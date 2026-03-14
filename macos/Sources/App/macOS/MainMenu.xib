@@ -42,6 +42,7 @@
                 <outlet property="menuNewWindow" destination="Was-JA-tGl" id="lK7-3I-CPG"/>
                 <outlet property="menuNextSplit" destination="bD7-ei-wKU" id="LeT-xw-eh4"/>
                 <outlet property="menuOpenConfig" destination="r1H-kf-o0x" id="Nze-Go-glw"/>
+                <outlet property="menuSettingsPanel" destination="bYF-7u-oZC" id="11i-IQ-e86"/>
                 <outlet property="menuPaste" destination="i27-pK-umN" id="ICc-X2-gV3"/>
                 <outlet property="menuPasteSelection" destination="akq-ov-Jjh" id="GS8-aQ-hVw"/>
                 <outlet property="menuPreviousSplit" destination="Lic-px-1wg" id="Rto-CG-yRe"/>
@@ -104,8 +105,8 @@
                                     <action selector="openConfig:" target="bbz-4X-AYv" id="n3Y-WT-Q3M"/>
                                 </connections>
                             </menuItem>
-                            <menuItem title="Connections…" id="bYF-7u-oZC">
-                                <modifierMask key="keyEquivalentModifierMask"/>
+                            <menuItem title="Settings Panel…" keyEquivalent="o" id="bYF-7u-oZC">
+                                <modifierMask key="keyEquivalentModifierMask" command="YES"/>
                                 <connections>
                                     <action selector="showSSHConnections:" target="bbz-4X-AYv" id="xJr-2n-uJ4"/>
                                 </connections>

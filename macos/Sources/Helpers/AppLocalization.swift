@@ -22,8 +22,8 @@ enum AppLocalization {
         "common.untitled": "Untitled",
         "command_palette.ai_manager.title": "Open: AI Terminal Manager",
         "command_palette.ai_manager.description": "Show the Phase 1 Ghostty + Shannon control center scaffold.",
-        "command_palette.ssh_connections.title": "Open: Connections",
-        "command_palette.ssh_connections.description": "Manage saved SSH connections and jump back to active remote tabs.",
+        "command_palette.ssh_connections.title": "Open: Settings Panel",
+        "command_palette.ssh_connections.description": "Open the settings panel for connection center and learning workflow.",
         "command_palette.update.restart": "Update Ghostty and Restart",
         "command_palette.update.cancel": "Cancel or Skip Update",
         "command_palette.update.cancel.description": "Dismiss the current update process",
@@ -187,9 +187,9 @@ enum AppLocalization {
         "ai.manager.task.session_closed": "Session closed before task completed.",
         "ai.manager.task.manage_session": "Manage %@",
         "ai.manager.task.default_title": "Managed Terminal Task",
-        "ssh.connections.window.title": "Connections",
-        "ssh.connections.title": "Connections",
-        "ssh.connections.subtitle": "Save SSH connections, reuse passwords from Keychain, and jump back into active remote sessions.",
+        "ssh.connections.window.title": "Settings Panel",
+        "ssh.connections.title": "Settings Panel",
+        "ssh.connections.subtitle": "Switch between connection center and learning settings in one place.",
         "ssh.connections.new": "New Connection",
         "ssh.connections.search": "Search Connections",
         "ssh.connections.connection_type": "Connection Type",
@@ -224,6 +224,64 @@ enum AppLocalization {
         "ssh.connections.new_tab_picker.empty": "No saved SSH connections are ready yet.",
         "ssh.connections.new_tab_picker.search": "Search local and SSH connections",
         "ssh.connections.new_tab_picker.quick_connect": "⌘1-9 Quick Connect",
+        "ssh.connections.tab.connections": "Connection Center",
+        "ssh.connections.tab.learning": "Learning Settings",
+        "ssh.connections.page.connections.title": "Connection Center",
+        "ssh.connections.page.connections.subtitle": "Manage saved SSH connections, reuse Keychain passwords, and jump back into active remote sessions.",
+        "ssh.connections.learning.title": "Learning Settings",
+        "ssh.connections.learning.subtitle": "Configure how selected terminal text is summarized and written into your project knowledge files.",
+        "ssh.connections.learning.enable": "Enable Learn action",
+        "ssh.connections.learning.prefer_tab_working_directory": "Prefer current tab working directory as project path",
+        "ssh.connections.learning.chat_workspace_path": "Chat workspace root path",
+        "ssh.connections.learning.chat_workspace_required": "Chat workspace root path is required.",
+        "ssh.connections.learning.learn_workspace_auto_path": "Learn workspace path (auto-derived)",
+        "ssh.connections.learning.default_project_path": "Default project path",
+        "ssh.connections.learning.notes_relative_path": "Knowledge file path (relative to project)",
+        "ssh.connections.learning.command_template": "Execution command template",
+        "ssh.connections.learning.fast_model": "Fast model",
+        "ssh.connections.learning.prompt_template": "Summary prompt template",
+        "ssh.connections.learning.supported_placeholders": "Supported placeholders",
+        "ssh.connections.learning.context_action": "Learn Selection",
+        "ssh.connections.learning.disabled_message": "Learn action is disabled in Learning settings.",
+        "ssh.connections.learning.started_message": "Learning command started.",
+        "ssh.connections.learning.succeeded_message": "Learning command completed.",
+        "ssh.connections.learning.failed_message": "Learning command failed: %@",
+        "ssh.connections.learning.permission_denied_message": "Learning command was canceled because execution permission was denied.",
+        "ssh.connections.learning.persist_succeeded_message": "Learning completed and knowledge note saved: %@",
+        "ssh.connections.learning.persist_failed_message": "Learning command completed, but writing knowledges failed: %@",
+        "ssh.connections.learning.initialize_workspace": "Initialize Chat + Learn Workspace",
+        "ssh.connections.learning.initialize_confirm_title": "Confirm initialization",
+        "ssh.connections.learning.initialize_confirm_message": "Use this path as chat root?\n%@",
+        "ssh.connections.learning.initialize_confirm_action": "Initialize now",
+        "ssh.connections.learning.initialize_workspace_hint": "Create chat/learn bootstrap files (skills, scripts, and knowledges) under the chat root path.",
+        "ssh.connections.learning.initializing": "Initializing workspace...",
+        "ssh.connections.learning.initialized_message": "Workspace initialized. Created %d file(s), reused %d existing file(s).",
+        "ssh.connections.learning.initialized_with_skill_sync_warning_message": "Workspace initialized. Created %d file(s), reused %d existing file(s), but %d skill repo(s) failed to sync.",
+        "ssh.connections.learning.initialize_failed_message": "Workspace initialization failed: %@",
+        "ssh.connections.learning.skill_repos.title": "Skill Repository Sync",
+        "ssh.connections.learning.skill_repos.subtitle": "Private skill repositories for chat/learn workspaces.",
+        "ssh.connections.learning.skill_repos.empty": "No repository status yet. Click Check Updates.",
+        "ssh.connections.learning.skill_repos.check_updates": "Check Updates",
+        "ssh.connections.learning.skill_repos.pull_updates": "Pull Skills",
+        "ssh.connections.learning.skill_repos.checking": "Checking skill repository status...",
+        "ssh.connections.learning.skill_repos.pulling": "Pulling skill repositories...",
+        "ssh.connections.learning.skill_repos.checked_message": "Skill status checked. Latest %d, updates %d, errors %d.",
+        "ssh.connections.learning.skill_repos.pulled_message": "Skill pull completed. Latest %d, updates %d, errors %d.",
+        "ssh.connections.learning.skill_repos.status.latest": "Latest",
+        "ssh.connections.learning.skill_repos.status.update_available": "Update Available",
+        "ssh.connections.learning.skill_repos.status.not_installed": "Not Installed",
+        "ssh.connections.learning.skill_repos.status.local_changes": "Local Changes",
+        "ssh.connections.learning.skill_repos.status.error": "Error",
+        "ssh.connections.learning.save": "Save Learning Settings",
+        "ssh.connections.learning.saved": "Learning settings saved.",
+        "ssh.connections.learning.log.title": "Learning Log Panel",
+        "ssh.connections.learning.log.subtitle": "Recent right-click Learn runs with result status and output summary.",
+        "ssh.connections.learning.log.clear": "Clear Logs",
+        "ssh.connections.learning.log.empty": "No learning logs yet.",
+        "ssh.connections.learning.log.status.success": "Success",
+        "ssh.connections.learning.log.status.failure": "Failure",
+        "ssh.connections.learning.log.show_details": "Show details",
+        "ssh.connections.learning.log.hide_details": "Hide details",
         "terminal.notification.bell.title": "Action Required",
         "terminal.notification.bell.body": "Task completed and waiting for your input.",
         "about.tagline": "Fast, native, feature-rich terminal \nemulator pushing modern features.",
@@ -236,6 +294,7 @@ enum AppLocalization {
         "settings.body": "Language can be configured here. For advanced terminal settings, edit $HOME/.config/ghostty/config.ghostty and restart Ghostty.",
         "settings.language.title": "App Language",
         "AI Terminal Manager…": "AI Terminal Manager…",
+        "Settings Panel…": "Settings Panel…",
         "Connections…": "Connections…",
         "settings.language.description": "Choose a language override for Ghostty. Restart is required for menus, App Intents, and all localized resources to update consistently.",
         "settings.language.option.system": "System",
@@ -267,8 +326,8 @@ enum AppLocalization {
         "common.untitled": "未命名",
         "command_palette.ai_manager.title": "打开：AI Terminal Manager",
         "command_palette.ai_manager.description": "打开 Ghostty + Shannon Phase 1 控制中心原型。",
-        "command_palette.ssh_connections.title": "打开：连接中心",
-        "command_palette.ssh_connections.description": "管理已保存的 SSH 连接，并快速回到活动中的远程标签页。",
+        "command_palette.ssh_connections.title": "打开：设置面板",
+        "command_palette.ssh_connections.description": "打开设置面板，统一管理连接中心与学习设置。",
         "command_palette.update.restart": "更新 Ghostty 并重启",
         "command_palette.update.cancel": "取消或跳过更新",
         "command_palette.update.cancel.description": "关闭当前更新流程",
@@ -432,9 +491,9 @@ enum AppLocalization {
         "ai.manager.task.session_closed": "会话在任务完成前已关闭。",
         "ai.manager.task.manage_session": "托管 %@",
         "ai.manager.task.default_title": "托管终端任务",
-        "ssh.connections.window.title": "连接中心",
-        "ssh.connections.title": "连接中心",
-        "ssh.connections.subtitle": "保存 SSH 连接、复用 Keychain 密码，并快速回到活动中的远程会话。",
+        "ssh.connections.window.title": "设置面板",
+        "ssh.connections.title": "设置面板",
+        "ssh.connections.subtitle": "在一个面板里快速切换连接中心与学习设置。",
         "ssh.connections.new": "新建连接",
         "ssh.connections.search": "搜索连接",
         "ssh.connections.connection_type": "连接类型",
@@ -469,6 +528,64 @@ enum AppLocalization {
         "ssh.connections.new_tab_picker.empty": "当前还没有可直接连接的已保存 SSH 连接。",
         "ssh.connections.new_tab_picker.search": "搜索本地和 SSH 连接",
         "ssh.connections.new_tab_picker.quick_connect": "⌘1-9 快速连接",
+        "ssh.connections.tab.connections": "连接中心",
+        "ssh.connections.tab.learning": "学习设置",
+        "ssh.connections.page.connections.title": "连接中心",
+        "ssh.connections.page.connections.subtitle": "管理已保存 SSH 连接、复用 Keychain 密码，并快速回到活动中的远程会话。",
+        "ssh.connections.learning.title": "学习参数",
+        "ssh.connections.learning.subtitle": "配置如何把终端选中文本总结并写入项目知识文件。",
+        "ssh.connections.learning.enable": "启用学习动作",
+        "ssh.connections.learning.prefer_tab_working_directory": "优先使用当前 tab 工作目录作为项目路径",
+        "ssh.connections.learning.chat_workspace_path": "Chat 项目根目录",
+        "ssh.connections.learning.chat_workspace_required": "必须先填写 Chat 项目根目录。",
+        "ssh.connections.learning.learn_workspace_auto_path": "Learn 项目路径（自动解析）",
+        "ssh.connections.learning.default_project_path": "默认项目路径",
+        "ssh.connections.learning.notes_relative_path": "知识文件路径（相对项目）",
+        "ssh.connections.learning.command_template": "执行命令模板",
+        "ssh.connections.learning.fast_model": "快速模型",
+        "ssh.connections.learning.prompt_template": "总结提示模板",
+        "ssh.connections.learning.supported_placeholders": "可用占位符",
+        "ssh.connections.learning.context_action": "学习选中文本",
+        "ssh.connections.learning.disabled_message": "学习动作在学习设置中已禁用。",
+        "ssh.connections.learning.started_message": "学习命令已开始执行。",
+        "ssh.connections.learning.succeeded_message": "学习命令已完成。",
+        "ssh.connections.learning.failed_message": "学习命令失败：%@",
+        "ssh.connections.learning.permission_denied_message": "学习命令已取消：执行权限被拒绝。",
+        "ssh.connections.learning.persist_succeeded_message": "学习已完成，知识笔记已写入：%@",
+        "ssh.connections.learning.persist_failed_message": "学习命令已完成，但写入 knowledges 失败：%@",
+        "ssh.connections.learning.initialize_workspace": "初始化 Chat + Learn 目录",
+        "ssh.connections.learning.initialize_confirm_title": "确认初始化",
+        "ssh.connections.learning.initialize_confirm_message": "确认使用以下路径作为 Chat 根目录？\n%@",
+        "ssh.connections.learning.initialize_confirm_action": "立即初始化",
+        "ssh.connections.learning.initialize_workspace_hint": "在 Chat 根目录下创建 chat/learn 初始化文件（skills、scripts、knowledges）。",
+        "ssh.connections.learning.initializing": "正在初始化目录...",
+        "ssh.connections.learning.initialized_message": "目录初始化完成：新建 %d 个文件，复用 %d 个已存在文件。",
+        "ssh.connections.learning.initialized_with_skill_sync_warning_message": "目录初始化完成：新建 %d 个文件，复用 %d 个已存在文件，但有 %d 个 skill 仓库同步失败。",
+        "ssh.connections.learning.initialize_failed_message": "目录初始化失败：%@",
+        "ssh.connections.learning.skill_repos.title": "Skill 仓库同步",
+        "ssh.connections.learning.skill_repos.subtitle": "用于 chat/learn 的私有 skill 仓库。",
+        "ssh.connections.learning.skill_repos.empty": "还没有仓库状态，请先点“检查更新”。",
+        "ssh.connections.learning.skill_repos.check_updates": "检查更新",
+        "ssh.connections.learning.skill_repos.pull_updates": "拉取 Skills",
+        "ssh.connections.learning.skill_repos.checking": "正在检查 skill 仓库状态...",
+        "ssh.connections.learning.skill_repos.pulling": "正在拉取 skill 仓库...",
+        "ssh.connections.learning.skill_repos.checked_message": "已检查 skill 状态：最新 %d，待更新 %d，错误 %d。",
+        "ssh.connections.learning.skill_repos.pulled_message": "已完成 skill 拉取：最新 %d，待更新 %d，错误 %d。",
+        "ssh.connections.learning.skill_repos.status.latest": "已最新",
+        "ssh.connections.learning.skill_repos.status.update_available": "有更新",
+        "ssh.connections.learning.skill_repos.status.not_installed": "未安装",
+        "ssh.connections.learning.skill_repos.status.local_changes": "本地有改动",
+        "ssh.connections.learning.skill_repos.status.error": "错误",
+        "ssh.connections.learning.save": "保存学习设置",
+        "ssh.connections.learning.saved": "学习设置已保存。",
+        "ssh.connections.learning.log.title": "学习日志面板",
+        "ssh.connections.learning.log.subtitle": "记录每次右键学习的成功/失败与输出摘要。",
+        "ssh.connections.learning.log.clear": "清空日志",
+        "ssh.connections.learning.log.empty": "暂时还没有学习日志。",
+        "ssh.connections.learning.log.status.success": "成功",
+        "ssh.connections.learning.log.status.failure": "失败",
+        "ssh.connections.learning.log.show_details": "展开详情",
+        "ssh.connections.learning.log.hide_details": "收起详情",
         "terminal.notification.bell.title": "等待操作",
         "terminal.notification.bell.body": "任务已完成，等待你的操作。",
         "about.tagline": "快速、原生、功能丰富的终端模拟器，持续推进现代终端体验。",
@@ -481,6 +598,7 @@ enum AppLocalization {
         "settings.body": "这里目前可配置应用语言。若要修改高级终端配置，请编辑 $HOME/.config/ghostty/config.ghostty，然后重启 Ghostty。",
         "settings.language.title": "应用语言",
         "AI Terminal Manager…": "AI 终端管理器…",
+        "Settings Panel…": "设置面板…",
         "Connections…": "连接中心…",
         "settings.language.description": "为 Ghostty 选择语言覆盖设置。为了让菜单、App Intents 和所有本地化资源一致更新，需要重启应用。",
         "settings.language.option.system": "跟随系统",
@@ -514,6 +632,7 @@ enum AppLocalization {
         "Preferences…": "偏好设置…",
         "Open Config": "打开配置文件",
         "AI Terminal Manager…": "AI 终端管理器…",
+        "Settings Panel…": "设置面板…",
         "Connections…": "连接中心…",
         "Reload Configuration": "重新加载配置",
         "Secure Keyboard Entry": "安全键盘输入",
@@ -1100,6 +1219,99 @@ enum L10n {
         nonisolated static var newTabPickerEmpty: String { AppLocalization.localizedString("ssh.connections.new_tab_picker.empty") }
         nonisolated static var newTabPickerSearch: String { AppLocalization.localizedString("ssh.connections.new_tab_picker.search") }
         nonisolated static var newTabPickerQuickConnect: String { AppLocalization.localizedString("ssh.connections.new_tab_picker.quick_connect") }
+        nonisolated static var tabConnections: String { AppLocalization.localizedString("ssh.connections.tab.connections") }
+        nonisolated static var tabLearning: String { AppLocalization.localizedString("ssh.connections.tab.learning") }
+        nonisolated static var connectionsPageTitle: String { AppLocalization.localizedString("ssh.connections.page.connections.title") }
+        nonisolated static var connectionsPageSubtitle: String { AppLocalization.localizedString("ssh.connections.page.connections.subtitle") }
+        nonisolated static var learningTitle: String { AppLocalization.localizedString("ssh.connections.learning.title") }
+        nonisolated static var learningSubtitle: String { AppLocalization.localizedString("ssh.connections.learning.subtitle") }
+        nonisolated static var learningEnable: String { AppLocalization.localizedString("ssh.connections.learning.enable") }
+        nonisolated static var learningPreferTabWorkingDirectory: String { AppLocalization.localizedString("ssh.connections.learning.prefer_tab_working_directory") }
+        nonisolated static var learningChatWorkspacePath: String { AppLocalization.localizedString("ssh.connections.learning.chat_workspace_path") }
+        nonisolated static var learningChatWorkspaceRequired: String { AppLocalization.localizedString("ssh.connections.learning.chat_workspace_required") }
+        nonisolated static var learningLearnWorkspaceAutoPath: String { AppLocalization.localizedString("ssh.connections.learning.learn_workspace_auto_path") }
+        nonisolated static var learningDefaultProjectPath: String { AppLocalization.localizedString("ssh.connections.learning.default_project_path") }
+        nonisolated static var learningNotesRelativePath: String { AppLocalization.localizedString("ssh.connections.learning.notes_relative_path") }
+        nonisolated static var learningCommandTemplate: String { AppLocalization.localizedString("ssh.connections.learning.command_template") }
+        nonisolated static var learningFastModel: String { AppLocalization.localizedString("ssh.connections.learning.fast_model") }
+        nonisolated static var learningPromptTemplate: String { AppLocalization.localizedString("ssh.connections.learning.prompt_template") }
+        nonisolated static var learningSupportedPlaceholders: String { AppLocalization.localizedString("ssh.connections.learning.supported_placeholders") }
+        nonisolated static var learningContextAction: String { AppLocalization.localizedString("ssh.connections.learning.context_action") }
+        nonisolated static var learningDisabledMessage: String { AppLocalization.localizedString("ssh.connections.learning.disabled_message") }
+        nonisolated static var learningStartedMessage: String { AppLocalization.localizedString("ssh.connections.learning.started_message") }
+        nonisolated static var learningSucceededMessage: String { AppLocalization.localizedString("ssh.connections.learning.succeeded_message") }
+        nonisolated static func learningFailedMessage(_ message: String) -> String { AppLocalization.localizedString("ssh.connections.learning.failed_message", message) }
+        nonisolated static var learningPermissionDeniedMessage: String { AppLocalization.localizedString("ssh.connections.learning.permission_denied_message") }
+        nonisolated static func learningPersistSucceededMessage(_ path: String) -> String { AppLocalization.localizedString("ssh.connections.learning.persist_succeeded_message", path) }
+        nonisolated static func learningPersistFailedMessage(_ message: String) -> String { AppLocalization.localizedString("ssh.connections.learning.persist_failed_message", message) }
+        nonisolated static var learningInitializeWorkspace: String { AppLocalization.localizedString("ssh.connections.learning.initialize_workspace") }
+        nonisolated static var learningInitializeConfirmTitle: String { AppLocalization.localizedString("ssh.connections.learning.initialize_confirm_title") }
+        nonisolated static func learningInitializeConfirmMessage(_ path: String) -> String {
+            AppLocalization.localizedString("ssh.connections.learning.initialize_confirm_message", path)
+        }
+        nonisolated static var learningInitializeConfirmAction: String { AppLocalization.localizedString("ssh.connections.learning.initialize_confirm_action") }
+        nonisolated static var learningInitializeWorkspaceHint: String { AppLocalization.localizedString("ssh.connections.learning.initialize_workspace_hint") }
+        nonisolated static var learningInitializing: String { AppLocalization.localizedString("ssh.connections.learning.initializing") }
+        nonisolated static func learningInitializedMessage(_ createdCount: Int, _ reusedCount: Int) -> String {
+            AppLocalization.localizedString(
+                "ssh.connections.learning.initialized_message",
+                createdCount,
+                reusedCount
+            )
+        }
+        nonisolated static func learningInitializedWithSkillSyncWarningMessage(
+            _ createdCount: Int,
+            _ reusedCount: Int,
+            _ failedSkillRepoCount: Int
+        ) -> String {
+            AppLocalization.localizedString(
+                "ssh.connections.learning.initialized_with_skill_sync_warning_message",
+                createdCount,
+                reusedCount,
+                failedSkillRepoCount
+            )
+        }
+        nonisolated static func learningInitializeFailedMessage(_ message: String) -> String {
+            AppLocalization.localizedString("ssh.connections.learning.initialize_failed_message", message)
+        }
+        nonisolated static var learningSkillReposTitle: String { AppLocalization.localizedString("ssh.connections.learning.skill_repos.title") }
+        nonisolated static var learningSkillReposSubtitle: String { AppLocalization.localizedString("ssh.connections.learning.skill_repos.subtitle") }
+        nonisolated static var learningSkillReposEmpty: String { AppLocalization.localizedString("ssh.connections.learning.skill_repos.empty") }
+        nonisolated static var learningSkillReposCheckUpdates: String { AppLocalization.localizedString("ssh.connections.learning.skill_repos.check_updates") }
+        nonisolated static var learningSkillReposPullUpdates: String { AppLocalization.localizedString("ssh.connections.learning.skill_repos.pull_updates") }
+        nonisolated static var learningSkillReposChecking: String { AppLocalization.localizedString("ssh.connections.learning.skill_repos.checking") }
+        nonisolated static var learningSkillReposPulling: String { AppLocalization.localizedString("ssh.connections.learning.skill_repos.pulling") }
+        nonisolated static func learningSkillReposCheckedMessage(_ latest: Int, _ updates: Int, _ errors: Int) -> String {
+            AppLocalization.localizedString(
+                "ssh.connections.learning.skill_repos.checked_message",
+                latest,
+                updates,
+                errors
+            )
+        }
+        nonisolated static func learningSkillReposPulledMessage(_ latest: Int, _ updates: Int, _ errors: Int) -> String {
+            AppLocalization.localizedString(
+                "ssh.connections.learning.skill_repos.pulled_message",
+                latest,
+                updates,
+                errors
+            )
+        }
+        nonisolated static var learningSkillReposStatusLatest: String { AppLocalization.localizedString("ssh.connections.learning.skill_repos.status.latest") }
+        nonisolated static var learningSkillReposStatusUpdateAvailable: String { AppLocalization.localizedString("ssh.connections.learning.skill_repos.status.update_available") }
+        nonisolated static var learningSkillReposStatusNotInstalled: String { AppLocalization.localizedString("ssh.connections.learning.skill_repos.status.not_installed") }
+        nonisolated static var learningSkillReposStatusLocalChanges: String { AppLocalization.localizedString("ssh.connections.learning.skill_repos.status.local_changes") }
+        nonisolated static var learningSkillReposStatusError: String { AppLocalization.localizedString("ssh.connections.learning.skill_repos.status.error") }
+        nonisolated static var learningSave: String { AppLocalization.localizedString("ssh.connections.learning.save") }
+        nonisolated static var learningSaved: String { AppLocalization.localizedString("ssh.connections.learning.saved") }
+        nonisolated static var learningLogPanelTitle: String { AppLocalization.localizedString("ssh.connections.learning.log.title") }
+        nonisolated static var learningLogPanelSubtitle: String { AppLocalization.localizedString("ssh.connections.learning.log.subtitle") }
+        nonisolated static var learningLogClear: String { AppLocalization.localizedString("ssh.connections.learning.log.clear") }
+        nonisolated static var learningLogEmpty: String { AppLocalization.localizedString("ssh.connections.learning.log.empty") }
+        nonisolated static var learningLogStatusSuccess: String { AppLocalization.localizedString("ssh.connections.learning.log.status.success") }
+        nonisolated static var learningLogStatusFailure: String { AppLocalization.localizedString("ssh.connections.learning.log.status.failure") }
+        nonisolated static var learningLogShowDetails: String { AppLocalization.localizedString("ssh.connections.learning.log.show_details") }
+        nonisolated static var learningLogHideDetails: String { AppLocalization.localizedString("ssh.connections.learning.log.hide_details") }
     }
 
     enum AITerminalManager {

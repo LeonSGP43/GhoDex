@@ -1470,9 +1470,17 @@ extension Ghostty {
             // in a row without storing it all.
             var item: NSMenuItem
 
-            // If we have a selection, add copy
-            if let text = self.accessibilitySelectedText(), text.count > 0 {
+            // If we have a selection, add copy and learn.
+            let hasSelection = (self.accessibilitySelectedText()?.isEmpty == false)
+            if hasSelection {
                 menu.addItem(withTitle: AppLocalization.localizedText("Copy"), action: #selector(copy(_:)), keyEquivalent: "")
+
+                item = menu.addItem(
+                    withTitle: L10n.SSHConnections.learningContextAction,
+                    action: #selector(learnSelectionFromContextMenu(_:)),
+                    keyEquivalent: ""
+                )
+                item.setImageIfDesired(systemSymbolName: "book.closed")
             }
             menu.addItem(withTitle: AppLocalization.localizedText("Paste"), action: #selector(paste(_:)), keyEquivalent: "")
 
@@ -1646,6 +1654,542 @@ extension Ghostty {
 
         @IBAction func changeTitle(_ sender: Any) {
             promptTitle()
+        }
+
+        @IBAction @MainActor func learnSelectionFromContextMenu(_ sender: Any?) {
+            guard let selection = accessibilitySelectedText(),
+                  !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return
+            }
+
+            guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
+            let settings = appDelegate.aiTerminalManagerStore.learningSettings
+            guard settings.enabled else {
+                showUserNotification(
+                    title: L10n.SSHConnections.learningContextAction,
+                    body: L10n.SSHConnections.learningDisabledMessage,
+                    requireFocus: false
+                )
+                return
+            }
+
+            let context = settings.resolvedContext(
+                selection: selection,
+                tabWorkingDirectory: pwd
+            )
+            let permissionKey = "learning.command.\(context.commandTemplate)"
+
+            PermissionRequest.show(
+                permissionKey,
+                message: L10n.App.allowExecute(context.commandTemplate),
+                allowDuration: .once,
+                rememberDuration: .seconds(86400),
+                window: window
+            ) { [weak self] allowed in
+                guard let self else { return }
+                if !allowed {
+                    let deniedMessage = L10n.SSHConnections.learningPermissionDeniedMessage
+                    appDelegate.aiTerminalManagerStore.appendLearningLog(
+                        status: .failure,
+                        outputSummary: deniedMessage,
+                        outputDetail: deniedMessage,
+                        exitCode: nil,
+                        commandTemplate: context.commandTemplate,
+                        projectPath: context.projectPath,
+                        notesAbsolutePath: context.notesAbsolutePath
+                    )
+                    self.showUserNotification(
+                        title: L10n.SSHConnections.learningContextAction,
+                        body: deniedMessage,
+                        requireFocus: false
+                    )
+                    return
+                }
+                self.showUserNotification(
+                    title: L10n.SSHConnections.learningContextAction,
+                    body: L10n.SSHConnections.learningStartedMessage,
+                    requireFocus: false
+                )
+                self.runLearningCommand(
+                    context,
+                    store: appDelegate.aiTerminalManagerStore
+                )
+            }
+        }
+
+        private func runLearningCommand(
+            _ context: AITerminalLearningSettings.ResolvedContext,
+            store: AITerminalManagerStore
+        ) {
+            let notificationTitle = L10n.SSHConnections.learningContextAction
+
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                var rawArchivePath: String?
+                var rawArchiveError: String?
+                do {
+                    rawArchivePath = try Self.appendLearningRawArchive(context: context)
+                } catch {
+                    rawArchiveError = error.localizedDescription
+                }
+
+                let result = Self.executeLearningCommand(context)
+
+                DispatchQueue.main.async {
+                    var logStatus: AITerminalLearningLogEntry.Status
+                    var logSummary: String
+                    var notificationBody: String
+                    var logDetailSections: [String] = []
+                    if let rawArchivePath, !rawArchivePath.isEmpty {
+                        logDetailSections.append("raw_archive:\n\(rawArchivePath)")
+                    }
+                    if let rawArchiveError, !rawArchiveError.isEmpty {
+                        logDetailSections.append("raw_archive_error:\n\(rawArchiveError)")
+                    }
+                    logDetailSections.append(result.commandOutput)
+                    var logDetail = logDetailSections.joined(separator: "\n\n")
+
+                    if result.isSuccess {
+                        do {
+                            let savedPath = try Self.appendLearningSummaryToInbox(
+                                context: context,
+                                commandOutput: result.commandOutput
+                            )
+                            logStatus = .success
+                            logSummary = result.outputSummary
+                            notificationBody = L10n.SSHConnections.learningPersistSucceededMessage(savedPath)
+                        } catch {
+                            logStatus = .failure
+                            let persistMessage = L10n.SSHConnections.learningPersistFailedMessage(error.localizedDescription)
+                            logSummary = persistMessage
+                            notificationBody = persistMessage
+                            logDetail += "\n\npersist_error:\n\(error.localizedDescription)"
+                        }
+                    } else {
+                        logStatus = .failure
+                        logSummary = result.outputSummary
+                        notificationBody = L10n.SSHConnections.learningFailedMessage(result.outputSummary)
+                    }
+
+                    store.appendLearningLog(
+                        status: logStatus,
+                        outputSummary: logSummary,
+                        outputDetail: logDetail,
+                        exitCode: result.exitCode,
+                        commandTemplate: context.commandTemplate,
+                        projectPath: context.projectPath,
+                        notesAbsolutePath: context.notesAbsolutePath
+                    )
+
+                    guard let self else { return }
+                    self.showUserNotification(
+                        title: notificationTitle,
+                        body: notificationBody,
+                        requireFocus: false
+                    )
+                }
+            }
+        }
+
+        private static func executeLearningCommand(
+            _ context: AITerminalLearningSettings.ResolvedContext
+        ) -> LearningCommandExecutionResult {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            process.arguments = ["-lc", context.commandTemplate]
+
+            if !context.projectPath.isEmpty {
+                process.currentDirectoryURL = URL(fileURLWithPath: context.projectPath)
+            }
+
+            var environment = ProcessInfo.processInfo.environment
+            for (key, value) in context.environmentVariables {
+                environment[key] = value
+            }
+
+            if let home = environment["HOME"], !home.isEmpty {
+                let localBinPath = "\(home)/.local/bin"
+                if FileManager.default.fileExists(atPath: localBinPath) {
+                    let path = environment["PATH"] ?? ""
+                    let components = path.split(separator: ":").map(String.init)
+                    if !components.contains(localBinPath) {
+                        environment["PATH"] = path.isEmpty ? localBinPath : "\(localBinPath):\(path)"
+                    }
+                }
+            }
+            process.environment = environment
+
+            let stdoutPipe = Pipe()
+            let stderrPipe = Pipe()
+            process.standardOutput = stdoutPipe
+            process.standardError = stderrPipe
+
+            do {
+                try process.run()
+            } catch {
+                let message = "Failed to start command: \(error.localizedDescription)"
+                return .failed(message, commandOutput: message, exitCode: nil)
+            }
+            process.waitUntilExit()
+
+            let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+            let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+            let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
+            let stderr = String(data: stderrData, encoding: .utf8) ?? ""
+            let trimmedStdout = stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedStderr = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            let exitCode = process.terminationStatus
+
+            var detailSections: [String] = []
+            if !trimmedStdout.isEmpty {
+                detailSections.append("stdout:\n\(trimmedStdout)")
+            }
+            if !trimmedStderr.isEmpty {
+                detailSections.append("stderr:\n\(trimmedStderr)")
+            }
+            let commandOutput = detailSections.isEmpty ? "(no output)" : detailSections.joined(separator: "\n\n")
+
+            if exitCode == 0 {
+                let successOutput = if !trimmedStdout.isEmpty {
+                    stdout
+                } else if !trimmedStderr.isEmpty {
+                    stderr
+                } else {
+                    "(no output)"
+                }
+                return .success(
+                    condensedOutputSummary(successOutput),
+                    commandOutput: commandOutput,
+                    exitCode: exitCode
+                )
+            }
+
+            let base = if !trimmedStderr.isEmpty {
+                stderr
+            } else if !trimmedStdout.isEmpty {
+                stdout
+            } else {
+                "exit code \(exitCode)"
+            }
+
+            return .failed(
+                condensedOutputSummary(base),
+                commandOutput: commandOutput,
+                exitCode: exitCode
+            )
+        }
+
+        private static func condensedOutputSummary(_ text: String, limit: Int = 220) -> String {
+            let normalized = text
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "\n", with: " ")
+                .replacingOccurrences(of: "\t", with: " ")
+            guard normalized.count > limit else { return normalized }
+            let endIndex = normalized.index(normalized.startIndex, offsetBy: limit)
+            return "\(normalized[..<endIndex])..."
+        }
+
+        private static func appendLearningSummaryToInbox(
+            context: AITerminalLearningSettings.ResolvedContext,
+            commandOutput: String
+        ) throws -> String {
+            let trimmedProjectPath = context.projectPath.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedProjectPath.isEmpty else {
+                throw LearningKnowledgePersistenceError.missingProjectPath
+            }
+
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: trimmedProjectPath, isDirectory: &isDirectory), isDirectory.boolValue else {
+                throw LearningKnowledgePersistenceError.invalidProjectPath(trimmedProjectPath)
+            }
+
+            var workspaceURL = URL(fileURLWithPath: trimmedProjectPath, isDirectory: true)
+            if workspaceURL.lastPathComponent == "codex_learn_workspace" {
+                workspaceURL.deleteLastPathComponent()
+            }
+
+            let knowledgeDirectory = workspaceURL.appendingPathComponent("knowledges", isDirectory: true)
+            try FileManager.default.createDirectory(at: knowledgeDirectory, withIntermediateDirectories: true)
+
+            let inboxURL = knowledgeDirectory.appendingPathComponent("inbox.md")
+            if !FileManager.default.fileExists(atPath: inboxURL.path) {
+                try Data().write(to: inboxURL, options: .atomic)
+            }
+            let currentContent = (try? String(contentsOf: inboxURL, encoding: .utf8)) ?? ""
+            let outputText = extractPrimaryLearningOutput(commandOutput)
+            var incomingBullets = extractLearningBullets(from: outputText)
+            incomingBullets = filterBulletsStrictlyFromSource(
+                incomingBullets,
+                sourceText: context.selection
+            )
+            if incomingBullets.isEmpty {
+                incomingBullets = fallbackLearningBullets(from: context.selection)
+            }
+            let updatedContent = mergeLearningBullets(
+                existingContent: currentContent,
+                incomingBullets: incomingBullets
+            )
+            try updatedContent.write(to: inboxURL, atomically: true, encoding: .utf8)
+            return inboxURL.path
+        }
+
+        private static func appendLearningRawArchive(
+            context: AITerminalLearningSettings.ResolvedContext
+        ) throws -> String {
+            let trimmedProjectPath = context.projectPath.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedProjectPath.isEmpty else {
+                throw LearningKnowledgePersistenceError.missingProjectPath
+            }
+
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: trimmedProjectPath, isDirectory: &isDirectory), isDirectory.boolValue else {
+                throw LearningKnowledgePersistenceError.invalidProjectPath(trimmedProjectPath)
+            }
+
+            let archiveDirectory = URL(fileURLWithPath: trimmedProjectPath, isDirectory: true)
+                .appendingPathComponent(".codex", isDirectory: true)
+                .appendingPathComponent("learning-archive", isDirectory: true)
+            try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+            let archiveURL = archiveDirectory.appendingPathComponent("raw-selections.jsonl")
+
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            let payload: [String: Any] = [
+                "time": formatter.string(from: Date()),
+                "project_path": trimmedProjectPath,
+                "tab_working_directory": context.tabWorkingDirectory,
+                "selection": context.selection,
+            ]
+            var data = try JSONSerialization.data(withJSONObject: payload)
+            data.append(0x0a)
+
+            if FileManager.default.fileExists(atPath: archiveURL.path) {
+                let handle = try FileHandle(forWritingTo: archiveURL)
+                try handle.seekToEnd()
+                try handle.write(contentsOf: data)
+                try handle.close()
+            } else {
+                try data.write(to: archiveURL, options: .atomic)
+            }
+
+            return archiveURL.path
+        }
+
+        private static func extractPrimaryLearningOutput(_ commandOutput: String) -> String {
+            let trimmed = commandOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return "" }
+
+            if let stdoutRange = trimmed.range(of: "stdout:\n") {
+                var stdoutText = String(trimmed[stdoutRange.upperBound...])
+                if let stderrRange = stdoutText.range(of: "\n\nstderr:\n") {
+                    stdoutText = String(stdoutText[..<stderrRange.lowerBound])
+                }
+                let normalized = stdoutText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !normalized.isEmpty {
+                    return normalized
+                }
+            }
+
+            if let stderrRange = trimmed.range(of: "stderr:\n") {
+                return String(trimmed[stderrRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+
+            return trimmed
+        }
+
+        private static func filterBulletsStrictlyFromSource(
+            _ bullets: [String],
+            sourceText: String
+        ) -> [String] {
+            let sourceFlat = oneLine(sourceText)
+            guard !sourceFlat.isEmpty else { return [] }
+
+            var filtered: [String] = []
+            var seen: Set<String> = []
+            for bullet in bullets {
+                let normalized = oneLine(bullet)
+                guard !normalized.isEmpty else { continue }
+                guard sourceFlat.contains(normalized) else { continue }
+                if seen.insert(normalized).inserted {
+                    filtered.append(normalized)
+                }
+            }
+            return filtered
+        }
+
+        private static func extractLearningBullets(from text: String) -> [String] {
+            let lines = text.components(separatedBy: .newlines)
+            var bullets: [String] = []
+            var seen: Set<String> = []
+
+            for line in lines {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+
+                var payload: String?
+                if let range = trimmed.range(of: #"^[-*]\s+(.+)$"#, options: .regularExpression) {
+                    payload = String(trimmed[range]).replacingOccurrences(
+                        of: #"^[-*]\s+"#,
+                        with: "",
+                        options: .regularExpression
+                    )
+                } else if let range = trimmed.range(of: #"^\d+[.)]\s+(.+)$"#, options: .regularExpression) {
+                    payload = String(trimmed[range]).replacingOccurrences(
+                        of: #"^\d+[.)]\s+"#,
+                        with: "",
+                        options: .regularExpression
+                    )
+                }
+
+                guard let payload else { continue }
+                let normalized = oneLine(payload)
+                guard !normalized.isEmpty else { continue }
+                if seen.insert(normalized).inserted {
+                    bullets.append(normalized)
+                }
+            }
+
+            return Array(bullets.prefix(8))
+        }
+
+        private static func fallbackLearningBullets(from text: String) -> [String] {
+            let lines = text.components(separatedBy: .newlines)
+            var bullets: [String] = []
+            var seen: Set<String> = []
+
+            for line in lines {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+
+                var payload = trimmed
+                if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
+                    payload = String(trimmed.dropFirst(2))
+                } else if let range = trimmed.range(of: #"^\d+[.)]\s+"#, options: .regularExpression) {
+                    payload = String(trimmed[range.upperBound...])
+                }
+
+                let normalized = oneLine(payload)
+                guard !normalized.isEmpty else { continue }
+                if seen.insert(normalized).inserted {
+                    bullets.append(normalized)
+                }
+            }
+
+            if bullets.isEmpty {
+                let single = oneLine(text)
+                if !single.isEmpty {
+                    bullets.append(single)
+                }
+            }
+
+            return Array(bullets.prefix(8))
+        }
+
+        private static func mergeLearningBullets(
+            existingContent: String,
+            incomingBullets: [String]
+        ) -> String {
+            var lines = existingContent.components(separatedBy: .newlines)
+            if lines.count == 1 && lines[0].isEmpty {
+                lines = []
+            }
+
+            var bulletIndexes: [Int] = []
+            var bulletTexts: [String] = []
+
+            for (index, line) in lines.enumerated() {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard trimmed.hasPrefix("- ") else { continue }
+                let bullet = oneLine(String(trimmed.dropFirst(2)))
+                guard !bullet.isEmpty else { continue }
+                bulletIndexes.append(index)
+                bulletTexts.append(bullet)
+            }
+
+            for incoming in incomingBullets {
+                let incomingNormalized = normalizeLearningBullet(incoming)
+                guard !incomingNormalized.isEmpty else { continue }
+
+                var exactIndex: Int?
+
+                for (offset, existing) in bulletTexts.enumerated() {
+                    let existingNormalized = normalizeLearningBullet(existing)
+                    guard !existingNormalized.isEmpty else { continue }
+                    if existingNormalized == incomingNormalized {
+                        exactIndex = offset
+                        break
+                    }
+                }
+
+                if exactIndex != nil {
+                    continue
+                }
+
+                lines.append("- \(incoming)")
+                bulletIndexes.append(lines.count - 1)
+                bulletTexts.append(incoming)
+            }
+
+            var result = lines.joined(separator: "\n")
+            if !result.isEmpty && !result.hasSuffix("\n") {
+                result.append("\n")
+            }
+            return result
+        }
+
+        private static func normalizeLearningBullet(_ text: String) -> String {
+            let lowered = text.lowercased()
+            return lowered.replacingOccurrences(
+                of: #"[^a-z0-9\p{Han}]+"#,
+                with: "",
+                options: .regularExpression
+            )
+        }
+
+        private static func oneLine(_ text: String) -> String {
+            text
+                .replacingOccurrences(of: "\n", with: " ")
+                .replacingOccurrences(of: "\t", with: " ")
+                .replacingOccurrences(of: #"[\s]+"#, with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        private struct LearningCommandExecutionResult {
+            let isSuccess: Bool
+            let outputSummary: String
+            let commandOutput: String
+            let exitCode: Int32?
+
+            static func success(_ outputSummary: String, commandOutput: String, exitCode: Int32?) -> Self {
+                Self(
+                    isSuccess: true,
+                    outputSummary: outputSummary,
+                    commandOutput: commandOutput,
+                    exitCode: exitCode
+                )
+            }
+
+            static func failed(_ summary: String, commandOutput: String, exitCode: Int32?) -> Self {
+                Self(
+                    isSuccess: false,
+                    outputSummary: summary,
+                    commandOutput: commandOutput,
+                    exitCode: exitCode
+                )
+            }
+        }
+
+        private enum LearningKnowledgePersistenceError: LocalizedError {
+            case missingProjectPath
+            case invalidProjectPath(String)
+
+            var errorDescription: String? {
+                switch self {
+                case .missingProjectPath:
+                    return "project path is empty"
+                case .invalidProjectPath(let path):
+                    return "project path is invalid: \(path)"
+                }
+            }
         }
 
         /// Show a user notification and associate it with this surface
@@ -2109,6 +2653,9 @@ extension Ghostty.SurfaceView: NSServicesMenuRequestor {
 extension Ghostty.SurfaceView: NSMenuItemValidation {
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(learnSelectionFromContextMenu(_:)):
+            return accessibilitySelectedText()?.isEmpty == false
+
         case #selector(pasteSelection):
             let pb = NSPasteboard.ghosttySelection
             guard let str = pb.getOpinionatedStringContents() else { return false }

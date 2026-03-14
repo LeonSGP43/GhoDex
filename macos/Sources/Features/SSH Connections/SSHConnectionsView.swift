@@ -3,6 +3,22 @@ import Foundation
 import SwiftUI
 
 struct SSHConnectionsView: View {
+    private enum CenterTab: String, CaseIterable, Identifiable {
+        case connections
+        case learning
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .connections:
+                return L10n.SSHConnections.tabConnections
+            case .learning:
+                return L10n.SSHConnections.tabLearning
+            }
+        }
+    }
+
     private enum ConnectionEditorType: String, CaseIterable, Identifiable {
         case ssh
         case localmcd
@@ -37,6 +53,13 @@ struct SSHConnectionsView: View {
         }
     }
 
+    private static let learningLogDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .medium
+        return formatter
+    }()
+
     private struct VisualEffectBackground: NSViewRepresentable {
         let material: NSVisualEffectView.Material
 
@@ -70,6 +93,16 @@ struct SSHConnectionsView: View {
     @State private var isPresentingEditor = false
     @State private var selectedHostID: String?
     @State private var hostSearchText = ""
+    @State private var selectedTab: CenterTab = .connections
+    @State private var learningEnabled = true
+    @State private var learningChatWorkspacePath = ""
+    @State private var learningCommandTemplate = ""
+    @State private var learningStatusMessage: String?
+    @State private var managedSkillStatuses: [AITerminalManagerStore.ManagedSkillRepositoryStatus] = []
+    @State private var expandedLearningLogIDs: Set<UUID> = []
+    @State private var learningOperationInProgress = false
+    @State private var initializeChatWorkspaceCandidate = ""
+    @State private var showingInitializeConfirmation = false
 
     var body: some View {
         ZStack {
@@ -85,37 +118,201 @@ struct SSHConnectionsView: View {
                         .padding(.bottom, 8)
                 }
 
-                HStack(alignment: .top, spacing: 20) {
-                    sidebarPanel
-                        .frame(width: 340)
+                tabPicker
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 12)
 
-                    detailPanel
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                switch selectedTab {
+                case .connections:
+                    connectionsTabContent
+
+                case .learning:
+                    learningTabContent
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 20)
             }
         }
         .frame(minWidth: 1240, minHeight: 780)
         .sheet(isPresented: $isPresentingEditor) {
             hostEditorSheet
         }
-        .onAppear(perform: syncSelection)
+        .onAppear {
+            syncSelection()
+            syncLearningSettings()
+        }
         .onChange(of: allConnectionHosts.map(\.id)) { _ in
             syncSelection()
         }
+        .onChange(of: selectedTab) { _ in
+            if selectedTab == .learning {
+                syncLearningSettings()
+            }
+        }
+        .alert(L10n.SSHConnections.learningInitializeConfirmTitle, isPresented: $showingInitializeConfirmation) {
+            Button(L10n.SSHConnections.learningInitializeConfirmAction) {
+                confirmInitializeLearningWorkspace()
+            }
+            Button(L10n.AITerminalManager.cancelEdit, role: .cancel) {}
+        } message: {
+            Text(L10n.SSHConnections.learningInitializeConfirmMessage(initializeChatWorkspaceCandidate))
+        }
+    }
+
+    private var tabPicker: some View {
+        Picker("", selection: $selectedTab) {
+            ForEach(CenterTab.allCases) { tab in
+                Text(tab.title)
+                    .tag(tab)
+            }
+        }
+        .pickerStyle(.segmented)
+        .frame(maxWidth: 320)
+    }
+
+    private var connectionsTabContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(L10n.SSHConnections.connectionsPageTitle)
+                    .font(.title2.weight(.semibold))
+
+                Text(L10n.SSHConnections.connectionsPageSubtitle)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(alignment: .top, spacing: 20) {
+                sidebarPanel
+                    .frame(width: 340)
+
+                detailPanel
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 20)
+    }
+
+    private var learningTabContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(L10n.SSHConnections.learningTitle)
+                        .font(.title2.weight(.semibold))
+
+                    Text(L10n.SSHConnections.learningSubtitle)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Toggle(L10n.SSHConnections.learningEnable, isOn: $learningEnabled)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(L10n.SSHConnections.learningChatWorkspacePath)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField(
+                        AITerminalLearningSettings.defaultChatWorkspacePath,
+                        text: $learningChatWorkspacePath
+                    )
+                    .textFieldStyle(.roundedBorder)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(L10n.SSHConnections.learningLearnWorkspaceAutoPath)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(derivedLearnWorkspacePath)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(L10n.SSHConnections.learningCommandTemplate)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField(
+                        AITerminalLearningSettings.defaultCommandTemplate,
+                        text: $learningCommandTemplate
+                    )
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(L10n.SSHConnections.learningSupportedPlaceholders)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(learningSupportedPlaceholdersText)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                managedSkillRepositoryPanel
+
+                learningLogPanel
+
+                HStack(spacing: 12) {
+                    Button(L10n.SSHConnections.learningInitializeWorkspace) {
+                        requestInitializeLearningWorkspace()
+                    }
+                    .disabled(learningOperationInProgress)
+
+                    Button(L10n.SSHConnections.learningSave) {
+                        persistLearningSettings()
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(learningOperationInProgress)
+
+                    if learningOperationInProgress {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+
+                    if let learningStatusMessage, !learningStatusMessage.isEmpty {
+                        Text(learningStatusMessage)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Text(L10n.SSHConnections.learningInitializeWorkspaceHint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(22)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .panelSurface()
+        .padding(.horizontal, 20)
+        .padding(.bottom, 20)
     }
 
     private var header: some View {
         HStack(alignment: .top, spacing: 16) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text(L10n.SSHConnections.title)
-                    .font(.title2.weight(.semibold))
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.accentColor.gradient)
+                    )
 
-                Text(L10n.SSHConnections.subtitle)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(L10n.SSHConnections.title)
+                        .font(.title2.weight(.semibold))
+
+                    Text(L10n.SSHConnections.subtitle)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Spacer(minLength: 12)
@@ -137,6 +334,243 @@ struct SSHConnectionsView: View {
         .padding(.horizontal, 20)
         .padding(.top, 18)
         .padding(.bottom, 16)
+    }
+
+    private var managedSkillRepositoryPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(L10n.SSHConnections.learningSkillReposTitle)
+                        .font(.headline)
+                    Text(L10n.SSHConnections.learningSkillReposSubtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 8)
+
+                Button(L10n.SSHConnections.learningSkillReposCheckUpdates) {
+                    checkManagedSkillRepositories()
+                }
+                .buttonStyle(.bordered)
+                .disabled(learningOperationInProgress)
+
+                Button(L10n.SSHConnections.learningSkillReposPullUpdates) {
+                    syncManagedSkillRepositories()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(learningOperationInProgress)
+            }
+
+            if managedSkillStatuses.isEmpty {
+                Text(L10n.SSHConnections.learningSkillReposEmpty)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(managedSkillStatuses) { status in
+                        managedSkillRepositoryRow(status)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.primary.opacity(0.04))
+        )
+    }
+
+    private func managedSkillRepositoryRow(
+        _ status: AITerminalManagerStore.ManagedSkillRepositoryStatus
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(status.skillName)
+                    .font(.callout.weight(.semibold))
+
+                Spacer(minLength: 8)
+
+                Text(skillStatusLabel(status.state))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(skillStatusColor(status.state))
+            }
+
+            Text("\(status.repositoryURL) @ \(status.branch)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+
+            if let commitLine = managedSkillCommitLine(status), !commitLine.isEmpty {
+                Text(commitLine)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+
+            Text(status.destinationPath)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+
+            if let message = status.message, !message.isEmpty {
+                Text(message)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.primary.opacity(0.05))
+        )
+    }
+
+    private func skillStatusLabel(_ state: AITerminalManagerStore.ManagedSkillRepositoryState) -> String {
+        switch state {
+        case .latest:
+            return L10n.SSHConnections.learningSkillReposStatusLatest
+        case .updateAvailable:
+            return L10n.SSHConnections.learningSkillReposStatusUpdateAvailable
+        case .notInstalled:
+            return L10n.SSHConnections.learningSkillReposStatusNotInstalled
+        case .localChanges:
+            return L10n.SSHConnections.learningSkillReposStatusLocalChanges
+        case .error:
+            return L10n.SSHConnections.learningSkillReposStatusError
+        }
+    }
+
+    private func managedSkillCommitLine(
+        _ status: AITerminalManagerStore.ManagedSkillRepositoryStatus
+    ) -> String? {
+        guard let localCommit = status.localCommit, !localCommit.isEmpty else { return nil }
+
+        var parts: [String] = ["local: \(localCommit)"]
+        if let remoteCommit = status.remoteCommit, !remoteCommit.isEmpty {
+            parts.append("remote: \(remoteCommit)")
+        }
+        if let expectedTag = status.expectedTag, !expectedTag.isEmpty {
+            parts.append("tag: \(expectedTag)")
+        }
+        if let expectedCommit = status.expectedCommit, !expectedCommit.isEmpty {
+            parts.append("expected: \(expectedCommit)")
+        }
+        return parts.joined(separator: "  ")
+    }
+
+    private func skillStatusColor(_ state: AITerminalManagerStore.ManagedSkillRepositoryState) -> Color {
+        switch state {
+        case .latest:
+            return .green
+        case .updateAvailable, .localChanges:
+            return .orange
+        case .notInstalled:
+            return .secondary
+        case .error:
+            return .red
+        }
+    }
+
+    private var learningLogPanel: some View {
+        let entries = learningLogEntries
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(L10n.SSHConnections.learningLogPanelTitle)
+                        .font(.headline)
+
+                    Text(L10n.SSHConnections.learningLogPanelSubtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 8)
+
+                if !entries.isEmpty {
+                    Button(L10n.SSHConnections.learningLogClear) {
+                        store.clearLearningLogs()
+                        expandedLearningLogIDs.removeAll()
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+
+            if entries.isEmpty {
+                Text(L10n.SSHConnections.learningLogEmpty)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array(entries.prefix(40))) { entry in
+                        learningLogRow(entry)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.primary.opacity(0.04))
+        )
+    }
+
+    private func learningLogRow(_ entry: AITerminalLearningLogEntry) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(entry.status.displayName)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(entry.status == .success ? .green : .red)
+
+                Spacer(minLength: 8)
+
+                Text(Self.learningLogDateFormatter.string(from: entry.createdAt))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(entry.outputSummary)
+                .font(.callout)
+                .foregroundStyle(.primary)
+
+            if let exitCode = entry.exitCode {
+                Text("exit code: \(exitCode)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let outputDetail = entry.outputDetail, !outputDetail.isEmpty {
+                let isExpanded = expandedLearningLogIDs.contains(entry.id)
+                Button(isExpanded ? L10n.SSHConnections.learningLogHideDetails : L10n.SSHConnections.learningLogShowDetails) {
+                    if isExpanded {
+                        expandedLearningLogIDs.remove(entry.id)
+                    } else {
+                        expandedLearningLogIDs.insert(entry.id)
+                    }
+                }
+                .buttonStyle(.link)
+
+                if isExpanded {
+                    Text(outputDetail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
+
+            if !entry.notesAbsolutePath.isEmpty {
+                Text(entry.notesAbsolutePath)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.primary.opacity(0.05))
+        )
     }
 
     private var sidebarPanel: some View {
@@ -364,7 +798,7 @@ struct SSHConnectionsView: View {
             .panelSurface()
         } else {
             VStack(alignment: .leading, spacing: 14) {
-                Text(L10n.SSHConnections.title)
+                Text(L10n.SSHConnections.connectionsPageTitle)
                     .font(.title2.weight(.semibold))
 
                 Text(allConnectionHosts.isEmpty ? L10n.AITerminalManager.hostsEmpty : L10n.AITerminalManager.noHostSelected)
@@ -847,6 +1281,173 @@ struct SSHConnectionsView: View {
         selectedHostID = allConnectionHosts.first?.id
     }
 
+    private func syncLearningSettings() {
+        let settings = store.learningSettings
+        learningEnabled = settings.enabled
+        learningChatWorkspacePath = AITerminalLearningSettings.chatWorkspacePath(
+            fromLearnWorkspacePath: settings.defaultProjectPath
+        )
+        learningCommandTemplate = settings.commandTemplate
+        managedSkillStatuses = store.managedSkillStatuses
+        if !learningOperationInProgress {
+            learningStatusMessage = nil
+        }
+    }
+
+    private func persistLearningSettings() {
+        let trimmedChatWorkspacePath = learningChatWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let current = store.learningSettings
+        let resolvedWorkspacePath: String = if !trimmedChatWorkspacePath.isEmpty {
+            AITerminalLearningSettings.learnWorkspacePath(fromChatWorkspacePath: trimmedChatWorkspacePath)
+        } else {
+            current.defaultProjectPath
+        }
+
+        store.saveLearningSettings(.init(
+            enabled: learningEnabled,
+            preferTabWorkingDirectory: false,
+            defaultProjectPath: resolvedWorkspacePath,
+            notesRelativePath: current.notesRelativePath,
+            commandTemplate: learningCommandTemplate,
+            fastModel: current.fastModel,
+            promptTemplate: current.promptTemplate
+        ))
+
+        if store.lastError == nil {
+            if !resolvedWorkspacePath.isEmpty {
+                learningChatWorkspacePath = AITerminalLearningSettings.chatWorkspacePath(
+                    fromLearnWorkspacePath: resolvedWorkspacePath
+                )
+            }
+            learningStatusMessage = L10n.SSHConnections.learningSaved
+        } else {
+            learningStatusMessage = nil
+        }
+    }
+
+    private func requestInitializeLearningWorkspace() {
+        guard !learningOperationInProgress else { return }
+        guard let resolvedChatWorkspacePath = validatedLearningChatWorkspacePath() else {
+            return
+        }
+        initializeChatWorkspaceCandidate = resolvedChatWorkspacePath
+        showingInitializeConfirmation = true
+    }
+
+    private func confirmInitializeLearningWorkspace() {
+        learningChatWorkspacePath = initializeChatWorkspaceCandidate
+        initializeLearningWorkspace()
+    }
+
+    private func initializeLearningWorkspace() {
+        guard !learningOperationInProgress else { return }
+        guard let resolvedChatWorkspacePath = validatedLearningChatWorkspacePath() else {
+            return
+        }
+        let resolvedCommandTemplate = learningCommandTemplate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? AITerminalLearningSettings.defaultCommandTemplate
+            : learningCommandTemplate
+
+        learningOperationInProgress = true
+        learningStatusMessage = L10n.SSHConnections.learningInitializing
+        Task { @MainActor in
+            defer { learningOperationInProgress = false }
+            guard let result = await store.initializeChatAndLearnWorkspaceAsync(
+                chatWorkspacePath: resolvedChatWorkspacePath,
+                commandTemplate: resolvedCommandTemplate
+            ) else {
+                learningStatusMessage = L10n.SSHConnections.learningInitializeFailedMessage(
+                    store.lastError ?? "unknown"
+                )
+                return
+            }
+
+            learningChatWorkspacePath = result.chatWorkspacePath
+            learningCommandTemplate = resolvedCommandTemplate
+            managedSkillStatuses = store.managedSkillStatuses
+            let skillErrors = managedSkillStatuses.filter { $0.state == .error }.count
+            learningStatusMessage = if skillErrors == 0 {
+                L10n.SSHConnections.learningInitializedMessage(
+                    result.createdFileCount,
+                    result.reusedFileCount
+                )
+            } else {
+                L10n.SSHConnections.learningInitializedWithSkillSyncWarningMessage(
+                    result.createdFileCount,
+                    result.reusedFileCount,
+                    skillErrors
+                )
+            }
+        }
+    }
+
+    private func checkManagedSkillRepositories() {
+        guard !learningOperationInProgress else { return }
+        guard let resolvedChatWorkspacePath = validatedLearningChatWorkspacePath() else {
+            return
+        }
+
+        learningOperationInProgress = true
+        learningStatusMessage = L10n.SSHConnections.learningSkillReposChecking
+        Task { @MainActor in
+            defer { learningOperationInProgress = false }
+            managedSkillStatuses = await store.checkManagedSkillRepositoryUpdatesAsync(
+                chatWorkspacePath: resolvedChatWorkspacePath
+            )
+            let latestCount = managedSkillStatuses.filter { $0.state == .latest }.count
+            let updateCount = managedSkillStatuses.filter { $0.state == .updateAvailable }.count
+            let errorCount = managedSkillStatuses.filter { $0.state == .error }.count
+            learningStatusMessage = L10n.SSHConnections.learningSkillReposCheckedMessage(
+                latestCount,
+                updateCount,
+                errorCount
+            )
+        }
+    }
+
+    private func syncManagedSkillRepositories() {
+        guard !learningOperationInProgress else { return }
+        guard let resolvedChatWorkspacePath = validatedLearningChatWorkspacePath() else {
+            return
+        }
+
+        learningOperationInProgress = true
+        learningStatusMessage = L10n.SSHConnections.learningSkillReposPulling
+        Task { @MainActor in
+            defer { learningOperationInProgress = false }
+            managedSkillStatuses = await store.syncManagedSkillRepositoriesAsync(
+                chatWorkspacePath: resolvedChatWorkspacePath
+            )
+            let latestCount = managedSkillStatuses.filter { $0.state == .latest }.count
+            let updateCount = managedSkillStatuses.filter { $0.state == .updateAvailable }.count
+            let errorCount = managedSkillStatuses.filter { $0.state == .error }.count
+            learningStatusMessage = L10n.SSHConnections.learningSkillReposPulledMessage(
+                latestCount,
+                updateCount,
+                errorCount
+            )
+        }
+    }
+
+    private func validatedLearningChatWorkspacePath() -> String? {
+        let trimmedChatWorkspacePath = learningChatWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedChatWorkspacePath.isEmpty else {
+            learningStatusMessage = L10n.SSHConnections.learningChatWorkspaceRequired
+            return nil
+        }
+        return trimmedChatWorkspacePath
+    }
+
+    private var derivedLearnWorkspacePath: String {
+        let trimmedChatWorkspacePath = learningChatWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedChatWorkspacePath.isEmpty else {
+            return "-"
+        }
+        return AITerminalLearningSettings.learnWorkspacePath(
+            fromChatWorkspacePath: trimmedChatWorkspacePath
+        )
+    }
+
     private var displayRecentHosts: [AITerminalHost] {
         Self.sidebarRecentHosts(
             recentHosts: filterHosts(store.recentHosts),
@@ -910,6 +1511,14 @@ struct SSHConnectionsView: View {
     private var editingHost: AITerminalHost? {
         guard let editingHostID else { return nil }
         return allConnectionHosts.first(where: { $0.id == editingHostID })
+    }
+
+    private var learningSupportedPlaceholdersText: String {
+        AITerminalLearningSettings.supportedPlaceholders.joined(separator: "  ")
+    }
+
+    private var learningLogEntries: [AITerminalLearningLogEntry] {
+        store.learningLogs
     }
 
     private func filterHosts(_ hosts: [AITerminalHost]) -> [AITerminalHost] {

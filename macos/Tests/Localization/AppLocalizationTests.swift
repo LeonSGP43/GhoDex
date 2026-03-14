@@ -92,9 +92,9 @@ struct AppLocalizationTests {
         )
         #expect(
             AppLocalization.localizedText(
-                "Connections…",
+                "Settings Panel…",
                 preferredLanguages: ["zh-Hans"]
-            ) == "连接中心…"
+            ) == "设置面板…"
         )
         #expect(
             AppLocalization.localizedText(
@@ -116,13 +116,100 @@ struct AppLocalizationTests {
             AppLocalization.localizedString(
                 "command_palette.ssh_connections.title",
                 preferredLanguages: ["en-US"]
-            ) == "Open: Connections"
+            ) == "Open: Settings Panel"
         )
         #expect(
             AppLocalization.localizedString(
                 "command_palette.ssh_connections.title",
                 preferredLanguages: ["zh-Hans"]
-            ) == "打开：连接中心"
+            ) == "打开：设置面板"
+        )
+    }
+
+    @Test func sshConnectionsPanelAndLearningLogStringsAreLocalized() {
+        #expect(
+            AppLocalization.localizedString(
+                "ssh.connections.window.title",
+                preferredLanguages: ["en-US"]
+            ) == "Settings Panel"
+        )
+        #expect(
+            AppLocalization.localizedString(
+                "ssh.connections.window.title",
+                preferredLanguages: ["zh-Hans"]
+            ) == "设置面板"
+        )
+        #expect(
+            AppLocalization.localizedString(
+                "ssh.connections.learning.log.status.success",
+                preferredLanguages: ["en-US"]
+            ) == "Success"
+        )
+        #expect(
+            AppLocalization.localizedString(
+                "ssh.connections.learning.log.status.failure",
+                preferredLanguages: ["zh-Hans"]
+            ) == "失败"
+        )
+        #expect(
+            AppLocalization.localizedString(
+                "ssh.connections.learning.started_message",
+                preferredLanguages: ["en-US"]
+            ) == "Learning command started."
+        )
+        #expect(
+            AppLocalization.localizedString(
+                "ssh.connections.learning.initialize_workspace",
+                preferredLanguages: ["en-US"]
+            ) == "Initialize Chat + Learn Workspace"
+        )
+        #expect(
+            AppLocalization.localizedString(
+                "ssh.connections.learning.skill_repos.check_updates",
+                preferredLanguages: ["en-US"]
+            ) == "Check Updates"
+        )
+        #expect(
+            AppLocalization.localizedString(
+                "ssh.connections.learning.permission_denied_message",
+                preferredLanguages: ["zh-Hans"]
+            ) == "学习命令已取消：执行权限被拒绝。"
+        )
+        #expect(
+            AppLocalization.localizedString(
+                "ssh.connections.learning.chat_workspace_path",
+                preferredLanguages: ["zh-Hans"]
+            ) == "Chat 项目根目录"
+        )
+        #expect(
+            AppLocalization.localizedString(
+                "ssh.connections.learning.chat_workspace_required",
+                preferredLanguages: ["en-US"]
+            ) == "Chat workspace root path is required."
+        )
+        #expect(
+            AppLocalization.localizedString(
+                "ssh.connections.learning.learn_workspace_auto_path",
+                preferredLanguages: ["zh-Hans"]
+            ) == "Learn 项目路径（自动解析）"
+        )
+        #expect(
+            AppLocalization.localizedString(
+                "ssh.connections.learning.initialize_confirm_title",
+                preferredLanguages: ["en-US"]
+            ) == "Confirm initialization"
+        )
+        #expect(
+            AppLocalization.localizedString(
+                "ssh.connections.learning.skill_repos.checking",
+                preferredLanguages: ["zh-Hans"]
+            ) == "正在检查 skill 仓库状态..."
+        )
+        #expect(
+            AppLocalization.localizedString(
+                "ssh.connections.learning.skill_repos.status.latest",
+                preferredLanguages: ["zh-Hans"]
+            ) == "已最新"
         )
     }
 

@@ -45,6 +45,111 @@ struct AITerminalManagerTests {
         #expect(configuration.savedHosts.map(\.id) == ["ssh:buildbox"])
     }
 
+    @Test func decodesLegacyConfigurationWithDefaultLearningSettings() throws {
+        let data = Data(#"{"schemaVersion":2,"savedHosts":[],"importedHostOverrides":[],"favoriteHostIDs":[],"recentHosts":[],"workspaces":[]}"#.utf8)
+        let configuration = try JSONDecoder().decode(AITerminalManagerConfiguration.self, from: data)
+
+        #expect(configuration.learningSettings.enabled)
+        #expect(configuration.learningSettings.preferTabWorkingDirectory)
+        #expect(configuration.learningSettings.notesRelativePath == AITerminalLearningSettings.defaultNotesRelativePath)
+        #expect(configuration.learningSettings.commandTemplate == AITerminalLearningSettings.defaultCommandTemplate)
+        #expect(configuration.learningSettings.fastModel == AITerminalLearningSettings.defaultFastModel)
+        #expect(configuration.learningSettings.promptTemplate == AITerminalLearningSettings.defaultPromptTemplate)
+        #expect(configuration.learningLogs.isEmpty)
+    }
+
+    @Test func decodesLegacyLearningKeysIntoCommandTemplate() throws {
+        let data = Data(#"{"schemaVersion":3,"savedHosts":[],"importedHostOverrides":[],"favoriteHostIDs":[],"recentHosts":[],"workspaces":[],"learningSettings":{"enabled":true,"preferTabWorkingDirectory":false,"defaultProjectPath":"/tmp/project","notesRelativePath":".agents/memory/custom.md","codexCommand":"c codex -m \"$MODEL\" \"$PROMPT\"","codexModel":"grokcodex41fast"}}"#.utf8)
+        let configuration = try JSONDecoder().decode(AITerminalManagerConfiguration.self, from: data)
+
+        #expect(configuration.learningSettings.commandTemplate == #"c codex -m "$MODEL" "$PROMPT""#)
+        #expect(configuration.learningSettings.fastModel == "grokcodex41fast")
+        #expect(configuration.learningSettings.promptTemplate == AITerminalLearningSettings.defaultPromptTemplate)
+    }
+
+    @Test func normalizesCodex1mExecCommandTemplateWithSkipGitRepoCheck() {
+        let settings = AITerminalLearningSettings(
+            enabled: true,
+            preferTabWorkingDirectory: false,
+            defaultProjectPath: "/tmp/project",
+            notesRelativePath: "knowledges/inbox.md",
+            commandTemplate: #"/Users/leongong/.local/bin/codex1m exec -C "$LEARN_WORKSPACE" "$PROMPT""#,
+            fastModel: "gpt-5-codex",
+            promptTemplate: "ignored"
+        )
+
+        #expect(settings.commandTemplate.contains("--skip-git-repo-check"))
+        #expect(settings.commandTemplate.contains("/Users/leongong/.local/bin/codex1m exec"))
+
+        let context = settings.resolvedContext(selection: "test", tabWorkingDirectory: "/tmp/project")
+        #expect(context.commandTemplate.contains("--skip-git-repo-check"))
+    }
+
+    @Test func learningSettingsResolveContextWithTabWorkingDirectory() {
+        let settings = AITerminalLearningSettings(
+            enabled: true,
+            preferTabWorkingDirectory: true,
+            defaultProjectPath: "/tmp/default",
+            notesRelativePath: "knowledges/inbox.md",
+            commandTemplate: #"c codex -m "$MODEL" "$PROMPT""#,
+            fastModel: "grokcodex41fast",
+            promptTemplate: "Project=$PROJECT_PATH\nNotes=$NOTES_ABSOLUTE_PATH\nSelection=$SELECTION"
+        )
+
+        let context = settings.resolvedContext(
+            selection: "  hello world  ",
+            tabWorkingDirectory: "/tmp/current-tab"
+        )
+        let expectedPrompt = AITerminalLearningSettings.defaultPromptTemplate.replacingOccurrences(
+            of: "$SELECTION",
+            with: "hello world"
+        )
+
+        #expect(context.projectPath == "/tmp/default")
+        #expect(context.notesAbsolutePath == "/tmp/default/knowledges/inbox.md")
+        #expect(context.prompt == expectedPrompt)
+        #expect(context.environmentVariables["MODEL"] == "grokcodex41fast")
+    }
+
+    @Test func learningSettingsResolveContextFallsBackToDefaultProjectPath() {
+        let settings = AITerminalLearningSettings(
+            enabled: true,
+            preferTabWorkingDirectory: true,
+            defaultProjectPath: "/tmp/default-project",
+            notesRelativePath: "knowledges/inbox.md",
+            commandTemplate: #"c codex -m "$MODEL" "$PROMPT""#,
+            fastModel: "gpt-5-codex",
+            promptTemplate: "Path=$PROJECT_PATH"
+        )
+
+        let context = settings.resolvedContext(
+            selection: "selection",
+            tabWorkingDirectory: nil
+        )
+        let expectedPrompt = AITerminalLearningSettings.defaultPromptTemplate.replacingOccurrences(
+            of: "$SELECTION",
+            with: "selection"
+        )
+
+        #expect(context.projectPath == "/tmp/default-project")
+        #expect(context.notesAbsolutePath == "/tmp/default-project/knowledges/inbox.md")
+        #expect(context.prompt == expectedPrompt)
+    }
+
+    @Test func learningSettingsDeriveChatAndLearnWorkspacePaths() {
+        let chatWorkspacePath = "/tmp/my-chat-workspace"
+        let learnWorkspacePath = AITerminalLearningSettings.learnWorkspacePath(
+            fromChatWorkspacePath: chatWorkspacePath
+        )
+
+        #expect(learnWorkspacePath == "/tmp/my-chat-workspace/codex_learn_workspace")
+        #expect(
+            AITerminalLearningSettings.chatWorkspacePath(
+                fromLearnWorkspacePath: learnWorkspacePath
+            ) == chatWorkspacePath
+        )
+    }
+
     @Test func parsesSSHConfigHosts() {
         let config = #"""
         Host *
@@ -222,6 +327,160 @@ struct AITerminalManagerTests {
         #expect(store.configuration.savedHosts.first?.transport == .localmcd)
         #expect(store.configuration.savedHosts.first?.defaultDirectory == "/tmp/grokmcp")
         #expect(store.configuration.savedHosts.first?.startupCommands == ["cd /tmp/grokmcp", "c codex"])
+    }
+
+    @Test @MainActor func storeSavesLearningSettings() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("json")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        store.saveLearningSettings(.init(
+            enabled: true,
+            preferTabWorkingDirectory: false,
+            defaultProjectPath: "/Users/leongong/Desktop/LeonProjects/codex_chat_workspace",
+            notesRelativePath: ".agents/memory/custom.md",
+            commandTemplate: #"c codex -m "$MODEL" "$PROMPT""#,
+            fastModel: "grokcodex41fast",
+            promptTemplate: "Summarize:\n$SELECTION"
+        ))
+
+        let data = try Data(contentsOf: tempURL)
+        let configuration = try JSONDecoder().decode(AITerminalManagerConfiguration.self, from: data)
+
+        #expect(configuration.learningSettings.enabled)
+        #expect(!configuration.learningSettings.preferTabWorkingDirectory)
+        #expect(configuration.learningSettings.defaultProjectPath == "/Users/leongong/Desktop/LeonProjects/codex_chat_workspace")
+        #expect(configuration.learningSettings.notesRelativePath == ".agents/memory/custom.md")
+        #expect(configuration.learningSettings.commandTemplate == #"c codex -m "$MODEL" "$PROMPT""#)
+        #expect(configuration.learningSettings.fastModel == AITerminalLearningSettings.defaultFastModel)
+        #expect(configuration.learningSettings.promptTemplate == AITerminalLearningSettings.defaultPromptTemplate)
+    }
+
+    @Test @MainActor func storeInitializesChatAndLearnWorkspaceScaffold() throws {
+        let tempConfigURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("json")
+        let tempChatWorkspaceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ghostty-learning-bootstrap-\(UUID().uuidString)", isDirectory: true)
+
+        defer {
+            try? FileManager.default.removeItem(at: tempChatWorkspaceURL)
+            try? FileManager.default.removeItem(at: tempConfigURL)
+        }
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempConfigURL
+        )
+
+        let result = try #require(
+            store.initializeChatAndLearnWorkspace(
+                chatWorkspacePath: tempChatWorkspaceURL.path,
+                commandTemplate: AITerminalLearningSettings.defaultCommandTemplate
+            )
+        )
+
+        let learnWorkspaceURL = URL(fileURLWithPath: result.learnWorkspacePath, isDirectory: true)
+        let expectedSkillURL = learnWorkspaceURL
+            .appendingPathComponent(".codex/skills/terminal-learning-notes/SKILL.md")
+        let expectedScriptURL = learnWorkspaceURL
+            .appendingPathComponent(".codex/skills/terminal-learning-notes/scripts/run_learn_capture.sh")
+        let expectedKnowledgeURL = URL(fileURLWithPath: result.chatWorkspacePath, isDirectory: true)
+            .appendingPathComponent("knowledges/inbox.md")
+
+        #expect(result.createdFileCount > 0)
+        #expect(FileManager.default.fileExists(atPath: expectedSkillURL.path))
+        #expect(FileManager.default.fileExists(atPath: expectedScriptURL.path))
+        #expect(FileManager.default.fileExists(atPath: expectedKnowledgeURL.path))
+        #expect(store.learningSettings.defaultProjectPath == result.learnWorkspacePath)
+        #expect(store.learningSettings.notesRelativePath == AITerminalLearningSettings.defaultNotesRelativePath)
+    }
+
+    @Test @MainActor func initializeWorkspaceMigratesLegacyLearnScriptCommandTemplate() throws {
+        let tempConfigURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("json")
+        let tempChatWorkspaceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ghostty-learning-bootstrap-\(UUID().uuidString)", isDirectory: true)
+        let learnWorkspaceURL = tempChatWorkspaceURL
+            .appendingPathComponent("codex_learn_workspace", isDirectory: true)
+        let legacyScriptURL = learnWorkspaceURL
+            .appendingPathComponent(".codex/skills/terminal-learning-notes/scripts/run_learn_capture.sh")
+
+        defer {
+            try? FileManager.default.removeItem(at: tempChatWorkspaceURL)
+            try? FileManager.default.removeItem(at: tempConfigURL)
+        }
+
+        try FileManager.default.createDirectory(
+            at: legacyScriptURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        #!/usr/bin/env bash
+        LEARN_EXEC_COMMAND_TEMPLATE="${LEARN_EXEC_COMMAND_TEMPLATE:-/Users/leongong/.local/bin/codex1m exec -c 'mcp_servers.gemini.enabled=false' -c 'mcp_servers.grok-research.enabled=false' -c 'mcp_servers.opus-planning.enabled=false' -C \"$LEARN_WORKSPACE\" \"$PROMPT\"}"
+        """.write(to: legacyScriptURL, atomically: true, encoding: .utf8)
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempConfigURL
+        )
+        _ = try #require(store.initializeChatAndLearnWorkspace(
+            chatWorkspacePath: tempChatWorkspaceURL.path,
+            commandTemplate: AITerminalLearningSettings.defaultCommandTemplate
+        ))
+
+        let migratedScript = try String(contentsOf: legacyScriptURL, encoding: .utf8)
+        #expect(migratedScript.contains("codex1m exec --skip-git-repo-check"))
+        #expect(!migratedScript.contains("codex1m exec -c"))
+    }
+
+    @Test @MainActor func storeAppendsAndClearsLearningLogs() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("json")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        store.appendLearningLog(
+            status: .success,
+            outputSummary: "summary one",
+            commandTemplate: #"c codex exec -m "$MODEL" "$PROMPT""#,
+            projectPath: "/tmp/project-a",
+            notesAbsolutePath: "/tmp/project-a/.agents/memory/inbox.md"
+        )
+        store.appendLearningLog(
+            status: .failure,
+            outputSummary: "   ",
+            commandTemplate: #"c codex exec -m "$MODEL" "$PROMPT""#,
+            projectPath: "/tmp/project-b",
+            notesAbsolutePath: "/tmp/project-b/.agents/memory/inbox.md"
+        )
+
+        #expect(store.configuration.learningLogs.count == 2)
+        #expect(store.configuration.learningLogs[0].status == .success)
+        #expect(store.configuration.learningLogs[0].outputSummary == "summary one")
+        #expect(store.configuration.learningLogs[1].status == .failure)
+        #expect(store.configuration.learningLogs[1].outputSummary == "(no output)")
+
+        let savedData = try Data(contentsOf: tempURL)
+        let savedConfiguration = try JSONDecoder().decode(AITerminalManagerConfiguration.self, from: savedData)
+        #expect(savedConfiguration.learningLogs.count == 2)
+
+        store.clearLearningLogs()
+        #expect(store.configuration.learningLogs.isEmpty)
+
+        let clearedData = try Data(contentsOf: tempURL)
+        let clearedConfiguration = try JSONDecoder().decode(AITerminalManagerConfiguration.self, from: clearedData)
+        #expect(clearedConfiguration.learningLogs.isEmpty)
     }
 
     @Test func derivesHostNameFromAliasOrHostname() {

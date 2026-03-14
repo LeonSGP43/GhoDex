@@ -265,6 +265,306 @@ struct AITerminalWorkspaceTemplate: Identifiable, Codable, Hashable, Sendable {
     var directory: String
 }
 
+struct AITerminalLearningSettings: Codable, Hashable, Sendable {
+    var enabled: Bool
+    var preferTabWorkingDirectory: Bool
+    var defaultProjectPath: String
+    var notesRelativePath: String
+    var commandTemplate: String
+    var fastModel: String
+    var promptTemplate: String
+
+    static let chatWorkspaceDirectoryName = "codex_chat_workspace"
+    static let learnWorkspaceDirectoryName = "codex_learn_workspace"
+    static var defaultChatWorkspacePath: String {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(chatWorkspaceDirectoryName, isDirectory: true)
+            .path
+    }
+    static var defaultLearnWorkspacePath: String {
+        learnWorkspacePath(fromChatWorkspacePath: defaultChatWorkspacePath)
+    }
+    static let defaultNotesRelativePath = "../knowledges/inbox.md"
+    static let defaultCommandTemplate = #"/Users/leongong/.local/bin/codex1m exec --skip-git-repo-check -c 'mcp_servers.gemini.enabled=false' -c 'mcp_servers.grok-research.enabled=false' -c 'mcp_servers.opus-planning.enabled=false' -C "$LEARN_WORKSPACE" "$PROMPT""#
+    static let defaultFastModel = "gpt-5-codex"
+    static let defaultPromptTemplate = #"""
+请执行“原文保真整理”。
+严格规则：
+1) 仅输出 Markdown 列表，每行以“- ”开头。
+2) 每条必须直接摘录原文，不得改写、扩写、推断、补充、联想。
+3) 不要输出标题、解释或任何额外文本。
+$SELECTION
+"""#
+
+    static let supportedPlaceholders = [
+        "$PROMPT",
+        "$SELECTION",
+        "$LEARN_WORKSPACE",
+        "$PROJECT_PATH",
+    ]
+
+    static func learnWorkspacePath(fromChatWorkspacePath chatWorkspacePath: String) -> String {
+        URL(fileURLWithPath: chatWorkspacePath, isDirectory: true)
+            .appendingPathComponent(learnWorkspaceDirectoryName, isDirectory: true)
+            .path
+    }
+
+    static func chatWorkspacePath(fromLearnWorkspacePath learnWorkspacePath: String) -> String {
+        let trimmed = learnWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        var url = URL(fileURLWithPath: trimmed, isDirectory: true)
+        if url.lastPathComponent == learnWorkspaceDirectoryName {
+            url.deleteLastPathComponent()
+        }
+        return url.path
+    }
+
+    static func normalizedCommandTemplate(_ commandTemplate: String) -> String {
+        let trimmed = commandTemplate.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return defaultCommandTemplate }
+        guard !trimmed.contains("--skip-git-repo-check") else { return trimmed }
+
+        let absoluteMarker = "/Users/leongong/.local/bin/codex1m exec"
+        if trimmed.contains(absoluteMarker) {
+            return trimmed.replacingOccurrences(
+                of: absoluteMarker,
+                with: "\(absoluteMarker) --skip-git-repo-check",
+                options: [],
+                range: trimmed.range(of: absoluteMarker)
+            )
+        }
+
+        let genericMarker = "codex1m exec"
+        if trimmed.contains(genericMarker) {
+            return trimmed.replacingOccurrences(
+                of: genericMarker,
+                with: "\(genericMarker) --skip-git-repo-check",
+                options: [],
+                range: trimmed.range(of: genericMarker)
+            )
+        }
+
+        return trimmed
+    }
+
+    struct ResolvedContext: Hashable, Sendable {
+        var commandTemplate: String
+        var fastModel: String
+        var prompt: String
+        var selection: String
+        var projectPath: String
+        var notesRelativePath: String
+        var notesAbsolutePath: String
+        var tabWorkingDirectory: String
+
+        var environmentVariables: [String: String] {
+            [
+                "MODEL": fastModel,
+                "PROMPT": prompt,
+                "SELECTION": selection,
+                "PROJECT_PATH": projectPath,
+                "LEARN_WORKSPACE": projectPath,
+                "NOTES_RELATIVE_PATH": notesRelativePath,
+                "NOTES_ABSOLUTE_PATH": notesAbsolutePath,
+                "TAB_WORKING_DIRECTORY": tabWorkingDirectory,
+            ]
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case preferTabWorkingDirectory
+        case defaultProjectPath
+        case notesRelativePath
+        case commandTemplate
+        case fastModel
+        case promptTemplate
+
+        // Legacy keys from schemaVersion 3.
+        case codexCommand
+        case codexModel
+    }
+
+    init(
+        enabled: Bool = true,
+        preferTabWorkingDirectory: Bool = true,
+        defaultProjectPath: String = AITerminalLearningSettings.defaultLearnWorkspacePath,
+        notesRelativePath: String = AITerminalLearningSettings.defaultNotesRelativePath,
+        commandTemplate: String = AITerminalLearningSettings.defaultCommandTemplate,
+        fastModel: String = AITerminalLearningSettings.defaultFastModel,
+        promptTemplate: String = AITerminalLearningSettings.defaultPromptTemplate
+    ) {
+        self.enabled = enabled
+        self.preferTabWorkingDirectory = preferTabWorkingDirectory
+        self.defaultProjectPath = defaultProjectPath
+        self.notesRelativePath = notesRelativePath
+        self.commandTemplate = Self.normalizedCommandTemplate(commandTemplate)
+        self.fastModel = fastModel
+        self.promptTemplate = promptTemplate
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        preferTabWorkingDirectory = try container.decodeIfPresent(Bool.self, forKey: .preferTabWorkingDirectory) ?? true
+        defaultProjectPath = try container.decodeIfPresent(String.self, forKey: .defaultProjectPath) ?? Self.defaultLearnWorkspacePath
+        notesRelativePath = try container.decodeIfPresent(String.self, forKey: .notesRelativePath) ?? Self.defaultNotesRelativePath
+
+        commandTemplate = Self.normalizedCommandTemplate(
+            try container.decodeIfPresent(String.self, forKey: .commandTemplate)
+            ?? container.decodeIfPresent(String.self, forKey: .codexCommand)
+            ?? Self.defaultCommandTemplate
+        )
+
+        fastModel = try container.decodeIfPresent(String.self, forKey: .fastModel)
+            ?? container.decodeIfPresent(String.self, forKey: .codexModel)
+            ?? Self.defaultFastModel
+
+        promptTemplate = try container.decodeIfPresent(String.self, forKey: .promptTemplate)
+            ?? Self.defaultPromptTemplate
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(enabled, forKey: .enabled)
+        try container.encode(preferTabWorkingDirectory, forKey: .preferTabWorkingDirectory)
+        try container.encode(defaultProjectPath, forKey: .defaultProjectPath)
+        try container.encode(notesRelativePath, forKey: .notesRelativePath)
+        try container.encode(commandTemplate, forKey: .commandTemplate)
+        try container.encode(fastModel, forKey: .fastModel)
+        try container.encode(promptTemplate, forKey: .promptTemplate)
+    }
+
+    func resolvedContext(selection: String, tabWorkingDirectory: String?) -> ResolvedContext {
+        let trimmedSelection = selection.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedTabWorkingDirectory = tabWorkingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        let resolvedCommandTemplate = Self.normalizedCommandTemplate(commandTemplate)
+
+        let trimmedFastModel = fastModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedFastModel = trimmedFastModel.isEmpty
+            ? Self.defaultFastModel
+            : trimmedFastModel
+
+        let trimmedDefaultProjectPath = defaultProjectPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedProjectPath: String = if !trimmedDefaultProjectPath.isEmpty {
+            trimmedDefaultProjectPath
+        } else if preferTabWorkingDirectory && !trimmedTabWorkingDirectory.isEmpty {
+            trimmedTabWorkingDirectory
+        } else {
+            trimmedTabWorkingDirectory
+        }
+
+        let trimmedNotesRelativePath = notesRelativePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedNotesRelativePath = trimmedNotesRelativePath.isEmpty
+            ? Self.defaultNotesRelativePath
+            : trimmedNotesRelativePath
+
+        let resolvedNotesAbsolutePath: String = if resolvedNotesRelativePath.hasPrefix("/") {
+            resolvedNotesRelativePath
+        } else if !resolvedProjectPath.isEmpty {
+            URL(fileURLWithPath: resolvedProjectPath)
+                .appendingPathComponent(resolvedNotesRelativePath)
+                .path
+        } else if !trimmedTabWorkingDirectory.isEmpty {
+            URL(fileURLWithPath: trimmedTabWorkingDirectory)
+                .appendingPathComponent(resolvedNotesRelativePath)
+                .path
+        } else {
+            resolvedNotesRelativePath
+        }
+
+        // Prompt editing is hidden in the UI; keep runtime behavior deterministic and lightweight.
+        let resolvedPromptTemplate = Self.defaultPromptTemplate
+
+        let replacements = [
+            "$MODEL": resolvedFastModel,
+            "$SELECTION": trimmedSelection,
+            "$PROJECT_PATH": resolvedProjectPath,
+            "$LEARN_WORKSPACE": resolvedProjectPath,
+            "$NOTES_RELATIVE_PATH": resolvedNotesRelativePath,
+            "$NOTES_ABSOLUTE_PATH": resolvedNotesAbsolutePath,
+            "$TAB_WORKING_DIRECTORY": trimmedTabWorkingDirectory,
+        ]
+        let resolvedPrompt = Self.renderTemplate(
+            resolvedPromptTemplate,
+            replacements: replacements
+        )
+
+        return .init(
+            commandTemplate: resolvedCommandTemplate,
+            fastModel: resolvedFastModel,
+            prompt: resolvedPrompt,
+            selection: trimmedSelection,
+            projectPath: resolvedProjectPath,
+            notesRelativePath: resolvedNotesRelativePath,
+            notesAbsolutePath: resolvedNotesAbsolutePath,
+            tabWorkingDirectory: trimmedTabWorkingDirectory
+        )
+    }
+
+    private static func renderTemplate(
+        _ template: String,
+        replacements: [String: String]
+    ) -> String {
+        let sorted = replacements.sorted { lhs, rhs in
+            lhs.key.count > rhs.key.count
+        }
+        return sorted.reduce(template) { partial, item in
+            partial.replacingOccurrences(of: item.key, with: item.value)
+        }
+    }
+}
+
+struct AITerminalLearningLogEntry: Identifiable, Codable, Hashable, Sendable {
+    enum Status: String, Codable, Sendable {
+        case success
+        case failure
+
+        var displayName: String {
+            switch self {
+            case .success:
+                return L10n.SSHConnections.learningLogStatusSuccess
+            case .failure:
+                return L10n.SSHConnections.learningLogStatusFailure
+            }
+        }
+    }
+
+    let id: UUID
+    var createdAt: Date
+    var status: Status
+    var outputSummary: String
+    var outputDetail: String?
+    var exitCode: Int32?
+    var commandTemplate: String
+    var projectPath: String
+    var notesAbsolutePath: String
+
+    init(
+        id: UUID = UUID(),
+        createdAt: Date = .now,
+        status: Status,
+        outputSummary: String,
+        outputDetail: String? = nil,
+        exitCode: Int32? = nil,
+        commandTemplate: String,
+        projectPath: String,
+        notesAbsolutePath: String
+    ) {
+        self.id = id
+        self.createdAt = createdAt
+        self.status = status
+        self.outputSummary = outputSummary
+        self.outputDetail = outputDetail
+        self.exitCode = exitCode
+        self.commandTemplate = commandTemplate
+        self.projectPath = projectPath
+        self.notesAbsolutePath = notesAbsolutePath
+    }
+}
+
 struct AITerminalManagerConfiguration: Codable, Sendable {
     var schemaVersion: Int
     var savedHosts: [AITerminalHost]
@@ -272,14 +572,18 @@ struct AITerminalManagerConfiguration: Codable, Sendable {
     var favoriteHostIDs: [String]
     var recentHosts: [AITerminalRecentHostRecord]
     var workspaces: [AITerminalWorkspaceTemplate]
+    var learningSettings: AITerminalLearningSettings
+    var learningLogs: [AITerminalLearningLogEntry]
 
     init(
-        schemaVersion: Int = 2,
+        schemaVersion: Int = 4,
         savedHosts: [AITerminalHost] = [],
         importedHostOverrides: [AITerminalHost] = [],
         favoriteHostIDs: [String] = [],
         recentHosts: [AITerminalRecentHostRecord] = [],
-        workspaces: [AITerminalWorkspaceTemplate] = []
+        workspaces: [AITerminalWorkspaceTemplate] = [],
+        learningSettings: AITerminalLearningSettings = .init(),
+        learningLogs: [AITerminalLearningLogEntry] = []
     ) {
         self.schemaVersion = schemaVersion
         self.savedHosts = savedHosts
@@ -287,6 +591,8 @@ struct AITerminalManagerConfiguration: Codable, Sendable {
         self.favoriteHostIDs = favoriteHostIDs
         self.recentHosts = recentHosts
         self.workspaces = workspaces
+        self.learningSettings = learningSettings
+        self.learningLogs = learningLogs
     }
 
     enum CodingKeys: String, CodingKey {
@@ -296,6 +602,8 @@ struct AITerminalManagerConfiguration: Codable, Sendable {
         case favoriteHostIDs
         case recentHosts
         case workspaces
+        case learningSettings
+        case learningLogs
         case hosts
     }
 
@@ -309,6 +617,8 @@ struct AITerminalManagerConfiguration: Codable, Sendable {
         favoriteHostIDs = try container.decodeIfPresent([String].self, forKey: .favoriteHostIDs) ?? []
         recentHosts = try container.decodeIfPresent([AITerminalRecentHostRecord].self, forKey: .recentHosts) ?? []
         workspaces = try container.decodeIfPresent([AITerminalWorkspaceTemplate].self, forKey: .workspaces) ?? []
+        learningSettings = try container.decodeIfPresent(AITerminalLearningSettings.self, forKey: .learningSettings) ?? .init()
+        learningLogs = try container.decodeIfPresent([AITerminalLearningLogEntry].self, forKey: .learningLogs) ?? []
     }
 
     func encode(to encoder: Encoder) throws {
@@ -319,6 +629,8 @@ struct AITerminalManagerConfiguration: Codable, Sendable {
         try container.encode(favoriteHostIDs, forKey: .favoriteHostIDs)
         try container.encode(recentHosts, forKey: .recentHosts)
         try container.encode(workspaces, forKey: .workspaces)
+        try container.encode(learningSettings, forKey: .learningSettings)
+        try container.encode(learningLogs, forKey: .learningLogs)
     }
 }
 
