@@ -19,6 +19,17 @@ final class MockSSHConnectionCredentialStore: SSHConnectionCredentialStore {
     }
 }
 
+private struct HeartbeatPressureResult: Codable {
+    var mode: String
+    var maxConcurrentTasks: Int
+    var taskCount: Int
+    var taskSleepSeconds: Double
+    var elapsedSeconds: Double
+    var sequentialSeconds: Double
+    var speedupVsSequential: Double
+    var peakRunningCount: Int
+}
+
 struct AITerminalManagerTests {
     @Test @MainActor func sshConnectionsWindowsWithoutTabGroupsAreNotTreatedAsSameGroup() {
         let lhs = NSWindow()
@@ -43,6 +54,10 @@ struct AITerminalManagerTests {
 
         #expect(configuration.favoriteHostIDs.isEmpty)
         #expect(configuration.savedHosts.map(\.id) == ["ssh:buildbox"])
+        #expect(configuration.heartbeatQueueSettings.enabled)
+        #expect(configuration.heartbeatQueueSettings.heartbeatIntervalSeconds == 5)
+        #expect(configuration.heartbeatQueueSettings.maxConcurrentTasks == 4)
+        #expect(configuration.heartbeatTasks.isEmpty)
     }
 
     @Test func decodesLegacyConfigurationWithDefaultLearningSettings() throws {
@@ -327,6 +342,280 @@ struct AITerminalManagerTests {
         #expect(store.configuration.savedHosts.first?.transport == .localmcd)
         #expect(store.configuration.savedHosts.first?.defaultDirectory == "/tmp/grokmcp")
         #expect(store.configuration.savedHosts.first?.startupCommands == ["cd /tmp/grokmcp", "c codex"])
+    }
+
+    @Test @MainActor func storeClampsHeartbeatIntervalSettings() {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("json")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        store.saveHeartbeatQueueSettings(.init(enabled: true, heartbeatIntervalSeconds: 0.1, maxConcurrentTasks: 0))
+        #expect(store.heartbeatQueueSettings.heartbeatIntervalSeconds == 0.5)
+        #expect(store.heartbeatQueueSettings.maxConcurrentTasks == 1)
+
+        store.saveHeartbeatQueueSettings(.init(enabled: true, heartbeatIntervalSeconds: 120, maxConcurrentTasks: 999))
+        #expect(store.heartbeatQueueSettings.heartbeatIntervalSeconds == 60)
+        #expect(store.heartbeatQueueSettings.maxConcurrentTasks == 16)
+    }
+
+    @Test @MainActor func storeManagesHeartbeatQueueLifecycle() {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("json")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+        store.saveHeartbeatQueueSettings(.init(enabled: false, heartbeatIntervalSeconds: 5, maxConcurrentTasks: 4))
+
+        let queuedID = store.enqueueHeartbeatTask(command: "codex exec \"status\"")
+        #expect(queuedID != nil)
+        #expect(store.heartbeatQueuedCount == 1)
+
+        if let queuedID {
+            store.cancelHeartbeatTask(queuedID)
+        }
+        #expect(store.heartbeatQueuedCount == 0)
+        #expect(store.heartbeatQueueTasks.first?.status == .cancelled)
+
+        store.clearFinishedHeartbeatTasks()
+        #expect(store.heartbeatQueueTasks.isEmpty)
+    }
+
+    @Test @MainActor func storeRunsDueHeartbeatTasksWithBoundedConcurrencyUnderLoad() async {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("json")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        let maxConcurrentTasks = 4
+        let taskCount = 64
+        let taskSleepSeconds = 0.2
+        store.saveHeartbeatQueueSettings(.init(
+            enabled: true,
+            heartbeatIntervalSeconds: 0.5,
+            maxConcurrentTasks: maxConcurrentTasks
+        ))
+
+        let start = Date()
+        for _ in 0..<taskCount {
+            let id = store.enqueueHeartbeatTask(
+                command: "sleep \(taskSleepSeconds)"
+            )
+            #expect(id != nil)
+        }
+
+        let timeout = Date().addingTimeInterval(20)
+        var peakRunningCount = 0
+
+        while Date() < timeout {
+            peakRunningCount = max(peakRunningCount, store.heartbeatRunningCount)
+            if store.heartbeatDoneCount == taskCount {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+
+        let elapsed = Date().timeIntervalSince(start)
+        let sequentialRuntime = Double(taskCount) * taskSleepSeconds
+
+        #expect(
+            store.heartbeatDoneCount == taskCount,
+            "done=\(store.heartbeatDoneCount) running=\(store.heartbeatRunningCount) queued=\(store.heartbeatQueuedCount) failed=\(store.heartbeatFailedCount)"
+        )
+        #expect(store.heartbeatFailedCount == 0)
+        #expect(store.heartbeatQueuedCount == 0)
+        #expect(store.heartbeatRunningCount == 0)
+        #expect(peakRunningCount <= maxConcurrentTasks)
+        #expect(peakRunningCount > 1)
+        #expect(elapsed < sequentialRuntime * 0.7)
+    }
+
+    @Test @MainActor func storeBenchmarksHeartbeatConcurrencyCurve() async throws {
+        let taskCount = 64
+        let taskSleepSeconds = 0.2
+        let maxConcurrentValues = [1, 2, 4, 8]
+        let intervalSeconds = 0.5
+        var results: [HeartbeatPressureResult] = []
+
+        for maxConcurrent in maxConcurrentValues {
+            let baseDirectory = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+            let configURL = baseDirectory.appendingPathComponent("ai-terminal-manager.json")
+
+            let store = AITerminalManagerStore(
+                appDelegateProvider: { nil },
+                configurationURL: configURL
+            )
+            store.saveHeartbeatQueueSettings(.init(
+                enabled: true,
+                heartbeatIntervalSeconds: intervalSeconds,
+                maxConcurrentTasks: maxConcurrent
+            ))
+
+            for _ in 0..<taskCount {
+                let id = store.enqueueHeartbeatTask(command: "sleep \(taskSleepSeconds)")
+                #expect(id != nil)
+            }
+
+            let startedAt = Date()
+            let timeout = startedAt.addingTimeInterval(30)
+            var peakRunningCount = 0
+
+            while Date() < timeout {
+                peakRunningCount = max(peakRunningCount, store.heartbeatRunningCount)
+                if store.heartbeatDoneCount == taskCount {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+
+            let elapsed = Date().timeIntervalSince(startedAt)
+            let sequentialSeconds = Double(taskCount) * taskSleepSeconds
+            let speedup = sequentialSeconds / max(elapsed, 0.000_1)
+
+            #expect(
+                store.heartbeatDoneCount == taskCount,
+                "maxConcurrent=\(maxConcurrent) done=\(store.heartbeatDoneCount) running=\(store.heartbeatRunningCount) queued=\(store.heartbeatQueuedCount) failed=\(store.heartbeatFailedCount)"
+            )
+            #expect(store.heartbeatFailedCount == 0)
+            #expect(store.heartbeatQueuedCount == 0)
+            #expect(store.heartbeatRunningCount == 0)
+            #expect(peakRunningCount <= maxConcurrent)
+            #expect(peakRunningCount > 0)
+
+            results.append(.init(
+                mode: "direct_api",
+                maxConcurrentTasks: maxConcurrent,
+                taskCount: taskCount,
+                taskSleepSeconds: taskSleepSeconds,
+                elapsedSeconds: elapsed,
+                sequentialSeconds: sequentialSeconds,
+                speedupVsSequential: speedup,
+                peakRunningCount: peakRunningCount
+            ))
+        }
+
+        for index in 1..<results.count {
+            let previous = results[index - 1]
+            let current = results[index]
+            #expect(
+                current.elapsedSeconds < previous.elapsedSeconds * 0.95,
+                "expected faster runtime when maxConcurrent increases: prev=\(previous.maxConcurrentTasks):\(previous.elapsedSeconds)s, current=\(current.maxConcurrentTasks):\(current.elapsedSeconds)s"
+            )
+        }
+
+        let outputURL = URL(fileURLWithPath: "/tmp/ghostty-heartbeat-curve-direct.json")
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(results)
+        try data.write(to: outputURL, options: .atomic)
+    }
+
+    @Test @MainActor func storeBenchmarksHeartbeatInboxEndToEndCurve() async throws {
+        let taskCount = 64
+        let taskSleepSeconds = 0.2
+        let maxConcurrentValues = [1, 2, 4, 8]
+        let intervalSeconds = 0.5
+        var results: [HeartbeatPressureResult] = []
+
+        for maxConcurrent in maxConcurrentValues {
+            let baseDirectory = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+            let configURL = baseDirectory.appendingPathComponent("ai-terminal-manager.json")
+
+            let store = AITerminalManagerStore(
+                appDelegateProvider: { nil },
+                configurationURL: configURL
+            )
+            store.saveHeartbeatQueueSettings(.init(
+                enabled: true,
+                heartbeatIntervalSeconds: intervalSeconds,
+                maxConcurrentTasks: maxConcurrent
+            ))
+
+            let inboxURL = URL(fileURLWithPath: store.heartbeatInboxDirectoryPath, isDirectory: true)
+            let startedAt = Date()
+            for index in 0..<taskCount {
+                let payload: [String: Any] = [
+                    "action": "enqueue",
+                    "command": "sleep \(taskSleepSeconds)",
+                    "type": "exec",
+                ]
+                let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                let filename = String(format: "enqueue-%03d.json", index)
+                try data.write(to: inboxURL.appendingPathComponent(filename), options: .atomic)
+            }
+
+            let timeout = startedAt.addingTimeInterval(40)
+            var peakRunningCount = 0
+            while Date() < timeout {
+                peakRunningCount = max(peakRunningCount, store.heartbeatRunningCount)
+                if store.heartbeatDoneCount == taskCount {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+
+            let elapsed = Date().timeIntervalSince(startedAt)
+            let sequentialSeconds = Double(taskCount) * taskSleepSeconds
+            let speedup = sequentialSeconds / max(elapsed, 0.000_1)
+
+            let remainingFiles = try FileManager.default.contentsOfDirectory(
+                at: inboxURL,
+                includingPropertiesForKeys: nil
+            )
+            let failedInboxFiles = remainingFiles.filter { $0.pathExtension.lowercased() == "failed" }
+
+            #expect(
+                store.heartbeatDoneCount == taskCount,
+                "maxConcurrent=\(maxConcurrent) done=\(store.heartbeatDoneCount) running=\(store.heartbeatRunningCount) queued=\(store.heartbeatQueuedCount) failed=\(store.heartbeatFailedCount)"
+            )
+            #expect(store.heartbeatFailedCount == 0)
+            #expect(store.heartbeatQueuedCount == 0)
+            #expect(store.heartbeatRunningCount == 0)
+            #expect(peakRunningCount <= maxConcurrent)
+            #expect(peakRunningCount > 0)
+            #expect(failedInboxFiles.isEmpty)
+
+            results.append(.init(
+                mode: "inbox_e2e",
+                maxConcurrentTasks: maxConcurrent,
+                taskCount: taskCount,
+                taskSleepSeconds: taskSleepSeconds,
+                elapsedSeconds: elapsed,
+                sequentialSeconds: sequentialSeconds,
+                speedupVsSequential: speedup,
+                peakRunningCount: peakRunningCount
+            ))
+        }
+
+        for index in 1..<results.count {
+            let previous = results[index - 1]
+            let current = results[index]
+            #expect(
+                current.elapsedSeconds < previous.elapsedSeconds * 0.95,
+                "expected faster runtime when maxConcurrent increases (inbox): prev=\(previous.maxConcurrentTasks):\(previous.elapsedSeconds)s, current=\(current.maxConcurrentTasks):\(current.elapsedSeconds)s"
+            )
+        }
+
+        let outputURL = URL(fileURLWithPath: "/tmp/ghostty-heartbeat-curve-inbox.json")
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(results)
+        try data.write(to: outputURL, options: .atomic)
     }
 
     @Test @MainActor func storeSavesLearningSettings() throws {

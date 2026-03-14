@@ -265,6 +265,86 @@ struct AITerminalWorkspaceTemplate: Identifiable, Codable, Hashable, Sendable {
     var directory: String
 }
 
+enum AITerminalHeartbeatTaskType: String, Codable, CaseIterable, Sendable {
+    case exec
+    case script
+}
+
+enum AITerminalHeartbeatTaskStatus: String, Codable, CaseIterable, Sendable {
+    case queued
+    case running
+    case done
+    case failed
+    case cancelled
+}
+
+struct AITerminalHeartbeatTask: Identifiable, Codable, Hashable, Sendable {
+    let id: UUID
+    var command: String
+    var type: AITerminalHeartbeatTaskType
+    var executeAt: Date
+    var createdAt: Date
+    var updatedAt: Date
+    var status: AITerminalHeartbeatTaskStatus
+    var errorMessage: String?
+
+    init(
+        id: UUID = UUID(),
+        command: String,
+        type: AITerminalHeartbeatTaskType = .exec,
+        executeAt: Date,
+        createdAt: Date = .now,
+        updatedAt: Date = .now,
+        status: AITerminalHeartbeatTaskStatus = .queued,
+        errorMessage: String? = nil
+    ) {
+        self.id = id
+        self.command = command
+        self.type = type
+        self.executeAt = executeAt
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.status = status
+        self.errorMessage = errorMessage
+    }
+}
+
+struct AITerminalHeartbeatQueueSettings: Codable, Hashable, Sendable {
+    var enabled: Bool
+    var heartbeatIntervalSeconds: Double
+    var maxConcurrentTasks: Int
+
+    init(
+        enabled: Bool = true,
+        heartbeatIntervalSeconds: Double = 5,
+        maxConcurrentTasks: Int = 4
+    ) {
+        self.enabled = enabled
+        self.heartbeatIntervalSeconds = heartbeatIntervalSeconds
+        self.maxConcurrentTasks = maxConcurrentTasks
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case heartbeatIntervalSeconds
+        case maxConcurrentTasks
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        heartbeatIntervalSeconds = try container.decodeIfPresent(Double.self, forKey: .heartbeatIntervalSeconds) ?? 5
+        maxConcurrentTasks = try container.decodeIfPresent(Int.self, forKey: .maxConcurrentTasks) ?? 4
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(enabled, forKey: .enabled)
+        try container.encode(heartbeatIntervalSeconds, forKey: .heartbeatIntervalSeconds)
+        try container.encode(maxConcurrentTasks, forKey: .maxConcurrentTasks)
+    }
+}
+
 struct AITerminalLearningSettings: Codable, Hashable, Sendable {
     var enabled: Bool
     var preferTabWorkingDirectory: Bool
@@ -572,16 +652,20 @@ struct AITerminalManagerConfiguration: Codable, Sendable {
     var favoriteHostIDs: [String]
     var recentHosts: [AITerminalRecentHostRecord]
     var workspaces: [AITerminalWorkspaceTemplate]
+    var heartbeatQueueSettings: AITerminalHeartbeatQueueSettings
+    var heartbeatTasks: [AITerminalHeartbeatTask]
     var learningSettings: AITerminalLearningSettings
     var learningLogs: [AITerminalLearningLogEntry]
 
     init(
-        schemaVersion: Int = 4,
+        schemaVersion: Int = 5,
         savedHosts: [AITerminalHost] = [],
         importedHostOverrides: [AITerminalHost] = [],
         favoriteHostIDs: [String] = [],
         recentHosts: [AITerminalRecentHostRecord] = [],
         workspaces: [AITerminalWorkspaceTemplate] = [],
+        heartbeatQueueSettings: AITerminalHeartbeatQueueSettings = .init(),
+        heartbeatTasks: [AITerminalHeartbeatTask] = [],
         learningSettings: AITerminalLearningSettings = .init(),
         learningLogs: [AITerminalLearningLogEntry] = []
     ) {
@@ -591,6 +675,8 @@ struct AITerminalManagerConfiguration: Codable, Sendable {
         self.favoriteHostIDs = favoriteHostIDs
         self.recentHosts = recentHosts
         self.workspaces = workspaces
+        self.heartbeatQueueSettings = heartbeatQueueSettings
+        self.heartbeatTasks = heartbeatTasks
         self.learningSettings = learningSettings
         self.learningLogs = learningLogs
     }
@@ -602,6 +688,8 @@ struct AITerminalManagerConfiguration: Codable, Sendable {
         case favoriteHostIDs
         case recentHosts
         case workspaces
+        case heartbeatQueueSettings
+        case heartbeatTasks
         case learningSettings
         case learningLogs
         case hosts
@@ -617,6 +705,8 @@ struct AITerminalManagerConfiguration: Codable, Sendable {
         favoriteHostIDs = try container.decodeIfPresent([String].self, forKey: .favoriteHostIDs) ?? []
         recentHosts = try container.decodeIfPresent([AITerminalRecentHostRecord].self, forKey: .recentHosts) ?? []
         workspaces = try container.decodeIfPresent([AITerminalWorkspaceTemplate].self, forKey: .workspaces) ?? []
+        heartbeatQueueSettings = try container.decodeIfPresent(AITerminalHeartbeatQueueSettings.self, forKey: .heartbeatQueueSettings) ?? .init()
+        heartbeatTasks = try container.decodeIfPresent([AITerminalHeartbeatTask].self, forKey: .heartbeatTasks) ?? []
         learningSettings = try container.decodeIfPresent(AITerminalLearningSettings.self, forKey: .learningSettings) ?? .init()
         learningLogs = try container.decodeIfPresent([AITerminalLearningLogEntry].self, forKey: .learningLogs) ?? []
     }
@@ -629,6 +719,8 @@ struct AITerminalManagerConfiguration: Codable, Sendable {
         try container.encode(favoriteHostIDs, forKey: .favoriteHostIDs)
         try container.encode(recentHosts, forKey: .recentHosts)
         try container.encode(workspaces, forKey: .workspaces)
+        try container.encode(heartbeatQueueSettings, forKey: .heartbeatQueueSettings)
+        try container.encode(heartbeatTasks, forKey: .heartbeatTasks)
         try container.encode(learningSettings, forKey: .learningSettings)
         try container.encode(learningLogs, forKey: .learningLogs)
     }

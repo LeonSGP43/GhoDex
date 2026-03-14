@@ -10,6 +10,35 @@ final class AITerminalManagerStore: ObservableObject {
         var hasSentPassword: Bool
     }
 
+    private enum ExternalHeartbeatTaskAction: String, Codable {
+        case enqueue
+        case cancel
+        case clearFinished = "clear_finished"
+        case configure
+    }
+
+    private struct ExternalHeartbeatTaskRequest: Codable {
+        var action: ExternalHeartbeatTaskAction?
+        var command: String?
+        var type: AITerminalHeartbeatTaskType?
+        var executeAtMS: Int64?
+        var taskID: UUID?
+        var enabled: Bool?
+        var heartbeatIntervalSeconds: Double?
+        var maxConcurrentTasks: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case action
+            case command
+            case type
+            case executeAtMS = "execute_at_ms"
+            case taskID = "task_id"
+            case enabled
+            case heartbeatIntervalSeconds = "heartbeat_interval_seconds"
+            case maxConcurrentTasks = "max_concurrent_tasks"
+        }
+    }
+
     struct LearningWorkspaceBootstrapResult {
         var chatWorkspacePath: String
         var learnWorkspacePath: String
@@ -59,6 +88,8 @@ final class AITerminalManagerStore: ObservableObject {
     @Published private(set) var remoteSessions: [AITerminalRemoteSessionSummary] = []
     @Published private(set) var sessions: [AITerminalSessionSummary] = []
     @Published private(set) var tasks: [AITerminalTaskRecord] = []
+    @Published private(set) var heartbeatLastBeatAt: Date?
+    @Published private(set) var heartbeatIsExecutingTask = false
     @Published private(set) var selectedSessionID: UUID?
     @Published private(set) var selectedSessionVisibleText = ""
     @Published private(set) var selectedSessionScreenText = ""
@@ -68,6 +99,7 @@ final class AITerminalManagerStore: ObservableObject {
 
     private let appDelegateProvider: () -> AppDelegate?
     private let configurationURL: URL
+    private let heartbeatInboxDirectoryURL: URL
     private let sshConfigHostLoader: () -> [AITerminalHost]
     private let credentialStore: SSHConnectionCredentialStore
     private var registrations: [UUID: AITerminalLaunchRegistration] = [:]
@@ -75,9 +107,15 @@ final class AITerminalManagerStore: ObservableObject {
     private var pendingSSHPasswordAutomations: [UUID: PendingSSHPasswordAutomation] = [:]
     private var taskBindings: [UUID: UUID] = [:]
     private var sshPasswordAutomationTimer: Timer?
+    private var heartbeatTimer: Timer?
+    private var heartbeatSchedulerTimer: Timer?
     private static let maxLearningLogEntries = 200
     private static let maxLearningLogSummaryCharacters = 400
     private static let maxLearningLogDetailCharacters = 8_000
+    private static let minHeartbeatIntervalSeconds = 0.5
+    private static let maxHeartbeatIntervalSeconds = 60.0
+    private static let minHeartbeatMaxConcurrentTasks = 1
+    private static let maxHeartbeatMaxConcurrentTasks = 16
     private static let isRunningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     nonisolated private static let managedSkillRepositorySpecs: [ManagedSkillRepositorySpec] = [
         .init(
@@ -135,6 +173,9 @@ final class AITerminalManagerStore: ObservableObject {
     ) {
         self.appDelegateProvider = appDelegateProvider
         self.configurationURL = configurationURL ?? Self.defaultConfigurationURL()
+        self.heartbeatInboxDirectoryURL = self.configurationURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("ai-task-queue-inbox", isDirectory: true)
         self.sshConfigHostLoader = sshConfigHostLoader
         self.credentialStore = credentialStore
         self.configuration = (try? Self.loadConfiguration(from: self.configurationURL)) ?? .empty
@@ -144,6 +185,10 @@ final class AITerminalManagerStore: ObservableObject {
     deinit {
         sshPasswordAutomationTimer?.invalidate()
         sshPasswordAutomationTimer = nil
+        heartbeatTimer?.invalidate()
+        heartbeatTimer = nil
+        heartbeatSchedulerTimer?.invalidate()
+        heartbeatSchedulerTimer = nil
     }
 
     var availableHosts: [AITerminalHost] {
@@ -251,6 +296,115 @@ final class AITerminalManagerStore: ObservableObject {
         Array(configuration.learningLogs.reversed())
     }
 
+    var heartbeatQueueSettings: AITerminalHeartbeatQueueSettings {
+        configuration.heartbeatQueueSettings
+    }
+
+    var heartbeatQueueTasks: [AITerminalHeartbeatTask] {
+        configuration.heartbeatTasks.sorted {
+            if $0.executeAt != $1.executeAt {
+                return $0.executeAt > $1.executeAt
+            }
+            return $0.createdAt > $1.createdAt
+        }
+    }
+
+    var heartbeatInboxDirectoryPath: String {
+        heartbeatInboxDirectoryURL.path(percentEncoded: false)
+    }
+
+    var heartbeatQueuedCount: Int {
+        configuration.heartbeatTasks.filter { $0.status == .queued }.count
+    }
+
+    var heartbeatRunningCount: Int {
+        configuration.heartbeatTasks.filter { $0.status == .running }.count
+    }
+
+    var heartbeatDoneCount: Int {
+        configuration.heartbeatTasks.filter { $0.status == .done }.count
+    }
+
+    var heartbeatFailedCount: Int {
+        configuration.heartbeatTasks.filter { $0.status == .failed }.count
+    }
+
+    func saveHeartbeatQueueSettings(_ settings: AITerminalHeartbeatQueueSettings) {
+        let interval = min(
+            max(settings.heartbeatIntervalSeconds, Self.minHeartbeatIntervalSeconds),
+            Self.maxHeartbeatIntervalSeconds
+        )
+        let maxConcurrentTasks = min(
+            max(settings.maxConcurrentTasks, Self.minHeartbeatMaxConcurrentTasks),
+            Self.maxHeartbeatMaxConcurrentTasks
+        )
+        configuration.heartbeatQueueSettings = .init(
+            enabled: settings.enabled,
+            heartbeatIntervalSeconds: interval,
+            maxConcurrentTasks: maxConcurrentTasks
+        )
+        persistConfiguration()
+        syncHeartbeatRuntime()
+    }
+
+    @discardableResult
+    func enqueueHeartbeatTask(
+        command: String,
+        type: AITerminalHeartbeatTaskType = .exec,
+        executeAt: Date? = nil
+    ) -> UUID? {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            lastError = "Task queue command is required."
+            return nil
+        }
+
+        let task = AITerminalHeartbeatTask(
+            command: command,
+            type: type,
+            executeAt: executeAt ?? .now
+        )
+        configuration.heartbeatTasks.append(task)
+        persistConfiguration()
+        lastError = nil
+        syncHeartbeatRuntime()
+        return task.id
+    }
+
+    func cancelHeartbeatTask(_ id: UUID) {
+        guard let idx = configuration.heartbeatTasks.firstIndex(where: { $0.id == id }) else { return }
+        guard configuration.heartbeatTasks[idx].status == .queued else { return }
+        configuration.heartbeatTasks[idx].status = .cancelled
+        configuration.heartbeatTasks[idx].updatedAt = .now
+        persistConfiguration()
+        syncHeartbeatRuntime()
+    }
+
+    func cancelAllQueuedHeartbeatTasks() {
+        var changed = false
+        for index in configuration.heartbeatTasks.indices where configuration.heartbeatTasks[index].status == .queued {
+            configuration.heartbeatTasks[index].status = .cancelled
+            configuration.heartbeatTasks[index].updatedAt = .now
+            changed = true
+        }
+        guard changed else { return }
+        persistConfiguration()
+        syncHeartbeatRuntime()
+    }
+
+    func clearFinishedHeartbeatTasks() {
+        configuration.heartbeatTasks.removeAll { task in
+            switch task.status {
+            case .done, .failed, .cancelled:
+                return true
+            case .queued, .running:
+                return false
+            }
+        }
+        persistConfiguration()
+        syncHeartbeatRuntime()
+    }
+
     var managedSkillStatuses: [ManagedSkillRepositoryStatus] {
         managedSkillRepositoryStatuses
     }
@@ -280,6 +434,7 @@ final class AITerminalManagerStore: ObservableObject {
         importedSSHHosts = sshConfigHostLoader()
         reconcileImportedState()
         rebuildSessions()
+        syncHeartbeatRuntime()
     }
 
     func reloadImportedSSHHosts() {
@@ -2209,6 +2364,277 @@ final class AITerminalManagerStore: ObservableObject {
             .split(whereSeparator: \.isNewline)
             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
             .last(where: { !$0.isEmpty })
+    }
+
+    private func syncHeartbeatRuntime() {
+        ensureHeartbeatInboxDirectory()
+        ensureHeartbeatTimer()
+
+        guard configuration.heartbeatQueueSettings.enabled else {
+            stopHeartbeatExecutionTimers()
+            return
+        }
+
+        scheduleNextHeartbeatExecution()
+        runDueHeartbeatTasksIfNeeded()
+    }
+
+    private func ensureHeartbeatInboxDirectory() {
+        do {
+            try FileManager.default.createDirectory(
+                at: heartbeatInboxDirectoryURL,
+                withIntermediateDirectories: true
+            )
+        } catch {
+            lastError = "Failed to create task queue inbox: \(error.localizedDescription)"
+        }
+    }
+
+    private func ensureHeartbeatTimer() {
+        let interval = min(
+            max(configuration.heartbeatQueueSettings.heartbeatIntervalSeconds, Self.minHeartbeatIntervalSeconds),
+            Self.maxHeartbeatIntervalSeconds
+        )
+        if let heartbeatTimer {
+            if abs(heartbeatTimer.timeInterval - interval) < 0.001 {
+                return
+            }
+            heartbeatTimer.invalidate()
+            self.heartbeatTimer = nil
+        }
+
+        let timer = Timer(
+            timeInterval: interval,
+            repeats: true
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.heartbeatLastBeatAt = .now
+            self.importHeartbeatTasksFromInbox()
+            if self.configuration.heartbeatQueueSettings.enabled {
+                self.runDueHeartbeatTasksIfNeeded()
+            }
+        }
+        timer.tolerance = min(max(interval * 0.1, 0.05), 1)
+        RunLoop.main.add(timer, forMode: .common)
+        heartbeatTimer = timer
+    }
+
+    private func stopHeartbeatExecutionTimers() {
+        heartbeatSchedulerTimer?.invalidate()
+        heartbeatSchedulerTimer = nil
+        heartbeatIsExecutingTask = configuration.heartbeatTasks.contains(where: { $0.status == .running })
+    }
+
+    private func scheduleNextHeartbeatExecution() {
+        heartbeatSchedulerTimer?.invalidate()
+        heartbeatSchedulerTimer = nil
+
+        guard configuration.heartbeatQueueSettings.enabled else { return }
+
+        guard let nextDate = configuration.heartbeatTasks
+            .filter({ $0.status == .queued })
+            .map(\.executeAt)
+            .min()
+        else {
+            return
+        }
+
+        let delay = max(0, nextDate.timeIntervalSinceNow)
+        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
+            self?.runDueHeartbeatTasksIfNeeded()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        heartbeatSchedulerTimer = timer
+    }
+
+    private func runDueHeartbeatTasksIfNeeded() {
+        guard configuration.heartbeatQueueSettings.enabled else { return }
+
+        let runningCount = configuration.heartbeatTasks.filter { $0.status == .running }.count
+        let maxConcurrent = min(
+            max(configuration.heartbeatQueueSettings.maxConcurrentTasks, Self.minHeartbeatMaxConcurrentTasks),
+            Self.maxHeartbeatMaxConcurrentTasks
+        )
+        let availableSlots = maxConcurrent - runningCount
+        heartbeatIsExecutingTask = runningCount > 0
+
+        guard availableSlots > 0 else {
+            scheduleNextHeartbeatExecution()
+            return
+        }
+
+        let now = Date()
+        let dueIndices = configuration.heartbeatTasks.indices
+            .filter { index in
+                let task = configuration.heartbeatTasks[index]
+                return task.status == .queued && task.executeAt <= now
+            }
+            .sorted { lhs, rhs in
+                let lhsTask = configuration.heartbeatTasks[lhs]
+                let rhsTask = configuration.heartbeatTasks[rhs]
+                if lhsTask.executeAt != rhsTask.executeAt {
+                    return lhsTask.executeAt < rhsTask.executeAt
+                }
+                return lhsTask.createdAt < rhsTask.createdAt
+            }
+
+        guard !dueIndices.isEmpty else {
+            scheduleNextHeartbeatExecution()
+            return
+        }
+
+        let selectedIndices = Array(dueIndices.prefix(availableSlots))
+        var runningTasks: [AITerminalHeartbeatTask] = []
+        runningTasks.reserveCapacity(selectedIndices.count)
+
+        for index in selectedIndices {
+            configuration.heartbeatTasks[index].status = .running
+            configuration.heartbeatTasks[index].updatedAt = .now
+            configuration.heartbeatTasks[index].errorMessage = nil
+            runningTasks.append(configuration.heartbeatTasks[index])
+        }
+
+        heartbeatIsExecutingTask = true
+        persistConfiguration()
+        scheduleNextHeartbeatExecution()
+
+        for task in runningTasks {
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let result = Self.executeHeartbeatTask(task)
+                Task { @MainActor [weak self] in
+                    self?.finishHeartbeatTask(taskID: task.id, succeeded: result.succeeded, errorMessage: result.errorMessage)
+                }
+            }
+        }
+    }
+
+    private func finishHeartbeatTask(taskID: UUID, succeeded: Bool, errorMessage: String?) {
+        guard let index = configuration.heartbeatTasks.firstIndex(where: { $0.id == taskID }) else {
+            heartbeatIsExecutingTask = configuration.heartbeatTasks.contains(where: { $0.status == .running })
+            persistConfiguration()
+            scheduleNextHeartbeatExecution()
+            runDueHeartbeatTasksIfNeeded()
+            return
+        }
+
+        configuration.heartbeatTasks[index].status = succeeded ? .done : .failed
+        configuration.heartbeatTasks[index].updatedAt = .now
+        configuration.heartbeatTasks[index].errorMessage = errorMessage
+        heartbeatIsExecutingTask = configuration.heartbeatTasks.contains(where: { $0.status == .running })
+        persistConfiguration()
+        scheduleNextHeartbeatExecution()
+        runDueHeartbeatTasksIfNeeded()
+    }
+
+    private nonisolated static func executeHeartbeatTask(_ task: AITerminalHeartbeatTask) -> (succeeded: Bool, errorMessage: String?) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        switch task.type {
+        case .exec:
+            process.arguments = ["-lc", task.command]
+        case .script:
+            process.arguments = [task.command]
+        }
+
+        let stderrPipe = Pipe()
+        process.standardError = stderrPipe
+
+        do {
+            try process.run()
+        } catch {
+            return (false, "failed to launch: \(error.localizedDescription)")
+        }
+
+        process.waitUntilExit()
+        if process.terminationStatus == 0 {
+            return (true, nil)
+        }
+
+        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        let stderr = String(data: stderrData, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if stderr.isEmpty {
+            return (false, "exit code \(process.terminationStatus)")
+        }
+        return (false, stderr)
+    }
+
+    private func importHeartbeatTasksFromInbox() {
+        let fileURLs: [URL]
+        do {
+            fileURLs = try FileManager.default.contentsOfDirectory(
+                at: heartbeatInboxDirectoryURL,
+                includingPropertiesForKeys: nil
+            )
+            .filter { $0.pathExtension.lowercased() == "json" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        } catch {
+            lastError = "Failed to read task queue inbox: \(error.localizedDescription)"
+            return
+        }
+
+        guard !fileURLs.isEmpty else { return }
+
+        let decoder = JSONDecoder()
+        for url in fileURLs {
+            do {
+                let data = try Data(contentsOf: url)
+                let request = try decoder.decode(ExternalHeartbeatTaskRequest.self, from: data)
+                try applyExternalHeartbeatTaskRequest(request)
+                try? FileManager.default.removeItem(at: url)
+            } catch {
+                let failedURL = url.deletingPathExtension().appendingPathExtension("failed")
+                try? FileManager.default.moveItem(at: url, to: failedURL)
+            }
+        }
+    }
+
+    private func applyExternalHeartbeatTaskRequest(_ request: ExternalHeartbeatTaskRequest) throws {
+        let action = request.action ?? .enqueue
+
+        switch action {
+        case .enqueue:
+            guard let command = request.command?.trimmingCharacters(in: .whitespacesAndNewlines), !command.isEmpty else {
+                throw NSError(
+                    domain: "AITerminalHeartbeatQueue",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "enqueue requires non-empty command"]
+                )
+            }
+            let executeAt: Date? = if let executeAtMS = request.executeAtMS {
+                Date(timeIntervalSince1970: TimeInterval(executeAtMS) / 1000)
+            } else {
+                nil
+            }
+            _ = enqueueHeartbeatTask(
+                command: command,
+                type: request.type ?? .exec,
+                executeAt: executeAt
+            )
+
+        case .cancel:
+            if let taskID = request.taskID {
+                cancelHeartbeatTask(taskID)
+            } else {
+                cancelAllQueuedHeartbeatTasks()
+            }
+
+        case .clearFinished:
+            clearFinishedHeartbeatTasks()
+
+        case .configure:
+            var settings = configuration.heartbeatQueueSettings
+            if let enabled = request.enabled {
+                settings.enabled = enabled
+            }
+            if let heartbeatIntervalSeconds = request.heartbeatIntervalSeconds {
+                settings.heartbeatIntervalSeconds = heartbeatIntervalSeconds
+            }
+            if let maxConcurrentTasks = request.maxConcurrentTasks {
+                settings.maxConcurrentTasks = maxConcurrentTasks
+            }
+            saveHeartbeatQueueSettings(settings)
+        }
     }
 
     private func persistConfiguration() {

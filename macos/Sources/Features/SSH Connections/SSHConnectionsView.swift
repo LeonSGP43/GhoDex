@@ -6,6 +6,7 @@ struct SSHConnectionsView: View {
     private enum CenterTab: String, CaseIterable, Identifiable {
         case connections
         case learning
+        case taskQueue
 
         var id: String { rawValue }
 
@@ -15,6 +16,8 @@ struct SSHConnectionsView: View {
                 return L10n.SSHConnections.tabConnections
             case .learning:
                 return L10n.SSHConnections.tabLearning
+            case .taskQueue:
+                return "Task Queue"
             }
         }
     }
@@ -103,6 +106,13 @@ struct SSHConnectionsView: View {
     @State private var learningOperationInProgress = false
     @State private var initializeChatWorkspaceCandidate = ""
     @State private var showingInitializeConfirmation = false
+    @State private var heartbeatQueueEnabled = true
+    @State private var heartbeatIntervalSecondsText = "5"
+    @State private var heartbeatMaxConcurrentTasks = 4
+    @State private var queueCommandInput = ""
+    @State private var queueScheduleEnabled = false
+    @State private var queueExecuteAt = Date().addingTimeInterval(60)
+    @State private var queueStatusMessage: String?
 
     var body: some View {
         ZStack {
@@ -128,6 +138,9 @@ struct SSHConnectionsView: View {
 
                 case .learning:
                     learningTabContent
+
+                case .taskQueue:
+                    taskQueueTabContent
                 }
             }
         }
@@ -138,6 +151,7 @@ struct SSHConnectionsView: View {
         .onAppear {
             syncSelection()
             syncLearningSettings()
+            syncTaskQueueSettings()
         }
         .onChange(of: allConnectionHosts.map(\.id)) { _ in
             syncSelection()
@@ -145,6 +159,8 @@ struct SSHConnectionsView: View {
         .onChange(of: selectedTab) { _ in
             if selectedTab == .learning {
                 syncLearningSettings()
+            } else if selectedTab == .taskQueue {
+                syncTaskQueueSettings()
             }
         }
         .alert(L10n.SSHConnections.learningInitializeConfirmTitle, isPresented: $showingInitializeConfirmation) {
@@ -283,6 +299,157 @@ struct SSHConnectionsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(22)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .panelSurface()
+        .padding(.horizontal, 20)
+        .padding(.bottom, 20)
+    }
+
+    private var taskQueueTabContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Task Queue")
+                        .font(.title2.weight(.semibold))
+                    Text("Schedule and run terminal commands through Ghostty heartbeat queue.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Toggle("Enable queue", isOn: $heartbeatQueueEnabled)
+
+                HStack(alignment: .center, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Heartbeat Interval (seconds)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        TextField("5", text: $heartbeatIntervalSecondsText)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 120)
+                    }
+
+                    Stepper(
+                        "Max Concurrent: \(heartbeatMaxConcurrentTasks)",
+                        value: $heartbeatMaxConcurrentTasks,
+                        in: 1...16
+                    )
+                    .frame(maxWidth: 260, alignment: .leading)
+                }
+
+                HStack(spacing: 12) {
+                    Button("Save Queue Settings") {
+                        persistTaskQueueSettings()
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button("Cancel All Queued") {
+                        store.cancelAllQueuedHeartbeatTasks()
+                        syncTaskQueueSettings()
+                        queueStatusMessage = "Queued tasks cancelled."
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("Clear Finished") {
+                        store.clearFinishedHeartbeatTasks()
+                        syncTaskQueueSettings()
+                        queueStatusMessage = "Finished tasks cleared."
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Enqueue Command")
+                        .font(.headline)
+                    TextField("codex exec \"echo heartbeat\"", text: $queueCommandInput)
+                        .textFieldStyle(.roundedBorder)
+
+                    Toggle("Schedule execution time", isOn: $queueScheduleEnabled)
+                    if queueScheduleEnabled {
+                        DatePicker(
+                            "Execute At",
+                            selection: $queueExecuteAt,
+                            displayedComponents: [.date, .hourAndMinute]
+                        )
+                    }
+
+                    HStack(spacing: 10) {
+                        Button("Enqueue") {
+                            let executeAt: Date? = queueScheduleEnabled ? queueExecuteAt : nil
+                            if let id = store.enqueueHeartbeatTask(command: queueCommandInput, executeAt: executeAt) {
+                                queueStatusMessage = "Task accepted: \(id.uuidString)"
+                                queueCommandInput = ""
+                                syncTaskQueueSettings()
+                            } else {
+                                queueStatusMessage = store.lastError
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+
+                if let queueStatusMessage, !queueStatusMessage.isEmpty {
+                    Text(queueStatusMessage)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(
+                        "Counts · queued \(store.heartbeatQueuedCount) · running \(store.heartbeatRunningCount) · done \(store.heartbeatDoneCount) · failed \(store.heartbeatFailedCount)"
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                    if store.heartbeatQueueTasks.isEmpty {
+                        Text("No queue tasks.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        LazyVStack(alignment: .leading, spacing: 10) {
+                            ForEach(Array(store.heartbeatQueueTasks.prefix(100))) { task in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack {
+                                        Text(taskQueueStatusLabel(task.status))
+                                            .font(.caption.weight(.semibold))
+                                        Spacer(minLength: 8)
+                                        Text(task.executeAt.formatted(date: .abbreviated, time: .standard))
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+
+                                    Text(task.command)
+                                        .font(.callout)
+                                        .textSelection(.enabled)
+
+                                    if let errorMessage = task.errorMessage, !errorMessage.isEmpty {
+                                        Text(errorMessage)
+                                            .font(.caption2)
+                                            .foregroundStyle(.red)
+                                    }
+
+                                    if task.status == .queued {
+                                        HStack {
+                                            Spacer()
+                                            Button("Cancel") {
+                                                store.cancelHeartbeatTask(task.id)
+                                                syncTaskQueueSettings()
+                                            }
+                                            .buttonStyle(.bordered)
+                                        }
+                                    }
+                                }
+                                .padding(10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(Color.primary.opacity(0.05))
+                                )
+                            }
+                        }
+                    }
+                }
             }
             .padding(22)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1291,6 +1458,41 @@ struct SSHConnectionsView: View {
         managedSkillStatuses = store.managedSkillStatuses
         if !learningOperationInProgress {
             learningStatusMessage = nil
+        }
+    }
+
+    private func syncTaskQueueSettings() {
+        let settings = store.heartbeatQueueSettings
+        heartbeatQueueEnabled = settings.enabled
+        heartbeatIntervalSecondsText = String(format: "%.3f", settings.heartbeatIntervalSeconds)
+        heartbeatMaxConcurrentTasks = settings.maxConcurrentTasks
+        queueStatusMessage = nil
+    }
+
+    private func persistTaskQueueSettings() {
+        let trimmedInterval = heartbeatIntervalSecondsText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parsedInterval = Double(trimmedInterval) ?? store.heartbeatQueueSettings.heartbeatIntervalSeconds
+        store.saveHeartbeatQueueSettings(.init(
+            enabled: heartbeatQueueEnabled,
+            heartbeatIntervalSeconds: parsedInterval,
+            maxConcurrentTasks: heartbeatMaxConcurrentTasks
+        ))
+        syncTaskQueueSettings()
+        queueStatusMessage = store.lastError ?? "Queue settings saved."
+    }
+
+    private func taskQueueStatusLabel(_ status: AITerminalHeartbeatTaskStatus) -> String {
+        switch status {
+        case .queued:
+            return "QUEUED"
+        case .running:
+            return "RUNNING"
+        case .done:
+            return "DONE"
+        case .failed:
+            return "FAILED"
+        case .cancelled:
+            return "CANCELLED"
         }
     }
 
