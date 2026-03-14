@@ -13,7 +13,7 @@ struct ReleaseNotesTests {
         #expect(notes != nil)
         if case .tagged(let url) = notes {
             #expect(url.absoluteString == "https://ghostty.org/docs/install/release-notes/1-2-3")
-            #expect(notes?.label == "View Release Notes")
+            #expect(notes?.label == AppLocalization.localizedText("View Release Notes"))
         } else {
             Issue.record("Expected tagged case")
         }
@@ -29,7 +29,7 @@ struct ReleaseNotesTests {
         #expect(notes != nil)
         if case .compareTip(let url) = notes {
             #expect(url.absoluteString == "https://github.com/ghostty-org/ghostty/compare/def5678...abc1234")
-            #expect(notes?.label == "Changes Since This Tip Release")
+            #expect(notes?.label == AppLocalization.localizedText("Changes Since This Tip Release"))
         } else {
             Issue.record("Expected compareTip case")
         }
@@ -45,7 +45,7 @@ struct ReleaseNotesTests {
         #expect(notes != nil)
         if case .commit(let url) = notes {
             #expect(url.absoluteString == "https://github.com/ghostty-org/ghostty/commit/abc1234")
-            #expect(notes?.label == "View GitHub Commit")
+            #expect(notes?.label == AppLocalization.localizedText("View GitHub Commit"))
         } else {
             Issue.record("Expected commit case")
         }

@@ -17,51 +17,61 @@ struct UpdateViewModelTests {
         let viewModel = UpdateViewModel()
         let request = SPUUpdatePermissionRequest(systemProfile: [])
         viewModel.state = .permissionRequest(.init(request: request, reply: { _ in }))
-        #expect(viewModel.text == "Enable Automatic Updates?")
+        #expect(viewModel.text == AppLocalization.localizedText("Enable Automatic Updates?"))
     }
 
     @Test func testCheckingText() {
         let viewModel = UpdateViewModel()
         viewModel.state = .checking(.init(cancel: {}))
-        #expect(viewModel.text == "Checking for Updates…")
+        #expect(viewModel.text == AppLocalization.localizedText("Checking for Updates…"))
     }
 
     @Test func testDownloadingTextWithKnownLength() {
         let viewModel = UpdateViewModel()
         viewModel.state = .downloading(.init(cancel: {}, expectedLength: 1000, progress: 500))
-        #expect(viewModel.text == "Downloading: 50%")
+        #expect(
+            viewModel.text == String(
+                format: AppLocalization.localizedText("Downloading: %.0f%%"),
+                50.0
+            )
+        )
     }
 
     @Test func testDownloadingTextWithUnknownLength() {
         let viewModel = UpdateViewModel()
         viewModel.state = .downloading(.init(cancel: {}, expectedLength: nil, progress: 500))
-        #expect(viewModel.text == "Downloading…")
+        #expect(viewModel.text == AppLocalization.localizedText("Downloading…"))
     }
 
     @Test func testDownloadingTextWithZeroExpectedLength() {
         let viewModel = UpdateViewModel()
         viewModel.state = .downloading(.init(cancel: {}, expectedLength: 0, progress: 500))
-        #expect(viewModel.text == "Downloading…")
+        #expect(viewModel.text == AppLocalization.localizedText("Downloading…"))
     }
 
     @Test func testExtractingText() {
         let viewModel = UpdateViewModel()
         viewModel.state = .extracting(.init(progress: 0.75))
-        #expect(viewModel.text == "Preparing: 75%")
+        #expect(
+            viewModel.text == String(
+                format: AppLocalization.localizedText("Preparing: %.0f%%"),
+                75.0
+            )
+        )
     }
 
     @Test func testInstallingText() {
         let viewModel = UpdateViewModel()
         viewModel.state = .installing(.init(isAutoUpdate: false, retryTerminatingApplication: {}, dismiss: {}))
-        #expect(viewModel.text == "Installing…")
+        #expect(viewModel.text == AppLocalization.localizedText("Installing…"))
         viewModel.state = .installing(.init(isAutoUpdate: true, retryTerminatingApplication: {}, dismiss: {}))
-        #expect(viewModel.text == "Restart to Complete Update")
+        #expect(viewModel.text == AppLocalization.localizedText("Restart to Complete Update"))
     }
 
     @Test func testNotFoundText() {
         let viewModel = UpdateViewModel()
         viewModel.state = .notFound(.init(acknowledgement: {}))
-        #expect(viewModel.text == "No Updates Available")
+        #expect(viewModel.text == AppLocalization.localizedText("No Updates Available"))
     }
 
     @Test func testErrorText() {
@@ -76,13 +86,23 @@ struct UpdateViewModelTests {
     @Test func testMaxWidthTextForDownloading() {
         let viewModel = UpdateViewModel()
         viewModel.state = .downloading(.init(cancel: {}, expectedLength: 1000, progress: 50))
-        #expect(viewModel.maxWidthText == "Downloading: 100%")
+        #expect(
+            viewModel.maxWidthText == String(
+                format: AppLocalization.localizedText("Downloading: %.0f%%"),
+                100.0
+            )
+        )
     }
 
     @Test func testMaxWidthTextForExtracting() {
         let viewModel = UpdateViewModel()
         viewModel.state = .extracting(.init(progress: 0.5))
-        #expect(viewModel.maxWidthText == "Preparing: 100%")
+        #expect(
+            viewModel.maxWidthText == String(
+                format: AppLocalization.localizedText("Preparing: %.0f%%"),
+                100.0
+            )
+        )
     }
 
     @Test func testMaxWidthTextForNonProgressState() {
