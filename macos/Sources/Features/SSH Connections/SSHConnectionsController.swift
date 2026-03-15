@@ -65,4 +65,8 @@ final class SSHConnectionsController: NSWindowController, NSWindowDelegate {
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
+
+    @IBAction func closeTab(_ sender: Any?) {
+        window?.performClose(sender)
+    }
 }

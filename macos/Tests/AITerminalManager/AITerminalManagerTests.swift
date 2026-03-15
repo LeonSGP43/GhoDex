@@ -61,6 +61,26 @@ struct AITerminalManagerTests {
         #expect(SSHConnectionsController.windowsAreInSameTabGroup(lhs, rhs) == false)
     }
 
+    @Test @MainActor func sshConnectionsControllerCloseTabClosesWindow() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("json")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        let controller = SSHConnectionsController(store: store)
+        let window = try #require(controller.window)
+        window.makeKeyAndOrderFront(nil)
+        #expect(window.isVisible)
+
+        controller.closeTab(nil)
+
+        #expect(!window.isVisible)
+    }
+
     @Test func decodesLegacyHostConfigurationIntoSavedHosts() throws {
         let data = Data(#"{"hosts":[{"id":"ssh:buildbox","name":"Buildbox","transport":"ssh","sshAlias":"buildbox","hostname":"10.0.0.5","user":"deploy","port":2222,"defaultDirectory":"/srv/app","source":"configuration_file"}],"workspaces":[],"supervisor":{"arguments":[],"autoStart":false,"environment":{}}}"#.utf8)
         let configuration = try JSONDecoder().decode(AITerminalManagerConfiguration.self, from: data)

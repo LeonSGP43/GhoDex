@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(macos): close Settings Panel tab from Close Tab/Cmd+W
+
+- What changed: Added `closeTab(_:)` handling to `SSHConnectionsController`
+  and routed it to `window?.performClose(sender)` so the Settings Panel tab
+  responds to the `Close Tab` action path; added a regression test that asserts
+  the window closes when `closeTab` is invoked.
+- Why: Settings Panel windows can be inserted into native tab groups but they
+  did not implement the `closeTab:` responder action used by `Close Tab` /
+  `Cmd+W` in this configuration.
+- Impact: The currently focused Settings Panel tab now closes with the same tab
+  close shortcut flow used by other tabs.
+- Verification: `zig build test -Demit-macos-app=false
+  -Dtest-filter=sshConnectionsControllerCloseTabClosesWindow`
+- Files:
+  `macos/Sources/Features/SSH Connections/SSHConnectionsController.swift`,
+  `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`,
+  `CHANGELOG.md`.
+
 ### feat(config): sync GhoDex control-panel settings with config.ghodex
 
 - What changed: Moved connection center, learning settings, and task queue
