@@ -19,8 +19,8 @@ msgstr ""
 "Plural-Forms: nplurals=1; plural=0;\n"
 
 #: dist/linux/ghostty_nautilus.py:53
-msgid "Open in Ghostty"
-msgstr "Ghostty ішінде ашу"
+msgid "Open in GhoDex"
+msgstr "GhoDex ішінде ашу"
 
 #: src/apprt/gtk/ui/1.0/clipboard-confirmation-dialog.blp:12
 #: src/apprt/gtk/ui/1.4/clipboard-confirmation-dialog.blp:12
@@ -81,14 +81,14 @@ msgstr "Конфигурацияны қайта жүктеу"
 
 #: src/apprt/gtk/ui/1.2/debug-warning.blp:7
 #: src/apprt/gtk/ui/1.3/debug-warning.blp:6
-msgid "⚠️ You're running a debug build of Ghostty! Performance will be degraded."
+msgid "⚠️ You're running a debug build of GhoDex! Performance will be degraded."
 msgstr ""
-"⚠️ Сіз Ghostty жөндеу құрастырылымын іске қосып тұрсыз! Өнімділік төмен болуы "
+"⚠️ Сіз GhoDex жөндеу құрастырылымын іске қосып тұрсыз! Өнімділік төмен болуы "
 "мүмкін."
 
 #: src/apprt/gtk/ui/1.5/inspector-window.blp:5
-msgid "Ghostty: Terminal Inspector"
-msgstr "Ghostty: Терминал инспекторы"
+msgid "GhoDex: Terminal Inspector"
+msgstr "GhoDex: Терминал инспекторы"
 
 #: src/apprt/gtk/ui/1.2/search-overlay.blp:29
 msgid "Find…"
@@ -238,8 +238,8 @@ msgid "Terminal Inspector"
 msgstr "Терминал инспекторы"
 
 #: src/apprt/gtk/ui/1.5/window.blp:307 src/apprt/gtk/class/window.zig:1727
-msgid "About Ghostty"
-msgstr "Ghostty туралы"
+msgid "About GhoDex"
+msgstr "GhoDex туралы"
 
 #: src/apprt/gtk/ui/1.5/window.blp:312
 msgid "Quit"
@@ -278,8 +278,8 @@ msgstr ""
 "командалар орындалуы мүмкін сияқты."
 
 #: src/apprt/gtk/class/close_confirmation_dialog.zig:184
-msgid "Quit Ghostty?"
-msgstr "Ghostty-ден шығу керек пе?"
+msgid "Quit GhoDex?"
+msgstr "GhoDex-ден шығу керек пе?"
 
 #: src/apprt/gtk/class/close_confirmation_dialog.zig:185
 msgid "Close Tab?"
@@ -350,5 +350,5 @@ msgid "Cleared clipboard"
 msgstr "Алмасу буфері тазартылды"
 
 #: src/apprt/gtk/class/window.zig:1708
-msgid "Ghostty Developers"
-msgstr "Ghostty әзірлеушілері"
+msgid "GhoDex Developers"
+msgstr "GhoDex әзірлеушілері"

@@ -1,15 +1,15 @@
-# Ghostty + Shannon 一体化 AI 终端管理器开发计划
+# GhoDex + Shannon 一体化 AI 终端管理器开发计划
 
 ## Summary
 
 将产品定义为一个**单一安装、单一入口**的 AI 终端运维系统：
 
-- `Ghostty` 作为终端宿主、窗口/标签/分屏 UI 与终端运行时。
+- `GhoDex` 作为终端宿主、窗口/标签/分屏 UI 与终端运行时。
 - `Shannon` 作为**内嵌本地中枢服务**，负责任务调度、主控对话、审批、事件流、策略和工作流编排。
 
 V1 目标不是做成完整分布式运维平台，而是先交付一个**高性能、可托管、可接管、可管理本地与 SSH 终端 tab 的 AI 终端管理器**，并为后续多机编排与深度 agent 集成留接口。
 
-默认产品定位：**控制台优先，但保留 Ghostty 作为高性能终端的轻快体验**。
+默认产品定位：**控制台优先，但保留 GhoDex 作为高性能终端的轻快体验**。
 
 默认远程接入：**纯 SSH**。
 
@@ -81,7 +81,7 @@ V1 目标不是做成完整分布式运维平台，而是先交付一个**高性
 - 手动维护 host / workspace 配置并持久化到本地 JSON
 - 已保存 SSH host 支持编辑与删除
 - 导入自 `~/.ssh/config` 的 SSH host 支持编辑并保存为本地覆盖配置
-- 枚举 Ghostty 当前打开的 terminal session
+- 枚举 GhoDex 当前打开的 terminal session
 - 对 session 执行：
   - `Select`
   - `Focus`
@@ -101,7 +101,7 @@ V1 目标不是做成完整分布式运维平台，而是先交付一个**高性
 
 ### 当前测试入口
 
-- 菜单入口：`Ghostty` → `AI Terminal Manager…`
+- 菜单入口：`GhoDex` → `AI Terminal Manager…`
 - 命令面板入口：`Open: AI Terminal Manager`
 - 测试文件：`macos/Tests/AITerminalManager/AITerminalManagerTests.swift`
 - 测试文件：`macos/Tests/Localization/AppLocalizationTests.swift`
@@ -135,7 +135,7 @@ V1 目标不是做成完整分布式运维平台，而是先交付一个**高性
 
 - Shannon 仍是本地 supervisor scaffold，尚未接入完整 Shannon workflow / API bridge
 - 远程 tab 当前通过 shell 启动后发送 `ssh ...` 初始输入完成，不是深度 SSH transport
-- tab 输出读取目前以 Ghostty 已有文本缓存为主，尚未引入更细粒度事件流建模
+- tab 输出读取目前以 GhoDex 已有文本缓存为主，尚未引入更细粒度事件流建模
 - 环境若缺少完整 macOS/Xcode 测试条件，则运行时验证需要你本机手动启动 app 检查
 
 ## Key Changes
@@ -143,24 +143,24 @@ V1 目标不是做成完整分布式运维平台，而是先交付一个**高性
 ### 1. 产品架构与进程模型
 
 - 采用**单产品、分层实现**：
-  - `Ghostty App`：终端 UI、tab/pane 生命周期、主控页、托管入口、终端读取器。
-  - `Embedded Shannon Supervisor`：本地服务进程，随 Ghostty 启动并受其管理。
-  - `Ghostty-Shannon Bridge`：将 Ghostty 的 tab/session/host/runtime 事件映射到 Shannon 的 task/session/event 模型。
+  - `GhoDex App`：终端 UI、tab/pane 生命周期、主控页、托管入口、终端读取器。
+  - `Embedded Shannon Supervisor`：本地服务进程，随 GhoDex 启动并受其管理。
+  - `GhoDex-Shannon Bridge`：将 GhoDex 的 tab/session/host/runtime 事件映射到 Shannon 的 task/session/event 模型。
 - 对用户保持**一体安装与一体启动**：
-  - 启动 Ghostty 时自动确保 Shannon 本地服务可用。
+  - 启动 GhoDex 时自动确保 Shannon 本地服务可用。
   - 用户不需要单独安装或手动运行 Shannon。
 - 进程隔离为默认实现：
-  - Ghostty 崩溃不应带崩 Shannon。
+  - GhoDex 崩溃不应带崩 Shannon。
   - Shannon 卡住不应阻塞终端渲染或输入。
-- 本地通信默认使用**本机 loopback HTTP/WebSocket 或 Unix domain socket**，由桥接层统一封装，Ghostty UI 不直接散落调用 Shannon API。
+- 本地通信默认使用**本机 loopback HTTP/WebSocket 或 Unix domain socket**，由桥接层统一封装，GhoDex UI 不直接散落调用 Shannon API。
 
 ### 2. 终端资源模型
 
-- 在 Ghostty 内新增一等资源模型：
+- 在 GhoDex 内新增一等资源模型：
   - `Host`：本地或远程机器。
   - `Workspace`：本地项目目录或远程目录模板。
   - `Terminal Session`：一个可交互 shell/SSH 终端实例。
-  - `Managed Tab`：绑定到 Ghostty tab/pane 的终端实体，拥有可读、可控、可托管状态。
+  - `Managed Tab`：绑定到 GhoDex tab/pane 的终端实体，拥有可读、可控、可托管状态。
   - `Control Task`：由主控发起、绑定一个或多个 Managed Tab 的任务。
 - 每个 tab/pane 必须拥有稳定 ID，并可映射到：
   - Host
@@ -172,7 +172,7 @@ V1 目标不是做成完整分布式运维平台，而是先交付一个**高性
 - Tab 与 Shannon 的映射规则：
   - 一个 tab/pane 可绑定 0 或 1 个活动控制任务。
   - 一个任务可管理 1 到多个 tab，但 V1 默认先优化单 tab 与少量多 tab 协作。
-  - Ghostty 作为 tab 的事实来源；Shannon 作为任务与策略状态来源。
+  - GhoDex 作为 tab 的事实来源；Shannon 作为任务与策略状态来源。
 
 ### 3. 新建 Tab 与远程接入
 
@@ -189,7 +189,7 @@ V1 目标不是做成完整分布式运维平台，而是先交付一个**高性
   - 认证方式引用（系统 SSH 配置/密钥别名）
 - V1 默认**复用用户已有 SSH 配置**：
   - 优先读取 `~/.ssh/config`
-  - Ghostty 内允许补充别名、默认目录和显示名
+  - GhoDex 内允许补充别名、默认目录和显示名
 - 远程 tab 的行为要求：
   - 创建时可直接进入指定目录
   - UI 上明确显示本地/远程身份
@@ -198,7 +198,7 @@ V1 目标不是做成完整分布式运维平台，而是先交付一个**高性
 
 ### 4. 主控页面（AI 管家页）
 
-- 在 Ghostty 内新增独立主控页面，作为产品主中枢 UI：
+- 在 GhoDex 内新增独立主控页面，作为产品主中枢 UI：
   - 对话区
   - 当前任务区
   - tab/host 资源区
@@ -269,11 +269,11 @@ V1 目标不是做成完整分布式运维平台，而是先交付一个**高性
   - human approval
   - policy 执行
   - 历史与观测
-- 新增 Ghostty 专用桥接层，而非把 Ghostty 直接当成一个普通 Shannon client：
-  - Ghostty tab/session/host 要映射为 Shannon 的 domain objects
+- 新增 GhoDex 专用桥接层，而非把 GhoDex 直接当成一个普通 Shannon client：
+  - GhoDex tab/session/host 要映射为 Shannon 的 domain objects
   - 主控页的对话提交要带上目标 tab/workspace 选择
-  - Shannon 输出的动作计划要转换成 Ghostty 可执行动作
-- 新增 Ghostty 专用工具/动作类型：
+  - Shannon 输出的动作计划要转换成 GhoDex 可执行动作
+- 新增 GhoDex 专用工具/动作类型：
   - `create_local_tab`
   - `create_remote_tab`
   - `focus_tab`
@@ -283,14 +283,14 @@ V1 目标不是做成完整分布式运维平台，而是先交付一个**高性
   - `request_user_approval`
   - `handoff_to_user`
   - `resume_managed_tab`
-- 默认不修改 Shannon 的通用任务抽象语义，只新增 Ghostty adapter 和少量扩展字段。
+- 默认不修改 Shannon 的通用任务抽象语义，只新增 GhoDex adapter 和少量扩展字段。
 
 ### 8. 调度器与任务队列
 
 - V1 调度器核心目标：**持续推进 tab 相关任务直到完成或等待人工**。
 - 调度循环需要支持：
   - 从 Shannon 取待执行动作
-  - 从 Ghostty 获取目标 tab 最新状态
+  - 从 GhoDex 获取目标 tab 最新状态
   - 判断是否可继续执行
   - 写入终端输入或创建/聚焦 tab
   - 发现等待确认条件时挂起
@@ -319,7 +319,7 @@ V1 目标不是做成完整分布式运维平台，而是先交付一个**高性
 
 ### 10. 配置、规则与权限
 
-- 新增一组 Ghostty AI 配置：
+- 新增一组 GhoDex AI 配置：
   - Shannon 服务启用与连接方式
   - Host 列表与目录模板
   - 默认托管策略
@@ -353,19 +353,19 @@ V1 目标不是做成完整分布式运维平台，而是先交付一个**高性
   - 人工接管
   - 在主控页打开关联任务
 - 主控页要支持从任务跳转到对应 tab，也能从 tab 跳到对应任务。
-- Ghostty 终端核心体验不能明显退化：
+- GhoDex 终端核心体验不能明显退化：
   - 未使用 AI/托管时，普通终端体验保持原样
   - 主控相关 UI 不应强占默认终端使用路径
 
 ## Public Interfaces / API Additions
 
-- Ghostty 内部新增稳定 domain types：
+- GhoDex 内部新增稳定 domain types：
   - `HostConfig`
   - `WorkspaceTemplate`
   - `ManagedTerminalSession`
   - `ManagedState`
   - `ControlTaskBinding`
-- Ghostty ↔ Shannon 桥接接口新增动作/事件协议：
+- GhoDex ↔ Shannon 桥接接口新增动作/事件协议：
   - tab 创建、聚焦、读取、写入、暂停、恢复
   - tab 输出更新、等待输入、命令完成、异常、断开
 - Shannon 扩展字段：
@@ -383,7 +383,7 @@ V1 目标不是做成完整分布式运维平台，而是先交付一个**高性
 - **桥接正确性**
   - tab 创建后稳定映射到 Shannon session/task
   - tab 关闭、断连、重连时状态正确更新
-  - Ghostty 事件能稳定进入 Shannon 流
+  - GhoDex 事件能稳定进入 Shannon 流
 - **读取器**
   - 普通 shell 输出能被提取
   - 长输出与滚动缓冲可读
@@ -404,13 +404,13 @@ V1 目标不是做成完整分布式运维平台，而是先交付一个**高性
 - **性能与回归**
   - 未托管 tab 的输入延迟和渲染性能无明显退化
   - 大量 tab 观察时 UI 不冻结
-  - Shannon 服务异常时 Ghostty 仍能作为普通终端使用
+  - Shannon 服务异常时 GhoDex 仍能作为普通终端使用
 
 ## Delivery Plan
 
 - **Phase 1 — 一体化底座**
   - 内嵌 Shannon 启动/健康检查
-  - Ghostty-Shannon bridge 基础通信
+  - GhoDex-Shannon bridge 基础通信
   - Host/Workspace 配置模型
   - 新建 local/remote tab 入口
 - **Phase 2 — 可观察终端**
@@ -431,9 +431,9 @@ V1 目标不是做成完整分布式运维平台，而是先交付一个**高性
 
 ## Assumptions
 
-- 产品作为**一个一体化 Ghostty 发行版**发布，而不是两个独立产品拼装。
-- Shannon 以**本地内嵌服务**方式集成，默认由 Ghostty 自动管理生命周期。
+- 产品作为**一个一体化 GhoDex 发行版**发布，而不是两个独立产品拼装。
+- Shannon 以**本地内嵌服务**方式集成，默认由 GhoDex 自动管理生命周期。
 - V1 远程连接仅依赖 SSH，不要求在远端安装 agent。
 - V1 优先支持**通用 shell/SSH 托管**；Claude Code / Codex 的深度 TUI 接管放在后续适配层。
 - 主控默认拥有较高权限，但高风险动作必须通过策略/审批链路控制。
-- 普通终端用户路径必须保持可用，AI 能力是增强层，不得破坏 Ghostty 作为终端的基础体验。
+- 普通终端用户路径必须保持可用，AI 能力是增强层，不得破坏 GhoDex 作为终端的基础体验。

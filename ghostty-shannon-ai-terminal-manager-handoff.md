@@ -1,8 +1,8 @@
-# Ghostty Shannon AI Terminal Manager Handoff
+# GhoDex Shannon AI Terminal Manager Handoff
 
 ## Status
 
-当前已完成 **macOS Phase 1 的 tab 管控能力**，可以在 Ghostty 内直接测试：
+当前已完成 **macOS Phase 1 的 tab 管控能力**，可以在 GhoDex 内直接测试：
 
 - 打开本地 shell tab
 - 打开 workspace tab
@@ -16,7 +16,7 @@
 - 设置 session 的 `Observe / Manage / Return Manual`
 - 在任务队列里切换 `Pause / Resume / Need Approval / Complete / Fail`
 
-这部分不是假 UI，已经接到了 Ghostty 当前 surface/session 能力。
+这部分不是假 UI，已经接到了 GhoDex 当前 surface/session 能力。
 
 同时已补上 **扩展版 macOS 国际化**：
 
@@ -43,9 +43,9 @@
 ## Entry Points
 
 - app: `macos/build/Debug/Ghostty.app`
-- 菜单入口：`Ghostty` → `AI Terminal Manager…`
+- 菜单入口：`GhoDex` → `AI Terminal Manager…`
 - 命令面板入口：`Open: AI Terminal Manager`
-- 国际化测试：切换 `Ghostty` → `Preferences…` → `App Language`
+- 国际化测试：切换 `GhoDex` → `Preferences…` → `App Language`
 
 ## Build Output Rule
 
@@ -62,7 +62,7 @@
 
 ### 2. 打开 AI Terminal Manager
 
-- 方式 A：菜单栏 `Ghostty` → `AI Terminal Manager…`
+- 方式 A：菜单栏 `GhoDex` → `AI Terminal Manager…`
 - 方式 B：按 `Cmd+Shift+P`
 - 输入 `Open: AI Terminal Manager`
 - 回车
@@ -157,4 +157,4 @@
 
 如果之后继续开发，可以直接从这里接：
 
-> Continue implementing the Ghostty Shannon AI Terminal Manager after the completed macOS Phase 1 tab-control milestone. Keep the current tab/session control working, and build the real Shannon bridge and task scheduler next.
+> Continue implementing the GhoDex Shannon AI Terminal Manager after the completed macOS Phase 1 tab-control milestone. Keep the current tab/session control working, and build the real Shannon bridge and task scheduler next.

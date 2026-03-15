@@ -21,8 +21,8 @@ msgstr ""
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
 #: dist/linux/ghostty_nautilus.py:53
-msgid "Open in Ghostty"
-msgstr "In Ghostty öffnen"
+msgid "Open in GhoDex"
+msgstr "In GhoDex öffnen"
 
 #: src/apprt/gtk/ui/1.0/clipboard-confirmation-dialog.blp:12
 #: src/apprt/gtk/ui/1.4/clipboard-confirmation-dialog.blp:12
@@ -86,14 +86,14 @@ msgstr "Konfiguration neu laden"
 #: src/apprt/gtk/ui/1.2/debug-warning.blp:7
 #: src/apprt/gtk/ui/1.3/debug-warning.blp:6
 msgid ""
-"⚠️ You're running a debug build of Ghostty! Performance will be degraded."
+"⚠️ You're running a debug build of GhoDex! Performance will be degraded."
 msgstr ""
-"⚠️ Du verwendest einen Debug Build von Ghostty! Die Leistung wird reduziert "
+"⚠️ Du verwendest einen Debug Build von GhoDex! Die Leistung wird reduziert "
 "sein."
 
 #: src/apprt/gtk/ui/1.5/inspector-window.blp:5
-msgid "Ghostty: Terminal Inspector"
-msgstr "Ghostty: Terminalinspektor"
+msgid "GhoDex: Terminal Inspector"
+msgstr "GhoDex: Terminalinspektor"
 
 #: src/apprt/gtk/ui/1.2/search-overlay.blp:29
 msgid "Find…"
@@ -244,8 +244,8 @@ msgid "Terminal Inspector"
 msgstr "Terminalinspektor"
 
 #: src/apprt/gtk/ui/1.5/window.blp:307 src/apprt/gtk/class/window.zig:1727
-msgid "About Ghostty"
-msgstr "Über Ghostty"
+msgid "About GhoDex"
+msgstr "Über GhoDex"
 
 #: src/apprt/gtk/ui/1.5/window.blp:312
 msgid "Quit"
@@ -284,8 +284,8 @@ msgstr ""
 "sein. Es scheint, dass Anweisungen ausgeführt werden könnten."
 
 #: src/apprt/gtk/class/close_confirmation_dialog.zig:184
-msgid "Quit Ghostty?"
-msgstr "Ghostty schließen?"
+msgid "Quit GhoDex?"
+msgstr "GhoDex schließen?"
 
 #: src/apprt/gtk/class/close_confirmation_dialog.zig:185
 msgid "Close Tab?"
@@ -356,5 +356,5 @@ msgid "Cleared clipboard"
 msgstr "Zwischenablage geleert"
 
 #: src/apprt/gtk/class/window.zig:1708
-msgid "Ghostty Developers"
-msgstr "Ghostty-Entwickler"
+msgid "GhoDex Developers"
+msgstr "GhoDex-Entwickler"

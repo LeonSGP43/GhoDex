@@ -1,14 +1,14 @@
-# Packaging Ghostty for Distribution
+# Packaging GhoDex for Distribution
 
-Ghostty relies on downstream package maintainers to distribute Ghostty to
+GhoDex relies on downstream package maintainers to distribute GhoDex to
 end-users. This document provides guidance to package maintainers on how to
-package Ghostty for distribution.
+package GhoDex for distribution.
 
 > [!IMPORTANT]
 >
-> This document is only accurate for the Ghostty source alongside it.
-> **Do not use this document for older or newer versions of Ghostty!** If
-> you are reading this document in a different version of Ghostty, please
+> This document is only accurate for the GhoDex source alongside it.
+> **Do not use this document for older or newer versions of GhoDex!** If
+> you are reading this document in a different version of GhoDex, please
 > find the `PACKAGING.md` file alongside that version.
 
 ## Source Tarballs
@@ -39,33 +39,33 @@ the `main` branch and are not associated with a specific version.
 > [!WARNING]
 >
 > Source tarballs are _not the same_ as a Git checkout. Source tarballs
-> contain some preprocessed files that allow building Ghostty with less
-> dependencies. If you are building Ghostty from a Git checkout, the
+> contain some preprocessed files that allow building GhoDex with less
+> dependencies. If you are building GhoDex from a Git checkout, the
 > steps below are the same but they may require additional dependencies
 > not listed here. See the `README.md` for more information on building
 > from a Git checkout.
 >
-> For everyone except Ghostty developers, please use the source tarballs.
+> For everyone except GhoDex developers, please use the source tarballs.
 > We generate tip source tarballs for users following the development
 > branch.
 
 ## Zig Version
 
-[Zig](https://ziglang.org) is required to build Ghostty. Prior to Zig 1.0,
-Zig releases often have breaking changes. Ghostty requires specific Zig versions
-depending on the Ghostty version in order to build. To make things easier for
-package maintainers, Ghostty always uses some _released_ version of Zig.
+[Zig](https://ziglang.org) is required to build GhoDex. Prior to Zig 1.0,
+Zig releases often have breaking changes. GhoDex requires specific Zig versions
+depending on the GhoDex version in order to build. To make things easier for
+package maintainers, GhoDex always uses some _released_ version of Zig.
 
-To find the version of Zig required to build Ghostty, check the `required_zig`
+To find the version of Zig required to build GhoDex, check the `required_zig`
 constant in `build.zig`. You don't need to know Zig to extract this information.
 This version will always be an official released version of Zig.
 
-For example, at the time of writing this document, Ghostty requires Zig 0.14.0.
+For example, at the time of writing this document, GhoDex requires Zig 0.14.0.
 
-## Building Ghostty
+## Building GhoDex
 
-The following is a standard example of how to build Ghostty _for system
-packages_. This is not the recommended way to build Ghostty for your
+The following is a standard example of how to build GhoDex _for system
+packages_. This is not the recommended way to build GhoDex for your
 own system. For that, see the primary README.
 
 1. First, we fetch our dependencies from the internet into a cached directory.
@@ -75,7 +75,7 @@ own system. For that, see the primary README.
 ZIG_GLOBAL_CACHE_DIR=/tmp/offline-cache ./nix/build-support/fetch-zig-cache.sh
 ```
 
-2. Next, we build Ghostty. This step requires no internet access:
+2. Next, we build GhoDex. This step requires no internet access:
 
 ```sh
 DESTDIR=/tmp/ghostty \
@@ -87,7 +87,7 @@ zig build \
 ```
 
 The build options are covered in the next section, but this will build
-and install Ghostty to `/tmp/ghostty` with the prefix `/usr` (i.e. the
+and install GhoDex to `/tmp/ghostty` with the prefix `/usr` (i.e. the
 binary will be at `/tmp/ghostty/usr/bin/ghostty`). This style is common
 for system packages which separate a build and install step, since the
 install step can then be done with a `mv` or `cp` command (from `/tmp/ghostty`
@@ -95,7 +95,7 @@ to wherever the package manager expects it).
 
 ### Build Options
 
-Ghostty uses the Zig build system. You can see all available build options by
+GhoDex uses the Zig build system. You can see all available build options by
 running `zig build --help`. The following are options that are particularly
 relevant to package maintainers:
 

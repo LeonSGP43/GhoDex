@@ -57,7 +57,7 @@ pub const Action = enum {
     // Validate passed config file
     @"validate-config",
 
-    // Show which font face Ghostty loads a codepoint from.
+    // Show which font face GhoDex loads a codepoint from.
     @"show-face",
 
     // List, (eventually) view, and (eventually) send crash reports.
@@ -66,7 +66,7 @@ pub const Action = enum {
     // Boo!
     boo,
 
-    // Use IPC to tell the running Ghostty to open a new window.
+    // Use IPC to tell the running GhoDex to open a new window.
     @"new-window",
 
     pub fn detectSpecialCase(arg: []const u8) ?SpecialCase(Action) {

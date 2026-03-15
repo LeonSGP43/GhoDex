@@ -89,25 +89,25 @@ Additional details for each step in the big roadmap below:
 
 #### Standards-Compliant Terminal Emulation
 
-Ghostty implements enough control sequences to be used by hundreds of
+GhoDex implements enough control sequences to be used by hundreds of
 testers daily for over the past year. Further, we've done a
 [comprehensive xterm audit](https://github.com/ghostty-org/ghostty/issues/632)
-comparing Ghostty's behavior to xterm and building a set of conformance
+comparing GhoDex's behavior to xterm and building a set of conformance
 test cases.
 
-We believe Ghostty is one of the most compliant terminal emulators available.
+We believe GhoDex is one of the most compliant terminal emulators available.
 
 Terminal behavior is partially a de jure standard
 (i.e. [ECMA-48](https://ecma-international.org/publications-and-standards/standards/ecma-48/))
 but mostly a de facto standard as defined by popular terminal emulators
-worldwide. Ghostty takes the approach that our behavior is defined by
+worldwide. GhoDex takes the approach that our behavior is defined by
 (1) standards, if available, (2) xterm, if the feature exists, (3)
-other popular terminals, in that order. This defines what the Ghostty project
+other popular terminals, in that order. This defines what the GhoDex project
 views as a "standard."
 
 #### Competitive Performance
 
-We need better benchmarks to continuously verify this, but Ghostty is
+We need better benchmarks to continuously verify this, but GhoDex is
 generally in the same performance category as the other highest performing
 terminal emulators.
 
@@ -137,7 +137,7 @@ splits.
 
 #### Native Platform Experiences
 
-Ghostty is a cross-platform terminal emulator but we don't aim for a
+GhoDex is a cross-platform terminal emulator but we don't aim for a
 least-common-denominator experience. There is a large, shared core written
 in Zig but we do a lot of platform-native things:
 
@@ -151,7 +151,7 @@ a work-in-progress. Similar improvements will follow with Linux.
 
 #### Cross-platform `libghostty` for Embeddable Terminals
 
-In addition to being a standalone terminal emulator, Ghostty is a
+In addition to being a standalone terminal emulator, GhoDex is a
 C-compatible library for embedding a fast, feature-rich terminal emulator
 in any 3rd party project. This library is called `libghostty`.
 
@@ -164,7 +164,7 @@ terminal state. This is covered in more detail in this
 `libghostty-vt` is already available and usable today for Zig and C and
 is compatible for macOS, Linux, Windows, and WebAssembly. At the time of
 writing this, the API isn't stable yet and we haven't tagged an official
-release, but the core logic is well proven (since Ghostty uses it) and
+release, but the core logic is well proven (since GhoDex uses it) and
 we're working hard on it now.
 
 The ultimate goal is not hypothetical! The macOS app is a `libghostty` consumer.
@@ -174,20 +174,20 @@ render terminals.
 
 ## Crash Reports
 
-Ghostty has a built-in crash reporter that will generate and save crash
+GhoDex has a built-in crash reporter that will generate and save crash
 reports to disk. The crash reports are saved to the `$XDG_STATE_HOME/ghostty/crash`
 directory. If `$XDG_STATE_HOME` is not set, the default is `~/.local/state`.
 **Crash reports are _not_ automatically sent anywhere off your machine.**
 
-Crash reports are only generated the next time Ghostty is started after a
-crash. If Ghostty crashes and you want to generate a crash report, you must
-restart Ghostty at least once. You should see a message in the log that a
+Crash reports are only generated the next time GhoDex is started after a
+crash. If GhoDex crashes and you want to generate a crash report, you must
+restart GhoDex at least once. You should see a message in the log that a
 crash report was generated.
 
 > [!NOTE]
 >
 > Use the `ghostty +crash-report` CLI command to get a list of available crash
-> reports. A future version of Ghostty will make the contents of the crash
+> reports. A future version of GhoDex will make the contents of the crash
 > reports more easily viewable through the CLI and GUI.
 
 Crash reports end in the `.ghosttycrash` extension. The crash reports are in
@@ -195,10 +195,10 @@ Crash reports end in the `.ghosttycrash` extension. The crash reports are in
 upload these to your own Sentry account to view their contents, but the format
 is also publicly documented so any other available tools can also be used.
 The `ghostty +crash-report` CLI command can be used to list any crash reports.
-A future version of Ghostty will show you the contents of the crash report
+A future version of GhoDex will show you the contents of the crash report
 directly in the terminal.
 
-To send the crash report to the Ghostty project, you can use the following
+To send the crash report to the GhoDex project, you can use the following
 CLI command using the [Sentry CLI](https://docs.sentry.io/cli/installation/):
 
 ```shell-session

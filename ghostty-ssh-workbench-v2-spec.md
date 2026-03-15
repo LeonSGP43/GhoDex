@@ -1,4 +1,4 @@
-# Ghostty SSH Workbench V2 Spec
+# GhoDex SSH Workbench V2 Spec
 
 ## Summary
 
@@ -8,13 +8,13 @@
 
 ## Product Goals
 
-用户应当可以在 Ghostty 内完成以下更高频的连接流：
+用户应当可以在 GhoDex 内完成以下更高频的连接流：
 
 1. 在 `Connections` 中把最常用的 SSH 连接标记为收藏。
 2. 在侧边栏中优先看到收藏连接，而不是混在最近/已保存列表里。
 3. 在 `Cmd+N` 与 tab bar `+` 打开的 `New Tab` picker 里，直接搜索并快速选择本地或 SSH 连接。
 4. 同一个连接只在一个最优分组里出现，避免最近/已保存/导入重复展示。
-5. 收藏状态持久化保存，重启 Ghostty 后仍然存在。
+5. 收藏状态持久化保存，重启 GhoDex 后仍然存在。
 
 ## Non-Goals
 

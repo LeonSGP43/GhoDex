@@ -1,6 +1,6 @@
 # WebAssembly SGR Parser Example
 
-This example demonstrates how to use the Ghostty VT library from WebAssembly
+This example demonstrates how to use the GhoDex VT library from WebAssembly
 to parse terminal SGR (Select Graphic Rendition) sequences and extract text
 styling attributes.
 

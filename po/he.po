@@ -21,8 +21,8 @@ msgstr ""
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
 #: dist/linux/ghostty_nautilus.py:53
-msgid "Open in Ghostty"
-msgstr "פתח/י בGhostty"
+msgid "Open in GhoDex"
+msgstr "פתח/י בGhoDex"
 
 #: src/apprt/gtk/ui/1.0/clipboard-confirmation-dialog.blp:12
 #: src/apprt/gtk/ui/1.4/clipboard-confirmation-dialog.blp:12
@@ -84,12 +84,12 @@ msgstr "טעינה מחדש של ההגדרות"
 #: src/apprt/gtk/ui/1.2/debug-warning.blp:7
 #: src/apprt/gtk/ui/1.3/debug-warning.blp:6
 msgid ""
-"⚠️ You're running a debug build of Ghostty! Performance will be degraded."
-msgstr "⚠️ את/ה מריץ/ה גרסת ניפוי שגיאות של Ghostty! הביצועים יהיו ירודים."
+"⚠️ You're running a debug build of GhoDex! Performance will be degraded."
+msgstr "⚠️ את/ה מריץ/ה גרסת ניפוי שגיאות של GhoDex! הביצועים יהיו ירודים."
 
 #: src/apprt/gtk/ui/1.5/inspector-window.blp:5
-msgid "Ghostty: Terminal Inspector"
-msgstr "Ghostty: בודק המסוף"
+msgid "GhoDex: Terminal Inspector"
+msgstr "GhoDex: בודק המסוף"
 
 #: src/apprt/gtk/ui/1.2/search-overlay.blp:29
 msgid "Find…"
@@ -239,8 +239,8 @@ msgid "Terminal Inspector"
 msgstr "בודק המסוף"
 
 #: src/apprt/gtk/ui/1.5/window.blp:307 src/apprt/gtk/class/window.zig:1727
-msgid "About Ghostty"
-msgstr "אודות Ghostty"
+msgid "About GhoDex"
+msgstr "אודות GhoDex"
 
 #: src/apprt/gtk/ui/1.5/window.blp:312
 msgid "Quit"
@@ -276,8 +276,8 @@ msgstr ""
 "פקודות מסוימות."
 
 #: src/apprt/gtk/class/close_confirmation_dialog.zig:184
-msgid "Quit Ghostty?"
-msgstr "לצאת מGhostty?"
+msgid "Quit GhoDex?"
+msgstr "לצאת מGhoDex?"
 
 #: src/apprt/gtk/class/close_confirmation_dialog.zig:185
 msgid "Close Tab?"
@@ -348,5 +348,5 @@ msgid "Cleared clipboard"
 msgstr "לוח ההעתקה רוקן"
 
 #: src/apprt/gtk/class/window.zig:1708
-msgid "Ghostty Developers"
-msgstr "המפתחים של Ghostty"
+msgid "GhoDex Developers"
+msgstr "המפתחים של GhoDex"

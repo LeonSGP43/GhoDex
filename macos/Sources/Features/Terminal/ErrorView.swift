@@ -10,7 +10,7 @@ struct ErrorView: View {
 
             VStack(alignment: .leading) {
                 Text(AppLocalization.localizedText("Oh, no. 😭")).font(.title)
-                Text(AppLocalization.localizedText("Something went fatally wrong.\nCheck the logs and restart Ghostty."))
+                Text(AppLocalization.localizedText("Something went fatally wrong.\nCheck the logs and restart GhoDex."))
             }
         }
         .padding()

@@ -15,7 +15,7 @@ if ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) != GHOSTTY_SUCCE
         stderrHandle.write(
             (
                 AppLocalization.localizedText(
-                    "Ghostty failed to initialize! If you're executing Ghostty from the command line\n" +
+                    "GhoDex failed to initialize! If you're executing GhoDex from the command line\n" +
                     "then this is usually because an invalid action or multiple actions were specified.\n" +
                     "Actions start with the `+` character.\n\n" +
                     "View all available actions by running `ghostty +help`.\n"

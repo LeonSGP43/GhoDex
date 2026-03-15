@@ -18,7 +18,7 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 
 #: dist/linux/ghostty_nautilus.py:53
-msgid "Open in Ghostty"
+msgid "Open in GhoDex"
 msgstr ""
 
 #: src/apprt/gtk/ui/1.0/clipboard-confirmation-dialog.blp:12
@@ -79,11 +79,11 @@ msgstr ""
 #: src/apprt/gtk/ui/1.2/debug-warning.blp:7
 #: src/apprt/gtk/ui/1.3/debug-warning.blp:6
 msgid ""
-"⚠️ You're running a debug build of Ghostty! Performance will be degraded."
+"⚠️ You're running a debug build of GhoDex! Performance will be degraded."
 msgstr ""
 
 #: src/apprt/gtk/ui/1.5/inspector-window.blp:5
-msgid "Ghostty: Terminal Inspector"
+msgid "GhoDex: Terminal Inspector"
 msgstr ""
 
 #: src/apprt/gtk/ui/1.2/search-overlay.blp:29
@@ -232,7 +232,7 @@ msgid "Terminal Inspector"
 msgstr ""
 
 #: src/apprt/gtk/ui/1.5/window.blp:307 src/apprt/gtk/class/window.zig:1727
-msgid "About Ghostty"
+msgid "About GhoDex"
 msgstr ""
 
 #: src/apprt/gtk/ui/1.5/window.blp:312
@@ -266,7 +266,7 @@ msgid ""
 msgstr ""
 
 #: src/apprt/gtk/class/close_confirmation_dialog.zig:184
-msgid "Quit Ghostty?"
+msgid "Quit GhoDex?"
 msgstr ""
 
 #: src/apprt/gtk/class/close_confirmation_dialog.zig:185
@@ -338,5 +338,5 @@ msgid "Cleared clipboard"
 msgstr ""
 
 #: src/apprt/gtk/class/window.zig:1708
-msgid "Ghostty Developers"
+msgid "GhoDex Developers"
 msgstr ""

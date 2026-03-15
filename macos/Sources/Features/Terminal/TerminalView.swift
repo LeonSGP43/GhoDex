@@ -154,10 +154,10 @@ struct DebugBuildWarningView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundColor(.yellow)
 
-            Text(AppLocalization.localizedText("You're running a debug build of Ghostty! Performance will be degraded."))
+            Text(AppLocalization.localizedText("You're running a debug build of GhoDex! Performance will be degraded."))
                 .padding(.all, 8)
                 .popover(isPresented: $isPopover, arrowEdge: .bottom) {
-                    Text(AppLocalization.localizedText("Debug builds of Ghostty are very slow and you may experience performance problems. Debug builds are only recommended during development."))
+                    Text(AppLocalization.localizedText("Debug builds of GhoDex are very slow and you may experience performance problems. Debug builds are only recommended during development."))
                     .padding(.all)
                 }
 
@@ -167,7 +167,7 @@ struct DebugBuildWarningView: View {
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(AppLocalization.localizedText("Debug build warning"))
-        .accessibilityValue(AppLocalization.localizedText("Debug builds of Ghostty are very slow and you may experience performance problems. Debug builds are only recommended during development."))
+        .accessibilityValue(AppLocalization.localizedText("Debug builds of GhoDex are very slow and you may experience performance problems. Debug builds are only recommended during development."))
         .accessibilityAddTraits(.isStaticText)
         .onTapGesture {
             isPopover = true

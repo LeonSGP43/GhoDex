@@ -54,7 +54,7 @@ struct KeychainSSHConnectionCredentialStore: SSHConnectionCredentialStore {
 
         var query = baseQuery(for: hostID)
         query[kSecValueData as String] = Data(password.utf8)
-        query[kSecAttrLabel as String] = "Ghostty SSH Password"
+        query[kSecAttrLabel as String] = "GhoDex SSH Password"
 
         let status = SecItemAdd(query as CFDictionary, nil)
         guard status == errSecSuccess else {

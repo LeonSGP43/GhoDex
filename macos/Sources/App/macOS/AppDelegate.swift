@@ -446,7 +446,7 @@ class AppDelegate: NSObject,
             try process.run()
             NSApp.terminate(nil)
         } catch {
-            Self.logger.error("Failed to relaunch Ghostty: \(error.localizedDescription)")
+            Self.logger.error("Failed to relaunch GhoDex: \(error.localizedDescription)")
         }
     }
 

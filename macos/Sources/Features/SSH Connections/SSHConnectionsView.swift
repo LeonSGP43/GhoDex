@@ -314,7 +314,7 @@ struct SSHConnectionsView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Task Queue")
                         .font(.title2.weight(.semibold))
-                    Text("Schedule and run terminal commands through Ghostty heartbeat queue.")
+                    Text("Schedule and run terminal commands through GhoDex heartbeat queue.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

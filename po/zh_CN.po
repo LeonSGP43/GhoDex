@@ -18,8 +18,8 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 
 #: dist/linux/ghostty_nautilus.py:53
-msgid "Open in Ghostty"
-msgstr "在 Ghostty 中打开"
+msgid "Open in GhoDex"
+msgstr "在 GhoDex 中打开"
 
 #: src/apprt/gtk/ui/1.0/clipboard-confirmation-dialog.blp:12
 #: src/apprt/gtk/ui/1.4/clipboard-confirmation-dialog.blp:12
@@ -80,12 +80,12 @@ msgstr "重新加载配置"
 #: src/apprt/gtk/ui/1.2/debug-warning.blp:7
 #: src/apprt/gtk/ui/1.3/debug-warning.blp:6
 msgid ""
-"⚠️ You're running a debug build of Ghostty! Performance will be degraded."
-msgstr "⚠️ Ghostty 正在以调试模式运行！性能将大打折扣。"
+"⚠️ You're running a debug build of GhoDex! Performance will be degraded."
+msgstr "⚠️ GhoDex 正在以调试模式运行！性能将大打折扣。"
 
 #: src/apprt/gtk/ui/1.5/inspector-window.blp:5
-msgid "Ghostty: Terminal Inspector"
-msgstr "Ghostty 终端调试器"
+msgid "GhoDex: Terminal Inspector"
+msgstr "GhoDex 终端调试器"
 
 #: src/apprt/gtk/ui/1.2/search-overlay.blp:29
 msgid "Find…"
@@ -235,8 +235,8 @@ msgid "Terminal Inspector"
 msgstr "终端调试器"
 
 #: src/apprt/gtk/ui/1.5/window.blp:307 src/apprt/gtk/class/window.zig:1727
-msgid "About Ghostty"
-msgstr "关于 Ghostty"
+msgid "About GhoDex"
+msgstr "关于 GhoDex"
 
 #: src/apprt/gtk/ui/1.5/window.blp:312
 msgid "Quit"
@@ -269,8 +269,8 @@ msgid ""
 msgstr "将以下内容粘贴至终端内将可能执行有害命令。"
 
 #: src/apprt/gtk/class/close_confirmation_dialog.zig:184
-msgid "Quit Ghostty?"
-msgstr "退出 Ghostty 吗？"
+msgid "Quit GhoDex?"
+msgstr "退出 GhoDex 吗？"
 
 #: src/apprt/gtk/class/close_confirmation_dialog.zig:185
 msgid "Close Tab?"
@@ -341,5 +341,5 @@ msgid "Cleared clipboard"
 msgstr "已清空剪贴板"
 
 #: src/apprt/gtk/class/window.zig:1708
-msgid "Ghostty Developers"
-msgstr "Ghostty 开发团队"
+msgid "GhoDex Developers"
+msgstr "GhoDex 开发团队"

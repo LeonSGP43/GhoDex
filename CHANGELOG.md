@@ -12,6 +12,14 @@ All notable changes to this project are documented in this file.
 - Verification: Checked updated docs for consistent fork naming, origin statement, and license reference (`README.md`, `AI_POLICY.md`, `ORIGIN.md`).
 - Files: `README.md`, `AI_POLICY.md`, `ORIGIN.md`, `CHANGELOG.md`.
 
+### docs(i18n): complete GhoDex display-name rollout across docs and UI text
+
+- What changed: Rebranded remaining user-facing `Ghostty` display text to `GhoDex` across contributor/developer docs, spec docs, examples, translation catalogs (`po/*.po`, `po/*.pot`), macOS localized text tables, terminal window titles, and selected CLI/user messages.
+- Why: Finish first-phase fork identity migration so user-visible copy is consistent with the `GhoDex` project name.
+- Impact: UI labels, docs, and translated strings now present `GhoDex` consistently while technical/runtime identifiers (`ghostty`, `libghostty`, bundle IDs, target names) remain intact for compatibility.
+- Verification: Searched for `Ghostty` in changed scopes and confirmed only expected technical/legal leftovers remain (e.g., module names, upstream attribution, compatibility identifiers).
+- Files: `CONTRIBUTING.md`, `HACKING.md`, `PACKAGING.md`, `po/*.po`, `po/com.mitchellh.ghostty.pot`, `macos/Sources/Helpers/AppLocalization.swift`, `macos/Sources/Features/Terminal/Window Styles/*.xib`, `src/cli/*.zig`, `src/main_ghostty.zig`, `dist/windows/ghostty.rc` and related docs/tests.
+
 ## [0.1.0] - 2026-03-15
 
 ### feat(macos): AI terminal manager learning workflow and heartbeat queue

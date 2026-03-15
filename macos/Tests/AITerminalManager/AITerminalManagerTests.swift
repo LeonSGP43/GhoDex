@@ -282,7 +282,7 @@ struct AITerminalManagerTests {
     @Test func localWorkspacePlanUsesWorkingDirectory() throws {
         let workspace = AITerminalWorkspaceTemplate(
             id: "workspace:test",
-            name: "Ghostty",
+            name: "GhoDex",
             hostID: AITerminalHost.local.id,
             directory: "/tmp/ghostty"
         )

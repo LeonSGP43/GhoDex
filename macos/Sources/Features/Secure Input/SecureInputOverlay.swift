@@ -57,7 +57,7 @@ struct SecureInputOverlay: View {
                     .padding(.top, 10)
                     .padding(.trailing, 10)
                     .popover(isPresented: $isPopover, arrowEdge: .bottom) {
-                        Text(AppLocalization.localizedText("Secure Input is active. Secure Input is a macOS security feature that prevents applications from reading keyboard events. This is enabled automatically whenever Ghostty detects a password prompt in the terminal, or at all times if `Ghostty > Secure Keyboard Entry` is active."))
+                        Text(AppLocalization.localizedText("Secure Input is active. Secure Input is a macOS security feature that prevents applications from reading keyboard events. This is enabled automatically whenever GhoDex detects a password prompt in the terminal, or at all times if `GhoDex > Secure Keyboard Entry` is active."))
                         .padding(.all)
                     }
             }

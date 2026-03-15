@@ -1,6 +1,6 @@
-# Localizing Ghostty: The Contributors' Guide
+# Localizing GhoDex: The Contributors' Guide
 
-Ghostty uses the `gettext` library/framework for localization, which has the
+GhoDex uses the `gettext` library/framework for localization, which has the
 distinct benefit of being able to be consumed directly by our two main
 app runtimes: macOS and GTK (Linux). The core would ideally remain agnostic
 to localization efforts, as not all consumers of libghostty would be interested
@@ -15,7 +15,7 @@ translatable strings, which look like this:
 
 ```zig
 // Translators: This is the name of the button that opens the about dialog.
-title: _("About Ghostty");
+title: _("About GhoDex");
 ```
 
 The `// Translators:` comment provides additional context to the translator

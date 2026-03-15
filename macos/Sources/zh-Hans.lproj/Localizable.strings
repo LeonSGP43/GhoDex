@@ -85,10 +85,10 @@
 "Split Down" = "向下分屏";
 "Open the Quick Terminal" = "打开快捷终端";
 "Open the Quick Terminal. If it is already open, then do nothing." = "打开快捷终端。如果已经打开，则不执行任何操作。";
-"The Ghostty app isn't properly initialized." = "Ghostty 应用未正确初始化。";
+"The GhoDex app isn't properly initialized." = "GhoDex 应用未正确初始化。";
 "The terminal no longer exists." = "该终端已不存在。";
-"Ghostty doesn't allow Shortcuts." = "Ghostty 不允许快捷指令访问。";
-"Allow Shortcuts to interact with Ghostty?" = "允许快捷指令与 Ghostty 交互吗？";
+"GhoDex doesn't allow Shortcuts." = "GhoDex 不允许快捷指令访问。";
+"Allow Shortcuts to interact with GhoDex?" = "允许快捷指令与 GhoDex 交互吗？";
 "Key Action" = "按键动作";
 "Release" = "释放";
 "Press" = "按下";

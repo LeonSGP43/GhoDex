@@ -1,16 +1,16 @@
-# Ghostty SSH V1 Connection Workspace Spec
+# GhoDex SSH V1 Connection Workspace Spec
 
 ## Summary
 
-- 目标：先把 Ghostty 的 SSH 体验收敛到 **“像 Termius 一样保存连接并快速连接”**。
+- 目标：先把 GhoDex 的 SSH 体验收敛到 **“像 Termius 一样保存连接并快速连接”**。
 - 范围：只做 `SSH Host 保存 / 编辑 / 删除 / 搜索 / 最近连接 / ~/.ssh/config 导入 / 导入覆盖 / 一键连接`。
 - 不做：`SFTP`、`Vault`、`团队协作`、`端口转发`、`Known Hosts 审批 UI`、`Snippets`、`自研 SSH transport`。
 - 技术边界：继续复用系统 `ssh`，但连接参数必须来自结构化模型，不再只依赖手写字符串。
-- 合并策略：优先只改 `macos/`，不碰 `src/` Zig 核心，减少未来跟 Ghostty 主线合并冲突。
+- 合并策略：优先只改 `macos/`，不碰 `src/` Zig 核心，减少未来跟 GhoDex 主线合并冲突。
 
 ## Product Goal
 
-用户在 Ghostty 里应该能获得下面这套最小完整体验：
+用户在 GhoDex 里应该能获得下面这套最小完整体验：
 
 1. 打开连接工作台。
 2. 看到 `Recent / Saved / Imported` 三类 SSH 连接。
@@ -246,7 +246,7 @@ V1 不做：
 
 ## Merge Strategy
 
-为减少后续与 Ghostty 主线冲突，提交必须按下列原子粒度拆分：
+为减少后续与 GhoDex 主线冲突，提交必须按下列原子粒度拆分：
 
 1. `docs: add ssh v1 connection workspace spec`
 2. `macos: split ssh workspace storage model`

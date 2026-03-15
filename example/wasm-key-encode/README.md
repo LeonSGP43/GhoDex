@@ -1,6 +1,6 @@
 # WebAssembly Key Encoder Example
 
-This example demonstrates how to use the Ghostty VT library from WebAssembly
+This example demonstrates how to use the GhoDex VT library from WebAssembly
 to encode key events into terminal escape sequences.
 
 ## Building

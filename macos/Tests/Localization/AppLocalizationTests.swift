@@ -52,7 +52,7 @@ struct AppLocalizationTests {
                 "app.allow_execute",
                 preferredLanguages: ["zh-Hans"],
                 arguments: ["/tmp/demo.sh"]
-            ) == "允许 Ghostty 执行“/tmp/demo.sh”吗？"
+            ) == "允许 GhoDex 执行“/tmp/demo.sh”吗？"
         )
         #expect(
             AppLocalization.localizedText(
@@ -62,9 +62,9 @@ struct AppLocalizationTests {
         )
         #expect(
             AppLocalization.localizedText(
-                "Allow Shortcuts to interact with Ghostty?",
+                "Allow Shortcuts to interact with GhoDex?",
                 preferredLanguages: ["zh-Hans"]
-            ) == "允许快捷指令与 Ghostty 交互吗？"
+            ) == "允许快捷指令与 GhoDex 交互吗？"
         )
         #expect(
             AppLocalization.localizedText(

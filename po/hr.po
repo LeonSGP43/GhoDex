@@ -20,8 +20,8 @@ msgstr ""
 "n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
 
 #: dist/linux/ghostty_nautilus.py:53
-msgid "Open in Ghostty"
-msgstr "Otvori u Ghosttyju"
+msgid "Open in GhoDex"
+msgstr "Otvori u GhoDexju"
 
 #: src/apprt/gtk/ui/1.0/clipboard-confirmation-dialog.blp:12
 #: src/apprt/gtk/ui/1.4/clipboard-confirmation-dialog.blp:12
@@ -83,12 +83,12 @@ msgstr "Ponovno učitaj postavke"
 #: src/apprt/gtk/ui/1.2/debug-warning.blp:7
 #: src/apprt/gtk/ui/1.3/debug-warning.blp:6
 msgid ""
-"⚠️ You're running a debug build of Ghostty! Performance will be degraded."
-msgstr "⚠️ Pokrenuta je debug verzija Ghosttyja! Performanse će biti smanjene."
+"⚠️ You're running a debug build of GhoDex! Performance will be degraded."
+msgstr "⚠️ Pokrenuta je debug verzija GhoDexja! Performanse će biti smanjene."
 
 #: src/apprt/gtk/ui/1.5/inspector-window.blp:5
-msgid "Ghostty: Terminal Inspector"
-msgstr "Ghostty: inspektor terminala"
+msgid "GhoDex: Terminal Inspector"
+msgstr "GhoDex: inspektor terminala"
 
 #: src/apprt/gtk/ui/1.2/search-overlay.blp:29
 msgid "Find…"
@@ -239,8 +239,8 @@ msgid "Terminal Inspector"
 msgstr "Inspektor terminala"
 
 #: src/apprt/gtk/ui/1.5/window.blp:307 src/apprt/gtk/class/window.zig:1727
-msgid "About Ghostty"
-msgstr "O Ghosttyju"
+msgid "About GhoDex"
+msgstr "O GhoDexju"
 
 #: src/apprt/gtk/ui/1.5/window.blp:312
 msgid "Quit"
@@ -279,8 +279,8 @@ msgstr ""
 "naredbe mogu biti izvršene."
 
 #: src/apprt/gtk/class/close_confirmation_dialog.zig:184
-msgid "Quit Ghostty?"
-msgstr "Zatvori Ghostty?"
+msgid "Quit GhoDex?"
+msgstr "Zatvori GhoDex?"
 
 #: src/apprt/gtk/class/close_confirmation_dialog.zig:185
 msgid "Close Tab?"
@@ -351,5 +351,5 @@ msgid "Cleared clipboard"
 msgstr "Očišćen međuspremnik"
 
 #: src/apprt/gtk/class/window.zig:1708
-msgid "Ghostty Developers"
-msgstr "Razvijatelji Ghosttyja"
+msgid "GhoDex Developers"
+msgstr "Razvijatelji GhoDexja"

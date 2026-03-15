@@ -1,14 +1,14 @@
 import AppKit
 
-/// Requests permission for Shortcuts app to interact with Ghostty
+/// Requests permission for Shortcuts app to interact with GhoDex
 ///
 /// This function displays a permission dialog asking the user to allow Shortcuts
-/// to interact with Ghostty. The permission is automatically cached for 10 minutes
+/// to interact with GhoDex. The permission is automatically cached for 10 minutes
 /// if the user selects "Allow", meaning subsequent intent calls won't show the dialog
 /// again during that time period.
 /// 
 /// The permission uses a shared UserDefaults key across all intents, so granting
-/// permission for one intent allows all Ghostty intents to execute without additional
+/// permission for one intent allows all GhoDex intents to execute without additional
 /// prompts for the duration of the cache period.
 /// 
 /// - Returns: `true` if permission is granted, `false` if denied
@@ -46,7 +46,7 @@ func requestIntentPermission() async -> Bool {
             PermissionRequest.show(
                 "com.mitchellh.ghostty.shortcutsPermission",
                 message: AppLocalization.localizedText(
-                    "Allow Shortcuts to interact with Ghostty?"
+                    "Allow Shortcuts to interact with GhoDex?"
                 ),
                 allowDuration: .forever,
                 rememberDuration: nil,

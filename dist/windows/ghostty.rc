@@ -25,7 +25,7 @@ BEGIN
         //VALUE "FileVersion",        VERSION
         //VALUE "LegalCopyright",     "(C) 2024 ???"
         VALUE "OriginalFilename", "ghostty.exe"
-        VALUE "ProductName",        "Ghostty"
+        VALUE "ProductName",        "GhoDex"
         //VALUE "ProductVersion",     VERSION
         END
     END

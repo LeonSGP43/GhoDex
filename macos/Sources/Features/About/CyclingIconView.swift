@@ -26,7 +26,7 @@ struct CyclingIconView: View {
                 }
             }
         }
-        .accessibilityLabel(AppLocalization.localizedText("Ghostty Application Icon"))
+        .accessibilityLabel(AppLocalization.localizedText("GhoDex Application Icon"))
         .accessibilityHint(AppLocalization.localizedText("Click to cycle through icon variants"))
     }
 

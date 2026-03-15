@@ -19,8 +19,8 @@ msgstr ""
 "Plural-Forms: nplurals=1; plural=0;\n"
 
 #: dist/linux/ghostty_nautilus.py:53
-msgid "Open in Ghostty"
-msgstr "Ghosttyで開く"
+msgid "Open in GhoDex"
+msgstr "GhoDexで開く"
 
 #: src/apprt/gtk/ui/1.0/clipboard-confirmation-dialog.blp:12
 #: src/apprt/gtk/ui/1.4/clipboard-confirmation-dialog.blp:12
@@ -82,13 +82,13 @@ msgstr "設定ファイルの再読み込み"
 #: src/apprt/gtk/ui/1.2/debug-warning.blp:7
 #: src/apprt/gtk/ui/1.3/debug-warning.blp:6
 msgid ""
-"⚠️ You're running a debug build of Ghostty! Performance will be degraded."
+"⚠️ You're running a debug build of GhoDex! Performance will be degraded."
 msgstr ""
-"⚠️ Ghostty のデバッグビルドを実行しています! パフォーマンスが低下しています。"
+"⚠️ GhoDex のデバッグビルドを実行しています! パフォーマンスが低下しています。"
 
 #: src/apprt/gtk/ui/1.5/inspector-window.blp:5
-msgid "Ghostty: Terminal Inspector"
-msgstr "Ghostty: 端末インスペクター"
+msgid "GhoDex: Terminal Inspector"
+msgstr "GhoDex: 端末インスペクター"
 
 #: src/apprt/gtk/ui/1.2/search-overlay.blp:29
 msgid "Find…"
@@ -238,8 +238,8 @@ msgid "Terminal Inspector"
 msgstr "端末インスペクター"
 
 #: src/apprt/gtk/ui/1.5/window.blp:307 src/apprt/gtk/class/window.zig:1727
-msgid "About Ghostty"
-msgstr "Ghostty について"
+msgid "About GhoDex"
+msgstr "GhoDex について"
 
 #: src/apprt/gtk/ui/1.5/window.blp:312
 msgid "Quit"
@@ -278,8 +278,8 @@ msgstr ""
 "危険な可能性があります。"
 
 #: src/apprt/gtk/class/close_confirmation_dialog.zig:184
-msgid "Quit Ghostty?"
-msgstr "Ghostty を終了しますか?"
+msgid "Quit GhoDex?"
+msgstr "GhoDex を終了しますか?"
 
 #: src/apprt/gtk/class/close_confirmation_dialog.zig:185
 msgid "Close Tab?"
@@ -350,5 +350,5 @@ msgid "Cleared clipboard"
 msgstr "クリップボードを空にしました"
 
 #: src/apprt/gtk/class/window.zig:1708
-msgid "Ghostty Developers"
-msgstr "Ghostty 開発者"
+msgid "GhoDex Developers"
+msgstr "GhoDex 開発者"
