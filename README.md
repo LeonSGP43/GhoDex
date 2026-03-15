@@ -201,3 +201,9 @@ SENTRY_DSN=https://e914ee84fd895c4fe324afa3e53dac76@o4507352570920960.ingest.us.
 > stack memory of each thread at the time of the crash. This information
 > is used to rebuild the stack trace but can also contain sensitive data
 > depending on when the crash occurred.
+
+## Versioning
+
+This project follows Semantic Versioning (`MAJOR.MINOR.PATCH`).
+The current version is stored in [`VERSION`](./VERSION), and release history is
+tracked in [`CHANGELOG.md`](./CHANGELOG.md).
