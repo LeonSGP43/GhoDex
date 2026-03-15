@@ -2,16 +2,18 @@
 <h1>
 <p align="center">
   <img src="https://github.com/user-attachments/assets/fe853809-ba8b-400b-83ab-a9a0da25be8a" alt="Logo" width="128">
-  <br>Ghostty
+  <br>GhoDex
 </h1>
   <p align="center">
-    Fast, native, feature-rich terminal emulator pushing modern features.
+    Fast, native, feature-rich terminal emulator forked from Ghostty.
     <br />
     <a href="#about">About</a>
     ·
-    <a href="https://ghostty.org/download">Download</a>
+    <a href="#upgrade-highlights">Upgrade Highlights</a>
     ·
-    <a href="https://ghostty.org/docs">Documentation</a>
+    <a href="#download">Download</a>
+    ·
+    <a href="#project-origin">Project Origin</a>
     ·
     <a href="CONTRIBUTING.md">Contributing</a>
     ·
@@ -21,43 +23,52 @@
 
 ## About
 
-Ghostty is a terminal emulator that differentiates itself by being
-fast, feature-rich, and native. While there are many excellent terminal
-emulators available, they all force you to choose between speed,
-features, or native UIs. Ghostty provides all three.
+GhoDex is a personal fork of Ghostty that keeps the upstream terminal core
+while adding workflow upgrades for day-to-day development on macOS.
 
-In all categories, I am not trying to claim that Ghostty is the
-best (i.e. the fastest, most feature-rich, or most native). But
-Ghostty is competitive in all three categories and Ghostty
-doesn't make you choose between them.
+Like upstream, the goal is still speed, native UX, and rich terminal features
+without forcing tradeoffs between those pillars.
 
-Ghostty also intends to push the boundaries of what is possible with a
-terminal emulator by exposing modern, opt-in features that enable CLI tool
-developers to build more feature rich, interactive applications.
+This repository is in a phased rebrand:
 
-While aiming for this ambitious goal, our first step is to make Ghostty
-one of the best fully standards compliant terminal emulator, remaining
-compatible with all existing shells and software while supporting all of
-the latest terminal innovations in the ecosystem. You can use Ghostty
-as a drop-in replacement for your existing terminal emulator.
+- User-facing docs and project branding are migrating to `GhoDex`.
+- Runtime compatibility identifiers such as `ghostty`, `libghostty`, and
+  `com.mitchellh.ghostty` are intentionally retained for now.
 
-For more details, see [About Ghostty](https://ghostty.org/docs/about).
+## Upgrade Highlights
+
+Recent fork-specific upgrades include:
+
+- Added an AI Terminal Manager settings panel and learning workflow for
+  terminal-to-knowledge capture.
+- Added a heartbeat task queue with configurable interval/concurrency and
+  a dedicated settings tab.
+- Hardened update/localization tests to be language-agnostic.
+- Added release governance basics (`VERSION`, `CHANGELOG.md`, SemVer flow).
 
 ## Download
 
-See the [download page](https://ghostty.org/download) on the Ghostty website.
+- Fork releases: <https://github.com/LeonSGP43/GhoDex/releases>
+- Upstream releases: <https://ghostty.org/download>
 
 ## Documentation
 
-See the [documentation](https://ghostty.org/docs) on the Ghostty website.
+- This repository: [`README.md`](./README.md), [`HACKING.md`](./HACKING.md),
+  [`CONTRIBUTING.md`](./CONTRIBUTING.md)
+- Upstream docs baseline: <https://ghostty.org/docs>
+
+## Project Origin
+
+GhoDex originates from [Ghostty](https://github.com/ghostty-org/ghostty).
+This project keeps the original MIT license and upstream attribution intact.
+Huge thanks to Mitchell Hashimoto and all Ghostty contributors.
+See [`ORIGIN.md`](./ORIGIN.md) for the attribution record.
 
 ## Contributing and Developing
 
-If you have any ideas, issues, etc. regarding Ghostty, or would like to
-contribute to Ghostty through pull requests, please check out our
-["Contributing to Ghostty"](CONTRIBUTING.md) document. Those who would like
-to get involved with Ghostty's development as well should also read the
-["Developing Ghostty"](HACKING.md) document for more technical details.
+If you have ideas or changes for GhoDex, start with
+["Contributing"](CONTRIBUTING.md), then read ["Developing"](HACKING.md)
+for technical details.
 
 ## Roadmap and Status
 
@@ -207,3 +218,9 @@ SENTRY_DSN=https://e914ee84fd895c4fe324afa3e53dac76@o4507352570920960.ingest.us.
 This project follows Semantic Versioning (`MAJOR.MINOR.PATCH`).
 The current version is stored in [`VERSION`](./VERSION), and release history is
 tracked in [`CHANGELOG.md`](./CHANGELOG.md).
+
+## End Note
+
+GhoDex is built on top of Ghostty.
+Thank you to Mitchell Hashimoto and every upstream contributor for the
+foundation this project stands on.
