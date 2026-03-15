@@ -135,6 +135,11 @@ extension Ghostty {
             #endif
         }
 
+        static func configPath() -> String? {
+            let str = Ghostty.AllocatedString(ghostty_config_open_path()).string
+            return str.isEmpty ? nil : str
+        }
+
         /// Reload the configuration.
         func reloadConfig(soft: Bool = false) {
             guard let app = self.app else { return }

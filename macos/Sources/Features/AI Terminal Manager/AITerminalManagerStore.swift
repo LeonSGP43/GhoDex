@@ -90,6 +90,7 @@ final class AITerminalManagerStore: ObservableObject {
     @Published private(set) var tasks: [AITerminalTaskRecord] = []
     @Published private(set) var heartbeatLastBeatAt: Date?
     @Published private(set) var heartbeatIsExecutingTask = false
+    @Published private(set) var configurationRevision = UUID()
     @Published private(set) var selectedSessionID: UUID?
     @Published private(set) var selectedSessionVisibleText = ""
     @Published private(set) var selectedSessionScreenText = ""
@@ -109,14 +110,18 @@ final class AITerminalManagerStore: ObservableObject {
     private var sshPasswordAutomationTimer: Timer?
     private var heartbeatTimer: Timer?
     private var heartbeatSchedulerTimer: Timer?
-    private static let maxLearningLogEntries = 200
-    private static let maxLearningLogSummaryCharacters = 400
-    private static let maxLearningLogDetailCharacters = 8_000
-    private static let minHeartbeatIntervalSeconds = 0.5
-    private static let maxHeartbeatIntervalSeconds = 60.0
-    private static let minHeartbeatMaxConcurrentTasks = 1
-    private static let maxHeartbeatMaxConcurrentTasks = 16
-    private static let isRunningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    private var ghosttyConfigObserver: NSObjectProtocol?
+    nonisolated private static let maxLearningLogEntries = 200
+    nonisolated private static let maxLearningLogSummaryCharacters = 400
+    nonisolated private static let maxLearningLogDetailCharacters = 8_000
+    nonisolated private static let minHeartbeatIntervalSeconds = 0.5
+    nonisolated private static let maxHeartbeatIntervalSeconds = 60.0
+    nonisolated private static let minHeartbeatMaxConcurrentTasks = 1
+    nonisolated private static let maxHeartbeatMaxConcurrentTasks = 16
+    nonisolated private static let isRunningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    nonisolated private static let legacyConfigurationFilename = "ai-terminal-manager.json"
+    nonisolated private static let managedConfigStartMarker = "# >>> GhoDex managed settings >>>"
+    nonisolated private static let managedConfigEndMarker = "# <<< GhoDex managed settings <<<"
     nonisolated private static let managedSkillRepositorySpecs: [ManagedSkillRepositorySpec] = [
         .init(
             id: "gho_chat_skill_daily-qa-copilot",
@@ -178,11 +183,16 @@ final class AITerminalManagerStore: ObservableObject {
             .appendingPathComponent("ai-task-queue-inbox", isDirectory: true)
         self.sshConfigHostLoader = sshConfigHostLoader
         self.credentialStore = credentialStore
-        self.configuration = (try? Self.loadConfiguration(from: self.configurationURL)) ?? .empty
+        self.configuration = (try? Self.loadConfiguration(at: self.configurationURL)) ?? .empty
+        installGhosttyConfigObserver()
         refresh()
+        migrateLegacyConfigurationIfNeeded()
     }
 
     deinit {
+        if let ghosttyConfigObserver {
+            NotificationCenter.default.removeObserver(ghosttyConfigObserver)
+        }
         sshPasswordAutomationTimer?.invalidate()
         sshPasswordAutomationTimer = nil
         heartbeatTimer?.invalidate()
@@ -310,7 +320,7 @@ final class AITerminalManagerStore: ObservableObject {
     }
 
     var heartbeatInboxDirectoryPath: String {
-        heartbeatInboxDirectoryURL.path(percentEncoded: false)
+        heartbeatInboxDirectoryURL.standardizedFileURL.path
     }
 
     var heartbeatQueuedCount: Int {
@@ -427,10 +437,7 @@ final class AITerminalManagerStore: ObservableObject {
     }
 
     func refresh() {
-        if let loaded = try? Self.loadConfiguration(from: configurationURL) {
-            configuration = loaded
-        }
-
+        applyConfiguration((try? Self.loadConfiguration(at: configurationURL)) ?? .empty)
         importedSSHHosts = sshConfigHostLoader()
         reconcileImportedState()
         rebuildSessions()
@@ -2640,13 +2647,24 @@ final class AITerminalManagerStore: ObservableObject {
     private func persistConfiguration() {
         do {
             try Self.saveConfiguration(configuration, to: configurationURL)
+            configurationRevision = UUID()
+            appDelegateProvider()?.ghostty.reloadConfig()
         } catch {
             lastError = L10n.AITerminalManager.saveConfigurationFailed(error.localizedDescription)
         }
     }
 
-    private static func defaultConfigurationURL() -> URL {
+    nonisolated private static func defaultConfigurationURL() -> URL {
         let fileManager = FileManager.default
+        if let path = Ghostty.App.configPath(), !path.isEmpty {
+            let url = URL(fileURLWithPath: path, isDirectory: false)
+            try? fileManager.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            return url
+        }
+
         let appSupport = (try? fileManager.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
@@ -2654,25 +2672,59 @@ final class AITerminalManagerStore: ObservableObject {
             create: true
         )) ?? fileManager.homeDirectoryForCurrentUser
 
-        let bundleID = Bundle.main.bundleIdentifier ?? "com.mitchellh.ghostty"
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.sgpleon.ghodex"
         let directory = appSupport.appendingPathComponent(bundleID, isDirectory: true)
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory.appendingPathComponent("ai-terminal-manager.json", isDirectory: false)
+        return directory.appendingPathComponent("config.ghodex", isDirectory: false)
     }
 
-    private static func loadConfiguration(from url: URL) throws -> AITerminalManagerConfiguration {
-        let data = try Data(contentsOf: url)
-        let decoded = try JSONDecoder().decode(AITerminalManagerConfiguration.self, from: data)
-        return sanitizeLearningLogs(in: decoded)
+    nonisolated static func loadConfiguration(at url: URL) throws -> AITerminalManagerConfiguration {
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: url.path) {
+            let data = try Data(contentsOf: url)
+            if let text = String(data: data, encoding: .utf8),
+               let firstNonWhitespace = text.trimmingCharacters(in: .whitespacesAndNewlines).first,
+               firstNonWhitespace == "{" {
+                let configuration = try JSONDecoder().decode(AITerminalManagerConfiguration.self, from: data)
+                return sanitizeConfiguration(configuration)
+            }
+        }
+
+        let config = Ghostty.Config(at: url.path(percentEncoded: false))
+        return sanitizeConfiguration(configuration(from: config))
     }
 
-    private static func saveConfiguration(_ configuration: AITerminalManagerConfiguration, to url: URL) throws {
-        let data = try JSONEncoder().encode(configuration)
-        try data.write(to: url, options: .atomic)
+    nonisolated private static func saveConfiguration(_ configuration: AITerminalManagerConfiguration, to url: URL) throws {
+        let fileManager = FileManager.default
+        try fileManager.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        let existingText: String
+        if fileManager.fileExists(atPath: url.path) {
+            existingText = try String(contentsOf: url, encoding: .utf8)
+        } else {
+            existingText = ""
+        }
+
+        let stripped = stripManagedConfig(from: existingText)
+        let block = managedConfigBlock(for: configuration)
+        let normalized = stripped.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = normalized.isEmpty ? "\(block)\n" : "\(normalized)\n\n\(block)\n"
+        try text.write(to: url, atomically: true, encoding: .utf8)
     }
 
-    private static func sanitizeLearningLogs(in configuration: AITerminalManagerConfiguration) -> AITerminalManagerConfiguration {
+    nonisolated private static func sanitizeConfiguration(_ configuration: AITerminalManagerConfiguration) -> AITerminalManagerConfiguration {
         var next = configuration
+        next.heartbeatQueueSettings.heartbeatIntervalSeconds = min(
+            max(next.heartbeatQueueSettings.heartbeatIntervalSeconds, Self.minHeartbeatIntervalSeconds),
+            Self.maxHeartbeatIntervalSeconds
+        )
+        next.heartbeatQueueSettings.maxConcurrentTasks = min(
+            max(next.heartbeatQueueSettings.maxConcurrentTasks, Self.minHeartbeatMaxConcurrentTasks),
+            Self.maxHeartbeatMaxConcurrentTasks
+        )
         if next.learningLogs.count > Self.maxLearningLogEntries {
             next.learningLogs = Array(next.learningLogs.suffix(Self.maxLearningLogEntries))
         }
@@ -2695,7 +2747,7 @@ final class AITerminalManagerStore: ObservableObject {
         return next
     }
 
-    private static func clampText(_ text: String, maxCharacters: Int) -> String {
+    nonisolated private static func clampText(_ text: String, maxCharacters: Int) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count > maxCharacters else { return trimmed }
         let endIndex = trimmed.index(trimmed.startIndex, offsetBy: maxCharacters)
@@ -2711,5 +2763,236 @@ final class AITerminalManagerStore: ObservableObject {
     nonisolated static func textPayload(for input: String) -> String? {
         guard !input.isEmpty else { return nil }
         return input
+    }
+
+    private func installGhosttyConfigObserver() {
+        ghosttyConfigObserver = NotificationCenter.default.addObserver(
+            forName: .ghosttyConfigDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard notification.object == nil else { return }
+            guard let config = notification.userInfo?[Notification.Name.GhosttyConfigChangeKey] as? Ghostty.Config else { return }
+            Task { @MainActor [weak self] in
+                self?.applyGhosttyConfig(config)
+            }
+        }
+    }
+
+    private func applyGhosttyConfig(_ ghosttyConfig: Ghostty.Config) {
+        applyConfiguration(Self.configuration(from: ghosttyConfig))
+        importedSSHHosts = sshConfigHostLoader()
+        reconcileImportedState()
+        rebuildSessions()
+        syncHeartbeatRuntime()
+    }
+
+    private func migrateLegacyConfigurationIfNeeded() {
+        guard configurationURL.lastPathComponent != Self.legacyConfigurationFilename else { return }
+        guard !Self.hasManagedConfigEntries(at: configurationURL) else { return }
+
+        let legacyURL = configurationURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(Self.legacyConfigurationFilename, isDirectory: false)
+        guard FileManager.default.fileExists(atPath: legacyURL.path) else { return }
+        guard let legacyConfiguration = try? Self.loadConfiguration(at: legacyURL) else { return }
+
+        applyConfiguration(legacyConfiguration)
+        importedSSHHosts = sshConfigHostLoader()
+        let reconciled = Self.reconciledConfiguration(configuration, importedHosts: importedSSHHosts)
+        applyConfiguration(reconciled)
+        rebuildSessions()
+        syncHeartbeatRuntime()
+        persistConfiguration()
+    }
+
+    private func applyConfiguration(_ nextConfiguration: AITerminalManagerConfiguration) {
+        configuration = Self.sanitizeConfiguration(nextConfiguration)
+        configurationRevision = UUID()
+    }
+
+    nonisolated private static func configuration(from config: Ghostty.Config) -> AITerminalManagerConfiguration {
+        .init(
+            savedHosts: decodePayloads(AITerminalHost.self, from: config.ghodexSavedHosts),
+            importedHostOverrides: decodePayloads(AITerminalHost.self, from: config.ghodexImportedHostOverrides),
+            favoriteHostIDs: config.ghodexFavoriteHosts,
+            recentHosts: decodePayloads(AITerminalRecentHostRecord.self, from: config.ghodexRecentHosts),
+            workspaces: decodePayloads(AITerminalWorkspaceTemplate.self, from: config.ghodexWorkspaces),
+            heartbeatQueueSettings: .init(
+                enabled: config.ghodexHeartbeatEnabled,
+                heartbeatIntervalSeconds: config.ghodexHeartbeatIntervalSeconds,
+                maxConcurrentTasks: config.ghodexHeartbeatMaxConcurrentTasks
+            ),
+            heartbeatTasks: decodePayloads(AITerminalHeartbeatTask.self, from: config.ghodexHeartbeatTasks),
+            learningSettings: .init(
+                enabled: config.ghodexLearningEnabled,
+                preferTabWorkingDirectory: config.ghodexLearningPreferTabWorkingDirectory,
+                defaultProjectPath: decodedStringValue(config.ghodexLearningDefaultProjectPath) ?? AITerminalLearningSettings.defaultLearnWorkspacePath,
+                notesRelativePath: decodedStringValue(config.ghodexLearningNotesRelativePath) ?? AITerminalLearningSettings.defaultNotesRelativePath,
+                commandTemplate: decodedStringValue(config.ghodexLearningCommandTemplate) ?? AITerminalLearningSettings.defaultCommandTemplate,
+                fastModel: decodedStringValue(config.ghodexLearningFastModel) ?? AITerminalLearningSettings.defaultFastModel,
+                promptTemplate: decodedStringValue(config.ghodexLearningPromptTemplate) ?? AITerminalLearningSettings.defaultPromptTemplate
+            ),
+            learningLogs: decodePayloads(AITerminalLearningLogEntry.self, from: config.ghodexLearningLogs)
+        )
+    }
+
+    nonisolated private static func decodePayloads<T: Decodable>(_ type: T.Type, from values: [String]) -> [T] {
+        let decoder = JSONDecoder()
+        return values.compactMap { value in
+            if let data = Data(base64Encoded: value),
+               let decoded = try? decoder.decode(T.self, from: data) {
+                return decoded
+            }
+
+            guard let data = value.data(using: .utf8) else { return nil }
+            return try? decoder.decode(T.self, from: data)
+        }
+    }
+
+    nonisolated private static func managedConfigBlock(for configuration: AITerminalManagerConfiguration) -> String {
+        let sanitized = sanitizeConfiguration(configuration)
+        var lines = [managedConfigStartMarker]
+        lines.append(contentsOf: renderedConfigLines(for: sanitized))
+        lines.append(managedConfigEndMarker)
+        return lines.joined(separator: "\n")
+    }
+
+    nonisolated private static func renderedConfigLines(for configuration: AITerminalManagerConfiguration) -> [String] {
+        var lines: [String] = []
+
+        appendPayloadLines("ghodex-saved-host", values: configuration.savedHosts, to: &lines)
+        appendPayloadLines("ghodex-imported-host-override", values: configuration.importedHostOverrides, to: &lines)
+        appendStringLines("ghodex-favorite-host", values: configuration.favoriteHostIDs, to: &lines)
+        appendPayloadLines("ghodex-recent-host", values: configuration.recentHosts, to: &lines)
+        appendPayloadLines("ghodex-workspace", values: configuration.workspaces, to: &lines)
+        appendPayloadLines("ghodex-heartbeat-task", values: configuration.heartbeatTasks, to: &lines)
+        appendPayloadLines("ghodex-learning-log", values: configuration.learningLogs, to: &lines)
+
+        lines.append("ghodex-learning-enabled = \(configuration.learningSettings.enabled ? "true" : "false")")
+        lines.append("ghodex-learning-prefer-tab-working-directory = \(configuration.learningSettings.preferTabWorkingDirectory ? "true" : "false")")
+        lines.append("ghodex-learning-default-project-path = \(configStringLiteral(encodeStringValue(configuration.learningSettings.defaultProjectPath)))")
+        lines.append("ghodex-learning-notes-relative-path = \(configStringLiteral(encodeStringValue(configuration.learningSettings.notesRelativePath)))")
+        lines.append("ghodex-learning-command-template = \(configStringLiteral(encodeStringValue(configuration.learningSettings.commandTemplate)))")
+        lines.append("ghodex-learning-fast-model = \(configStringLiteral(encodeStringValue(configuration.learningSettings.fastModel)))")
+        lines.append("ghodex-learning-prompt-template = \(configStringLiteral(encodeStringValue(configuration.learningSettings.promptTemplate)))")
+        lines.append("ghodex-heartbeat-enabled = \(configuration.heartbeatQueueSettings.enabled ? "true" : "false")")
+        lines.append("ghodex-heartbeat-interval-seconds = \(formatDouble(configuration.heartbeatQueueSettings.heartbeatIntervalSeconds))")
+        lines.append("ghodex-heartbeat-max-concurrent-tasks = \(configuration.heartbeatQueueSettings.maxConcurrentTasks)")
+
+        return lines
+    }
+
+    nonisolated private static func appendPayloadLines<T: Encodable>(
+        _ key: String,
+        values: [T],
+        to lines: inout [String]
+    ) {
+        for value in values {
+            guard let payload = encodedPayload(value) else { continue }
+            lines.append("\(key) = \(configStringLiteral(payload))")
+        }
+    }
+
+    nonisolated private static func appendStringLines(
+        _ key: String,
+        values: [String],
+        to lines: inout [String]
+    ) {
+        for value in values {
+            lines.append("\(key) = \(configStringLiteral(value))")
+        }
+    }
+
+    nonisolated private static func encodedPayload<T: Encodable>(_ value: T) -> String? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(value) else { return nil }
+        return data.base64EncodedString()
+    }
+
+    nonisolated private static func encodeStringValue(_ value: String) -> String {
+        Data(value.utf8).base64EncodedString()
+    }
+
+    nonisolated private static func decodedStringValue(_ value: String?) -> String? {
+        guard let value else { return nil }
+        if let data = Data(base64Encoded: value),
+           let decoded = String(data: data, encoding: .utf8) {
+            return decoded
+        }
+        return value
+    }
+
+    nonisolated private static func configStringLiteral(_ value: String) -> String {
+        let data = try? JSONSerialization.data(withJSONObject: [value], options: [])
+        guard
+            let data,
+            let encoded = String(data: data, encoding: .utf8),
+            encoded.count >= 2
+        else {
+            return "\"\""
+        }
+
+        let start = encoded.index(after: encoded.startIndex)
+        let end = encoded.index(before: encoded.endIndex)
+        return String(encoded[start..<end])
+    }
+
+    nonisolated private static func formatDouble(_ value: Double) -> String {
+        var rendered = String(value)
+        if rendered.contains(".") {
+            while rendered.hasSuffix("0") {
+                rendered.removeLast()
+            }
+            if rendered.hasSuffix(".") {
+                rendered.removeLast()
+            }
+        }
+        return rendered
+    }
+
+    nonisolated private static func stripManagedConfig(from text: String) -> String {
+        let lines = text.components(separatedBy: .newlines)
+        var result: [String] = []
+        var isInsideManagedBlock = false
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            if trimmed == managedConfigStartMarker {
+                isInsideManagedBlock = true
+                continue
+            }
+
+            if trimmed == managedConfigEndMarker {
+                isInsideManagedBlock = false
+                continue
+            }
+
+            if isInsideManagedBlock {
+                continue
+            }
+
+            if trimmed.hasPrefix("ghodex-") {
+                continue
+            }
+
+            result.append(line)
+        }
+
+        return result.joined(separator: "\n")
+    }
+
+    nonisolated private static func hasManagedConfigEntries(at url: URL) -> Bool {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return false }
+        if text.contains(managedConfigStartMarker) || text.contains(managedConfigEndMarker) {
+            return true
+        }
+
+        return text
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .contains { $0.hasPrefix("ghodex-") }
     }
 }

@@ -156,6 +156,11 @@ struct SSHConnectionsView: View {
         .onChange(of: allConnectionHosts.map(\.id)) { _ in
             syncSelection()
         }
+        .onChange(of: store.configurationRevision) { _ in
+            syncSelection()
+            syncLearningSettings()
+            syncTaskQueueSettings()
+        }
         .onChange(of: selectedTab) { _ in
             if selectedTab == .learning {
                 syncLearningSettings()

@@ -30,6 +30,29 @@ private struct HeartbeatPressureResult: Codable {
     var peakRunningCount: Int
 }
 
+private enum AITerminalManagerTestSupport {
+    static let managedConfigStartMarker = "# >>> GhoDex managed settings >>>"
+    static let managedConfigEndMarker = "# <<< GhoDex managed settings <<<"
+
+    static func configStringLiteral(_ value: String) throws -> String {
+        let data = try JSONSerialization.data(withJSONObject: [value], options: [])
+        guard let encoded = String(data: data, encoding: .utf8) else {
+            throw NSError(domain: "AITerminalManagerTests", code: 1)
+        }
+        return String(encoded.dropFirst().dropLast())
+    }
+
+    static func encodedPayload<T: Encodable>(_ value: T) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(value).base64EncodedString()
+    }
+
+    static func occurrences(of needle: String, in haystack: String) -> Int {
+        haystack.components(separatedBy: needle).count - 1
+    }
+}
+
 struct AITerminalManagerTests {
     @Test @MainActor func sshConnectionsWindowsWithoutTabGroupsAreNotTreatedAsSameGroup() {
         let lhs = NSWindow()
@@ -452,7 +475,7 @@ struct AITerminalManagerTests {
             let baseDirectory = FileManager.default.temporaryDirectory
                 .appendingPathComponent(UUID().uuidString, isDirectory: true)
             try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
-            let configURL = baseDirectory.appendingPathComponent("ai-terminal-manager.json")
+            let configURL = baseDirectory.appendingPathComponent("config.ghodex")
 
             let store = AITerminalManagerStore(
                 appDelegateProvider: { nil },
@@ -534,7 +557,7 @@ struct AITerminalManagerTests {
             let baseDirectory = FileManager.default.temporaryDirectory
                 .appendingPathComponent(UUID().uuidString, isDirectory: true)
             try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
-            let configURL = baseDirectory.appendingPathComponent("ai-terminal-manager.json")
+            let configURL = baseDirectory.appendingPathComponent("config.ghodex")
 
             let store = AITerminalManagerStore(
                 appDelegateProvider: { nil },
@@ -638,8 +661,7 @@ struct AITerminalManagerTests {
             promptTemplate: "Summarize:\n$SELECTION"
         ))
 
-        let data = try Data(contentsOf: tempURL)
-        let configuration = try JSONDecoder().decode(AITerminalManagerConfiguration.self, from: data)
+        let configuration = try AITerminalManagerStore.loadConfiguration(at: tempURL)
 
         #expect(configuration.learningSettings.enabled)
         #expect(!configuration.learningSettings.preferTabWorkingDirectory)
@@ -648,6 +670,151 @@ struct AITerminalManagerTests {
         #expect(configuration.learningSettings.commandTemplate == #"c codex -m "$MODEL" "$PROMPT""#)
         #expect(configuration.learningSettings.fastModel == AITerminalLearningSettings.defaultFastModel)
         #expect(configuration.learningSettings.promptTemplate == AITerminalLearningSettings.defaultPromptTemplate)
+    }
+
+    @Test @MainActor func storeLoadsConfigurationFromManagedGhoDexConfigBlock() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let savedHost = AITerminalHost(
+            id: "ssh:buildbox",
+            name: "Buildbox",
+            transport: .ssh,
+            sshAlias: "buildbox",
+            hostname: "10.0.0.5",
+            user: "deploy",
+            port: 2222,
+            defaultDirectory: "/srv/app",
+            source: .configurationFile
+        )
+        let payload = try AITerminalManagerTestSupport.encodedPayload(savedHost)
+        let favorite = try AITerminalManagerTestSupport.configStringLiteral("ssh:buildbox")
+
+        let text = """
+        font-size = 14
+
+        \(AITerminalManagerTestSupport.managedConfigStartMarker)
+        ghodex-saved-host = \(try AITerminalManagerTestSupport.configStringLiteral(payload))
+        ghodex-favorite-host = \(favorite)
+        ghodex-learning-enabled = false
+        ghodex-heartbeat-interval-seconds = 7
+        \(AITerminalManagerTestSupport.managedConfigEndMarker)
+        """
+        try text.write(to: tempURL, atomically: true, encoding: .utf8)
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        #expect(store.configuration.savedHosts.count == 1)
+        #expect(store.configuration.savedHosts.first?.id == "ssh:buildbox")
+        #expect(store.configuration.favoriteHostIDs == ["ssh:buildbox"])
+        #expect(store.configuration.learningSettings.enabled == false)
+        #expect(store.configuration.heartbeatQueueSettings.heartbeatIntervalSeconds == 7)
+    }
+
+    @Test @MainActor func storePersistsConfigurationIntoManagedGhoDexConfigBlock() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+        try "font-size = 14\n".write(to: tempURL, atomically: true, encoding: .utf8)
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        store.saveHost(
+            name: "Buildbox",
+            sshAlias: "buildbox",
+            hostname: "",
+            user: "deploy",
+            port: "2222",
+            defaultDirectory: "/srv/app"
+        )
+        store.saveHost(
+            existingHostID: "ssh:buildbox",
+            name: "Buildbox Prod",
+            sshAlias: "buildbox",
+            hostname: "",
+            user: "deploy",
+            port: "2200",
+            defaultDirectory: "/srv/prod"
+        )
+
+        let text = try String(contentsOf: tempURL, encoding: .utf8)
+        #expect(text.contains("font-size = 14"))
+        #expect(text.contains(AITerminalManagerTestSupport.managedConfigStartMarker))
+        #expect(text.contains(AITerminalManagerTestSupport.managedConfigEndMarker))
+        #expect(text.contains("ghodex-saved-host = "))
+        #expect(!text.contains("\"savedHosts\""))
+        #expect(AITerminalManagerTestSupport.occurrences(of: AITerminalManagerTestSupport.managedConfigStartMarker, in: text) == 1)
+        #expect(AITerminalManagerTestSupport.occurrences(of: AITerminalManagerTestSupport.managedConfigEndMarker, in: text) == 1)
+    }
+
+    @Test @MainActor func storeReloadsPersistedConfigurationFromGhoDexConfig() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let storeA = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+        storeA.saveHost(
+            name: "Buildbox",
+            sshAlias: "buildbox",
+            hostname: "",
+            user: "deploy",
+            port: "2222",
+            defaultDirectory: "/srv/app"
+        )
+        storeA.saveLearningSettings(.init(
+            enabled: true,
+            preferTabWorkingDirectory: false,
+            defaultProjectPath: "/tmp/learn-workspace",
+            notesRelativePath: ".agents/memory/custom.md",
+            commandTemplate: #"c codex -m "$MODEL" "$PROMPT""#,
+            fastModel: "ignored-fast-model",
+            promptTemplate: "ignored prompt"
+        ))
+        storeA.saveHeartbeatQueueSettings(.init(
+            enabled: true,
+            heartbeatIntervalSeconds: 7,
+            maxConcurrentTasks: 3
+        ))
+
+        let storeB = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        #expect(storeB.configuration.savedHosts.map(\.id) == ["ssh:buildbox"])
+        #expect(storeB.configuration.learningSettings.preferTabWorkingDirectory == false)
+        #expect(storeB.configuration.learningSettings.defaultProjectPath == "/tmp/learn-workspace")
+        #expect(storeB.configuration.learningSettings.notesRelativePath == ".agents/memory/custom.md")
+        #expect(storeB.configuration.learningSettings.commandTemplate == #"c codex -m "$MODEL" "$PROMPT""#)
+        #expect(storeB.configuration.heartbeatQueueSettings.enabled)
+        #expect(storeB.configuration.heartbeatQueueSettings.heartbeatIntervalSeconds == 7)
+        #expect(storeB.configuration.heartbeatQueueSettings.maxConcurrentTasks == 3)
+    }
+
+    @Test @MainActor func storeUsesConfigDirectoryForHeartbeatInbox() {
+        let baseDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let configURL = baseDirectory.appendingPathComponent("config.ghodex")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: configURL
+        )
+
+        #expect(
+            store.heartbeatInboxDirectoryPath ==
+            baseDirectory.appendingPathComponent("ai-task-queue-inbox", isDirectory: true).path
+        )
     }
 
     @Test @MainActor func storeInitializesChatAndLearnWorkspaceScaffold() throws {
@@ -760,15 +927,13 @@ struct AITerminalManagerTests {
         #expect(store.configuration.learningLogs[1].status == .failure)
         #expect(store.configuration.learningLogs[1].outputSummary == "(no output)")
 
-        let savedData = try Data(contentsOf: tempURL)
-        let savedConfiguration = try JSONDecoder().decode(AITerminalManagerConfiguration.self, from: savedData)
+        let savedConfiguration = try AITerminalManagerStore.loadConfiguration(at: tempURL)
         #expect(savedConfiguration.learningLogs.count == 2)
 
         store.clearLearningLogs()
         #expect(store.configuration.learningLogs.isEmpty)
 
-        let clearedData = try Data(contentsOf: tempURL)
-        let clearedConfiguration = try JSONDecoder().decode(AITerminalManagerConfiguration.self, from: clearedData)
+        let clearedConfiguration = try AITerminalManagerStore.loadConfiguration(at: tempURL)
         #expect(clearedConfiguration.learningLogs.isEmpty)
     }
 

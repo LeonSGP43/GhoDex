@@ -733,6 +733,116 @@ extension Ghostty {
             let buffer = UnsafeBufferPointer(start: v.commands, count: v.len)
             return buffer.map { Ghostty.Command(cValue: $0) }
         }
+
+        var ghodexSavedHosts: [String] {
+            repeatableStrings(for: "ghodex-saved-host")
+        }
+
+        var ghodexImportedHostOverrides: [String] {
+            repeatableStrings(for: "ghodex-imported-host-override")
+        }
+
+        var ghodexFavoriteHosts: [String] {
+            repeatableStrings(for: "ghodex-favorite-host")
+        }
+
+        var ghodexRecentHosts: [String] {
+            repeatableStrings(for: "ghodex-recent-host")
+        }
+
+        var ghodexWorkspaces: [String] {
+            repeatableStrings(for: "ghodex-workspace")
+        }
+
+        var ghodexHeartbeatTasks: [String] {
+            repeatableStrings(for: "ghodex-heartbeat-task")
+        }
+
+        var ghodexLearningLogs: [String] {
+            repeatableStrings(for: "ghodex-learning-log")
+        }
+
+        var ghodexLearningEnabled: Bool {
+            bool(for: "ghodex-learning-enabled", default: true)
+        }
+
+        var ghodexLearningPreferTabWorkingDirectory: Bool {
+            bool(for: "ghodex-learning-prefer-tab-working-directory", default: true)
+        }
+
+        var ghodexLearningDefaultProjectPath: String? {
+            optionalString(for: "ghodex-learning-default-project-path")
+        }
+
+        var ghodexLearningNotesRelativePath: String? {
+            optionalString(for: "ghodex-learning-notes-relative-path")
+        }
+
+        var ghodexLearningCommandTemplate: String? {
+            optionalString(for: "ghodex-learning-command-template")
+        }
+
+        var ghodexLearningFastModel: String? {
+            optionalString(for: "ghodex-learning-fast-model")
+        }
+
+        var ghodexLearningPromptTemplate: String? {
+            optionalString(for: "ghodex-learning-prompt-template")
+        }
+
+        var ghodexHeartbeatEnabled: Bool {
+            bool(for: "ghodex-heartbeat-enabled", default: true)
+        }
+
+        var ghodexHeartbeatIntervalSeconds: Double {
+            double(for: "ghodex-heartbeat-interval-seconds", default: 5)
+        }
+
+        var ghodexHeartbeatMaxConcurrentTasks: Int {
+            Int(uint(for: "ghodex-heartbeat-max-concurrent-tasks", default: 4))
+        }
+
+        private func optionalString(for key: String) -> String? {
+            guard let config = self.config else { return nil }
+            var v: UnsafePointer<Int8>?
+            guard ghostty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return nil }
+            guard let ptr = v else { return nil }
+            let value = String(cString: ptr)
+            return value.isEmpty ? nil : value
+        }
+
+        private func bool(for key: String, default defaultValue: Bool) -> Bool {
+            guard let config = self.config else { return defaultValue }
+            var v = defaultValue
+            _ = ghostty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8)))
+            return v
+        }
+
+        private func double(for key: String, default defaultValue: Double) -> Double {
+            guard let config = self.config else { return defaultValue }
+            var v = defaultValue
+            _ = ghostty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8)))
+            return v
+        }
+
+        private func uint(for key: String, default defaultValue: UInt32) -> UInt32 {
+            guard let config = self.config else { return defaultValue }
+            var v = defaultValue
+            _ = ghostty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8)))
+            return v
+        }
+
+        private func repeatableStrings(for key: String) -> [String] {
+            guard let config = self.config else { return [] }
+            var v: ghostty_config_string_list_s = .init()
+            guard ghostty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return [] }
+            guard v.len > 0 else { return [] }
+            let buffer = UnsafeBufferPointer(start: v.strings, count: v.len)
+            return buffer.compactMap { ptr in
+                guard let ptr else { return nil }
+                return String(cString: ptr)
+            }
+        }
     }
 }
 

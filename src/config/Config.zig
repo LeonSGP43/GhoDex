@@ -2454,7 +2454,7 @@ keybind: Keybinds = .{},
 
 /// When this is true, the default configuration file paths will be loaded.
 /// The default configuration file paths are currently only the XDG
-/// config path ($XDG_CONFIG_HOME/ghostty/config.ghostty).
+/// config path ($XDG_CONFIG_HOME/ghodex/config.ghodex).
 ///
 /// If this is false, the default configuration paths will not be loaded.
 /// This is targeted directly at using Ghostty from the CLI in a way
@@ -3761,6 +3761,30 @@ term: []const u8 = "xterm-ghostty",
 /// This only works on macOS since only macOS has an auto-update feature.
 @"auto-update-channel": ?build_config.ReleaseChannel = null,
 
+/// GhoDex-managed connection center entries serialized by the macOS app.
+/// Each value is an opaque base64-encoded JSON payload.
+@"ghodex-saved-host": RepeatableString = .{},
+@"ghodex-imported-host-override": RepeatableString = .{},
+@"ghodex-favorite-host": RepeatableString = .{},
+@"ghodex-recent-host": RepeatableString = .{},
+@"ghodex-workspace": RepeatableString = .{},
+@"ghodex-heartbeat-task": RepeatableString = .{},
+@"ghodex-learning-log": RepeatableString = .{},
+
+/// GhoDex-managed learning settings persisted in the main config file.
+@"ghodex-learning-enabled": bool = true,
+@"ghodex-learning-prefer-tab-working-directory": bool = true,
+@"ghodex-learning-default-project-path": ?[:0]const u8 = null,
+@"ghodex-learning-notes-relative-path": ?[:0]const u8 = null,
+@"ghodex-learning-command-template": ?[:0]const u8 = null,
+@"ghodex-learning-fast-model": ?[:0]const u8 = null,
+@"ghodex-learning-prompt-template": ?[:0]const u8 = null,
+
+/// GhoDex-managed heartbeat queue settings persisted in the main config file.
+@"ghodex-heartbeat-enabled": bool = true,
+@"ghodex-heartbeat-interval-seconds": f64 = 5,
+@"ghodex-heartbeat-max-concurrent-tasks": u8 = 4,
+
 /// This is set by the CLI parser for deinit.
 _arena: ?ArenaAllocator = null,
 
@@ -3907,7 +3931,7 @@ test "handle bom in config files" {
         try cfg.loadReader(
             alloc,
             &reader,
-            "/home/ghostty/.config/ghostty/config.ghostty",
+            "/home/ghostty/.config/ghodex/config.ghodex",
         );
         try cfg.finalize();
 
@@ -3926,7 +3950,7 @@ test "handle bom in config files" {
         try cfg.loadReader(
             alloc,
             &reader,
-            "/home/ghostty/.config/ghostty/config.ghostty",
+            "/home/ghostty/.config/ghodex/config.ghodex",
         );
         try cfg.finalize();
 
@@ -3980,13 +4004,13 @@ fn writeConfigTemplate(path: []const u8) !void {
 }
 
 /// Load configurations from the default configuration files. The default
-/// configuration file is at `$XDG_CONFIG_HOME/ghostty/config.ghostty`.
+/// configuration file is at `$XDG_CONFIG_HOME/ghodex/config.ghodex`.
 ///
 /// On macOS, `$HOME/Library/Application Support/$CFBundleIdentifier/`
 /// is also loaded.
 ///
 /// The legacy `config` file (without extension) is first loaded,
-/// then `config.ghostty`.
+/// then `config.ghodex`.
 pub fn loadDefaultFiles(self: *Config, alloc: Allocator) !void {
     // Load XDG first
     const legacy_xdg_path = try file_load.legacyDefaultXdgPath(alloc);
@@ -5809,6 +5833,7 @@ pub const RepeatableString = struct {
 
     // Allocator for the list is the arena for the parent config.
     list: std.ArrayListUnmanaged([:0]const u8) = .{},
+    list_c: std.ArrayListUnmanaged([*:0]const u8) = .{},
 
     // If true, then the next value will clear the list and start over
     // rather than append. This is a bit of a hack but is here to make
@@ -5821,17 +5846,33 @@ pub const RepeatableString = struct {
         // Empty value resets the list
         if (value.len == 0) {
             self.list.clearRetainingCapacity();
+            self.list_c.clearRetainingCapacity();
             return;
         }
 
         // If we're overwriting then we clear before appending
         if (self.overwrite_next) {
             self.list.clearRetainingCapacity();
+            self.list_c.clearRetainingCapacity();
             self.overwrite_next = false;
         }
 
         const copy = try alloc.dupeZ(u8, value);
         try self.list.append(alloc, copy);
+        try self.list_c.append(alloc, copy.ptr);
+    }
+
+    /// ghostty_config_string_list_s
+    pub const C = extern struct {
+        strings: [*]const [*:0]const u8,
+        len: usize,
+    };
+
+    pub fn cval(self: *const Self) C {
+        return .{
+            .strings = self.list_c.items.ptr,
+            .len = self.list_c.items.len,
+        };
     }
 
     /// Deep copy of the struct. Required by Config.
@@ -5841,16 +5882,22 @@ pub const RepeatableString = struct {
             alloc,
             self.list.items.len,
         );
+        var list_c = try std.ArrayListUnmanaged([*:0]const u8).initCapacity(
+            alloc,
+            self.list.items.len,
+        );
         errdefer {
             for (list.items) |item| alloc.free(item);
             list.deinit(alloc);
+            list_c.deinit(alloc);
         }
         for (self.list.items) |item| {
             const copy = try alloc.dupeZ(u8, item);
             list.appendAssumeCapacity(copy);
+            list_c.appendAssumeCapacity(copy.ptr);
         }
 
-        return .{ .list = list };
+        return .{ .list = list, .list_c = list_c };
     }
 
     /// The number of items in the list

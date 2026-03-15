@@ -488,6 +488,12 @@ typedef struct {
   size_t len;
 } ghostty_config_command_list_s;
 
+// config.RepeatableString
+typedef struct {
+  const char* const* strings;
+  size_t len;
+} ghostty_config_string_list_s;
+
 // config.Palette
 typedef struct {
   ghostty_config_color_s colors[256];

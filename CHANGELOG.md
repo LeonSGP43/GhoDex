@@ -4,6 +4,38 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(config): sync GhoDex control-panel settings with config.ghodex
+
+- What changed: Moved connection center, learning settings, and task queue
+  persistence into managed `ghodex-*` entries in the main `config.ghodex`
+  file; added reload-driven store/panel refresh; added regression coverage for
+  managed-block load/save/reload behavior.
+- Why: Settings that exist in both config and the control panel must have one
+  app-owned source of truth and support two-way sync instead of diverging into
+  a hidden sidecar JSON store.
+- Impact: Users can configure these features directly in `config.ghodex`,
+  reload the app config, and see matching values return to the panel. Panel
+  edits now update the same main config file.
+- Verification: `zig build`; `xcodebuild -project macos/Ghostty.xcodeproj
+  -scheme Ghostty -only-testing:GhosttyTests/AITerminalManagerTests/
+  storeLoadsConfigurationFromManagedGhoDexConfigBlock
+  -only-testing:GhosttyTests/AITerminalManagerTests/
+  storePersistsConfigurationIntoManagedGhoDexConfigBlock
+  -only-testing:GhosttyTests/AITerminalManagerTests/
+  storeReloadsPersistedConfigurationFromGhoDexConfig
+  -only-testing:GhosttyTests/AITerminalManagerTests/
+  storeUsesConfigDirectoryForHeartbeatInbox
+  -only-testing:GhosttyTests/AITerminalManagerTests/storeSavesLearningSettings
+  test`
+- Files: `include/ghostty.h`,
+  `macos/Sources/Features/AI Terminal Manager/AITerminalManagerStore.swift`,
+  `macos/Sources/Features/SSH Connections/SSHConnectionsView.swift`,
+  `macos/Sources/Ghostty/Ghostty.App.swift`,
+  `macos/Sources/Ghostty/Ghostty.Config.swift`,
+  `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`,
+  `src/cli/edit_config.zig`, `src/config/Config.zig`,
+  `src/config/file_load.zig`
+
 ### docs(branding): start GhoDex naming pass and origin annotation
 
 - What changed: Updated top-level branding in `README.md`, added upgrade highlights, added explicit `Project Origin` and `End Note`, renamed project wording in `AI_POLICY.md`, and added `ORIGIN.md` for provenance/thanks.
