@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(testing): restore macOS workspace snapshot test coverage
+
+- What changed: Fixed the `MainMenu.xib` outlet mismatch that caused the macOS test host to crash on launch, added a pane-hierarchy workspace snapshot round-trip regression test that asserts top-level split layout, pane ownership, pane child-tab order, active child-tab selection, and focused surface identity all survive encode/decode, and rebuilt the bundled `GhoDexKit.xcframework` from current Zig sources so Xcode-linked test hosts pick up the repaired theme lookup logic.
+- Why: `xcodebuild test` was blocked by a stale nib outlet connection, and the new workspace snapshot coverage originally depended on live terminal surfaces that destabilized the app-hosted test process. In parallel, Xcode was still linking a stale prebuilt core package, so tests that loaded real configs continued to resolve themes through outdated Ghostty-era resource paths.
+- Impact: macOS app-hosted tests start reliably again, workspace snapshot persistence now has explicit regression coverage for nested pane/tab relationships, and rebuilt test hosts no longer regress to the stale theme-lookup core when loading real user configuration.
+- Verification: `zig build -Demit-xcframework=true -Demit-macos-app=false`; `zig build -Doptimize=ReleaseFast -Demit-xcframework=true -Demit-macos-app=false`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Release -destination 'platform=macOS' build`; `xcodebuild -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' -only-testing:GhosttyTests/TerminalWorkspaceSnapshotTests test`; `xcodebuild -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' -only-testing:GhosttyTests/UpdateStateTests test`
+- Files: `macos/Sources/App/macOS/MainMenu.xib`, `macos/Tests/Terminal/TerminalWorkspaceSnapshotTests.swift`, `macos/GhoDexKit.xcframework`, `CHANGELOG.md`
+
 ### fix(theme): restore Ghostty theme-path compatibility during GhoDex migration
 
 - What changed: Updated theme lookup to prefer `ghodex/themes` while still checking the legacy `ghostty/themes` user directory, and updated bundled resource discovery to prefer `Resources/ghodex` while falling back to legacy `Resources/ghostty` bundles.
