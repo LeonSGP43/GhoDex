@@ -32,7 +32,7 @@ typedef struct GhosttyKeyEncoder *GhosttyKeyEncoder;
  *
  * @ingroup key
  */
-typedef uint8_t GhosttyKittyKeyFlags;
+typedef uint8_t GhoDexKittyKeyFlags;
 
 /** Kitty keyboard protocol disabled (all flags off) */
 #define GHOSTTY_KITTY_KEY_DISABLED 0
@@ -98,7 +98,7 @@ typedef enum {
     /** xterm modifyOtherKeys mode 2 (value: bool) */
     GHOSTTY_KEY_ENCODER_OPT_MODIFY_OTHER_KEYS_STATE_2 = 4,
     
-    /** Kitty keyboard protocol flags (value: GhosttyKittyKeyFlags bitmask) */
+    /** Kitty keyboard protocol flags (value: GhoDexKittyKeyFlags bitmask) */
     GHOSTTY_KEY_ENCODER_OPT_KITTY_FLAGS = 5,
     
     /** macOS option-as-alt setting (value: GhosttyOptionAsAlt) */

@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 import Testing
-@testable import Ghostty
+@testable import GhoDex
 
 struct ColorizedGhosttyIconTests {
     private func makeIcon(

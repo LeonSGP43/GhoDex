@@ -1756,8 +1756,8 @@ pub const Window = extern struct {
         self: *Self,
     ) callconv(.c) void {
         const name = "Ghostty";
-        const icon = "com.mitchellh.ghostty";
-        const website = "https://ghostty.org";
+        const icon = "com.leongong.ghodex";
+        const website = "https://github.com/LeonSGP43/GhoDex";
 
         if (adw_version.supportsDialogs()) {
             adw.showAboutDialog(

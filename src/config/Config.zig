@@ -119,7 +119,7 @@ language: ?[:0]const u8 = null,
 ///
 /// You can generate the list of valid values using the CLI:
 ///
-///     ghostty +list-fonts
+///     ghodex +list-fonts
 ///
 /// This configuration can be repeated multiple times to specify preferred
 /// fallback fonts when the requested codepoint is not available in the primary
@@ -548,18 +548,20 @@ language: ?[:0]const u8 = null,
 /// systems with case-sensitive filesystems. It is an error for a theme name to
 /// include path separators unless it is an absolute pathname.
 ///
-/// The first directory is the `themes` subdirectory of your Ghostty
-/// configuration directory. This is `$XDG_CONFIG_HOME/ghostty/themes` or
-/// `~/.config/ghostty/themes`.
+/// The first directory is the `themes` subdirectory of your GhoDex
+/// configuration directory. This is `$XDG_CONFIG_HOME/ghodex/themes` or
+/// `~/.config/ghodex/themes`. For compatibility during migration, Ghostty
+/// also checks the legacy `$XDG_CONFIG_HOME/ghostty/themes` path.
 ///
 /// The second directory is the `themes` subdirectory of the Ghostty resources
 /// directory. Ghostty ships with a multitude of themes that will be installed
 /// into this directory. On macOS, this list is in the
-/// `Ghostty.app/Contents/Resources/ghostty/themes` directory. On Linux, this
-/// list is in the `share/ghostty/themes` directory (wherever you installed the
-/// Ghostty "share" directory.
+/// `GhoDex.app/Contents/Resources/ghodex/themes` directory. Legacy app bundles
+/// that still use `.../Resources/ghostty/themes` are also supported. On Linux,
+/// this list is in the `share/ghodex/themes` directory (wherever you installed
+/// the GhoDex "share" directory.
 ///
-/// To see a list of available themes, run `ghostty +list-themes`.
+/// To see a list of available themes, run `ghodex +list-themes`.
 ///
 /// A theme file is simply another Ghostty configuration file. They share
 /// the same syntax and same configuration options. A theme can set any valid
@@ -1154,7 +1156,7 @@ palette: Palette = .{},
 /// created when Ghostty starts, use the `initial-command` configuration.
 ///
 /// Ghostty supports the common `-e` flag for executing a command with
-/// arguments. For example, `ghostty -e fish --with --custom --args`.
+/// arguments. For example, `ghodex -e fish --with --custom --args`.
 /// This flag sets the `initial-command` configuration, see that for more
 /// information.
 command: ?Command = null,
@@ -1169,13 +1171,13 @@ command: ?Command = null,
 /// if it is the first one ever created.
 ///
 /// If you're using the `ghostty` CLI there is also a shortcut to set this
-/// with arguments directly: you can use the `-e` flag. For example: `ghostty -e
+/// with arguments directly: you can use the `-e` flag. For example: `ghodex -e
 /// fish --with --custom --args`. The `-e` flag automatically forces some
 /// other behaviors as well:
 ///
 ///   * Disables shell expansion since the input is expected to already
 ///     be shell-expanded by the upstream (e.g. the shell used to type in
-///     the `ghostty -e` command).
+///     the `ghodex -e` command).
 ///
 ///   * `gtk-single-instance=false` - This ensures that a new instance is
 ///     launched and the CLI args are respected.
@@ -1500,7 +1502,7 @@ title: ?[:0]const u8 = null,
 /// The class name must follow the requirements defined [in the GTK
 /// documentation](https://docs.gtk.org/gio/type_func.Application.id_is_valid.html).
 ///
-/// The default is `com.mitchellh.ghostty`.
+/// The default is `com.leongong.ghodex`.
 ///
 /// This only affects GTK builds.
 class: ?[:0]const u8 = null,
@@ -1536,7 +1538,7 @@ class: ?[:0]const u8 = null,
 
 /// Key bindings. The format is `trigger=action`. Duplicate triggers will
 /// overwrite previously set values. The list of actions is available in
-/// the documentation or using the `ghostty +list-actions` command.
+/// the documentation or using the `ghodex +list-actions` command.
 ///
 /// Trigger: `+`-separated list of keys and modifiers. Example: `ctrl+a`,
 /// `ctrl+shift+b`, `up`.
@@ -1667,7 +1669,7 @@ class: ?[:0]const u8 = null,
 ///     e.g. `text:\x15` sends Ctrl-U.
 ///
 ///   * All other actions can be found in the documentation or by using the
-///     `ghostty +list-actions` command.
+///     `ghodex +list-actions` command.
 ///
 /// Some notes for the action:
 ///
@@ -3395,7 +3397,7 @@ keybind: Keybinds = .{},
 /// The absolute path to the custom icon file.
 /// Supported formats include PNG, JPEG, and ICNS.
 ///
-/// Defaults to `~/.config/ghostty/Ghostty.icns`
+/// Defaults to `~/.config/ghodex/GhoDex.icns`
 @"macos-custom-icon": ?[:0]const u8 = null,
 
 /// The material to use for the frame of the macOS app icon.
@@ -4008,45 +4010,22 @@ fn writeConfigTemplate(path: []const u8) !void {
 ///
 /// On macOS, `$HOME/Library/Application Support/$CFBundleIdentifier/`
 /// is also loaded.
-///
-/// The legacy `config` file (without extension) is first loaded,
-/// then `config.ghodex`.
 pub fn loadDefaultFiles(self: *Config, alloc: Allocator) !void {
     // Load XDG first
-    const legacy_xdg_path = try file_load.legacyDefaultXdgPath(alloc);
-    defer alloc.free(legacy_xdg_path);
     const xdg_path = try file_load.defaultXdgPath(alloc);
     defer alloc.free(xdg_path);
     const xdg_loaded: bool = xdg_loaded: {
-        const legacy_xdg_action = self.loadOptionalFile(alloc, legacy_xdg_path);
         const xdg_action = self.loadOptionalFile(alloc, xdg_path);
-        if (xdg_action != .not_found and legacy_xdg_action != .not_found) {
-            log.warn("both config files `{s}` and `{s}` exist.", .{ legacy_xdg_path, xdg_path });
-            log.warn("loading them both in that order", .{});
-            break :xdg_loaded true;
-        }
-
-        break :xdg_loaded xdg_action != .not_found or
-            legacy_xdg_action != .not_found;
+        break :xdg_loaded xdg_action != .not_found;
     };
 
     // On macOS load the app support directory as well
     if (comptime builtin.os.tag == .macos) {
-        const legacy_app_support_path = try file_load.legacyDefaultAppSupportPath(alloc);
-        defer alloc.free(legacy_app_support_path);
         const app_support_path = try file_load.preferredAppSupportPath(alloc);
         defer alloc.free(app_support_path);
         const app_support_loaded: bool = loaded: {
-            const legacy_app_support_action = self.loadOptionalFile(alloc, legacy_app_support_path);
             const app_support_action = self.loadOptionalFile(alloc, app_support_path);
-            if (app_support_action != .not_found and legacy_app_support_action != .not_found) {
-                log.warn("both config files `{s}` and `{s}` exist.", .{ legacy_app_support_path, app_support_path });
-                log.warn("loading them both in that order", .{});
-                break :loaded true;
-            }
-
-            break :loaded app_support_action != .not_found or
-                legacy_app_support_action != .not_found;
+            break :loaded app_support_action != .not_found;
         };
 
         // If both files are not found, then we create a template file.
@@ -6308,13 +6287,8 @@ pub const Keybinds = struct {
         // keybinds for opening and reloading config
         try self.set.put(
             alloc,
-            .{ .key = .{ .unicode = ',' }, .mods = inputpkg.ctrlOrSuper(.{ .shift = true }) },
+            .{ .key = .{ .unicode = ',' }, .mods = inputpkg.ctrlOrSuper(.{ .shift = true, .alt = true }) },
             .{ .reload_config = {} },
-        );
-        try self.set.put(
-            alloc,
-            .{ .key = .{ .unicode = ',' }, .mods = inputpkg.ctrlOrSuper(.{}) },
-            .{ .open_config = {} },
         );
 
         {
@@ -6542,13 +6516,13 @@ pub const Keybinds = struct {
             );
             try self.set.putFlags(
                 alloc,
-                .{ .key = .{ .unicode = '[' }, .mods = .{ .ctrl = true, .super = true } },
+                .{ .key = .{ .unicode = '[' }, .mods = .{ .super = true } },
                 .{ .goto_split = .previous },
                 .{ .performable = true },
             );
             try self.set.putFlags(
                 alloc,
-                .{ .key = .{ .unicode = ']' }, .mods = .{ .ctrl = true, .super = true } },
+                .{ .key = .{ .unicode = ']' }, .mods = .{ .super = true } },
                 .{ .goto_split = .next },
                 .{ .performable = true },
             );
@@ -6784,12 +6758,6 @@ pub const Keybinds = struct {
             // Undo/redo
             try self.set.putFlags(
                 alloc,
-                .{ .key = .{ .unicode = 't' }, .mods = .{ .super = true, .shift = true } },
-                .{ .undo = {} },
-                .{ .performable = true },
-            );
-            try self.set.putFlags(
-                alloc,
                 .{ .key = .{ .unicode = 'z' }, .mods = .{ .super = true } },
                 .{ .undo = {} },
                 .{ .performable = true },
@@ -6871,6 +6839,11 @@ pub const Keybinds = struct {
                 alloc,
                 .{ .key = .{ .unicode = 't' }, .mods = .{ .super = true } },
                 .{ .new_tab = {} },
+            );
+            try self.set.put(
+                alloc,
+                .{ .key = .{ .unicode = 't' }, .mods = .{ .super = true, .shift = true } },
+                .{ .new_pane_tab = {} },
             );
             try self.set.put(
                 alloc,

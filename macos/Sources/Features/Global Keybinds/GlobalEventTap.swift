@@ -2,7 +2,7 @@ import Cocoa
 import CoreGraphics
 import Carbon
 import OSLog
-import GhosttyKit
+import GhoDexKit
 
 // Manages the event tap to monitor global events, currently only used for
 // global keybindings.

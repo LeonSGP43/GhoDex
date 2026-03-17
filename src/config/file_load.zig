@@ -15,38 +15,10 @@ pub fn defaultXdgPath(alloc: Allocator) ![]const u8 {
     );
 }
 
-/// Ghostty <1.3.0 default path for the XDG home configuration file.
-/// Returned value must be freed by the caller.
-pub fn legacyDefaultXdgPath(alloc: Allocator) ![]const u8 {
-    return try internal_os.xdg.config(
-        alloc,
-        .{ .subdir = "ghostty/config" },
-    );
-}
-
 /// Preferred default path for the XDG home configuration file.
 /// Returned value must be freed by the caller.
 pub fn preferredXdgPath(alloc: Allocator) ![]const u8 {
-    // If the XDG path exists, use that.
-    const xdg_path = try defaultXdgPath(alloc);
-    if (open(xdg_path)) |f| {
-        f.close();
-        return xdg_path;
-    } else |_| {}
-
-    // Try the legacy path
-    errdefer alloc.free(xdg_path);
-    const legacy_xdg_path = try legacyDefaultXdgPath(alloc);
-    if (open(legacy_xdg_path)) |f| {
-        f.close();
-        alloc.free(xdg_path);
-        return legacy_xdg_path;
-    } else |_| {}
-
-    // Legacy path and XDG path both don't exist. Return the
-    // new one.
-    alloc.free(legacy_xdg_path);
-    return xdg_path;
+    return try defaultXdgPath(alloc);
 }
 
 /// Default path for the macOS Application Support configuration file.
@@ -55,35 +27,10 @@ pub fn defaultAppSupportPath(alloc: Allocator) ![]const u8 {
     return try internal_os.macos.appSupportDir(alloc, "config.ghodex");
 }
 
-/// Ghostty <1.3.0 default path for the macOS Application Support
-/// configuration file. Returned value must be freed by the caller.
-pub fn legacyDefaultAppSupportPath(alloc: Allocator) ![]const u8 {
-    return try internal_os.macos.appSupportDir(alloc, "config");
-}
-
 /// Preferred default path for the macOS Application Support configuration file.
 /// Returned value must be freed by the caller.
 pub fn preferredAppSupportPath(alloc: Allocator) ![]const u8 {
-    // If the app support path exists, use that.
-    const app_support_path = try defaultAppSupportPath(alloc);
-    if (open(app_support_path)) |f| {
-        f.close();
-        return app_support_path;
-    } else |_| {}
-
-    // Try the legacy path
-    errdefer alloc.free(app_support_path);
-    const legacy_app_support_path = try legacyDefaultAppSupportPath(alloc);
-    if (open(legacy_app_support_path)) |f| {
-        f.close();
-        alloc.free(app_support_path);
-        return legacy_app_support_path;
-    } else |_| {}
-
-    // Legacy path and app support path both don't exist. Return the
-    // new one.
-    alloc.free(legacy_app_support_path);
-    return app_support_path;
+    return try defaultAppSupportPath(alloc);
 }
 
 /// Returns the path to the preferred default configuration file.

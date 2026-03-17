@@ -4,7 +4,10 @@ struct NewTabPickerView: View {
     @EnvironmentObject private var store: AITerminalManagerStore
     @EnvironmentObject private var theme: GhosttyChromeTheme
 
+    let title: String
+    let subtitle: String
     let onClose: () -> Void
+    let onOpenHost: ((AITerminalHost) -> Void)?
 
     @State private var searchText = ""
     @State private var selectedID: String?
@@ -86,10 +89,10 @@ struct NewTabPickerView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(L10n.AITerminalManager.newTab)
+            Text(title)
                 .font(.system(size: 22, weight: .semibold))
 
-            Text(L10n.SSHConnections.newTabPickerSubtitle)
+            Text(subtitle)
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
@@ -289,7 +292,11 @@ struct NewTabPickerView: View {
     }
 
     private func open(_ entry: NewTabPickerEntry) {
-        store.openInNewTab(host: entry.host)
+        if let onOpenHost {
+            onOpenHost(entry.host)
+        } else {
+            store.openInNewTab(host: entry.host)
+        }
         onClose()
     }
 

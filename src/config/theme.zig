@@ -8,8 +8,9 @@ const cli = @import("../cli.zig");
 /// Location of possible themes. The order of this enum matters because it
 /// defines the priority of theme search (from top to bottom).
 pub const Location = enum {
-    user, // XDG config dir
-    resources, // Ghostty resources dir
+    user, // Preferred GhoDex XDG config dir
+    user_legacy, // Legacy Ghostty XDG config dir
+    resources, // Bundled GhoDex/Ghostty resources dir
 
     /// Returns the directory for the given theme based on this location type.
     ///
@@ -25,9 +26,14 @@ pub const Location = enum {
         arena_alloc: Allocator,
     ) error{OutOfMemory}!?[]const u8 {
         return switch (self) {
-            .user => user: {
+            .user, .user_legacy => user: {
                 const subdir = std.fs.path.join(arena_alloc, &.{
-                    "ghostty", "themes",
+                    switch (self) {
+                        .user => "ghodex",
+                        .user_legacy => "ghostty",
+                        else => unreachable,
+                    },
+                    "themes",
                 }) catch return error.OutOfMemory;
 
                 break :user internal_os.xdg.config(

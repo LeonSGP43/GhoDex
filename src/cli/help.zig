@@ -34,7 +34,7 @@ pub fn run(alloc: Allocator) !u8 {
     var stdout_writer = std.fs.File.stdout().writer(&buffer);
     const stdout = &stdout_writer.interface;
     try stdout.writeAll(
-        \\Usage: ghostty [+action] [options]
+        \\Usage: ghodex [+action] [options]
         \\
         \\Run the GhoDex terminal emulator or a specific helper action.
         \\
@@ -50,11 +50,11 @@ pub fn run(alloc: Allocator) !u8 {
         \\
         \\A special command line argument `-e <command>` can be used to run
         \\the specific command inside the terminal emulator. For example,
-        \\`ghostty -e top` will run the `top` command inside the terminal.
+        \\`ghodex -e top` will run the `top` command inside the terminal.
         \\
         \\On macOS, launching the terminal emulator from the CLI is not
         \\supported and only actions are supported. Use `open -na GhoDex.app`
-        \\instead, or `open -na ghostty.app --args --foo=bar --baz=quz` to pass
+        \\instead, or `open -na GhoDex.app --args --foo=bar --baz=quz` to pass
         \\arguments.
         \\
         \\Available actions:

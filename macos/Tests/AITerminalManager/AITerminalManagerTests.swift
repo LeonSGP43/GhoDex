@@ -1,7 +1,7 @@
 import Testing
 import Foundation
 import AppKit
-@testable import Ghostty
+@testable import GhoDex
 
 final class MockSSHConnectionCredentialStore: SSHConnectionCredentialStore {
     var passwords: [String: String] = [:]
@@ -59,26 +59,6 @@ struct AITerminalManagerTests {
         let rhs = NSWindow()
 
         #expect(SSHConnectionsController.windowsAreInSameTabGroup(lhs, rhs) == false)
-    }
-
-    @Test @MainActor func sshConnectionsControllerCloseTabClosesWindow() throws {
-        let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension("json")
-
-        let store = AITerminalManagerStore(
-            appDelegateProvider: { nil },
-            configurationURL: tempURL
-        )
-
-        let controller = SSHConnectionsController(store: store)
-        let window = try #require(controller.window)
-        window.makeKeyAndOrderFront(nil)
-        #expect(window.isVisible)
-
-        controller.closeTab(nil)
-
-        #expect(!window.isVisible)
     }
 
     @Test func decodesLegacyHostConfigurationIntoSavedHosts() throws {

@@ -2,7 +2,7 @@ import Testing
 import Foundation
 import SwiftUI
 import Sparkle
-@testable import Ghostty
+@testable import GhoDex
 
 struct UpdateViewModelTests {
     // MARK: - Text Formatting Tests

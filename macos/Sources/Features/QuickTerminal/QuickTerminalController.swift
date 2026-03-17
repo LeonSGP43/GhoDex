@@ -1,7 +1,7 @@
 import Foundation
 import Cocoa
 import SwiftUI
-import GhosttyKit
+import GhoDexKit
 
 /// Controller for the "quick" terminal.
 class QuickTerminalController: BaseTerminalController {
@@ -85,6 +85,11 @@ class QuickTerminalController: BaseTerminalController {
             self,
             selector: #selector(onNewTab),
             name: Ghostty.Notification.ghosttyNewTab,
+            object: nil)
+        center.addObserver(
+            self,
+            selector: #selector(onNewTab),
+            name: Ghostty.Notification.ghosttyNewPaneTab,
             object: nil)
         center.addObserver(
             self,
@@ -268,7 +273,7 @@ class QuickTerminalController: BaseTerminalController {
         animateIn()
     }
 
-    override func surfaceTreeDidChange(from: SplitTree<Ghostty.SurfaceView>, to: SplitTree<Ghostty.SurfaceView>) {
+    override func surfaceTreeDidChange(from: SplitTree<TerminalPane>, to: SplitTree<TerminalPane>) {
         super.surfaceTreeDidChange(from: from, to: to)
 
         // If our surface tree is nil then we animate the window out. We
@@ -288,7 +293,7 @@ class QuickTerminalController: BaseTerminalController {
     }
 
     override func closeSurface(
-        _ node: SplitTree<Ghostty.SurfaceView>.Node,
+        _ node: SplitTree<TerminalPane>.Node,
         withConfirmation: Bool = true
     ) {
         // If this isn't the root then we're dealing with a split closure.
@@ -298,14 +303,14 @@ class QuickTerminalController: BaseTerminalController {
         }
 
         // If this isn't a final leaf then we're dealing with a split closure
-        guard case .leaf(let surface) = node else {
+        guard case .leaf(let pane) = node else {
             super.closeSurface(node, withConfirmation: withConfirmation)
             return
         }
 
         // If its the root, we check if the process exited. If it did,
         // then we do empty the tree.
-        if surface.processExited {
+        if pane.activeSurface.processExited {
             surfaceTree = .init()
             return
         }
@@ -357,7 +362,8 @@ class QuickTerminalController: BaseTerminalController {
            let ghostty_app = ghostty.app {
             if let tree = restorationState?.surfaceTree, !tree.isEmpty {
                 surfaceTree = tree
-                let view = tree.first(where: { $0.id.uuidString == restorationState?.focusedSurface }) ?? tree.first!
+                let view = tree.allSurfaces.first(where: { $0.id.uuidString == restorationState?.focusedSurface })
+                    ?? tree.allSurfaces.first!
                 focusedSurface = view
                 // Add a short delay to check if the correct surface is focused.
                 // Each SurfaceWrapper defaults its FocusedValue to itself; without this delay,
@@ -373,7 +379,7 @@ class QuickTerminalController: BaseTerminalController {
                 config.environmentVariables["GHOSTTY_QUICK_TERMINAL"] = "1"
 
                 let view = Ghostty.SurfaceView(ghostty_app, baseConfig: config)
-                surfaceTree = SplitTree(view: view)
+                surfaceTree = SplitTree(view: TerminalPane(surface: view))
                 focusedSurface = view
             }
         }

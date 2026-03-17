@@ -6,7 +6,7 @@
 //
 
 import Testing
-import GhosttyKit
+import GhoDexKit
 
 extension Tag {
     @Tag static var benchmark: Self

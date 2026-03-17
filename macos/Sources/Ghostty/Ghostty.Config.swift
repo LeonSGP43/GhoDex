@@ -1,5 +1,5 @@
 import SwiftUI
-import GhosttyKit
+import GhoDexKit
 
 extension Ghostty {
     /// Maps to a `ghostty_config_t` and the various operations on that.
@@ -415,7 +415,7 @@ extension Ghostty {
 
         var macosCustomIcon: String {
             #if os(macOS)
-            let defaultValue = NSString("~/.config/ghostty/Ghostty.icns").expandingTildeInPath
+            let defaultValue = NSString("~/.config/ghodex/GhoDex.icns").expandingTildeInPath
             guard let config = self.config else { return defaultValue }
             var v: UnsafePointer<Int8>?
             let key = "macos-custom-icon"

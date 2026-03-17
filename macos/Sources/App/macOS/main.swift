@@ -1,6 +1,6 @@
 import AppKit
 import Cocoa
-import GhosttyKit
+import GhoDexKit
 
 // Initialize Ghostty global state. We do this once right away because the
 // CLI APIs require it and it lets us ensure it is done immediately for the
@@ -18,7 +18,7 @@ if ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) != GHOSTTY_SUCCE
                     "GhoDex failed to initialize! If you're executing GhoDex from the command line\n" +
                     "then this is usually because an invalid action or multiple actions were specified.\n" +
                     "Actions start with the `+` character.\n\n" +
-                    "View all available actions by running `ghostty +help`.\n"
+                    "View all available actions by running `ghodex +help`.\n"
                 ) as NSString
             ).data(using: String.Encoding.utf8.rawValue) ?? Data()
         )
@@ -32,7 +32,7 @@ if ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) != GHOSTTY_SUCCE
 }
 
 // This will run the CLI action and exit if one was specified. A CLI
-// action is a command starting with a `+`, such as `ghostty +boo`.
+// action is a command starting with a `+`, such as `ghodex +boo`.
 ghostty_cli_try_action()
 
 _ = NSApplicationMain(CommandLine.argc, CommandLine.unsafeArgv)

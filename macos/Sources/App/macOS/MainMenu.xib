@@ -94,7 +94,7 @@
                                 </connections>
                             </menuItem>
                             <menuItem isSeparatorItem="YES" id="VOq-y0-SEH"/>
-                            <menuItem title="Preferences…" keyEquivalent="," id="BOF-NM-1cW">
+                            <menuItem title="Preferences…" id="BOF-NM-1cW">
                                 <connections>
                                     <action selector="showSettings:" target="bbz-4X-AYv" id="X65-fg-iWU"/>
                                 </connections>
@@ -175,7 +175,25 @@
                             <menuItem title="New Tab" id="uTG-Vz-hJU">
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>
-                                    <action selector="newTab:" target="-1" id="KoW-K7-hw5"/>
+                                    <action selector="newTab:" target="-1" id="8tC-kQ-jr7"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="New Pane Tab" id="bK8-zW-Ym1">
+                                <modifierMask key="keyEquivalentModifierMask"/>
+                                <connections>
+                                    <action selector="newPaneTab:" target="-1" id="KoW-K7-hw5"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="Previous Pane Tab" keyEquivalent="," id="Q0d-Jg-TLh">
+                                <modifierMask key="keyEquivalentModifierMask" command="YES"/>
+                                <connections>
+                                    <action selector="previousPaneTab:" target="-1" id="wW5-6u-h3g"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="Next Pane Tab" keyEquivalent="." id="Iei-AJ-qk8">
+                                <modifierMask key="keyEquivalentModifierMask" command="YES"/>
+                                <connections>
+                                    <action selector="nextPaneTab:" target="-1" id="LNZ-8x-T9x"/>
                                 </connections>
                             </menuItem>
                             <menuItem isSeparatorItem="YES" id="m54-Is-iLE"/>
@@ -354,13 +372,13 @@
                             <menuItem title="Change Tab Title..." id="iac-lh-Cl7">
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>
-                                    <action selector="changeTabTitle:" target="-1" id="Jhl-9P-bMj"/>
+                                    <action selector="changeTitleContext:" target="-1" id="Jhl-9P-bMj"/>
                                 </connections>
                             </menuItem>
                             <menuItem title="Change Terminal Title..." id="24I-xg-qIq">
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>
-                                    <action selector="changeTitle:" target="-1" id="XuL-QB-Q9l"/>
+                                    <action selector="changeTitleContext:" target="-1" id="XuL-QB-Q9l"/>
                                 </connections>
                             </menuItem>
                             <menuItem title="Terminal Read-only" id="xpe-ia-Yjw">

@@ -4,23 +4,190 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
-### fix(macos): close Settings Panel tab from Close Tab/Cmd+W
+### fix(theme): restore Ghostty theme-path compatibility during GhoDex migration
 
-- What changed: Added `closeTab(_:)` handling to `SSHConnectionsController`
-  and routed it to `window?.performClose(sender)` so the Settings Panel tab
-  responds to the `Close Tab` action path; added a regression test that asserts
-  the window closes when `closeTab` is invoked.
-- Why: Settings Panel windows can be inserted into native tab groups but they
-  did not implement the `closeTab:` responder action used by `Close Tab` /
-  `Cmd+W` in this configuration.
-- Impact: The currently focused Settings Panel tab now closes with the same tab
-  close shortcut flow used by other tabs.
-- Verification: `zig build test -Demit-macos-app=false
-  -Dtest-filter=sshConnectionsControllerCloseTabClosesWindow`
-- Files:
-  `macos/Sources/Features/SSH Connections/SSHConnectionsController.swift`,
-  `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`,
-  `CHANGELOG.md`.
+- What changed: Updated theme lookup to prefer `ghodex/themes` while still checking the legacy `ghostty/themes` user directory, and updated bundled resource discovery to prefer `Resources/ghodex` while falling back to legacy `Resources/ghostty` bundles.
+- Why: The fork renamed config and packaged resources to GhoDex, but theme lookup still searched only Ghostty-era paths, which broke existing `theme = ...` settings even when the built-in theme files were present in the app bundle.
+- Impact: Existing theme names such as `Apple System Colors` resolve again from the installed GhoDex app, and users with legacy Ghostty theme folders keep working during the migration.
+- Verification: `zig fmt src/config/theme.zig src/os/resourcesdir.zig`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration ReleaseLocal -destination 'platform=macOS' build`; `/Applications/GhoDex.app/Contents/MacOS/GhoDex +list-themes | rg 'Apple System Colors'`; `XDG_CONFIG_HOME=/tmp/ghodex-theme-compat /Applications/GhoDex.app/Contents/MacOS/GhoDex +list-themes`
+- Files: `src/config/theme.zig`, `src/os/resourcesdir.zig`, `src/config/Config.zig`, `src/cli/list_themes.zig`, `CHANGELOG.md`
+
+### fix(identity): complete the external GhoDex GTK, packaging, and docs rebrand
+
+- What changed: Moved the remaining GTK resource namespace and D-Bus object paths from `com.mitchellh.ghostty` to `com.leongong.ghodex`, updated the GTK inspector title/icon, renamed the Linux Dolphin/Nautilus/AppStream template files to GhoDex-branded names, switched Linux desktop integration labels/icons/commands/gettext domain to `GhoDex` and `com.leongong.ghodex`, repointed AppStream links to the fork repository, renamed Flatpak manifests to `com.leongong.ghodex*.yml` with forked app ids/commands/icon mapping, updated Windows resource script inputs and `OriginalFilename` to `ghodex`, updated generated manpage content to use `ghodex` plus `config.ghodex`/`com.leongong.ghodex` paths, and refreshed config URL examples to match the new config filename and directory.
+- Why: The fork already had an independent bundle id and executable, but GTK, Linux packaging, Flatpak/Windows metadata, and generated docs still exposed Ghostty-branded config paths, logging namespaces, command names, and desktop integration metadata. That left the product externally mixed even after the main app identity fork landed.
+- Impact: GTK, Linux, Flatpak, and Windows packaging surfaces now advertise, install, and launch as GhoDex, while generated docs and example paths point users at GhoDex-owned config and runtime identifiers instead of upstream Ghostty surfaces.
+- Verification: `zig fmt src/apprt/gtk/build/gresource.zig src/apprt/gtk/App.zig src/apprt/gtk/class/application.zig src/apprt/gtk/ipc/new_window.zig src/build/GhosttyExe.zig src/build/GhosttyResources.zig src/build/GhosttyI18n.zig src/config/url.zig`; `zig build -Demit-macos-app=false`; `git diff --check`; `rg -n "com\\.mitchellh\\.ghostty|/com/mitchellh/ghostty|Open in Ghostty|Ghostty: Terminal Inspector|app-id: com\\.mitchellh\\.ghostty|command: ghostty|rename-icon: com\\.mitchellh\\.ghostty|ghostty\\.exe|ghostty\\.rc|ghostty\\.manifest|ghostty\\.ico|ghostty_dolphin|ghostty_nautilus|com\\.mitchellh\\.ghostty\\.metainfo" src dist flatpak macos`
+- Files: `src/apprt/gtk/build/gresource.zig`, `src/apprt/gtk/App.zig`, `src/apprt/gtk/class/application.zig`, `src/apprt/gtk/ipc/new_window.zig`, `src/apprt/gtk/ui/1.5/inspector-window.blp`, `dist/linux/app.desktop.in`, `dist/linux/ghodex_dolphin.desktop`, `dist/linux/ghodex_nautilus.py`, `dist/linux/com.leongong.ghodex.metainfo.xml.in`, `flatpak/com.leongong.ghodex.yml`, `flatpak/com.leongong.ghodex-debug.yml`, `flatpak/exceptions.json`, `dist/windows/ghodex.rc`, `dist/windows/ghodex.manifest`, `dist/windows/ghodex.ico`, `src/build/GhosttyExe.zig`, `src/build/GhosttyResources.zig`, `src/build/GhosttyI18n.zig`, `src/build/mdgen/ghostty_1_header.md`, `src/build/mdgen/ghostty_5_header.md`, `src/build/mdgen/ghostty_1_footer.md`, `src/build/mdgen/ghostty_5_footer.md`, `src/config/url.zig`, `CHANGELOG.md`
+- Decision trail: Keep internal ABI, terminfo, shell-integration, and compatibility names stable where downstream integrations may still depend on them, but finish the fork at every installed or user-visible GTK/packaging/docs surface so the shipped product no longer presents Ghostty as its primary identity.
+
+### fix(identity): complete the GhoDex runtime and build identity fork
+
+- What changed: Renamed the Xcode project path to `macos/GhoDex.xcodeproj`, switched the shared scheme to `GhoDex`, renamed the exported macOS xcframework module to `GhoDexKit`, renamed the standalone Zig executable/header/library artifacts to `ghodex`, `ghodex.h`, and `libghodex*`, moved packaged app resources under `share/ghodex`, updated macOS bundle metadata keys and AppleScript definition paths to `GhoDex`, moved app/runtime namespaces from `com.mitchellh.ghostty*` to `com.leongong.ghodex*`, repointed release-note and docs links to the fork repository, disabled Sparkle's upstream Ghostty appcast feed until a fork-specific feed exists, and updated macOS tests to import the renamed `GhoDex` module.
+- Why: The fork already had a renamed app bundle and config path, but the repo still shipped mixed Ghostty-era project names, framework/module names, resource install paths, update endpoints, and test imports. That left the fork looking independent in some places while still building and linking through upstream Ghostty identities elsewhere.
+- Impact: The built app, Zig artifacts, macOS framework/module import path, release-note links, bundle metadata, resource layout, and test imports now align on `GhoDex`, so the fork builds and runs as its own product instead of relying on Ghostty-branded project/runtime surfaces.
+- Verification: `zig build`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' build`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' -only-testing:GhosttyTests/ReleaseNotesTests test`
+- Files: `build.zig`, `include/module.modulemap`, `include/ghodex.h`, `src/build/GhosttyLib.zig`, `src/build/GhosttyExe.zig`, `src/build/GhosttyXCFramework.zig`, `src/build/GhosttyXcodebuild.zig`, `src/build/GhosttyDocs.zig`, `src/build/GhosttyResources.zig`, `src/build_config.zig`, `src/termio/Exec.zig`, `src/lib/enum.zig`, `macos/GhoDex.xcodeproj/*`, `macos/GhoDex-Info.plist`, `macos/GhoDex*.entitlements`, `macos/GhoDex.sdef`, `macos/Sources/Features/Update/*`, `macos/Sources/Features/About/AboutView.swift`, `macos/Tests/Update/ReleaseNotesTests.swift`, `macos/Tests/**/*.swift`, `CHANGELOG.md`
+- Decision trail: Keep low-level C symbol names and many internal source filenames stable for now, but fully fork every user-visible and artifact-visible identity surface first: project path, module name, bundle namespace, executable/header/library names, resource layout, update links, and test module imports. That gets the fork to a coherent standalone product without taking on a risky ABI-wide symbol rename in the same change set.
+
+### fix(config): fully isolate default config paths under ghodex
+
+- What changed: Removed the remaining runtime fallback that auto-loaded legacy Ghostty config files, limited `+edit-config` candidate paths to the new GhoDex config locations, updated the default macOS custom icon path to `~/.config/ghodex/GhoDex.icns`, corrected macOS/settings/theme documentation strings to point at `config.ghodex` under `ghodex` directories, and aligned the Zig macOS app bundle copy/run step with the renamed `GhoDex.app` executable path.
+- Why: The fork already had new default config paths, but several code paths still treated legacy Ghostty locations as implicit fallbacks or still told users to edit `config.ghostty`, which undermined the goal of a fully independent fork identity.
+- Impact: Future config creation, loading, editing guidance, and macOS icon defaults now consistently target GhoDex-owned config locations instead of silently reading or advertising Ghostty paths.
+- Verification: `zig build`; `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' build`
+- Files: `src/config/file_load.zig`, `src/config/edit.zig`, `src/config/Config.zig`, `src/cli/list_themes.zig`, `src/build/GhosttyResources.zig`, `src/build/GhosttyXcodebuild.zig`, `macos/Sources/Ghostty/Ghostty.Config.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `CHANGELOG.md`
+- Decision trail: Keep explicit migration under user control rather than silently ingesting legacy Ghostty config files forever. Once the macOS app identity and config filename have forked, the default loader and editor paths should be unambiguous and point only at GhoDex-owned config locations.
+
+### fix(macos): ship the forked app as GhoDex with an independent bundle id
+
+- What changed: Renamed the macOS app product to `GhoDex.app`, changed the packaged macOS executable name to `GhoDex`, changed the macOS app display name to `GhoDex`/`GhoDex[DEBUG]`, moved the app bundle identifiers to `com.leongong.ghodex` and `com.leongong.ghodex.debug`, updated the dock tile plugin bundle identifier to `com.leongong.ghodex-dock-tile`, and repointed dock-tile app-icon sync to the enclosing app bundle identity instead of the upstream Ghostty defaults suite.
+- Why: The fork was still shipping a macOS app bundle that identified itself as Ghostty, which prevented it from feeling like a distinct product and risked identity collisions with an upstream Ghostty install.
+- Impact: Debug and release macOS builds now install as `GhoDex.app` with a separate bundle identity from Ghostty, and the packaged app binary is also named `GhoDex` so launch paths, test hosts, and app identity are aligned end to end.
+- Verification: `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' build`; `plutil -extract CFBundleIdentifier raw '/Users/leongong/Library/Developer/Xcode/DerivedData/Ghostty-btzvxhclyyijmwgtdfhkiidorhew/Build/Products/Debug/GhoDex.app/Contents/Info.plist'`; `defaults read '/Users/leongong/Library/Developer/Xcode/DerivedData/Ghostty-btzvxhclyyijmwgtdfhkiidorhew/Build/Products/Debug/GhoDex.app/Contents/Info.plist' CFBundleDisplayName`; `ls -l '/Users/leongong/Library/Developer/Xcode/DerivedData/Ghostty-btzvxhclyyijmwgtdfhkiidorhew/Build/Products/Debug/GhoDex.app/Contents/MacOS/GhoDex'`
+- Files: `macos/Ghostty.xcodeproj/project.pbxproj`, `macos/Sources/Features/Custom App Icon/DockTilePlugin.swift`, `macos/Sources/Features/Custom App Icon/Extensions/Notification+AppIcon.swift`, `CHANGELOG.md`
+- Decision trail: Keep the upstream core/library naming and resource layout intact where compatibility still matters, but change the macOS bundle-facing product identity all the way through the packaged executable so the fork installs, launches, and tests as `GhoDex` instead of presenting a mixed Ghostty/GhoDex identity.
+
+### fix(macos): remap pane-tab and split navigation shortcuts
+
+- What changed: Remapped pane child-tab navigation to `Cmd+,` and `Cmd+.`, moved split-panel previous/next focus back to `Cmd+[` and `Cmd+]`, and removed the old `Cmd+,` shortcut from `Preferences…` so the pane-local shortcut can own that chord cleanly.
+- Why: Pane-local child-tab navigation and split-panel navigation need separate, predictable chords. `Cmd+,` was still occupied by the preferences menu item, and `Cmd+[` / `Cmd+]` were being used for pane child tabs instead of split-panel movement.
+- Impact: `Cmd+,` and `Cmd+.` now switch left/right within the current pane's child tabs, while `Cmd+[` and `Cmd+]` switch between panels inside the current top-level tab.
+- Verification: `zig build`; `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' build`; `'/Users/leongong/Library/Developer/Xcode/DerivedData/Ghostty-btzvxhclyyijmwgtdfhkiidorhew/Build/Products/Debug/Ghostty.app/Contents/MacOS/GhoDex' +show-config --default | sed -n '408,422p'`
+- Files: `src/config/Config.zig`, `macos/Sources/Features/Terminal/TerminalController.swift`, `macos/Sources/App/macOS/MainMenu.xib`, `CHANGELOG.md`
+- Decision trail: Keep pane child-tab switching in the macOS pane-local shortcut layer because it is a UI-level concept, but hand split-panel navigation back to Ghostty's `goto_split` bindings so panel movement stays config-driven and menu-synced.
+
+### feat(macos): route pane child-tab shortcuts through a native Ghostty action
+
+- What changed: Added a new bindable Ghostty action named `new_pane_tab`, gave macOS a default `Cmd+Shift+T` binding for it, routed the macOS runtime callback into the existing pane child-tab picker, and stopped the `New Pane Tab` menu item plus window event monitors from owning that shortcut directly.
+- Why: Pane child-tab creation previously lived on a custom AppKit shortcut interception path, so it could not participate cleanly in Ghostty's config-driven keybinding system and kept competing with menu-level shortcut routing.
+- Impact: Pane child tabs now use the same Ghostty binding pipeline as other native actions, the shortcut can be rebound from config via `new_pane_tab`, and macOS no longer depends on a hardcoded window-level pane-tab shortcut interceptor for this feature.
+- Verification: `zig build`; `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' build`
+- Files: `src/input/Binding.zig`, `src/input/command.zig`, `src/Surface.zig`, `src/apprt/action.zig`, `src/config/Config.zig`, `src/apprt/gtk/class/application.zig`, `include/ghostty.h`, `macos/Sources/Ghostty/GhosttyPackage.swift`, `macos/Sources/Ghostty/Ghostty.App.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Features/QuickTerminal/QuickTerminalController.swift`, `macos/Sources/Features/Terminal/TerminalController.swift`, `macos/Sources/Features/Terminal/Window Styles/TerminalWindow.swift`, `macos/Sources/App/macOS/MainMenu.xib`, `CHANGELOG.md`
+- Decision trail: Keep pane child tabs as a macOS-only UI capability, but move shortcut ownership into Ghostty's core action system so one binding source controls both defaults and user overrides. The menu item intentionally no longer owns a fixed key equivalent because a hardcoded AppKit shortcut would immediately compete with the config-driven Ghostty binding again.
+
+### fix(macos): keep pane-local actions on the selected top tab and focused split panel
+
+- What changed: Updated pane-local action routing so `AppDelegate` first resolves the selected native top tab window and then asks that controller for its current `effectiveFocusedSurface()` before handling `new_pane_tab` and pane-local title actions. `TerminalController` now resolves `effectiveFocusedSurface()` from the live responder chain before falling back to cached focus, and split pane tab-strip interactions explicitly focus their owning pane before running pane-tab actions. Surface click-to-focus handling was also widened from a strict `hitTest == self` check to any click inside the panel bounds.
+- Why: Pane child-tab and pane title actions were vulnerable to multiple layers of stale context: a non-selected top tab controller, a cached focused surface that lagged behind split focus changes, and pane-strip interactions that did not transfer focus back into the terminal surface.
+- Impact: `Cmd+Shift+T` and `Cmd+I` now resolve against the currently selected top-level tab and the currently focused split panel, even after switching panes via the split UI or clicking within wrapped/overlayed panel content.
+- Verification: `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' build`
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Ghostty/Ghostty.App.swift`, `macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift`, `macos/Sources/Features/Terminal/TerminalController.swift`, `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Features/Splits/TerminalSplitTreeView.swift`, `CHANGELOG.md`
+- Decision trail: Keep pane focus ownership centered in `TerminalController.effectiveFocusedSurface()`, but make every upstream entry point honor the selected native tab and live responder focus. Once pane-strip and surface clicks reliably move focus, pane-local shortcuts can share the same routing logic without each layer guessing the target independently.
+
+### fix(macos): rebuild new-tab picker callbacks per presentation
+
+- What changed: `NewTabPickerController` now assigns a fresh presentation identity on every `show(...)` call and rebuilds the picker view with that identity so SwiftUI does not reuse a previous pane-tab `onOpenHost` callback.
+- Why: After focus routing was corrected, pane-tab creation could still jump back to the first panel because the picker sometimes executed a stale callback captured from an earlier presentation.
+- Impact: Reopening the picker for `Cmd+Shift+T` now uses the current panel's `sourceSurface` when the user chooses a host, instead of silently reusing the previous panel's launch callback.
+- Verification: `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' build`
+- Files: `macos/Sources/Features/New Tab Picker/NewTabPickerController.swift`, `CHANGELOG.md`
+- Decision trail: Once the routing layer and controller focus were both confirmed to be correct, the remaining stale state was the picker callback itself. Forcing a fresh SwiftUI view identity per presentation is the smallest change that guarantees the callback is rebuilt with the current pane context.
+
+### feat(macos): introduce explicit workspace snapshots behind native top tabs
+
+- What changed: Promoted the outer native top-level tab state into an explicit `TerminalWorkspaceSnapshot` model and routed restoration/undo through that snapshot instead of ad hoc per-window fields.
+- Why: The pane-local child tabs already turned each top-level tab into a de facto workspace container. Making that state explicit is the necessary base for saved workspaces and a future top/sidebar workspace switcher without replacing the native AppKit tab UI.
+- Impact: Each native top-level tab now has a stable workspace identity plus persisted workspace metadata, window restore/undo now operate on workspace snapshots, and top-level workspace semantics are separated from inner pane tab semantics.
+- Verification: `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' build`; `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' -only-testing:GhosttyTests/Terminal/TerminalWorkspaceSnapshotTests test`
+- Files: `macos/Sources/Features/Terminal/TerminalRestorable.swift`, `macos/Sources/Features/Terminal/BaseTerminalController.swift`, `macos/Sources/Features/Terminal/TerminalController.swift`, `macos/Tests/Terminal/TerminalWorkspaceSnapshotTests.swift`
+- Decision trail: Preserve the native top tab UI as the workspace switcher, but move the data model from "window owns a surface tree" to "window/tab owns a workspace snapshot". This matches the useful part of `cmux`'s architecture: outer workspace identity plus inner split/tabset state, without trying to nest AppKit's real window-tab implementation inside pane content.
+
+### fix(macos): move split cycling to Cmd+, and Cmd+. without a preferences shortcut conflict
+
+- What changed: Removed the default `open_config` keybind and changed split previous/next defaults from `Cmd+Shift+,` / `Cmd+Shift+.` to `Cmd+,` / `Cmd+.`.
+- Why: The requested split-navigation shortcuts should be the easiest-to-reach pair. Keeping the old preferences shortcut on `Cmd+,` blocked that layout.
+- Impact: Split focus now cycles left/right with `Cmd+,` and `Cmd+.`, the Preferences/Open Config menu item no longer owns a default shortcut, and reload config stays on `Cmd+Option+Shift+,`.
+- Verification: `zig build`; `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' build`; `'/Users/leongong/Library/Developer/Xcode/DerivedData/Ghostty-btzvxhclyyijmwgtdfhkiidorhew/Build/Products/Debug/Ghostty.app/Contents/MacOS/GhoDex' +show-config --default | rg -n "open_config|reload_config|goto_split:previous|goto_split:next"`
+- Files: `src/config/Config.zig`, `CHANGELOG.md`
+
+### fix(macos): keep pane-targeting in sync immediately after split focus moves
+
+- What changed: Updated both split-tree replacement paths to set the controller's `focusedSurface` immediately when they already know the destination surface for the next pane/tab focus target.
+- Why: New split creation and pane-local tab changes previously waited for AppKit focus to catch up on the next run loop. If the user triggered pane-local open actions immediately after `Cmd+D` / `Cmd+Shift+D`, those actions could still resolve against the previously focused pane and open the child tab in the wrong split.
+- Impact: Pane-local open actions such as `Cmd+Shift+T` and host-specific pane-tab launches now target the newly focused split pane immediately instead of falling back to the old pane.
+- Verification: `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' build`
+- Files: `macos/Sources/Features/Terminal/BaseTerminalController.swift`, `macos/Sources/Features/Terminal/TerminalController.swift`, `CHANGELOG.md`
+
+### fix(macos): refresh pane tab titles immediately and remap split cycling to Cmd+< / Cmd+>
+
+- What changed: Made the pane child-tab strip subscribe directly to each child surface title publisher so renames rebuild the pane header immediately, changed split previous/next defaults to `Cmd+Shift+,` and `Cmd+Shift+.`, and moved config open/reload defaults to `Cmd+Option+,` and `Cmd+Option+Shift+,`.
+- Why: Pane child-tab titles were only rebuilt when pane structure changed, so rename feedback lagged until another UI update. Separately, the requested split-cycling shortcuts conflicted with the app's default config shortcuts, so the defaults had to be reassigned at the source-of-truth config layer.
+- Impact: Renaming a pane child tab updates its visible header title immediately, split focus can move left/right with `Cmd+<` and `Cmd+>`, and config open/reload no longer occupy that key pair.
+- Verification: `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' build`; `'/Users/leongong/Library/Developer/Xcode/DerivedData/Ghostty-btzvxhclyyijmwgtdfhkiidorhew/Build/Products/Debug/Ghostty.app/Contents/MacOS/GhoDex' +show-config --default | rg -n "open_config|reload_config|goto_split:previous|goto_split:next"`
+- Files: `macos/Sources/Features/Splits/TerminalSplitTreeView.swift`, `src/config/Config.zig`, `CHANGELOG.md`
+
+### fix(macos): unify Cmd+I title prompts around pane-aware context
+
+- What changed: Routed both menu rename actions and Ghostty prompt-title actions through `TerminalController.changeTitleContext(_:)` whenever the active window is using the pane-tab workspace model.
+- Why: `Cmd+I` could still bypass the pane-aware rename logic because some paths invoked the old `prompt_surface_title` or `prompt_tab_title` handlers directly. That left keyboard-driven rename behavior inconsistent with the new pane child-tab model.
+- Impact: `Cmd+I` now renames the focused pane child tab when pane-local tabs are active, and falls back to the top-level tab title when the user is in the outer workspace/top-level tab context.
+- Verification: `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' build`
+- Files: `macos/Sources/App/macOS/MainMenu.xib`, `macos/Sources/Ghostty/Ghostty.App.swift`, `CHANGELOG.md`
+
+### fix(macos): intercept pane child-tab shortcuts before AppKit menu routing
+
+- What changed: Added pane-child-tab interception to both `TerminalWindow.sendEvent` and `performKeyEquivalent`, and stopped syncing a menu key equivalent onto the top-level `New Tab` item so AppKit cannot ambiguously match `Cmd+Shift+T` to the top-level tab menu entry.
+- Why: The previous fix still left two escape hatches. First, some command-key paths can bypass `performKeyEquivalent` interception unless they are stopped at `sendEvent`. Second, AppKit menu matching can still prefer the top-level `New Tab` item when it owns `Cmd+T`, even though pane child tabs use `Cmd+Shift+T`.
+- Impact: `Cmd+Shift+T` now has an early window-level interception path and no longer competes with a menu-owned top-level `New Tab` shortcut. Top-level `Cmd+T` continues to be handled by Ghostty's own key binding path instead of the menu item.
+- Verification: `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' build`
+- Files: `macos/Sources/Features/Terminal/Window Styles/TerminalWindow.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `CHANGELOG.md`
+
+### feat(macos): align pane child-tab creation and controls with the top-level tab flow
+
+- What changed: Routed `New Pane Tab` through the existing new-tab picker instead of directly spawning a blank local shell, added pane-specific picker dispatch in `AppDelegate`/`AITerminalManagerStore`, switched pane child-tab cycling to `Cmd+[` and `Cmd+]`, and rebuilt the pane tab header into a persistent AppKit strip with per-tab close buttons plus a trailing `+` action.
+- Why: The pane-local tab layer must follow the same host-selection flow as the top-level tab feature and expose the same basic affordances users expect from tabs: a discoverable create action, a close button, and dedicated same-level navigation shortcuts. The previous direct-create path bypassed the picker entirely and the old segmented-control strip was too far from the native tab interaction model.
+- Impact: `Cmd+Shift+T` and the pane `+` button now open the host picker for the currently focused pane, split panes always expose their own child-tab header, pane child tabs can be closed with `x`, and same-pane cycling no longer collides with the top-level `Cmd+Shift+[` / `Cmd+Shift+]` bindings.
+- Verification: `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' build`; `'/Users/leongong/Library/Developer/Xcode/DerivedData/Ghostty-btzvxhclyyijmwgtdfhkiidorhew/Build/Products/Debug/Ghostty.app/Contents/MacOS/GhoDex' +show-config --default | rg -n "keybind = .*super\\+shift\\+t|keybind = .*super\\+z|keybind = .*super\\+shift\\+z|keybind = .*super\\+t"`
+- Files: `macos/Sources/Features/New Tab Picker/NewTabPickerController.swift`, `macos/Sources/Features/New Tab Picker/NewTabPickerView.swift`, `macos/Sources/Features/AI Terminal Manager/AITerminalManagerStore.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/App/macOS/MainMenu.xib`, `macos/Sources/Features/Terminal/TerminalController.swift`, `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Features/Splits/TerminalSplitTreeView.swift`, `CHANGELOG.md`
+
+### fix(macos): force pane-tab content remount and window-level shortcut routing
+
+- What changed: Forced pane child-tab content to remount on active-surface changes by keying `InspectableSurface` with the active surface UUID, capped pane tab item widths so the trailing `+` remains visible, and intercepted `Cmd+Shift+T` / `Cmd+[` / `Cmd+]` at the active terminal-window event monitor before Ghostty's lower-level key handling can route them elsewhere.
+- Why: The previous pane-tab switch path could leave the old `SurfaceView` content mounted even though the active tab ID changed, which made tab titles move while the visible terminal content stayed the same. Separately, AppKit/Ghostty shortcut routing could still let `Cmd+Shift+T` fall through to top-level tab behavior instead of the focused pane-local action.
+- Impact: Pane child-tab switches now replace the visible terminal content correctly, pane headers shrink tabs instead of letting them cover the add button, and `Cmd+Shift+T` consistently targets the focused pane rather than opening a top-level tab.
+- Verification: `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' build`
+- Files: `macos/Sources/Features/Splits/TerminalSplitTreeView.swift`, `macos/Sources/Features/Terminal/BaseTerminalController.swift`, `macos/Sources/Features/Terminal/TerminalController.swift`, `CHANGELOG.md`
+
+### fix(macos): preserve pane geometry when opening child tabs in splits
+
+- What changed: Kept `TerminalPane` frame size stable across child-tab switches, seeded newly created child surfaces with the current pane size, and clipped pane content to its split leaf in `TerminalSplitTreeView`.
+- Why: `Cmd+Shift+T` inside a split pane must not mutate pane geometry. The previous code could activate a fresh surface with no settled size, fall back to a default `800x600`, and let the un-clipped terminal scroll view visually cover sibling splits.
+- Impact: Opening a child tab in a split pane keeps the sibling panes visible instead of visually “exiting” the split, while still switching focus to the new child tab.
+- Verification: `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' build`; `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' -only-testing:GhosttyTests/Splits/SplitTreeTests -only-testing:GhosttyTests/Splits/TerminalSplitDropZoneTests test`
+- Files: `macos/Sources/Features/Terminal/TerminalPane.swift`, `macos/Sources/Features/Terminal/TerminalController.swift`, `macos/Sources/Features/Splits/TerminalSplitTreeView.swift`, `CHANGELOG.md`
+
+### fix(macos): remove the default Cmd+Shift+T undo conflict
+
+- What changed: Removed the macOS default keybinding that mapped `Cmd+Shift+T` to `undo`, leaving that shortcut available for the pane-local `New Pane Tab` menu action.
+- Why: The pane-tab feature uses `Cmd+Shift+T`, but the existing default Ghostty macOS bindings also treated `Cmd+Shift+T` as undo. In split workflows that could undo the last split, which matches the reported “pressing Cmd+Shift+T exits the split” behavior.
+- Impact: `Cmd+Shift+T` no longer conflicts with undo on macOS, so the shortcut can reliably target pane-local child tab creation instead of reverting split layout state.
+- Verification: `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' build`; `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' -only-testing:GhosttyTests/Splits/SplitTreeTests -only-testing:GhosttyTests/Splits/TerminalSplitDropZoneTests test`
+- Files: `src/config/Config.zig`, `CHANGELOG.md`
+
+### feat(macos): adopt a cmux-style pane tree for split-local tabs
+
+- What changed: Replaced raw split leaves with `TerminalPane` container leaves in `SplitTree<TerminalPane>`; moved child-tab ownership into each pane; updated `BaseTerminalController`, `TerminalController`, `TerminalView`, and `TerminalSplitTreeView` to render and mutate pane leaves directly; kept top-level AppKit window tabs on the original path; preserved `Cmd+Shift+T` for `newPaneTab:` and pane-local tab cycling; and updated restore/undo/App Intent/AppleScript/session enumeration paths to understand pane-owned child tabs.
+- Why: The previous runtime-only child-tab layer still treated split leaves as raw `SurfaceView`s, which diverged from `cmux`'s `split -> tabset` model and made pane behavior fragile. The requested design needs split panes to own their own tab stacks as first-class layout nodes.
+- Impact: Each split pane now owns its own child-tab stack and active child surface, pane content stays scoped to the pane boundary, nested split behavior follows the `cmux` data-model layering more closely, and window/quick-terminal restore now persist pane-local tab stacks instead of only the visible surface.
+- Verification: `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' build`; `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' -only-testing:GhosttyTests/Splits/SplitTreeTests -only-testing:GhosttyTests/Splits/TerminalSplitDropZoneTests test`
+- Files: `macos/Sources/Features/Terminal/TerminalPane.swift`, `macos/Sources/Features/Terminal/BaseTerminalController.swift`, `macos/Sources/Features/Terminal/TerminalController.swift`, `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Features/Splits/TerminalSplitTreeView.swift`, `macos/Sources/Features/Terminal/TerminalRestorable.swift`, `macos/Sources/Features/QuickTerminal/QuickTerminalRestorableState.swift`, `macos/Sources/Ghostty/Ghostty.App.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/App/macOS/MainMenu.xib`, `CHANGELOG.md`
+
+### fix(macos): route pane-tab menu actions through app delegate fallback
+
+- What changed: Added `AppDelegate` forwarders for `newPaneTab:`, `previousPaneTab:`, and `nextPaneTab:` that resolve the active `TerminalController` from the key/main window before dispatching the action.
+- Why: Pane-local tab actions should target the active terminal workspace regardless of which child surface or AppKit subview currently owns first responder status.
+- Impact: `Cmd+Shift+T` and pane-tab navigation shortcuts resolve against the active terminal window instead of depending on the focused descendant view.
+- Verification: `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' build`
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `CHANGELOG.md`
+
+### fix(macos): bump restore formats for pane-owned child tabs
+
+- What changed: Increased terminal and quick-terminal restorable state versions after switching persisted split leaves from raw surfaces to `TerminalPane` containers.
+- Why: Old restore payloads encoded a different tree shape and would otherwise be decoded as if they were still surface-leaf trees.
+- Impact: Existing persisted windows from the older model are safely ignored instead of restoring with mismatched child-tab state, while new saves round-trip the pane-local tab hierarchy.
+- Verification: `xcodebuild -project macos/Ghostty.xcodeproj -scheme Ghostty -destination 'platform=macOS' build`
+- Files: `macos/Sources/Features/Terminal/TerminalRestorable.swift`, `macos/Sources/Features/QuickTerminal/QuickTerminalRestorableState.swift`, `CHANGELOG.md`
 
 ### feat(config): sync GhoDex control-panel settings with config.ghodex
 
@@ -68,7 +235,7 @@ All notable changes to this project are documented in this file.
 - Why: Finish first-phase fork identity migration so user-visible copy is consistent with the `GhoDex` project name.
 - Impact: UI labels, docs, and translated strings now present `GhoDex` consistently while technical/runtime identifiers (`ghostty`, `libghostty`, bundle IDs, target names) remain intact for compatibility.
 - Verification: Searched for `Ghostty` in changed scopes and confirmed only expected technical/legal leftovers remain (e.g., module names, upstream attribution, compatibility identifiers).
-- Files: `CONTRIBUTING.md`, `HACKING.md`, `PACKAGING.md`, `po/*.po`, `po/com.mitchellh.ghostty.pot`, `macos/Sources/Helpers/AppLocalization.swift`, `macos/Sources/Features/Terminal/Window Styles/*.xib`, `src/cli/*.zig`, `src/main_ghostty.zig`, `dist/windows/ghostty.rc` and related docs/tests.
+- Files: `CONTRIBUTING.md`, `HACKING.md`, `PACKAGING.md`, `po/*.po`, `po/com.leongong.ghodex.pot`, `macos/Sources/Helpers/AppLocalization.swift`, `macos/Sources/Features/Terminal/Window Styles/*.xib`, `src/cli/*.zig`, `src/main_ghostty.zig`, `dist/windows/ghostty.rc` and related docs/tests.
 
 ## [0.1.0] - 2026-03-15
 

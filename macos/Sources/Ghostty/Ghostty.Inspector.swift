@@ -1,4 +1,4 @@
-import GhosttyKit
+import GhoDexKit
 import Metal
 
 extension Ghostty {

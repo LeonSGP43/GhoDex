@@ -1,4 +1,4 @@
-import GhosttyKit
+import GhoDexKit
 
 /// Represents the Ghostty `quick-terminal-size` configuration. See the documentation for
 /// that for more details on exactly how it works. Some of those docs will be reproduced in various comments

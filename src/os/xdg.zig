@@ -172,7 +172,7 @@ test "fallback when xdg env empty" {
         _ = env_os.setenv("HOME", home);
         std.testing.allocator.free(home);
     }
-    const temp_home = "/tmp/ghostty-test-home";
+    const temp_home = "/tmp/ghodex-test-home";
     _ = env_os.setenv("HOME", temp_home);
 
     const DirCase = struct {
@@ -236,7 +236,7 @@ test "fallback when xdg env empty and subdir" {
         std.testing.allocator.free(home);
     }
 
-    const temp_home = "/tmp/ghostty-test-home";
+    const temp_home = "/tmp/ghodex-test-home";
     _ = env.setenv("HOME", temp_home);
 
     const DirCase = struct {

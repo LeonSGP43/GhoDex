@@ -1,4 +1,4 @@
-import GhosttyKit
+import GhoDexKit
 
 extension Ghostty {
     /// `ghostty_command_s`

@@ -19,7 +19,7 @@ pub fn initStatic(
     deps: *const SharedDeps,
 ) !GhosttyLib {
     const lib = b.addLibrary(.{
-        .name = "ghostty",
+        .name = "ghodex",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main_c.zig"),
             .target = deps.config.target,
@@ -52,8 +52,8 @@ pub fn initStatic(
 
     // Create a static lib that contains all our dependencies.
     const libtool = LibtoolStep.create(b, .{
-        .name = "ghostty",
-        .out_name = "libghostty-fat.a",
+        .name = "ghodex",
+        .out_name = "libghodex-fat.a",
         .sources = lib_list.items,
     });
     libtool.step.dependOn(&lib.step);
@@ -72,7 +72,7 @@ pub fn initShared(
     deps: *const SharedDeps,
 ) !GhosttyLib {
     const lib = b.addLibrary(.{
-        .name = "ghostty",
+        .name = "ghodex",
         .linkage = .dynamic,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main_c.zig"),
@@ -98,7 +98,7 @@ pub fn initShared(
         dsymutil.addArgs(&.{"dsymutil"});
         dsymutil.addFileArg(lib.getEmittedBin());
         dsymutil.addArgs(&.{"-o"});
-        const output = dsymutil.addOutputFileArg("libghostty.dSYM");
+        const output = dsymutil.addOutputFileArg("libghodex.dSYM");
         break :dsymutil output;
     };
 
@@ -123,8 +123,8 @@ pub fn initMacOSUniversal(
     ));
 
     const universal = LipoStep.create(b, .{
-        .name = "ghostty",
-        .out_name = "libghostty.a",
+        .name = "ghodex",
+        .out_name = "libghodex.a",
         .input_a = aarch64.output,
         .input_b = x86_64.output,
     });
@@ -148,8 +148,8 @@ pub fn install(self: *const GhosttyLib, name: []const u8) void {
 pub fn installHeader(self: *const GhosttyLib) void {
     const b = self.step.owner;
     const header_install = b.addInstallHeaderFile(
-        b.path("include/ghostty.h"),
-        "ghostty.h",
+        b.path("include/ghodex.h"),
+        "ghodex.h",
     );
     b.getInstallStep().dependOn(&header_install.step);
 }

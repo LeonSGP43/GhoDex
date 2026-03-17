@@ -15,17 +15,19 @@ pub fn init(
     var steps: std.ArrayList(*std.Build.Step) = .empty;
     errdefer steps.deinit(b.allocator);
 
-    const manpages = [_]struct {
-        name: []const u8,
+    const Manpage = struct {
+        output_name: []const u8,
+        entrypoint_name: []const u8,
         section: []const u8,
-    }{
-        .{ .name = "ghostty", .section = "1" },
-        .{ .name = "ghostty", .section = "5" },
+    };
+    const manpages = [_]Manpage{
+        .{ .output_name = "ghodex", .entrypoint_name = "ghostty", .section = "1" },
+        .{ .output_name = "ghodex", .entrypoint_name = "ghostty", .section = "5" },
     };
 
     inline for (manpages) |manpage| {
         const generate_markdown = b.addExecutable(.{
-            .name = "mdgen_" ++ manpage.name ++ "_" ++ manpage.section,
+            .name = "mdgen_" ++ manpage.output_name ++ "_" ++ manpage.section,
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/main.zig"),
                 .target = b.graph.host,
@@ -40,7 +42,7 @@ pub fn init(
             var copy = deps.config.*;
             copy.exe_entrypoint = @field(
                 Config.ExeEntrypoint,
-                "mdgen_" ++ manpage.name ++ "_" ++ manpage.section,
+                "mdgen_" ++ manpage.entrypoint_name ++ "_" ++ manpage.section,
             );
             break :config copy;
         };
@@ -54,7 +56,7 @@ pub fn init(
 
         try steps.append(b.allocator, &b.addInstallFile(
             markdown_output,
-            "share/ghostty/doc/" ++ manpage.name ++ "." ++ manpage.section ++ ".md",
+            "share/ghodex/doc/" ++ manpage.output_name ++ "." ++ manpage.section ++ ".md",
         ).step);
 
         const generate_html = b.addSystemCommand(&.{"pandoc"});
@@ -69,7 +71,7 @@ pub fn init(
 
         try steps.append(b.allocator, &b.addInstallFile(
             generate_html.captureStdOut(),
-            "share/ghostty/doc/" ++ manpage.name ++ "." ++ manpage.section ++ ".html",
+            "share/ghodex/doc/" ++ manpage.output_name ++ "." ++ manpage.section ++ ".html",
         ).step);
 
         const generate_manpage = b.addSystemCommand(&.{"pandoc"});
@@ -84,7 +86,7 @@ pub fn init(
 
         try steps.append(b.allocator, &b.addInstallFile(
             generate_manpage.captureStdOut(),
-            "share/man/man" ++ manpage.section ++ "/" ++ manpage.name ++ "." ++ manpage.section,
+            "share/man/man" ++ manpage.section ++ "/" ++ manpage.output_name ++ "." ++ manpage.section,
         ).step);
     }
 

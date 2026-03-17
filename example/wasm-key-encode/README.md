@@ -11,7 +11,7 @@ First, build the WebAssembly module:
 zig build lib-vt -Dtarget=wasm32-freestanding -Doptimize=ReleaseSmall
 ```
 
-This will create `zig-out/bin/ghostty-vt.wasm`.
+This will create `zig-out/bin/ghodex-vt.wasm`.
 
 ## Running
 

@@ -1,7 +1,7 @@
 import Foundation
 import Cocoa
 import SwiftUI
-import GhosttyKit
+import GhoDexKit
 
 /// This initializes a clipboard confirmation warning window. The window itself
 /// WILL NOT show automatically and the caller must show the window via

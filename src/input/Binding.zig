@@ -534,6 +534,9 @@ pub const Action = union(enum) {
     /// Open a new tab.
     new_tab,
 
+    /// Open a new pane-local child tab.
+    new_pane_tab,
+
     /// Go to the previous tab.
     previous_tab,
 
@@ -566,7 +569,7 @@ pub const Action = union(enum) {
     ///
     /// This is only supported on Linux and when the system's libadwaita
     /// version is 1.4 or newer. The current libadwaita version can be
-    /// found by running `ghostty +version`.
+    /// found by running `ghodex +version`.
     toggle_tab_overview,
 
     /// Change the title of the current focused surface via a pop-up prompt.
@@ -744,7 +747,7 @@ pub const Action = union(enum) {
     /// to filter the actions, and the ability to then execute the action.
     ///
     /// This requires libadwaita 1.5 or newer on Linux. The current libadwaita
-    /// version can be found by running `ghostty +version`.
+    /// version can be found by running `ghodex +version`.
     toggle_command_palette,
 
     /// Toggle the quick terminal.
@@ -1365,6 +1368,7 @@ pub const Action = union(enum) {
             // come from. For example `new_window` needs to be sourced to
             // a surface so inheritance can be done correctly.
             .new_tab,
+            .new_pane_tab,
             .previous_tab,
             .next_tab,
             .last_tab,
@@ -3491,6 +3495,27 @@ test "set: parseAndPut typical binding" {
         defer buf.deinit();
         try s.chain_parent.?.key_ptr.format(&buf.writer);
         try testing.expectEqualStrings("a", buf.written());
+    }
+}
+
+test "set: parseAndPut new pane tab binding" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var s: Set = .{};
+    defer s.deinit(alloc);
+
+    try s.parseAndPut(alloc, "a=new_pane_tab");
+
+    {
+        const action = s.get(.{ .key = .{ .unicode = 'a' } }).?.value_ptr.*.leaf;
+        try testing.expect(action.action == .new_pane_tab);
+        try testing.expectEqual(Flags{}, action.flags);
+    }
+
+    {
+        const trigger = s.getTrigger(.{ .new_pane_tab = {} }).?;
+        try testing.expect(trigger.key.unicode == 'a');
     }
 }
 

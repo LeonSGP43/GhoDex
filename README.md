@@ -33,7 +33,7 @@ This repository is in a phased rebrand:
 
 - User-facing docs and project branding are migrating to `GhoDex`.
 - Runtime compatibility identifiers such as `ghostty`, `libghostty`, and
-  `com.mitchellh.ghostty` are intentionally retained for now.
+  `com.leongong.ghodex` are intentionally retained for now.
 
 ## Upgrade Highlights
 
@@ -49,13 +49,13 @@ Recent fork-specific upgrades include:
 ## Download
 
 - Fork releases: <https://github.com/LeonSGP43/GhoDex/releases>
-- Upstream releases: <https://ghostty.org/download>
+- Upstream releases: <https://github.com/LeonSGP43/GhoDex/releases>
 
 ## Documentation
 
 - This repository: [`README.md`](./README.md), [`HACKING.md`](./HACKING.md),
   [`CONTRIBUTING.md`](./CONTRIBUTING.md)
-- Upstream docs baseline: <https://ghostty.org/docs>
+- Upstream docs baseline: <https://github.com/LeonSGP43/GhoDex#readme>
 
 ## Project Origin
 
@@ -186,7 +186,7 @@ crash report was generated.
 
 > [!NOTE]
 >
-> Use the `ghostty +crash-report` CLI command to get a list of available crash
+> Use the `ghodex +crash-report` CLI command to get a list of available crash
 > reports. A future version of GhoDex will make the contents of the crash
 > reports more easily viewable through the CLI and GUI.
 
@@ -194,7 +194,7 @@ Crash reports end in the `.ghosttycrash` extension. The crash reports are in
 [Sentry envelope format](https://develop.sentry.dev/sdk/envelopes/). You can
 upload these to your own Sentry account to view their contents, but the format
 is also publicly documented so any other available tools can also be used.
-The `ghostty +crash-report` CLI command can be used to list any crash reports.
+The `ghodex +crash-report` CLI command can be used to list any crash reports.
 A future version of GhoDex will show you the contents of the crash report
 directly in the terminal.
 

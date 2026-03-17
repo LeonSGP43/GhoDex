@@ -2,7 +2,7 @@ import Testing
 import AppKit
 import CoreTransferable
 import UniformTypeIdentifiers
-@testable import Ghostty
+@testable import GhoDex
 
 struct TransferablePasteboardTests {
     // MARK: - Test Helpers

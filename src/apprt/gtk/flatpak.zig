@@ -9,7 +9,7 @@ pub fn resourcesDir(alloc: Allocator) !internal_os.ResourcesDir {
         // Only consult Flatpak runtime data for host case.
         if (internal_os.isFlatpak()) {
             var result: internal_os.ResourcesDir = .{
-                .app_path = try alloc.dupe(u8, "/app/share/ghostty"),
+                .app_path = try alloc.dupe(u8, "/app/share/ghodex"),
             };
             errdefer alloc.free(result.app_path.?);
 

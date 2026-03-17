@@ -1,10 +1,10 @@
 import Cocoa
 
 struct QuickTerminalRestorableState: TerminalRestorable {
-    static var version: Int { 1 }
+    static var version: Int { 2 }
 
     let focusedSurface: String?
-    let surfaceTree: SplitTree<Ghostty.SurfaceView>
+    let surfaceTree: SplitTree<TerminalPane>
     let screenStateEntries: QuickTerminalScreenStateCache.Entries
 
     init(from controller: QuickTerminalController) {

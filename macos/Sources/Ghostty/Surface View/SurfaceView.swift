@@ -1,6 +1,6 @@
 import SwiftUI
 import UserNotifications
-import GhosttyKit
+import GhoDexKit
 
 extension Ghostty {
     /// Render a terminal for the active app in the environment.

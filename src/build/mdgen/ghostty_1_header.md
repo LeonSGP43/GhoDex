@@ -1,8 +1,8 @@
-% GHOSTTY(1) Version @@VERSION@@ | GhoDex terminal emulator
+% GHODEX(1) Version @@VERSION@@ | GhoDex terminal emulator
 
 # NAME
 
-**ghostty** - GhoDex terminal emulator
+**ghodex** - GhoDex terminal emulator
 
 # DESCRIPTION
 

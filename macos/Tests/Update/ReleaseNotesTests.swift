@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import Ghostty
+@testable import GhoDex
 
 struct ReleaseNotesTests {
     /// Test tagged release (semantic version)
@@ -12,7 +12,7 @@ struct ReleaseNotesTests {
 
         #expect(notes != nil)
         if case .tagged(let url) = notes {
-            #expect(url.absoluteString == "https://ghostty.org/docs/install/release-notes/1-2-3")
+            #expect(url.absoluteString == "https://github.com/LeonSGP43/GhoDex/releases/tag/1.2.3")
             #expect(notes?.label == AppLocalization.localizedText("View Release Notes"))
         } else {
             Issue.record("Expected tagged case")
@@ -28,7 +28,7 @@ struct ReleaseNotesTests {
 
         #expect(notes != nil)
         if case .compareTip(let url) = notes {
-            #expect(url.absoluteString == "https://github.com/ghostty-org/ghostty/compare/def5678...abc1234")
+            #expect(url.absoluteString == "https://github.com/LeonSGP43/GhoDex/compare/def5678...abc1234")
             #expect(notes?.label == AppLocalization.localizedText("Changes Since This Tip Release"))
         } else {
             Issue.record("Expected compareTip case")
@@ -44,7 +44,7 @@ struct ReleaseNotesTests {
 
         #expect(notes != nil)
         if case .commit(let url) = notes {
-            #expect(url.absoluteString == "https://github.com/ghostty-org/ghostty/commit/abc1234")
+            #expect(url.absoluteString == "https://github.com/LeonSGP43/GhoDex/commit/abc1234")
             #expect(notes?.label == AppLocalization.localizedText("View GitHub Commit"))
         } else {
             Issue.record("Expected commit case")
@@ -60,7 +60,7 @@ struct ReleaseNotesTests {
 
         #expect(notes != nil)
         if case .commit(let url) = notes {
-            #expect(url.absoluteString == "https://github.com/ghostty-org/ghostty/commit/abc1234")
+            #expect(url.absoluteString == "https://github.com/LeonSGP43/GhoDex/commit/abc1234")
         } else {
             Issue.record("Expected commit case")
         }
@@ -75,7 +75,7 @@ struct ReleaseNotesTests {
 
         #expect(notes != nil)
         if case .commit(let url) = notes {
-            #expect(url.absoluteString == "https://github.com/ghostty-org/ghostty/commit/1234567890abcdef1234567890abcdef12345678")
+            #expect(url.absoluteString == "https://github.com/LeonSGP43/GhoDex/commit/1234567890abcdef1234567890abcdef12345678")
         } else {
             Issue.record("Expected commit case")
         }
@@ -122,7 +122,7 @@ struct ReleaseNotesTests {
 
         #expect(notes != nil)
         if case .compareTip(let url) = notes {
-            #expect(url.absoluteString == "https://github.com/ghostty-org/ghostty/compare/def5678...abc1234")
+            #expect(url.absoluteString == "https://github.com/LeonSGP43/GhoDex/compare/def5678...abc1234")
         } else {
             Issue.record("Expected compareTip case")
         }

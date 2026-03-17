@@ -1,5 +1,5 @@
 import SwiftUI
-import GhosttyKit
+import GhoDexKit
 import os
 
 /// This delegate is notified of actions and property changes regarding the terminal view. This
@@ -28,13 +28,21 @@ protocol TerminalViewDelegate: AnyObject {
 protocol TerminalViewModel: ObservableObject {
     /// The tree of terminal surfaces (splits) within the view. This is mutated by TerminalView
     /// and children. This should be @Published.
-    var surfaceTree: SplitTree<Ghostty.SurfaceView> { get set }
+    var surfaceTree: SplitTree<TerminalPane> { get set }
 
     /// The command palette state.
     var commandPaletteIsShowing: Bool { get set }
 
     /// The update overlay should be visible.
     var updateOverlayIsVisible: Bool { get }
+}
+
+/// Optional pane-tab model for split leaves that host their own tab stacks.
+protocol TerminalPaneTabModel: AnyObject {
+    func focusPane(_ pane: TerminalPane)
+    func selectPaneTab(_ tabID: UUID, in pane: TerminalPane)
+    func newPaneTab(in pane: TerminalPane)
+    func closePaneTab(_ tabID: UUID, in pane: TerminalPane)
 }
 
 /// The main terminal view. This terminal view supports splits.
@@ -65,6 +73,7 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
     }
 
     var body: some View {
+        let paneTabModel = viewModel as? any TerminalPaneTabModel
         switch ghostty.readiness {
         case .loading:
             Text(AppLocalization.localizedText("Loading"))
@@ -81,7 +90,11 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
 
                     TerminalSplitTreeView(
                         tree: viewModel.surfaceTree,
-                        action: { delegate?.performSplitAction($0) })
+                        action: { delegate?.performSplitAction($0) },
+                        onFocusPane: { paneTabModel?.focusPane($0) },
+                        onSelectPaneTab: { paneTabModel?.selectPaneTab($1, in: $0) },
+                        onNewPaneTab: { paneTabModel?.newPaneTab(in: $0) },
+                        onClosePaneTab: { paneTabModel?.closePaneTab($1, in: $0) })
                         .environmentObject(ghostty)
                         .ghosttyLastFocusedSurface(lastFocusedSurface)
                         .focused($focused)

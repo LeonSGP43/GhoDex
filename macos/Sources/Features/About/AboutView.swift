@@ -4,11 +4,11 @@ struct AboutView: View {
     @Environment(\.openURL) var openURL
 
     private let githubURL = URL(string: "https://github.com/LeonSGP43/GhoDex")
-    private let docsURL = URL(string: "https://ghostty.org/docs")
+    private let docsURL = URL(string: "https://github.com/LeonSGP43/GhoDex#readme")
 
     /// Read the commit from the bundle.
     private var build: String? { Bundle.main.infoDictionary?["CFBundleVersion"] as? String }
-    private var commit: String? { Bundle.main.infoDictionary?["GhosttyCommit"] as? String }
+    private var commit: String? { Bundle.main.infoDictionary?["GhoDexCommit"] as? String }
     private var version: String? { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String }
     private var copyright: String? { Bundle.main.infoDictionary?["NSHumanReadableCopyright"] as? String }
 

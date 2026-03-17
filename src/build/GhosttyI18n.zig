@@ -6,7 +6,7 @@ const Config = @import("Config.zig");
 const gresource = @import("../apprt/gtk/build/gresource.zig");
 const locales = @import("../os/i18n_locales.zig").locales;
 
-const domain = "com.mitchellh.ghostty";
+const domain = "com.leongong.ghodex";
 
 owner: *std.Build,
 steps: []*std.Build.Step,
@@ -158,7 +158,7 @@ fn createUpdateStep(b: *std.Build) !*std.Build.Step {
     xgettext_py.addArg("-o");
     const py_pot = xgettext_py.addOutputFileArg("py.pot");
 
-    const nautilus_script_path = "dist/linux/ghostty_nautilus.py";
+    const nautilus_script_path = "dist/linux/ghodex_nautilus.py";
     xgettext_py.addArg(nautilus_script_path);
     xgettext_py.addFileInput(b.path(nautilus_script_path));
 
@@ -167,8 +167,8 @@ fn createUpdateStep(b: *std.Build) !*std.Build.Step {
         "xgettext",
         "--add-comments=Translators",
         "--package-name=" ++ domain,
-        "--msgid-bugs-address=m@mitchellh.com",
-        "--copyright-holder=\"Mitchell Hashimoto, Ghostty contributors\"",
+        "--msgid-bugs-address=https://github.com/LeonSGP43/GhoDex/issues",
+        "--copyright-holder=\"Leon Gong, GhoDex contributors\"",
         "-o",
         "-",
     });

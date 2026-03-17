@@ -1,5 +1,5 @@
 import Cocoa
-import GhosttyKit
+import GhoDexKit
 
 extension NSEvent {
     /// Create a Ghostty key event for a given keyboard action.

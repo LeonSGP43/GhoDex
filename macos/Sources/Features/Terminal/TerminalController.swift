@@ -2,7 +2,7 @@ import Foundation
 import Cocoa
 import SwiftUI
 import Combine
-import GhosttyKit
+import GhoDexKit
 
 /// A classic, tabbed terminal experience.
 class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Controller {
@@ -56,13 +56,14 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     /// The notification cancellable for focused surface property changes.
     private var surfaceAppearanceCancellables: Set<AnyCancellable> = []
+    private weak var lastKnownFocusedSurface: Ghostty.SurfaceView?
 
     /// This will be set to the initial frame of the window from the xib on load.
     private var initialFrame: NSRect?
 
     init(_ ghostty: Ghostty.App,
          withBaseConfig base: Ghostty.SurfaceConfiguration? = nil,
-         withSurfaceTree tree: SplitTree<Ghostty.SurfaceView>? = nil,
+         withSurfaceTree tree: SplitTree<TerminalPane>? = nil,
          parent: NSWindow? = nil
     ) {
         // The window we manage is not restorable if we've specified a command
@@ -134,6 +135,15 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         )
     }
 
+    convenience init(
+        _ ghostty: Ghostty.App,
+        workspaceSnapshot: TerminalWorkspaceSnapshot,
+        parent: NSWindow? = nil
+    ) {
+        self.init(ghostty, withSurfaceTree: workspaceSnapshot.surfaceTree, parent: parent)
+        applyWorkspaceSnapshotMetadata(workspaceSnapshot)
+    }
+
     required init?(coder: NSCoder) {
         fatalError("init(coder:) is not supported for this view")
     }
@@ -146,7 +156,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     // MARK: Base Controller Overrides
 
-    override func surfaceTreeDidChange(from: SplitTree<Ghostty.SurfaceView>, to: SplitTree<Ghostty.SurfaceView>) {
+    override func surfaceTreeDidChange(from: SplitTree<TerminalPane>, to: SplitTree<TerminalPane>) {
         super.surfaceTreeDidChange(from: from, to: to)
 
         // Whenever our surface tree changes in any way (new split, close split, etc.)
@@ -165,7 +175,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     }
 
     override func replaceSurfaceTree(
-        _ newTree: SplitTree<Ghostty.SurfaceView>,
+        _ newTree: SplitTree<TerminalPane>,
         moveFocusTo newView: Ghostty.SurfaceView? = nil,
         moveFocusFrom oldView: Ghostty.SurfaceView? = nil,
         undoAction: String? = nil
@@ -182,6 +192,143 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             moveFocusTo: newView,
             moveFocusFrom: oldView,
             undoAction: undoAction)
+    }
+
+    private func hasMultiplePaneTabs(for surfaceView: Ghostty.SurfaceView?) -> Bool {
+        guard let surfaceView else { return false }
+        return (pane(for: surfaceView)?.surfaces.count ?? 0) > 1
+    }
+
+    func effectiveFocusedSurface() -> Ghostty.SurfaceView? {
+        if let responderSurface = responderFocusedSurface() {
+            return pane(for: responderSurface)?.activeSurface ?? responderSurface
+        }
+
+        if let focusedSurface, surfaceTree.contains(focusedSurface) {
+            return focusedSurface
+        }
+
+        if let lastKnownFocusedSurface, surfaceTree.contains(lastKnownFocusedSurface) {
+            return lastKnownFocusedSurface
+        }
+
+        return visibleSurfaces.first
+    }
+
+    private func responderFocusedSurface() -> Ghostty.SurfaceView? {
+        var responder = window?.firstResponder
+        while let current = responder {
+            if let surface = current as? Ghostty.SurfaceView,
+               surfaceTree.contains(surface) {
+                return surface
+            }
+
+            if let view = current as? NSView {
+                var ancestor = view.superview
+                while let currentAncestor = ancestor {
+                    if let surface = currentAncestor as? Ghostty.SurfaceView,
+                       surfaceTree.contains(surface) {
+                        return surface
+                    }
+                    ancestor = currentAncestor.superview
+                }
+            }
+
+            responder = current.nextResponder
+        }
+
+        return nil
+    }
+
+    private func replaceSurfaceTreeWithoutUndo(
+        _ newTree: SplitTree<TerminalPane>,
+        moveFocusTo newView: Ghostty.SurfaceView? = nil,
+        moveFocusFrom oldView: Ghostty.SurfaceView? = nil
+    ) {
+        surfaceTree = newTree
+        if let newView, newTree.contains(newView) {
+            focusedSurface = newView
+        }
+        if let newView {
+            DispatchQueue.main.async {
+                Ghostty.moveFocus(to: newView, from: oldView)
+            }
+        }
+    }
+
+    private func paneTabsForSurface(_ surfaceView: Ghostty.SurfaceView) -> [Ghostty.SurfaceView] {
+        let tabs = pane(for: surfaceView)?.surfaces ?? []
+        return tabs.isEmpty ? [surfaceView] : tabs
+    }
+
+    private func activePaneTabIDForSurface(_ surfaceView: Ghostty.SurfaceView) -> UUID {
+        pane(for: surfaceView)?.activeSurfaceID ?? surfaceView.id
+    }
+
+    private func selectPaneTabInternal(_ tabID: UUID, from surfaceView: Ghostty.SurfaceView) {
+        guard let pane = pane(for: surfaceView) else { return }
+        let oldActive = pane.activeSurface
+        guard let newActive = pane.selectSurface(id: tabID) else { return }
+        guard oldActive !== newActive else { return }
+        lastKnownFocusedSurface = newActive
+        replaceSurfaceTreeWithoutUndo(
+            surfaceTree,
+            moveFocusTo: newActive,
+            moveFocusFrom: oldActive)
+    }
+
+    @discardableResult
+    func createPaneTab(
+        from surfaceView: Ghostty.SurfaceView,
+        withBaseConfig baseConfig: Ghostty.SurfaceConfiguration? = nil
+    ) -> Ghostty.SurfaceView? {
+        createPaneTabInternal(from: surfaceView, withBaseConfig: baseConfig)
+    }
+
+    @discardableResult
+    private func createPaneTabInternal(
+        from surfaceView: Ghostty.SurfaceView,
+        withBaseConfig baseConfig: Ghostty.SurfaceConfiguration? = nil
+    ) -> Ghostty.SurfaceView? {
+        guard let ghosttyApp = ghostty.app else { return nil }
+        guard let pane = pane(for: surfaceView) else { return nil }
+        let newSurface = Ghostty.SurfaceView(ghosttyApp, baseConfig: baseConfig)
+        let oldActive = pane.activeSurface
+        let paneSize = pane.frame.size
+        if paneSize.width > 0 && paneSize.height > 0 {
+            newSurface.initialSize = paneSize
+            newSurface.setFrameSize(paneSize)
+        } else if oldActive.bounds.size.width > 0 && oldActive.bounds.size.height > 0 {
+            newSurface.initialSize = oldActive.bounds.size
+            newSurface.setFrameSize(oldActive.bounds.size)
+        }
+        pane.appendSurface(newSurface)
+        lastKnownFocusedSurface = newSurface
+        replaceSurfaceTreeWithoutUndo(
+            surfaceTree,
+            moveFocusTo: newSurface,
+            moveFocusFrom: oldActive)
+        return newSurface
+    }
+
+    private enum PaneTabDirection {
+        case previous
+        case next
+    }
+
+    private func cyclePaneTab(from surfaceView: Ghostty.SurfaceView, direction: PaneTabDirection) {
+        let ids = paneTabsForSurface(surfaceView).map(\.id)
+        guard ids.count > 1 else { return }
+        guard let currentIndex = ids.firstIndex(of: activePaneTabIDForSurface(surfaceView)) else { return }
+
+        let nextIndex: Int = switch direction {
+        case .previous:
+            (currentIndex - 1 + ids.count) % ids.count
+        case .next:
+            (currentIndex + 1) % ids.count
+        }
+
+        selectPaneTabInternal(ids[nextIndex], from: surfaceView)
     }
 
     // MARK: Terminal Creation
@@ -312,7 +459,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     ///               If nil, the window will cascade from the last cascade point.
     static func newWindow(
         _ ghostty: Ghostty.App,
-        tree: SplitTree<Ghostty.SurfaceView>,
+        tree: SplitTree<TerminalPane>,
         position: NSPoint? = nil,
         confirmUndo: Bool = true,
     ) -> TerminalController {
@@ -626,9 +773,14 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     /// This is called anytime a node in the surface tree is being removed.
     override func closeSurface(
-        _ node: SplitTree<Ghostty.SurfaceView>.Node,
+        _ node: SplitTree<TerminalPane>.Node,
         withConfirmation: Bool = true
     ) {
+        if case .leaf(let pane) = node,
+           closePaneTabIfNeeded(pane.activeSurface, withConfirmation: withConfirmation) {
+            return
+        }
+
         // If this isn't the root then we're dealing with a split closure.
         if surfaceTree.root != node {
             super.closeSurface(node, withConfirmation: withConfirmation)
@@ -643,6 +795,73 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
         // 1 window, closing the window
         closeWindow(nil)
+    }
+
+    private func closePaneTabIfNeeded(
+        _ surfaceView: Ghostty.SurfaceView,
+        withConfirmation: Bool
+    ) -> Bool {
+        guard hasMultiplePaneTabs(for: surfaceView) else {
+            return false
+        }
+
+        guard withConfirmation else {
+            return closeActivePaneTab(surfaceView)
+        }
+
+        confirmClose(
+            messageText: AppLocalization.localizedText("Close Pane Tab?"),
+            informativeText: AppLocalization.localizedText("The terminal still has a running process. If you close the pane tab the process will be killed.")
+        ) { [weak self] in
+            _ = self?.closeActivePaneTab(surfaceView)
+        }
+
+        return true
+    }
+
+    @discardableResult
+    private func closeActivePaneTab(_ surfaceView: Ghostty.SurfaceView) -> Bool {
+        guard let pane = pane(for: surfaceView) else {
+            return false
+        }
+
+        return closePaneTabInternal(surfaceView.id, in: pane, withConfirmation: false)
+    }
+
+    @discardableResult
+    private func closePaneTabInternal(
+        _ tabID: UUID,
+        in pane: TerminalPane,
+        withConfirmation: Bool
+    ) -> Bool {
+        guard pane.surfaces.count > 1,
+              let target = pane.surfaces.first(where: { $0.id == tabID }) else {
+            return false
+        }
+
+        if withConfirmation && target.needsConfirmQuit {
+            confirmClose(
+                messageText: AppLocalization.localizedText("Close Pane Tab?"),
+                informativeText: AppLocalization.localizedText("The terminal still has a running process. If you close the pane tab the process will be killed.")
+            ) { [weak self, weak pane] in
+                guard let self, let pane else { return }
+                _ = self.closePaneTabInternal(tabID, in: pane, withConfirmation: false)
+            }
+            return true
+        }
+
+        let previousActive = pane.activeSurface
+        if target === previousActive,
+           let nextSurface = pane.removeSurface(id: tabID) {
+            replaceSurfaceTreeWithoutUndo(
+                surfaceTree,
+                moveFocusTo: nextSurface,
+                moveFocusFrom: previousActive)
+        } else {
+            _ = pane.removeSurface(id: tabID)
+            replaceSurfaceTreeWithoutUndo(surfaceTree)
+        }
+        return true
     }
 
     func closeTabImmediately(registerRedo: Bool = true) {
@@ -907,8 +1126,8 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // needs quit confirmation. This lets us attach the confirmation to something
         // that is running.
         guard let confirmWindow = all
-            .first(where: { $0.surfaceTree.contains(where: { $0.needsConfirmQuit }) })?
-            .surfaceTree.first(where: { $0.needsConfirmQuit })?
+            .first(where: { $0.allSurfaces.contains(where: { $0.needsConfirmQuit }) })?
+            .allSurfaces.first(where: { $0.needsConfirmQuit })?
             .window
         else {
             closeAllWindowsImmediately()
@@ -944,22 +1163,20 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     /// The state that we require to recreate a TerminalController from an undo.
     struct UndoState {
         let frame: NSRect
-        let surfaceTree: SplitTree<Ghostty.SurfaceView>
-        let focusedSurface: UUID?
+        let workspace: TerminalWorkspaceSnapshot
         let tabIndex: Int?
         weak var tabGroup: NSWindowTabGroup?
-        let tabColor: TerminalTabColor
     }
 
     convenience init(_ ghostty: Ghostty.App, with undoState: UndoState) {
-        self.init(ghostty, withSurfaceTree: undoState.surfaceTree)
+        self.init(ghostty, workspaceSnapshot: undoState.workspace)
 
         // Show the window and restore its frame
         showWindow(nil)
         if let window {
             window.setFrame(undoState.frame, display: true)
             if let terminalWindow = window as? TerminalWindow {
-                terminalWindow.tabColor = undoState.tabColor
+                terminalWindow.tabColor = undoState.workspace.tabColor
             }
 
             // If we have a tab group and index, restore the tab to its original position
@@ -978,12 +1195,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             }
 
             // Restore focus to the previously focused surface
-            if let focusedUUID = undoState.focusedSurface,
-               let focusTarget = surfaceTree.first(where: { $0.id == focusedUUID }) {
+            if let focusedUUID = undoState.workspace.focusedSurfaceID,
+               let focusTarget = allSurfaces.first(where: { $0.id == focusedUUID }) {
                 DispatchQueue.main.async {
                     Ghostty.moveFocus(to: focusTarget, from: nil)
                 }
-            } else if let focusedSurface = surfaceTree.first {
+            } else if let focusedSurface = allSurfaces.first {
                 // No prior focused surface or we can't find it, let's focus
                 // the first.
                 self.focusedSurface = focusedSurface
@@ -1000,11 +1217,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         guard !surfaceTree.isEmpty else { return nil }
         return .init(
             frame: window.frame,
-            surfaceTree: surfaceTree,
-            focusedSurface: focusedSurface?.id,
+            workspace: makeWorkspaceSnapshot(),
             tabIndex: window.tabGroup?.windows.firstIndex(of: window),
-            tabGroup: window.tabGroup,
-            tabColor: (window as? TerminalWindow)?.tabColor ?? .none)
+            tabGroup: window.tabGroup)
     }
 
     // MARK: - NSWindowController
@@ -1036,7 +1251,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         if case let .leaf(view) = surfaceTree.root {
             // If this is our first surface then our focused surface will be nil
             // so we force the focused surface to the leaf.
-            focusedSurface = view
+            focusedSurface = view.activeSurface
         }
 
         // Initialize our content view to the SwiftUI root
@@ -1219,6 +1434,63 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         appDelegate.showNewTabPicker(from: window)
     }
 
+    @IBAction func newPaneTab(_ sender: Any?) {
+        guard let surface = effectiveFocusedSurface()?.surface else { return }
+        // Keep menu-triggered pane child tabs on the same Ghostty action path
+        // as config-owned keybindings.
+        ghostty.newPaneTab(surface: surface)
+    }
+
+    @IBAction func previousPaneTab(_ sender: Any?) {
+        guard let focusedSurface = effectiveFocusedSurface() else { return }
+        cyclePaneTab(from: focusedSurface, direction: .previous)
+    }
+
+    @IBAction func nextPaneTab(_ sender: Any?) {
+        guard let focusedSurface = effectiveFocusedSurface() else { return }
+        cyclePaneTab(from: focusedSurface, direction: .next)
+    }
+
+    @discardableResult
+    func handlePaneTabShortcutEvent(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        guard let characters = event.charactersIgnoringModifiers?.lowercased() else { return false }
+
+        switch (characters, flags) {
+        case (",", [.command]):
+            guard effectiveFocusedSurface() != nil else { return false }
+            previousPaneTab(nil)
+            return true
+
+        case (".", [.command]):
+            guard effectiveFocusedSurface() != nil else { return false }
+            nextPaneTab(nil)
+            return true
+
+        case ("i", [.command]):
+            changeTitleContext(nil)
+            return true
+
+        default:
+            return false
+        }
+    }
+
+    @IBAction func changeTitleContext(_ sender: Any?) {
+        guard let surface = effectiveFocusedSurface(),
+              let pane = pane(for: surface) else {
+            promptTabTitle()
+            return
+        }
+
+        let isPaneTitleContext = pane.surfaces.count > 1 || paneNode(for: surface) != surfaceTree.root
+        if isPaneTitleContext {
+            pane.activeSurface.promptTitle()
+        } else {
+            promptTabTitle()
+        }
+    }
+
     @IBAction func closeTab(_ sender: Any?) {
         guard let window = window else { return }
         guard window.tabGroup?.windows.count ?? 0 > 1 else {
@@ -1226,7 +1498,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             return
         }
 
-        guard surfaceTree.contains(where: { $0.needsConfirmQuit }) else {
+        guard allSurfaces.contains(where: { $0.needsConfirmQuit }) else {
             closeTabImmediately()
             return
         }
@@ -1257,7 +1529,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             }
 
             // Check if any surfaces require confirmation
-            return controller.surfaceTree.contains(where: { $0.needsConfirmQuit })
+            return controller.allSurfaces.contains(where: { $0.needsConfirmQuit })
         }) else {
             self.closeOtherTabsImmediately()
             return
@@ -1284,7 +1556,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
                 return false
             }
 
-            return controller.surfaceTree.contains(where: { $0.needsConfirmQuit })
+            return controller.allSurfaces.contains(where: { $0.needsConfirmQuit })
         }
 
         if !needsConfirm {
@@ -1314,7 +1586,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         let windows: [NSWindow] = window.tabGroup?.windows ?? [window]
         guard let confirmController = windows
             .compactMap({ $0.windowController as? TerminalController })
-            .first(where: { $0.surfaceTree.contains(where: { $0.needsConfirmQuit }) })
+            .first(where: { $0.allSurfaces.contains(where: { $0.needsConfirmQuit }) })
         else {
             closeWindowImmediately()
             return
@@ -1351,6 +1623,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // When our focus changes, we update our window appearance based on the
         // currently focused surface.
         guard let focusedSurface else { return }
+        lastKnownFocusedSurface = focusedSurface
         syncAppearance(focusedSurface.derivedConfig)
 
         // We also want to get notified of certain changes to update our appearance.
@@ -1564,11 +1837,34 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     }
 }
 
+extension TerminalController: TerminalPaneTabModel {
+    func focusPane(_ pane: TerminalPane) {
+        focusSurface(pane.activeSurface)
+    }
+
+    func selectPaneTab(_ tabID: UUID, in pane: TerminalPane) {
+        selectPaneTabInternal(tabID, from: pane.activeSurface)
+    }
+
+    func newPaneTab(in pane: TerminalPane) {
+        guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
+        appDelegate.showNewPaneTabPicker(from: window, in: self, sourceSurface: pane.activeSurface)
+    }
+
+    func closePaneTab(_ tabID: UUID, in pane: TerminalPane) {
+        _ = closePaneTabInternal(tabID, in: pane, withConfirmation: true)
+    }
+}
+
 // MARK: NSMenuItemValidation
 
 extension TerminalController {
     override func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(previousPaneTab(_:)),
+            #selector(nextPaneTab(_:)):
+            return hasMultiplePaneTabs(for: focusedSurface)
+
         case #selector(closeTabsOnTheRight):
             guard let window, let tabGroup = window.tabGroup else { return false }
             guard let currentIndex = tabGroup.windows.firstIndex(of: window) else { return false }

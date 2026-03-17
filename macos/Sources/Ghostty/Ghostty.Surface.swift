@@ -1,4 +1,4 @@
-import GhosttyKit
+import GhoDexKit
 
 extension Ghostty {
     /// Represents a single surface within Ghostty.

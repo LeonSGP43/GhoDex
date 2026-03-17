@@ -468,6 +468,15 @@ final class AITerminalManagerStore: ObservableObject {
         open(host: host, directoryOverride: nil, launchTarget: .tab)
     }
 
+    func openInPaneTab(host: AITerminalHost, controller: TerminalController, sourceSurface: Ghostty.SurfaceView) {
+        if host.isLocal {
+            _ = launch(.localShell(), inPaneOf: controller, sourceSurface: sourceSurface)
+            return
+        }
+
+        open(host: host, directoryOverride: nil, inPaneOf: controller, sourceSurface: sourceSurface)
+    }
+
     func newTabPickerEntries() -> [NewTabPickerEntry] {
         NewTabPickerModel.entries(
             favoriteHosts: favoriteHosts,
@@ -523,6 +532,48 @@ final class AITerminalManagerStore: ObservableObject {
             }
 
             guard let sessionID = launch(plan, target: launchTarget) else { return }
+            registerRemoteSession(sessionID, host: host, savedPassword: savedPassword)
+            recordRecentHost(host.id, status: .connected)
+        }
+    }
+
+    private func open(
+        host: AITerminalHost,
+        directoryOverride: String?,
+        inPaneOf controller: TerminalController,
+        sourceSurface: Ghostty.SurfaceView
+    ) {
+        switch host.transport {
+        case .local:
+            _ = launch(.localShell(), inPaneOf: controller, sourceSurface: sourceSurface)
+            return
+
+        case .localmcd:
+            guard let plan = AITerminalLaunchPlan.localCommand(host: host, directoryOverride: directoryOverride) else {
+                lastError = L10n.AITerminalManager.localMCDCommandsEmpty
+                recordRecentHost(host.id, status: .failed, errorSummary: lastError)
+                return
+            }
+            _ = launch(plan, inPaneOf: controller, sourceSurface: sourceSurface)
+            recordRecentHost(host.id, status: .connected)
+            return
+
+        case .ssh:
+            let passwordResolution = resolvedPasswordAutomation(for: host)
+            if let message = passwordResolution.error {
+                lastError = message
+                recordRecentHost(host.id, status: .failed, errorSummary: message)
+                return
+            }
+            let savedPassword = passwordResolution.password
+
+            guard let plan = AITerminalLaunchPlan.remote(host: host, directoryOverride: directoryOverride) else {
+                lastError = L10n.AITerminalManager.hostMissingSSHDetails
+                recordRecentHost(host.id, status: .failed, errorSummary: lastError)
+                return
+            }
+
+            guard let sessionID = launch(plan, inPaneOf: controller, sourceSurface: sourceSurface) else { return }
             registerRemoteSession(sessionID, host: host, savedPassword: savedPassword)
             recordRecentHost(host.id, status: .connected)
         }
@@ -1985,13 +2036,13 @@ final class AITerminalManagerStore: ObservableObject {
                 from: TerminalController.preferredParent?.window,
                 withBaseConfig: plan.surfaceConfiguration
             ) {
-                createdSurface = controller.surfaceTree.root?.leftmostLeaf()
+                createdSurface = controller.surfaceTree.leftmostActiveSurface()
             } else {
                 let controller = TerminalController.newWindow(
                     appDelegate.ghostty,
                     withBaseConfig: plan.surfaceConfiguration
                 )
-                createdSurface = controller.surfaceTree.root?.leftmostLeaf()
+                createdSurface = controller.surfaceTree.leftmostActiveSurface()
             }
 
         case .window:
@@ -1999,10 +2050,26 @@ final class AITerminalManagerStore: ObservableObject {
                 appDelegate.ghostty,
                 withBaseConfig: plan.surfaceConfiguration
             )
-            createdSurface = controller.surfaceTree.root?.leftmostLeaf()
+            createdSurface = controller.surfaceTree.leftmostActiveSurface()
         }
 
         guard let createdSurface else {
+            lastError = L10n.AITerminalManager.createSessionFailed
+            return nil
+        }
+
+        registrations[createdSurface.id] = plan.registration
+        rebuildSessions()
+        return createdSurface.id
+    }
+
+    @discardableResult
+    private func launch(
+        _ plan: AITerminalLaunchPlan,
+        inPaneOf controller: TerminalController,
+        sourceSurface: Ghostty.SurfaceView
+    ) -> UUID? {
+        guard let createdSurface = controller.createPaneTab(from: sourceSurface, withBaseConfig: plan.surfaceConfiguration) else {
             lastError = L10n.AITerminalManager.createSessionFailed
             return nil
         }
@@ -2016,7 +2083,7 @@ final class AITerminalManagerStore: ObservableObject {
         let hostLookup = Dictionary(uniqueKeysWithValues: availableHosts.map { ($0.id, $0) })
         let activeSessionIDs = Set(
             TerminalController.all.flatMap { controller in
-                controller.surfaceTree.map(\.id)
+                controller.allSurfaces.map(\.id)
             }
         )
 
@@ -2024,7 +2091,7 @@ final class AITerminalManagerStore: ObservableObject {
 
         sessions = TerminalController.all
             .flatMap { controller in
-                controller.surfaceTree.map { surface in
+                controller.allSurfaces.map { surface in
                     let registration = registrations[surface.id]
                     let task = task(for: surface.id)
                     let hostLabel = registration

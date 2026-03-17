@@ -411,8 +411,8 @@ test "url regex" {
             .expect = "~/Documents/notes.md",
         },
         .{
-            .input = "~/.config/ghostty/config",
-            .expect = "~/.config/ghostty/config",
+            .input = "~/.config/ghodex/config.ghodex",
+            .expect = "~/.config/ghodex/config.ghodex",
         },
         .{
             .input = "directory: ~/src/ghostty-org/ghostty",
@@ -436,12 +436,12 @@ test "url regex" {
             .expect = ".foo/bar/$VAR",
         },
         .{
-            .input = ".config/ghostty/config",
-            .expect = ".config/ghostty/config",
+            .input = ".config/ghodex/config.ghodex",
+            .expect = ".config/ghodex/config.ghodex",
         },
         .{
-            .input = "loaded from .local/share/ghostty/state.db now",
-            .expect = ".local/share/ghostty/state.db",
+            .input = "loaded from .local/share/ghodex/state.db now",
+            .expect = ".local/share/ghodex/state.db",
         },
         .{
             .input = "../some/where",
@@ -473,8 +473,8 @@ test "url regex" {
         },
         // trailing colon should not be part of the path
         .{
-            .input = "./.config/ghostty: Needs upstream (main)",
-            .expect = "./.config/ghostty",
+            .input = "./.config/ghodex: Needs upstream (main)",
+            .expect = "./.config/ghodex",
         },
         .{
             .input = "./Downloads: Operation not permitted",

@@ -1,7 +1,7 @@
 import AppIntents
 import Cocoa
 import SwiftUI
-import GhosttyKit
+import GhoDexKit
 
 extension Ghostty {
     struct Input {}

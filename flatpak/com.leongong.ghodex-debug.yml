@@ -1,10 +1,10 @@
-app-id: com.mitchellh.ghostty-debug
+app-id: com.leongong.ghodex-debug
 runtime: org.gnome.Platform
 runtime-version: "49"
 sdk: org.gnome.Sdk
 default-branch: tip
-command: ghostty
-rename-icon: com.mitchellh.ghostty
+command: ghodex
+rename-icon: com.leongong.ghodex
 finish-args:
   # 3D rendering
   - --device=dri
@@ -32,7 +32,7 @@ cleanup:
 modules:
   - dependencies.yml
 
-  - name: ghostty
+  - name: ghodex
     buildsystem: simple
     build-options:
       append-path: /app/zig

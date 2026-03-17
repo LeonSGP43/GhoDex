@@ -3,7 +3,7 @@ import Combine
 import SwiftUI
 import CoreText
 import UserNotifications
-import GhosttyKit
+import GhoDexKit
 
 extension Ghostty {
     /// The NSView implementation for a terminal surface.
@@ -644,9 +644,11 @@ extension Ghostty {
                   event.window != nil,
                   window == event.window else { return event }
 
-            // The clicked location in this window should be this view.
+            // Any click inside this surface's bounds should be allowed to transfer focus.
+            // Requiring hitTest(location) == self is too strict because AppKit can report
+            // descendants/overlays for clicks that are still visually inside the pane.
             let location = convert(event.locationInWindow, from: nil)
-            guard hitTest(location) == self else { return event }
+            guard bounds.contains(location) else { return event }
 
             // If we're already the first responder then no focus transfer is
             // happening, so the click should continue as normal.

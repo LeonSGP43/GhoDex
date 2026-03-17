@@ -1,5 +1,5 @@
 import Cocoa
-import GhosttyKit
+import GhoDexKit
 
 /// The fullscreen modes we support define how the fullscreen behaves.
 enum FullscreenMode: String, Codable {

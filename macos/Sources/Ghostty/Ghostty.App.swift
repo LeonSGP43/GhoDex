@@ -1,6 +1,6 @@
 import SwiftUI
 import UserNotifications
-import GhosttyKit
+import GhoDexKit
 
 protocol GhosttyAppDelegate: AnyObject {
     #if os(macOS)
@@ -188,6 +188,13 @@ extension Ghostty {
 
         func newTab(surface: ghostty_surface_t) {
             let action = "new_tab"
+            if !ghostty_surface_binding_action(surface, action, UInt(action.lengthOfBytes(using: .utf8))) {
+                logger.warning("action failed action=\(action)")
+            }
+        }
+
+        func newPaneTab(surface: ghostty_surface_t) {
+            let action = "new_pane_tab"
             if !ghostty_surface_binding_action(surface, action, UInt(action.lengthOfBytes(using: .utf8))) {
                 logger.warning("action failed action=\(action)")
             }
@@ -493,6 +500,9 @@ extension Ghostty {
 
             case GHOSTTY_ACTION_NEW_TAB:
                 newTab(app, target: target)
+
+            case GHOSTTY_ACTION_NEW_PANE_TAB:
+                return newPaneTab(app, target: target)
 
             case GHOSTTY_ACTION_NEW_SPLIT:
                 newSplit(app, target: target, direction: action.action.new_split)
@@ -840,6 +850,29 @@ extension Ghostty {
             }
         }
 
+        private static func newPaneTab(_ app: ghostty_app_t, target: ghostty_target_s) -> Bool {
+            switch target.tag {
+            case GHOSTTY_TARGET_APP:
+                Ghostty.logger.warning("new pane tab does nothing with an app target")
+                return false
+
+            case GHOSTTY_TARGET_SURFACE:
+                guard let surface = target.target.surface else { return false }
+                guard let surfaceView = self.surfaceView(from: surface) else { return false }
+
+                NotificationCenter.default.post(
+                    name: Notification.ghosttyNewPaneTab,
+                    object: surfaceView,
+                    userInfo: [:]
+                )
+                return true
+
+            default:
+                assertionFailure()
+                return false
+            }
+        }
+
         private static func newSplit(
             _ app: ghostty_app_t,
             target: ghostty_target_s,
@@ -1171,12 +1204,12 @@ extension Ghostty {
                     guard let splitDirection = SplitFocusDirection.from(direction: direction) else { return false }
 
                     // Find the current node in the tree
-                    guard let targetNode = controller.surfaceTree.root?.node(view: surfaceView) else { return false }
+                    guard let targetNode = controller.paneNode(for: surfaceView) else { return false }
 
                     // Check if a split actually exists in the target direction before
                     // returning true. This ensures performable keybinds only consume
                     // the key event when we actually perform navigation.
-                    let focusDirection: SplitTree<Ghostty.SurfaceView>.FocusDirection = splitDirection.toSplitTreeFocusDirection()
+                    let focusDirection: SplitTree<TerminalPane>.FocusDirection = splitDirection.toSplitTreeFocusDirection()
                     guard controller.surfaceTree.focusTarget(for: focusDirection, from: targetNode) != nil else {
                         return false
                     }
@@ -1636,6 +1669,19 @@ extension Ghostty {
                 case GHOSTTY_TARGET_SURFACE:
                     guard let surface = target.target.surface else { return false }
                     guard let surfaceView = self.surfaceView(from: surface) else { return false }
+                    if let controller = selectedBaseTerminalController(for: surfaceView.window) {
+                        if let terminalController = controller as? TerminalController {
+                            terminalController.changeTitleContext(nil)
+                            return true
+                        }
+                        controller.promptTabTitle()
+                        return true
+                    }
+                    if let window = surfaceView.window,
+                       let controller = window.windowController as? TerminalController {
+                        controller.changeTitleContext(nil)
+                        return true
+                    }
                     surfaceView.promptTitle()
                     return true
 
@@ -1647,18 +1693,26 @@ extension Ghostty {
             case .tab:
                 switch target.tag {
                 case GHOSTTY_TARGET_APP:
-                    guard let window = NSApp.mainWindow ?? NSApp.keyWindow,
-                          let controller = window.windowController as? BaseTerminalController
+                    guard let controller = selectedBaseTerminalController(for: NSApp.keyWindow)
+                        ?? selectedBaseTerminalController(for: NSApp.mainWindow)
                     else { return false }
+                    if let terminalController = controller as? TerminalController {
+                        terminalController.changeTitleContext(nil)
+                        return true
+                    }
                     controller.promptTabTitle()
                     return true
 
                 case GHOSTTY_TARGET_SURFACE:
                     guard let surface = target.target.surface else { return false }
                     guard let surfaceView = self.surfaceView(from: surface) else { return false }
-                    guard let window = surfaceView.window,
-                          let controller = window.windowController as? BaseTerminalController
+                    guard let controller = selectedBaseTerminalController(for: surfaceView.window)
+                        ?? (surfaceView.window?.windowController as? BaseTerminalController)
                     else { return false }
+                    if let terminalController = controller as? TerminalController {
+                        terminalController.changeTitleContext(nil)
+                        return true
+                    }
                     controller.promptTabTitle()
                     return true
 
@@ -1667,6 +1721,11 @@ extension Ghostty {
                     return false
                 }
             }
+        }
+
+        private static func selectedBaseTerminalController(for window: NSWindow?) -> BaseTerminalController? {
+            let selectedWindow = window?.tabGroup?.selectedWindow ?? window
+            return selectedWindow?.windowController as? BaseTerminalController
         }
 
         private static func pwdChanged(

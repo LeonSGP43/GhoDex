@@ -1725,7 +1725,7 @@ pub const Surface = extern struct {
         defer notification.unref();
         notification.setBody(body);
 
-        const icon = gio.ThemedIcon.new("com.mitchellh.ghostty");
+        const icon = gio.ThemedIcon.new("com.leongong.ghodex");
         defer icon.unref();
         notification.setIcon(icon.as(gio.Icon));
 
@@ -3207,7 +3207,7 @@ pub const Surface = extern struct {
         if (priv.gl_area.getError()) |err| {
             log.warn("failed to make GL context current: {s}", .{err.f_message orelse "(no message)"});
             log.warn("this error is almost always due to a library, driver, or GTK issue", .{});
-            log.warn("this is a common cause of this issue: https://ghostty.org/docs/help/gtk-opengl-context", .{});
+            log.warn("this is a common cause of this issue: https://github.com/LeonSGP43/GhoDex#readme", .{});
             self.setError(true);
             return;
         }

@@ -1,15 +1,15 @@
 # FILES
 
-_\$XDG_CONFIG_HOME/ghostty/config.ghostty_
+_\$XDG_CONFIG_HOME/ghodex/config.ghodex_
 
 : Location of the default configuration file.
 
-_\$HOME/Library/Application Support/com.mitchellh.ghostty/config.ghostty_
+_\$HOME/Library/Application Support/com.leongong.ghodex/config.ghodex_
 
 : **On macOS**, location of the default configuration file. This location takes
 precedence over the XDG environment locations.
 
-_\$LOCALAPPDATA/ghostty/config.ghostty_
+_\$LOCALAPPDATA/ghodex/config.ghodex_
 
 : **On Windows**, if _\$XDG_CONFIG_HOME_ is not set, _\$LOCALAPPDATA_ will be searched
 for configuration files.
@@ -20,7 +20,7 @@ for configuration files.
 
 : Default location for configuration files.
 
-**$HOME/Library/Application Support/com.mitchellh.ghostty**
+**$HOME/Library/Application Support/com.leongong.ghodex**
 
 : **MACOS ONLY** default location for configuration files. This location takes
 precedence over the XDG environment locations.
@@ -31,13 +31,13 @@ precedence over the XDG environment locations.
 
 # BUGS
 
-See GitHub issues: <https://github.com/ghostty-org/ghostty/issues>
+See GitHub issues: <https://github.com/LeonSGP43/GhoDex/issues>
 
 # AUTHOR
 
-Mitchell Hashimoto <m@mitchellh.com>
-Ghostty contributors <https://github.com/ghostty-org/ghostty/graphs/contributors>
+Leon Gong <https://github.com/LeonSGP43>
+GhoDex contributors <https://github.com/LeonSGP43/GhoDex/graphs/contributors>
 
 # SEE ALSO
 
-**ghostty(1)**
+**ghodex(1)**

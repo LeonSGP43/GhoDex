@@ -140,8 +140,8 @@ pub fn build(b: *std.Build) !void {
         // build on macOS this way ironically so we need to fix that.
         if (!config.target.result.os.tag.isDarwin()) {
             libghostty_shared.installHeader(); // Only need one header
-            libghostty_shared.install("libghostty.so");
-            libghostty_static.install("libghostty.a");
+            libghostty_shared.install("libghodex.so");
+            libghostty_static.install("libghodex.a");
         }
     }
 
@@ -191,7 +191,7 @@ pub fn build(b: *std.Build) !void {
             // build.
             run_cmd.setEnvironmentVariable(
                 "GHOSTTY_RESOURCES_DIR",
-                b.getInstallPath(.prefix, "share/ghostty"),
+                b.getInstallPath(.prefix, "share/ghodex"),
             );
 
             run_step.dependOn(&run_cmd.step);
@@ -275,7 +275,7 @@ pub fn build(b: *std.Build) !void {
     {
         // Full unit tests
         const test_exe = b.addTest(.{
-            .name = "ghostty-test",
+            .name = "ghodex-test",
             .filters = test_filters,
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/main.zig"),
@@ -293,11 +293,11 @@ pub fn build(b: *std.Build) !void {
 
         // Verify our internal libghostty header.
         const ghostty_h = b.addTranslateC(.{
-            .root_source_file = b.path("include/ghostty.h"),
+            .root_source_file = b.path("include/ghodex.h"),
             .target = config.baselineTarget(),
             .optimize = .Debug,
         });
-        test_exe.root_module.addImport("ghostty.h", ghostty_h.createModule());
+        test_exe.root_module.addImport("ghodex.h", ghostty_h.createModule());
 
         // Normal test running
         const test_run = b.addRunArtifact(test_exe);

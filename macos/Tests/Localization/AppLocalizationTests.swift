@@ -1,5 +1,5 @@
 import Testing
-@testable import Ghostty
+@testable import GhoDex
 
 struct AppLocalizationTests {
     @Test func detectsPreferredLanguage() {

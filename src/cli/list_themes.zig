@@ -81,16 +81,18 @@ const ThemeListElement = struct {
 /// Two different directories will be searched for themes.
 ///
 /// The first directory is the `themes` subdirectory of your GhoDex
-/// configuration directory. This is `$XDG_CONFIG_HOME/ghostty/themes` or
-/// `~/.config/ghostty/themes`.
+/// configuration directory. This is `$XDG_CONFIG_HOME/ghodex/themes` or
+/// `~/.config/ghodex/themes`. The legacy `$XDG_CONFIG_HOME/ghostty/themes`
+/// directory is also checked for compatibility.
 ///
 /// The second directory is the `themes` subdirectory of the GhoDex resources
 /// directory. GhoDex ships with a multitude of themes that will be installed
 /// into this directory. On macOS, this directory is the
-/// `GhoDex.app/Contents/Resources/ghostty/themes`. On Linux, this directory
-/// is the `share/ghostty/themes` (wherever you installed the GhoDex "share"
-/// directory). If you're running GhoDex from the source, this is the
-/// `zig-out/share/ghostty/themes` directory.
+/// `GhoDex.app/Contents/Resources/ghodex/themes`. Legacy app bundles that
+/// still use `.../Resources/ghostty/themes` are also supported. On Linux,
+/// this directory is the `share/ghodex/themes` (wherever you installed the
+/// GhoDex "share" directory). If you're running GhoDex from the source, this is the
+/// `zig-out/share/ghodex/themes` directory.
 ///
 /// You can also set the `GHOSTTY_RESOURCES_DIR` environment variable to point
 /// to the resources directory.
@@ -202,7 +204,7 @@ fn resolveAutoThemePath(alloc: std.mem.Allocator) ![]u8 {
     defer alloc.free(main_cfg_path);
 
     const base_dir = std.fs.path.dirname(main_cfg_path) orelse return error.BadPathName;
-    return try std.fs.path.join(alloc, &.{ base_dir, "auto", "theme.ghostty" });
+    return try std.fs.path.join(alloc, &.{ base_dir, "auto", "theme.ghodex" });
 }
 
 fn writeAutoThemeFile(alloc: std.mem.Allocator, theme_name: []const u8) !void {
@@ -843,11 +845,11 @@ const Preview = struct {
                     "Or press 'w' to write an auto theme file to your system's preferred default config path.",
                     "Then add the following line to your GhoDex configuration and reload:",
                     "",
-                    "config-file = ?auto/theme.ghostty",
+                    "config-file = ?auto/theme.ghodex",
                     "",
                     "For more details on configuration and themes, visit the GhoDex documentation:",
                     "",
-                    "https://ghostty.org/docs/config/reference",
+                    "https://github.com/LeonSGP43/GhoDex#readme",
                 };
 
                 for (save_instructions, 0..) |instruction, captured_i| {

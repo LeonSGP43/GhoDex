@@ -1,7 +1,7 @@
 import Foundation
 import MetalKit
 import SwiftUI
-import GhosttyKit
+import GhoDexKit
 
 extension Ghostty {
     /// InspectableSurface is a type of Surface view that allows an inspector to be attached.

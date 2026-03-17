@@ -1,5 +1,41 @@
 import Cocoa
 
+enum TerminalWorkspaceSwitcherMode: String, Codable {
+    case top
+    case sidebar
+}
+
+struct TerminalWorkspaceSnapshot: Codable {
+    let id: UUID
+    let title: String?
+    let surfaceTree: SplitTree<TerminalPane>
+    let focusedSurfaceID: UUID?
+    let effectiveFullscreenMode: FullscreenMode?
+    let tabColor: TerminalTabColor
+    let switcherMode: TerminalWorkspaceSwitcherMode
+
+    init(
+        id: UUID = UUID(),
+        title: String? = nil,
+        surfaceTree: SplitTree<TerminalPane>,
+        focusedSurfaceID: UUID? = nil,
+        effectiveFullscreenMode: FullscreenMode? = nil,
+        tabColor: TerminalTabColor = .none,
+        switcherMode: TerminalWorkspaceSwitcherMode = .top
+    ) {
+        self.id = id
+        self.title = title
+        self.surfaceTree = surfaceTree
+        self.focusedSurfaceID = focusedSurfaceID
+        self.effectiveFullscreenMode = effectiveFullscreenMode
+        self.tabColor = tabColor
+        self.switcherMode = switcherMode
+    }
+
+    var focusedSurface: String? { focusedSurfaceID?.uuidString }
+    var titleOverride: String? { title }
+}
+
 protocol TerminalRestorable: Codable {
     static var selfKey: String { get }
     static var versionKey: String { get }
@@ -41,28 +77,57 @@ extension TerminalRestorable {
 
 /// The state stored for terminal window restoration.
 class TerminalRestorableState: TerminalRestorable {
-    class var version: Int { 7 }
+    class var version: Int { 9 }
 
-    let focusedSurface: String?
-    let surfaceTree: SplitTree<Ghostty.SurfaceView>
-    let effectiveFullscreenMode: FullscreenMode?
-    let tabColor: TerminalTabColor
-    let titleOverride: String?
+    let workspace: TerminalWorkspaceSnapshot
+
+    var focusedSurface: String? { workspace.focusedSurface }
+    var surfaceTree: SplitTree<TerminalPane> { workspace.surfaceTree }
+    var effectiveFullscreenMode: FullscreenMode? { workspace.effectiveFullscreenMode }
+    var tabColor: TerminalTabColor { workspace.tabColor }
+    var titleOverride: String? { workspace.titleOverride }
 
     init(from controller: TerminalController) {
-        self.focusedSurface = controller.focusedSurface?.id.uuidString
-        self.surfaceTree = controller.surfaceTree
-        self.effectiveFullscreenMode = controller.fullscreenStyle?.fullscreenMode
-        self.tabColor = (controller.window as? TerminalWindow)?.tabColor ?? .none
-        self.titleOverride = controller.titleOverride
+        self.workspace = controller.makeWorkspaceSnapshot()
+    }
+
+    init(workspace: TerminalWorkspaceSnapshot) {
+        self.workspace = workspace
     }
 
     required init(copy other: TerminalRestorableState) {
-        self.surfaceTree = other.surfaceTree
-        self.focusedSurface = other.focusedSurface
-        self.effectiveFullscreenMode = other.effectiveFullscreenMode
-        self.tabColor = other.tabColor
-        self.titleOverride = other.titleOverride
+        self.workspace = other.workspace
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case workspace
+        case focusedSurface
+        case surfaceTree
+        case effectiveFullscreenMode
+        case tabColor
+        case titleOverride
+    }
+
+    required init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let workspace = try container.decodeIfPresent(TerminalWorkspaceSnapshot.self, forKey: .workspace) {
+            self.workspace = workspace
+            return
+        }
+
+        let focusedSurfaceID = try container.decodeIfPresent(String.self, forKey: .focusedSurface)
+            .flatMap(UUID.init(uuidString:))
+        self.workspace = .init(
+            title: try container.decodeIfPresent(String.self, forKey: .titleOverride),
+            surfaceTree: try container.decode(SplitTree<TerminalPane>.self, forKey: .surfaceTree),
+            focusedSurfaceID: focusedSurfaceID,
+            effectiveFullscreenMode: try container.decodeIfPresent(FullscreenMode.self, forKey: .effectiveFullscreenMode),
+            tabColor: try container.decode(TerminalTabColor.self, forKey: .tabColor))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(workspace, forKey: .workspace)
     }
 }
 
@@ -113,9 +178,9 @@ class TerminalWindowRestoration: NSObject, NSWindowRestoration {
         // can be found for events from libghostty. This uses the low-level
         // createWindow so that AppKit can place the window wherever it should
         // be.
-        let c = TerminalController.init(
+        let c = TerminalController(
             appDelegate.ghostty,
-            withSurfaceTree: state.surfaceTree)
+            workspaceSnapshot: state.workspace)
         guard let window = c.window else {
             completionHandler(nil, TerminalRestoreError.windowDidNotLoad)
             return
@@ -124,14 +189,10 @@ class TerminalWindowRestoration: NSObject, NSWindowRestoration {
         // Restore our tab color
         (window as? TerminalWindow)?.tabColor = state.tabColor
 
-        // Restore the tab title override
-        c.titleOverride = state.titleOverride
-
-        // Setup our restored state on the controller
-        // Find the focused surface in surfaceTree
+        // Setup our restored state on the controller.
         if let focusedStr = state.focusedSurface {
             var foundView: Ghostty.SurfaceView?
-            for view in c.surfaceTree where view.id.uuidString == focusedStr {
+            for view in c.allSurfaces where view.id.uuidString == focusedStr {
                 foundView = view
                 break
             }
@@ -189,4 +250,3 @@ class TerminalWindowRestoration: NSObject, NSWindowRestoration {
         }
     }
 }
-

@@ -1,6 +1,6 @@
 import Foundation
 #if !DOCK_TILE_PLUGIN
-import GhosttyKit
+import GhoDexKit
 #endif
 
 extension OSColor {

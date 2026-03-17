@@ -23,9 +23,9 @@ struct QuickTerminalIntent: AppIntent {
         let c = delegate.quickController
         c.animateIn()
 
-        let terminals = c.surfaceTree.root?.leaves().map {
-            TerminalEntity($0)
-        } ?? []
+        let terminals = c.allSurfaces.map { (surface: Ghostty.SurfaceView) in
+            TerminalEntity(surface)
+        }
 
         return .result(value: terminals)
     }

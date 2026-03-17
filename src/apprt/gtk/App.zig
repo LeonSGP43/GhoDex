@@ -1,4 +1,4 @@
-/// This is the main entrypoint to the apprt for Ghostty. Ghostty will
+/// This is the main entrypoint to the apprt for GhoDex. GhoDex will
 /// initialize this in main to start the application..
 const App = @This();
 
@@ -23,14 +23,14 @@ pub const must_draw_from_app_thread = true;
 
 /// GTK application ID
 pub const application_id = switch (builtin.mode) {
-    .Debug, .ReleaseSafe => "com.mitchellh.ghostty-debug",
-    .ReleaseFast, .ReleaseSmall => "com.mitchellh.ghostty",
+    .Debug, .ReleaseSafe => "com.leongong.ghodex-debug",
+    .ReleaseFast, .ReleaseSmall => "com.leongong.ghodex",
 };
 
 /// GTK object path
 pub const object_path = switch (builtin.mode) {
-    .Debug, .ReleaseSafe => "/com/mitchellh/ghostty_debug",
-    .ReleaseFast, .ReleaseSmall => "/com/mitchellh/ghostty",
+    .Debug, .ReleaseSafe => "/com/leongong/ghodex_debug",
+    .ReleaseFast, .ReleaseSmall => "/com/leongong/ghodex",
 };
 
 /// The GObject Application instance
@@ -76,7 +76,7 @@ pub fn performAction(
     return try self.app.performAction(target, action, value);
 }
 
-/// Send the given IPC to a running Ghostty. Returns `true` if the action was
+/// Send the given IPC to a running GhoDex. Returns `true` if the action was
 /// able to be performed, `false` otherwise.
 ///
 /// Note that this is a static function. Since this is called from a CLI app (or

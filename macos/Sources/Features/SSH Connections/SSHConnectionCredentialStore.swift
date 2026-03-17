@@ -22,7 +22,7 @@ enum SSHConnectionCredentialStoreError: LocalizedError {
 }
 
 struct KeychainSSHConnectionCredentialStore: SSHConnectionCredentialStore {
-    static let service = "com.mitchellh.ghostty.ssh"
+    static let service = "com.leongong.ghodex.ssh"
 
     func password(for hostID: String) throws -> String? {
         let query = baseQuery(for: hostID).merging([

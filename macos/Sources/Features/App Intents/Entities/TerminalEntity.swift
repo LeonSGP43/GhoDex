@@ -109,8 +109,6 @@ struct TerminalQuery: EntityStringQuery, EnumerableEntityQuery {
             $0.windowController as? BaseTerminalController
         }
 
-        return controllers.flatMap {
-            $0.surfaceTree.root?.leaves() ?? []
-        }
+        return controllers.flatMap(\.allSurfaces)
     }
 }

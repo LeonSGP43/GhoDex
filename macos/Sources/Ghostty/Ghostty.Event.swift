@@ -1,5 +1,5 @@
 import Cocoa
-import GhosttyKit
+import GhoDexKit
 
 extension Ghostty {
     /// A comparable event.

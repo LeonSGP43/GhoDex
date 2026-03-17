@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Service
+ServiceTypes=KonqPopupMenu/Plugin
+MimeType=inode/directory
+Actions=RunGhoDexDir
+
+[Desktop Action RunGhoDexDir]
+Name=Open GhoDex Here
+Icon=com.leongong.ghodex
+Exec=ghodex --working-directory=%F --gtk-single-instance=false

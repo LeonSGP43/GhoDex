@@ -21,7 +21,7 @@ pub const blueprint_compiler_help =
     \\
     \\This message should *not* appear for normal users, who
     \\should build Ghostty from official release tarballs instead.
-    \\Please consult https://ghostty.org/docs/install/build for
+    \\Please consult https://github.com/LeonSGP43/GhoDex#readme for
     \\more information on the recommended build instructions.
 ;
 

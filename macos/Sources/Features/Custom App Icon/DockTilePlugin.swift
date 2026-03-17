@@ -1,25 +1,49 @@
 import AppKit
 
 class DockTilePlugin: NSObject, NSDockTilePlugIn {
+    private static let appIconDefaultsSuiteFallbacks = [
+        "com.leongong.ghodex.debug",
+        "com.leongong.ghodex",
+    ]
+
     // WARNING: An instance of this class is alive as long as Ghostty's icon is
     // in the doc (running or not!), so keep any state and processing to a
     // minimum to respect resource usage.
 
     private let pluginBundle = Bundle(for: DockTilePlugin.self)
 
-    // Separate defaults based on debug vs release builds so we can test icons
-    // without messing up releases.
-    #if DEBUG
-    private let ghosttyUserDefaults = UserDefaults(suiteName: "com.mitchellh.ghostty.debug")
-    #else
-    private let ghosttyUserDefaults = UserDefaults(suiteName: "com.mitchellh.ghostty")
-    #endif
-
     private var iconChangeObserver: Any?
 
     /// The URL to the enclosing app bundle, determined from the plugin bundle path.
     var ghosttyAppURL: URL? {
         Self.appBundleURL(for: pluginBundle.bundleURL)
+    }
+
+    /// Resolve the enclosing app's defaults suite so the plugin tracks the
+    /// current app identity instead of a hardcoded upstream bundle ID.
+    var ghosttyUserDefaults: UserDefaults? {
+        if let bundleIdentifier = ghosttyAppBundleIdentifier {
+            return UserDefaults(suiteName: bundleIdentifier)
+        }
+
+        for suiteName in Self.appIconDefaultsSuiteFallbacks {
+            if let defaults = UserDefaults(suiteName: suiteName) {
+                return defaults
+            }
+        }
+
+        return nil
+    }
+
+    var ghosttyAppBundleIdentifier: String? {
+        guard
+            let appBundleURL = ghosttyAppURL,
+            let appBundle = Bundle(url: appBundleURL)
+        else {
+            return nil
+        }
+
+        return appBundle.bundleIdentifier
     }
 
     /// Determine the enclosing app bundle for the dock tile plugin bundle.

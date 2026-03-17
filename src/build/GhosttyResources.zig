@@ -119,7 +119,7 @@ pub fn init(b: *std.Build, cfg: *const Config, deps: *const SharedDeps) !Ghostty
         const install_step = b.addInstallDirectory(.{
             .source_dir = b.path("src/shell-integration"),
             .install_dir = .{ .custom = "share" },
-            .install_subdir = b.pathJoin(&.{ "ghostty", "shell-integration" }),
+            .install_subdir = b.pathJoin(&.{ "ghodex", "shell-integration" }),
             .exclude_extensions = &.{".md"},
         });
         try steps.append(b.allocator, &install_step.step);
@@ -131,7 +131,7 @@ pub fn init(b: *std.Build, cfg: *const Config, deps: *const SharedDeps) !Ghostty
             const install_step = b.addInstallDirectory(.{
                 .source_dir = upstream.path(""),
                 .install_dir = .{ .custom = "share" },
-                .install_subdir = b.pathJoin(&.{ "ghostty", "themes" }),
+                .install_subdir = b.pathJoin(&.{ "ghodex", "themes" }),
                 .exclude_extensions = &.{".md"},
             });
             try steps.append(b.allocator, &install_step.step);
@@ -228,7 +228,7 @@ pub fn init(b: *std.Build, cfg: *const Config, deps: *const SharedDeps) !Ghostty
     // 'ghostty.sublime-syntax' file from zig-out to the '~.config/bat/syntaxes'
     // directory. The syntax then needs to be mapped to the correct language in
     // the config file within the '~.config/bat' directory
-    // (ex: --map-syntax "/Users/user/.config/ghostty/config.ghostty:Ghostty Config").
+    // (ex: --map-syntax "/Users/user/.config/ghodex/config.ghodex:GhoDex Config").
     {
         const run = b.addRunArtifact(build_data_exe);
         run.addArg("+sublime");
@@ -265,14 +265,14 @@ fn addLinuxAppResources(
     // Background:
     // https://developer.gnome.org/documentation/guidelines/maintainer/integrating.html
 
-    const name = b.fmt("Ghostty{s}", .{
+    const name = b.fmt("GhoDex{s}", .{
         switch (cfg.optimize) {
             .Debug, .ReleaseSafe => " (Debug)",
             .ReleaseFast, .ReleaseSmall => "",
         },
     });
 
-    const app_id = b.fmt("com.mitchellh.ghostty{s}", .{
+    const app_id = b.fmt("com.leongong.ghodex{s}", .{
         switch (cfg.optimize) {
             .Debug, .ReleaseSafe => "-debug",
             .ReleaseFast, .ReleaseSmall => "",
@@ -280,7 +280,7 @@ fn addLinuxAppResources(
     });
 
     const exe_abs_path = b.fmt(
-        "{s}/bin/ghostty",
+        "{s}/bin/ghodex",
         .{b.install_prefix},
     );
 
@@ -338,7 +338,7 @@ fn addLinuxAppResources(
         // AppStream metainfo so that application has rich metadata
         // within app stores
         try ts.append(b.allocator, .{
-            b.path("dist/linux/com.mitchellh.ghostty.metainfo.xml.in"),
+            b.path("dist/linux/com.leongong.ghodex.metainfo.xml.in"),
             b.fmt("share/metainfo/{s}.metainfo.xml", .{app_id}),
         });
 
@@ -370,62 +370,62 @@ fn addLinuxAppResources(
 
     // Right click menu action for Plasma desktop
     try steps.append(b.allocator, &b.addInstallFile(
-        b.path("dist/linux/ghostty_dolphin.desktop"),
-        "share/kio/servicemenus/com.mitchellh.ghostty.desktop",
+        b.path("dist/linux/ghodex_dolphin.desktop"),
+        "share/kio/servicemenus/com.leongong.ghodex.desktop",
     ).step);
 
-    // Right click menu action for Nautilus. Note that this _must_ be named
-    // `ghostty.py`. Using the full app id causes problems (see #5468).
+    // Right click menu action for Nautilus. Keep the installed script name
+    // short; using the full app id causes problems (see #5468).
     try steps.append(b.allocator, &b.addInstallFile(
-        b.path("dist/linux/ghostty_nautilus.py"),
-        "share/nautilus-python/extensions/ghostty.py",
+        b.path("dist/linux/ghodex_nautilus.py"),
+        "share/nautilus-python/extensions/ghodex.py",
     ).step);
 
     // Various icons that our application can use, including the icon
     // that will be used for the desktop.
     try steps.append(b.allocator, &b.addInstallFile(
         b.path("images/gnome/16.png"),
-        "share/icons/hicolor/16x16/apps/com.mitchellh.ghostty.png",
+        "share/icons/hicolor/16x16/apps/com.leongong.ghodex.png",
     ).step);
     try steps.append(b.allocator, &b.addInstallFile(
         b.path("images/gnome/32.png"),
-        "share/icons/hicolor/32x32/apps/com.mitchellh.ghostty.png",
+        "share/icons/hicolor/32x32/apps/com.leongong.ghodex.png",
     ).step);
     try steps.append(b.allocator, &b.addInstallFile(
         b.path("images/gnome/128.png"),
-        "share/icons/hicolor/128x128/apps/com.mitchellh.ghostty.png",
+        "share/icons/hicolor/128x128/apps/com.leongong.ghodex.png",
     ).step);
     try steps.append(b.allocator, &b.addInstallFile(
         b.path("images/gnome/256.png"),
-        "share/icons/hicolor/256x256/apps/com.mitchellh.ghostty.png",
+        "share/icons/hicolor/256x256/apps/com.leongong.ghodex.png",
     ).step);
     try steps.append(b.allocator, &b.addInstallFile(
         b.path("images/gnome/512.png"),
-        "share/icons/hicolor/512x512/apps/com.mitchellh.ghostty.png",
+        "share/icons/hicolor/512x512/apps/com.leongong.ghodex.png",
     ).step);
     // Flatpaks only support icons up to 512x512.
     if (!cfg.flatpak) {
         try steps.append(b.allocator, &b.addInstallFile(
             b.path("images/gnome/1024.png"),
-            "share/icons/hicolor/1024x1024/apps/com.mitchellh.ghostty.png",
+            "share/icons/hicolor/1024x1024/apps/com.leongong.ghodex.png",
         ).step);
     }
 
     try steps.append(b.allocator, &b.addInstallFile(
         b.path("images/gnome/32.png"),
-        "share/icons/hicolor/16x16@2/apps/com.mitchellh.ghostty.png",
+        "share/icons/hicolor/16x16@2/apps/com.leongong.ghodex.png",
     ).step);
     try steps.append(b.allocator, &b.addInstallFile(
         b.path("images/gnome/64.png"),
-        "share/icons/hicolor/32x32@2/apps/com.mitchellh.ghostty.png",
+        "share/icons/hicolor/32x32@2/apps/com.leongong.ghodex.png",
     ).step);
     try steps.append(b.allocator, &b.addInstallFile(
         b.path("images/gnome/256.png"),
-        "share/icons/hicolor/128x128@2/apps/com.mitchellh.ghostty.png",
+        "share/icons/hicolor/128x128@2/apps/com.leongong.ghodex.png",
     ).step);
     try steps.append(b.allocator, &b.addInstallFile(
         b.path("images/gnome/512.png"),
-        "share/icons/hicolor/256x256@2/apps/com.mitchellh.ghostty.png",
+        "share/icons/hicolor/256x256@2/apps/com.leongong.ghodex.png",
     ).step);
 }
 

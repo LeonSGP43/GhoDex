@@ -5,11 +5,14 @@ import SwiftUI
 final class NewTabPickerController: NSWindowController {
     private let store: AITerminalManagerStore
     private let theme = GhosttyChromeTheme()
+    private let hostingView: NSHostingView<AnyView>
     private var configObserver: NSObjectProtocol?
     private weak var referenceWindow: NSWindow?
+    private var presentationID = UUID()
 
     init(store: AITerminalManagerStore) {
         self.store = store
+        self.hostingView = NSHostingView(rootView: AnyView(EmptyView()))
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 620, height: 520),
@@ -24,19 +27,10 @@ final class NewTabPickerController: NSWindowController {
         window.standardWindowButton(.zoomButton)?.isHidden = true
         window.standardWindowButton(.miniaturizeButton)?.isHidden = true
         window.minSize = NSSize(width: 560, height: 460)
-        window.contentView = NSHostingView(
-            rootView: NewTabPickerView(onClose: { [weak window] in
-                if let sheetParent = window?.sheetParent, let window {
-                    sheetParent.endSheet(window)
-                } else {
-                    window?.close()
-                }
-            })
-            .environmentObject(store)
-            .environmentObject(theme)
-        )
+        window.contentView = hostingView
 
         super.init(window: window)
+        hostingView.rootView = makeRootView()
 
         configObserver = NotificationCenter.default.addObserver(
             forName: .ghosttyConfigDidChange,
@@ -60,9 +54,19 @@ final class NewTabPickerController: NSWindowController {
         }
     }
 
-    func show(relativeTo parentWindow: NSWindow?) {
+    func show(
+        relativeTo parentWindow: NSWindow?,
+        title: String = L10n.AITerminalManager.newTab,
+        subtitle: String = L10n.SSHConnections.newTabPickerSubtitle,
+        onOpenHost: ((AITerminalHost) -> Void)? = nil
+    ) {
         store.refresh()
         referenceWindow = parentWindow
+        presentationID = UUID()
+        hostingView.rootView = makeRootView(
+            title: title,
+            subtitle: subtitle,
+            onOpenHost: onOpenHost)
         syncChrome()
 
         guard let window else { return }
@@ -82,6 +86,31 @@ final class NewTabPickerController: NSWindowController {
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func makeRootView(
+        title: String = L10n.AITerminalManager.newTab,
+        subtitle: String = L10n.SSHConnections.newTabPickerSubtitle,
+        onOpenHost: ((AITerminalHost) -> Void)? = nil
+    ) -> AnyView {
+        AnyView(
+            NewTabPickerView(
+                title: title,
+                subtitle: subtitle,
+                onClose: { [weak self] in
+                    guard let window = self?.window else { return }
+                    if let sheetParent = window.sheetParent {
+                        sheetParent.endSheet(window)
+                    } else {
+                        window.close()
+                    }
+                },
+                onOpenHost: onOpenHost
+            )
+            .id(presentationID)
+            .environmentObject(store)
+            .environmentObject(theme)
+        )
     }
 
     private func syncChrome() {

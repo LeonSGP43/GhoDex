@@ -1,6 +1,6 @@
 import AppKit
 import AppIntents
-import GhosttyKit
+import GhoDexKit
 
 struct FocusTerminalIntent: AppIntent {
     static var title: LocalizedStringResource = "Focus Terminal"

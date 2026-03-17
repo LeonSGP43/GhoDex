@@ -6,7 +6,7 @@ supports.
 
 This README is meant as developer documentation and not as
 user documentation. For user documentation, see the main
-README or [ghostty.org](https://ghostty.org/docs)
+README or [GhoDex docs](https://github.com/LeonSGP43/GhoDex#readme)
 
 ## Implementation Details
 

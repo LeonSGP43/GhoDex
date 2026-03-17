@@ -1,5 +1,5 @@
 import Foundation
-import GhosttyKit
+import GhoDexKit
 
 enum AITerminalManagedState: String, Codable, CaseIterable, Sendable {
     case manual

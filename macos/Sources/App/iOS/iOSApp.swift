@@ -1,5 +1,5 @@
 import SwiftUI
-import GhosttyKit
+import GhoDexKit
 
 @main
 struct Ghostty_iOSApp: App {

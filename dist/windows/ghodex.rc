@@ -2,10 +2,10 @@
 LANGUAGE 0, 0
 
 #define RT_MANIFEST 1
-RT_MANIFEST 24 "ghostty.manifest"
+RT_MANIFEST 24 "ghodex.manifest"
 
-#define ID_ICON_GHOSTTY 1
-ID_ICON_GHOSTTY ICON "ghostty.ico"
+#define ID_ICON_GHODEX 1
+ID_ICON_GHODEX ICON "ghodex.ico"
 
 VS_VERSION_INFO VERSIONINFO
 //FILEVERSION     VERSION_MAJOR,VERSION_MINOR,VERSION_PATCH,VERSION_COMMIT_HEIGHT
@@ -24,7 +24,7 @@ BEGIN
         //VALUE "FileDescription",    "???"
         //VALUE "FileVersion",        VERSION
         //VALUE "LegalCopyright",     "(C) 2024 ???"
-        VALUE "OriginalFilename", "ghostty.exe"
+        VALUE "OriginalFilename", "ghodex.exe"
         VALUE "ProductName",        "GhoDex"
         //VALUE "ProductVersion",     VERSION
         END

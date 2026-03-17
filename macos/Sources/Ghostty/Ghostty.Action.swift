@@ -1,5 +1,5 @@
 import SwiftUI
-import GhosttyKit
+import GhoDexKit
 
 extension Ghostty {
     struct Action {}

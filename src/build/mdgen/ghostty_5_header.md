@@ -1,18 +1,18 @@
-% GHOSTTY(5) Version @@VERSION@@ | GhoDex terminal emulator configuration file
+% GHODEX(5) Version @@VERSION@@ | GhoDex terminal emulator configuration file
 
 # NAME
 
-**ghostty** - GhoDex terminal emulator configuration file
+**ghodex** - GhoDex terminal emulator configuration file
 
 # DESCRIPTION
 
 To configure GhoDex, you must use a configuration file. GUI-based configuration
 is on the roadmap but not yet supported. The configuration file must be placed
-at `$XDG_CONFIG_HOME/ghostty/config.ghostty`, which defaults to `~/.config/ghostty/config.ghostty`
+at `$XDG_CONFIG_HOME/ghodex/config.ghodex`, which defaults to `~/.config/ghodex/config.ghodex`
 if the [XDG environment is not set](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html).
 
 **If you are using macOS, the configuration file can also be placed at
-`$HOME/Library/Application Support/com.mitchellh.ghostty/config.ghostty`.** This is the
+`$HOME/Library/Application Support/com.leongong.ghodex/config.ghodex`.** This is the
 default configuration location for macOS. It will be searched before any of the
 XDG environment locations listed above.
 
@@ -56,7 +56,7 @@ The file format is documented below as an example:
     palette = 15=#fbf1c7
 
 You can view all available configuration options and their documentation by
-executing the command `ghostty +show-config --default --docs`. Note that this will
+executing the command `ghodex +show-config --default --docs`. Note that this will
 output the full default configuration with docs to stdout, so you may want to
 pipe that through a pager, an editor, etc.
 
@@ -86,7 +86,7 @@ encountered. Configuration errors are also shown in a dedicated window on both
 macOS and Linux (GTK). GhoDex does not treat configuration errors as fatal and
 will fall back to default values for erroneous keys.
 
-You can also view the full configuration GhoDex is loading using `ghostty
+You can also view the full configuration GhoDex is loading using `ghodex
 +show-config` from the command-line. Use the `--help` flag to additional options
 for that command.
 
@@ -98,11 +98,11 @@ logs sent to `stderr` may be stored by the system and made available for later
 retrieval.
 
 On Linux if GhoDex is launched by the default `systemd` user service, you can use
-`journald` to see GhoDex's logs: `journalctl --user --unit app-com.mitchellh.ghostty.service`.
+`journald` to see GhoDex's logs: `journalctl --user --unit app-com.leongong.ghodex.service`.
 
 On macOS logging to the macOS unified log is available and enabled by default.
 --Use the system `log` CLI to view GhoDex's logs: `sudo log stream --level debug
---predicate 'subsystem=="com.mitchellh.ghostty"'`.
+--predicate 'subsystem=="com.leongong.ghodex"'`.
 
 GhoDex's logging can be configured in two ways. The first is by what
 optimization level GhoDex is compiled with. If GhoDex is compiled with `Debug`

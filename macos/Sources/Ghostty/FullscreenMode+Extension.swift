@@ -1,4 +1,4 @@
-import GhosttyKit
+import GhoDexKit
 
 extension FullscreenMode {
     /// Initialize from a Ghostty fullscreen action.

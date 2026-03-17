@@ -3,7 +3,7 @@ import SwiftUI
 import UserNotifications
 import OSLog
 import Sparkle
-import GhosttyKit
+import GhoDexKit
 
 class AppDelegate: NSObject,
                     ObservableObject,
@@ -273,6 +273,11 @@ class AppDelegate: NSObject,
             self,
             selector: #selector(ghosttyNewTab(_:)),
             name: Ghostty.Notification.ghosttyNewTab,
+            object: nil)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(ghosttyNewPaneTab(_:)),
+            name: Ghostty.Notification.ghosttyNewPaneTab,
             object: nil)
 
         // Configure user notifications
@@ -642,7 +647,7 @@ class AppDelegate: NSObject,
         syncMenuShortcut(config, action: "quit", menuItem: self.menuQuit)
 
         syncMenuShortcut(config, action: "new_window", menuItem: self.menuNewWindow)
-        syncMenuShortcut(config, action: "new_tab", menuItem: self.menuNewTab)
+        clearMenuShortcut(self.menuNewTab)
         syncMenuShortcut(config, action: "close_surface", menuItem: self.menuClose)
         syncMenuShortcut(config, action: "close_tab", menuItem: self.menuCloseTab)
         syncMenuShortcut(config, action: "close_window", menuItem: self.menuCloseWindow)
@@ -708,13 +713,18 @@ class AppDelegate: NSObject,
         guard let menu = menuItem else { return }
         guard let shortcut = config.keyboardShortcut(for: action) else {
             // No shortcut, clear the menu item
-            menu.keyEquivalent = ""
-            menu.keyEquivalentModifierMask = []
+            clearMenuShortcut(menu)
             return
         }
 
         menu.keyEquivalent = shortcut.key.character.description
         menu.keyEquivalentModifierMask = .init(swiftUIFlags: shortcut.modifiers)
+    }
+
+    private func clearMenuShortcut(_ menuItem: NSMenuItem?) {
+        guard let menuItem else { return }
+        menuItem.keyEquivalent = ""
+        menuItem.keyEquivalentModifierMask = []
     }
 
     // MARK: Notifications and Events
@@ -924,18 +934,28 @@ class AppDelegate: NSObject,
         _ = TerminalController.newWindow(ghostty, withBaseConfig: config)
     }
 
-    @objc private func ghosttyNewTab(_ notification: Notification) {
+    @MainActor @objc private func ghosttyNewTab(_ notification: Notification) {
         guard let surfaceView = notification.object as? Ghostty.SurfaceView else { return }
         guard let window = surfaceView.window else { return }
 
-        // We only want to listen to new tabs if the focused parent is
-        // a regular terminal controller.
+        // Keep keyboard-triggered new-tab actions aligned with the picker flow
+        // used by the menu and tab-bar affordances in the sidebar workspace UI.
         guard window.windowController is TerminalController else { return }
+        showNewTabPicker(from: selectedTerminalWindow(for: window) ?? window)
+    }
 
-        let configAny = notification.userInfo?[Ghostty.Notification.NewSurfaceConfigKey]
-        let config = configAny as? Ghostty.SurfaceConfiguration
+    @MainActor @objc private func ghosttyNewPaneTab(_ notification: Notification) {
+        let notificationSurface = notification.object as? Ghostty.SurfaceView
+        let notificationWindow = selectedTerminalWindow(for: notificationSurface?.window)
+        let notificationController = selectedTerminalController(for: notificationWindow)
 
-        _ = TerminalController.newTab(ghostty, from: window, withBaseConfig: config)
+        guard let controller = activeTerminalController(preferred: notificationWindow)
+            ?? notificationController else { return }
+
+        let window = selectedTerminalWindow(for: controller.window) ?? notificationWindow
+        guard let sourceSurface = activePaneSurface(in: controller) else { return }
+
+        showNewPaneTabPicker(from: window, in: controller, sourceSurface: sourceSurface)
     }
 
     private func setDockBadge() {
@@ -976,7 +996,7 @@ class AppDelegate: NSObject,
                 autoUpdate == .download
             /*
              To test `auto-update` easily, uncomment the line below and
-             delete `SUEnableAutomaticChecks` in Ghostty-Info.plist.
+             delete `SUEnableAutomaticChecks` in GhoDex-Info.plist.
 
              Note: When `auto-update = download`, you may need to
              `Clean Build Folder` if a background install has already begun.
@@ -1113,7 +1133,7 @@ class AppDelegate: NSObject,
 
     func findSurface(forUUID uuid: UUID) -> Ghostty.SurfaceView? {
         for c in TerminalController.all {
-            for view in c.surfaceTree where view.id == uuid {
+            for view in c.allSurfaces where view.id == uuid {
                 return view
             }
         }
@@ -1181,6 +1201,22 @@ class AppDelegate: NSObject,
         showNewTabPicker(from: TerminalController.preferredParent?.window ?? NSApp.keyWindow)
     }
 
+    @IBAction func newPaneTab(_ sender: Any?) {
+        activeTerminalController()?.newPaneTab(sender)
+    }
+
+    @IBAction func changeTitleContext(_ sender: Any?) {
+        activeTerminalController()?.changeTitleContext(sender)
+    }
+
+    @IBAction func previousPaneTab(_ sender: Any?) {
+        activeTerminalController()?.previousPaneTab(sender)
+    }
+
+    @IBAction func nextPaneTab(_ sender: Any?) {
+        activeTerminalController()?.nextPaneTab(sender)
+    }
+
     @MainActor
     func showNewTabPicker(from window: NSWindow?) {
         if let window {
@@ -1189,6 +1225,63 @@ class AppDelegate: NSObject,
         }
 
         aiTerminalManagerStore.openLocalShell(launchTarget: .window)
+    }
+
+    @MainActor
+    func showNewPaneTabPicker(
+        from window: NSWindow?,
+        in controller: TerminalController,
+        sourceSurface: Ghostty.SurfaceView
+    ) {
+        let openHost = { [weak self, weak controller, weak sourceSurface] (host: AITerminalHost) in
+            guard let self, let controller, let sourceSurface else { return }
+            self.aiTerminalManagerStore.openInPaneTab(host: host, controller: controller, sourceSurface: sourceSurface)
+        }
+
+        if let window {
+            newTabPickerController.show(
+                relativeTo: window,
+                title: AppLocalization.localizedText("New Pane Tab"),
+                subtitle: L10n.SSHConnections.newTabPickerSubtitle,
+                onOpenHost: openHost)
+            return
+        }
+
+        aiTerminalManagerStore.openInPaneTab(host: .local, controller: controller, sourceSurface: sourceSurface)
+    }
+
+    private func activeTerminalController(preferred window: NSWindow? = nil) -> TerminalController? {
+        if let controller = selectedTerminalController(for: window) {
+            return controller
+        }
+
+        if let controller = selectedTerminalController(for: NSApp.keyWindow) {
+            return controller
+        }
+
+        if let controller = selectedTerminalController(for: NSApp.mainWindow) {
+            return controller
+        }
+
+        if let controller = selectedTerminalController(for: TerminalController.preferredParent?.window) {
+            return controller
+        }
+
+        return TerminalController.preferredParent
+    }
+
+    private func selectedTerminalController(for window: NSWindow?) -> TerminalController? {
+        selectedTerminalWindow(for: window)?.windowController as? TerminalController
+    }
+
+    private func selectedTerminalWindow(for window: NSWindow?) -> NSWindow? {
+        window?.tabGroup?.selectedWindow ?? window
+    }
+
+    private func activePaneSurface(
+        in controller: TerminalController
+    ) -> Ghostty.SurfaceView? {
+        controller.effectiveFocusedSurface().flatMap { controller.pane(for: $0)?.activeSurface ?? $0 }
     }
 
     @IBAction func closeAllWindows(_ sender: Any?) {
@@ -1201,7 +1294,7 @@ class AppDelegate: NSObject,
     }
 
     @IBAction func showHelp(_ sender: Any) {
-        guard let url = URL(string: "https://ghostty.org/docs") else { return }
+        guard let url = URL(string: "https://github.com/LeonSGP43/GhoDex#readme") else { return }
         NSWorkspace.shared.open(url)
     }
 

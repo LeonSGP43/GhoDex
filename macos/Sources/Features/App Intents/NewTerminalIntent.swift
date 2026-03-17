@@ -1,6 +1,6 @@
 import AppKit
 import AppIntents
-import GhosttyKit
+import GhoDexKit
 
 /// App intent that allows creating a new terminal window or tab.
 ///
@@ -88,7 +88,7 @@ struct NewTerminalIntent: AppIntent {
 
             parent = view
         } else if let preferred = TerminalController.preferredParent {
-            parent = preferred.focusedSurface ?? preferred.surfaceTree.root?.leftmostLeaf()
+            parent = preferred.focusedSurface ?? preferred.surfaceTree.leftmostActiveSurface()
         } else {
             parent = nil
         }
@@ -104,7 +104,7 @@ struct NewTerminalIntent: AppIntent {
                 ghostty,
                 withBaseConfig: config,
                 withParent: parent?.window)
-            if let view = newController.surfaceTree.root?.leftmostLeaf() {
+            if let view = newController.surfaceTree.leftmostActiveSurface() {
                 return .result(value: TerminalEntity(view))
             }
 
@@ -113,7 +113,7 @@ struct NewTerminalIntent: AppIntent {
                 ghostty,
                 from: parent?.window,
                 withBaseConfig: config)
-            if let view = newController?.surfaceTree.root?.leftmostLeaf() {
+            if let view = newController?.surfaceTree.leftmostActiveSurface() {
                 return .result(value: TerminalEntity(view))
             }
 
@@ -144,7 +144,7 @@ enum NewTerminalLocation: String {
     case splitUp = "split:up"
     case splitDown = "split:down"
 
-    var splitDirection: SplitTree<Ghostty.SurfaceView>.NewDirection? {
+    var splitDirection: SplitTree<TerminalPane>.NewDirection? {
         switch self {
         case .splitLeft: return .left
         case .splitRight: return .right

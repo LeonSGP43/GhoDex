@@ -1,6 +1,6 @@
 import AppKit
 import SwiftUI
-import GhosttyKit
+import GhoDexKit
 
 /// The base class for all standalone, "normal" terminal windows. This sets the basic
 /// style and configuration of the window based on the app configuration.
@@ -198,11 +198,29 @@ class TerminalWindow: NSWindow {
     override var canBecomeMain: Bool { return true }
 
     override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown,
+           isKeyWindow,
+           terminalController?.handlePaneTabShortcutEvent(event) == true {
+            return
+        }
+
         if tabTitleEditor.handleMouseDown(event) {
             return
         }
 
         super.sendEvent(event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // Pane-local shortcuts that still live in the window/controller layer
+        // must win before AppKit routes command-key events into the main menu.
+        if event.type == .keyDown,
+           isKeyWindow,
+           terminalController?.handlePaneTabShortcutEvent(event) == true {
+            return true
+        }
+
+        return super.performKeyEquivalent(with: event)
     }
 
     override func close() {
@@ -531,12 +549,13 @@ class TerminalWindow: NSWindow {
             // If our focused surface borders the top then we prefer its background color
             if let focusedSurface = terminalController.focusedSurface,
                let treeRoot = terminalController.surfaceTree.root,
-               let focusedNode = treeRoot.node(view: focusedSurface),
+               let focusedPane = terminalController.pane(for: focusedSurface),
+               let focusedNode = treeRoot.node(view: focusedPane),
                treeRoot.spatial().doesBorder(side: .up, from: focusedNode) {
                 surface = focusedSurface
             } else {
                 // If it doesn't border the top, we use the top-left leaf
-                surface = terminalController.surfaceTree.root?.leftmostLeaf()
+                surface = terminalController.surfaceTree.root?.leftmostLeaf().activeSurface
             }
 
             if let surface {
@@ -730,11 +749,11 @@ private struct TabBellIndicatorView: View {
 // MARK: - Tab Context Menu
 
 extension TerminalWindow {
-    private static let closeTabsOnRightMenuItemIdentifier = NSUserInterfaceItemIdentifier("com.mitchellh.ghostty.closeTabsOnTheRightMenuItem")
-    private static let changeTitleMenuItemIdentifier = NSUserInterfaceItemIdentifier("com.mitchellh.ghostty.changeTitleMenuItem")
-    private static let tabColorSeparatorIdentifier = NSUserInterfaceItemIdentifier("com.mitchellh.ghostty.tabColorSeparator")
+    private static let closeTabsOnRightMenuItemIdentifier = NSUserInterfaceItemIdentifier("com.leongong.ghodex.closeTabsOnTheRightMenuItem")
+    private static let changeTitleMenuItemIdentifier = NSUserInterfaceItemIdentifier("com.leongong.ghodex.changeTitleMenuItem")
+    private static let tabColorSeparatorIdentifier = NSUserInterfaceItemIdentifier("com.leongong.ghodex.tabColorSeparator")
 
-    private static let tabColorPaletteIdentifier = NSUserInterfaceItemIdentifier("com.mitchellh.ghostty.tabColorPalette")
+    private static let tabColorPaletteIdentifier = NSUserInterfaceItemIdentifier("com.leongong.ghodex.tabColorPalette")
 
     func configureTabContextMenuIfNeeded(_ menu: NSMenu) {
         guard isTabContextMenu(menu) else { return }

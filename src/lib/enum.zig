@@ -104,7 +104,7 @@ pub fn checkGhosttyHEnum(comptime T: type, comptime prefix: []const u8) !void {
 
     @setEvalBranchQuota(1000000);
 
-    const c = @import("ghostty.h");
+    const c = @import("ghodex.h");
 
     var set: std.EnumSet(T) = .initFull();
 
@@ -138,7 +138,7 @@ pub fn checkGhosttyHEnum(comptime T: type, comptime prefix: []const u8) !void {
         while (it.next()) |v| {
             var buf: [128]u8 = undefined;
             const upper_string = std.ascii.upperString(&buf, @tagName(v));
-            std.log.err("ghostty.h is missing value for {s}{s}", .{ prefix, upper_string });
+            std.log.err("ghodex.h is missing value for {s}{s}", .{ prefix, upper_string });
         }
         return e;
     };

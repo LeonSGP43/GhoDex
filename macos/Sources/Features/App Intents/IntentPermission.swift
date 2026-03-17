@@ -44,7 +44,7 @@ func requestIntentPermission() async -> Bool {
             }
 
             PermissionRequest.show(
-                "com.mitchellh.ghostty.shortcutsPermission",
+                "com.leongong.ghodex.shortcutsPermission",
                 message: AppLocalization.localizedText(
                     "Allow Shortcuts to interact with GhoDex?"
                 ),

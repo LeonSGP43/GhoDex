@@ -419,6 +419,12 @@ fn actionCommands(action: Action.Key) []const Command {
             .description = "Open a new tab.",
         }},
 
+        .new_pane_tab => comptime &.{.{
+            .action = .new_pane_tab,
+            .title = "New Pane Tab",
+            .description = "Open a new child tab in the focused pane.",
+        }},
+
         .move_tab => comptime &.{
             .{
                 .action = .{ .move_tab = -1 },
