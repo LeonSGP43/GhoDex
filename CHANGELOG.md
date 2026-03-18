@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(macos): add direct workspace save shortcuts
+
+- What changed: Added `Cmd+Shift+S` as a native `Save Workspace...` shortcut in the File menu and added a `Save Workspace...` action to the native top-level tab right-click context menu.
+- Why: Saving a top-level workspace only through the File menu is too indirect once workspaces become a first-class top-tab concept. The tab context menu and a dedicated shortcut make save intent accessible at the right level of the UI.
+- Impact: Users can now save the current top-level tab layout either from the keyboard or directly from the native tab they are working on, while pane child-tab flows remain workspace-free.
+- Verification: `git diff --check`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS' build`
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/App/macOS/MainMenu.xib`, `macos/Sources/Features/Terminal/Window Styles/TerminalWindow.swift`, `CHANGELOG.md`
+- Decision trail: Keep all save entry points routed through the same `saveWorkspace:` action so validation, naming, and config persistence stay identical. Only top-level native tab UI gets the extra affordance; pane-local tabs still should not expose workspace save semantics.
+
 ### feat(workspaces): save top-level split workspaces into the new-tab picker
 
 - What changed: Added a separate `AITerminalSavedWorkspaceTemplate` model for user-saved top-level workspaces, persisted those templates into the managed `config.ghodex` block, exposed a new `Save Workspace...` file-menu action that captures the current top-level tab's split/panel/child-tab structure, added a Saved Workspaces section to the top-level new-tab picker, kept pane child-tab picker host-only through an explicit picker mode, and added runtime launch logic that rebuilds split panes plus pane-local child tabs from a saved template without routing through `TerminalWorkspaceSnapshot`.

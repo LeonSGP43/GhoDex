@@ -750,6 +750,7 @@ private struct TabBellIndicatorView: View {
 
 extension TerminalWindow {
     private static let closeTabsOnRightMenuItemIdentifier = NSUserInterfaceItemIdentifier("com.leongong.ghodex.closeTabsOnTheRightMenuItem")
+    private static let saveWorkspaceMenuItemIdentifier = NSUserInterfaceItemIdentifier("com.leongong.ghodex.saveWorkspaceMenuItem")
     private static let changeTitleMenuItemIdentifier = NSUserInterfaceItemIdentifier("com.leongong.ghodex.changeTitleMenuItem")
     private static let tabColorSeparatorIdentifier = NSUserInterfaceItemIdentifier("com.leongong.ghodex.tabColorSeparator")
 
@@ -809,6 +810,7 @@ extension TerminalWindow {
     private func appendTabModifierSection(to menu: NSMenu, target: TerminalController?) {
         menu.removeItems(withIdentifiers: [
             Self.tabColorSeparatorIdentifier,
+            Self.saveWorkspaceMenuItemIdentifier,
             Self.changeTitleMenuItemIdentifier,
             Self.tabColorPaletteIdentifier
         ])
@@ -816,6 +818,17 @@ extension TerminalWindow {
         let separator = NSMenuItem.separator()
         separator.identifier = Self.tabColorSeparatorIdentifier
         menu.addItem(separator)
+
+        let saveWorkspaceItem = NSMenuItem(
+            title: AppLocalization.localizedText("Save Workspace..."),
+            action: #selector(AppDelegate.saveWorkspace(_:)),
+            keyEquivalent: ""
+        )
+        saveWorkspaceItem.identifier = Self.saveWorkspaceMenuItemIdentifier
+        saveWorkspaceItem.target = NSApp.delegate
+        saveWorkspaceItem.representedObject = target?.window
+        saveWorkspaceItem.setImageIfDesired(systemSymbolName: "square.and.arrow.down")
+        menu.addItem(saveWorkspaceItem)
 
         // Rename Tab...
         let changeTitleItem = NSMenuItem(

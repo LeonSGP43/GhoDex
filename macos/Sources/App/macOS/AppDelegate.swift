@@ -1206,8 +1206,35 @@ class AppDelegate: NSObject,
     }
 
     @IBAction func saveWorkspace(_ sender: Any?) {
-        guard let controller = activeTerminalController() else { return }
+        guard let controller = saveWorkspaceController(for: sender) else { return }
+        presentSaveWorkspacePrompt(for: controller)
+    }
 
+    @MainActor
+    private func saveWorkspaceController(for sender: Any?) -> TerminalController? {
+        if let controller = sender as? TerminalController {
+            return controller
+        }
+
+        if let window = sender as? NSWindow {
+            return window.windowController as? TerminalController
+        }
+
+        if let menuItem = sender as? NSMenuItem {
+            if let controller = menuItem.representedObject as? TerminalController {
+                return controller
+            }
+
+            if let window = menuItem.representedObject as? NSWindow {
+                return window.windowController as? TerminalController
+            }
+        }
+
+        return activeTerminalController()
+    }
+
+    @MainActor
+    private func presentSaveWorkspacePrompt(for controller: TerminalController) {
         let alert = NSAlert()
         alert.messageText = AppLocalization.localizedText("Save Workspace")
         alert.informativeText = AppLocalization.localizedText("Save the current top-level tab layout so it can be reopened from the New Tab picker.")
@@ -1493,7 +1520,7 @@ extension AppDelegate: NSMenuItemValidation {
             return NSApp.keyWindow is TerminalWindow
 
         case #selector(saveWorkspace(_:)):
-            return activeTerminalController() != nil
+            return saveWorkspaceController(for: item) != nil
 
         case #selector(undo(_:)):
             if undoManager.canUndo {

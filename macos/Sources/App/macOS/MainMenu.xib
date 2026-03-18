@@ -184,7 +184,8 @@
                                     <action selector="newPaneTab:" target="-1" id="KoW-K7-hw5"/>
                                 </connections>
                             </menuItem>
-                            <menuItem title="Save Workspace..." id="T6a-Xn-7L2">
+                            <menuItem title="Save Workspace..." keyEquivalent="S" id="T6a-Xn-7L2">
+                                <modifierMask key="keyEquivalentModifierMask" shift="YES" command="YES"/>
                                 <connections>
                                     <action selector="saveWorkspace:" target="-1" id="Y0K-i5-Y1n"/>
                                 </connections>
