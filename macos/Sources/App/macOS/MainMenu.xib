@@ -51,6 +51,7 @@
                 <outlet property="menuReadonly" destination="xpe-ia-Yjw" id="MMT-Sl-AfD"/>
                 <outlet property="menuRedo" destination="EX8-lB-4s7" id="wON-2J-yT1"/>
                 <outlet property="menuReloadConfig" destination="KKH-XX-5py" id="Wvp-7J-wqX"/>
+                <outlet property="menuSaveWorkspace" destination="T6a-Xn-7L2" id="0iQ-uz-qmT"/>
                 <outlet property="menuResetFontSize" destination="Jah-MY-aLX" id="ger-qM-wrm"/>
                 <outlet property="menuReturnToDefaultSize" destination="Gbx-Vi-OGC" id="po9-qC-Iz6"/>
                 <outlet property="menuSecureInput" destination="oC6-w4-qI7" id="PCc-pe-Mda"/>

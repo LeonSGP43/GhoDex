@@ -29,6 +29,7 @@ class AppDelegate: NSObject,
 
     @IBOutlet private var menuNewWindow: NSMenuItem?
     @IBOutlet private var menuNewTab: NSMenuItem?
+    @IBOutlet private var menuSaveWorkspace: NSMenuItem?
     @IBOutlet private var menuSplitRight: NSMenuItem?
     @IBOutlet private var menuSplitLeft: NSMenuItem?
     @IBOutlet private var menuSplitDown: NSMenuItem?
@@ -318,6 +319,7 @@ class AppDelegate: NSObject,
         }
 
         // Setup our menu
+        setupMenuLocalization()
         setupMenuImages()
 
         // Setup signal handlers
@@ -592,6 +594,12 @@ class AppDelegate: NSObject,
         signals.append(sigusr2)
     }
 
+    /// Setup localized titles for menu items that are created in xib but need
+    /// to track our runtime language selection.
+    private func setupMenuLocalization() {
+        menuSaveWorkspace?.title = L10n.AITerminalManager.saveWorkspaceAction
+    }
+
     /// Setup all the images for our menu items.
     private func setupMenuImages() {
         // Note: This COULD Be done all in the xib file, but I find it easier to
@@ -604,6 +612,7 @@ class AppDelegate: NSObject,
         self.menuSecureInput?.setImageIfDesired(systemSymbolName: "lock.display")
         self.menuNewWindow?.setImageIfDesired(systemSymbolName: "macwindow.badge.plus")
         self.menuNewTab?.setImageIfDesired(systemSymbolName: "macwindow")
+        self.menuSaveWorkspace?.setImageIfDesired(systemSymbolName: "square.and.arrow.down")
         self.menuSplitRight?.setImageIfDesired(systemSymbolName: "rectangle.righthalf.inset.filled")
         self.menuSplitLeft?.setImageIfDesired(systemSymbolName: "rectangle.leadinghalf.inset.filled")
         self.menuSplitUp?.setImageIfDesired(systemSymbolName: "rectangle.tophalf.inset.filled")
@@ -1236,8 +1245,8 @@ class AppDelegate: NSObject,
     @MainActor
     private func presentSaveWorkspacePrompt(for controller: TerminalController) {
         let alert = NSAlert()
-        alert.messageText = AppLocalization.localizedText("Save Workspace")
-        alert.informativeText = AppLocalization.localizedText("Save the current top-level tab layout so it can be reopened from the New Tab picker.")
+        alert.messageText = L10n.AITerminalManager.saveWorkspaceAction
+        alert.informativeText = L10n.AITerminalManager.saveWorkspacePrompt
         alert.alertStyle = .informational
 
         let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
@@ -1245,23 +1254,73 @@ class AppDelegate: NSObject,
             ? controller.titleOverride ?? ""
             : (controller.window?.title ?? "")
         alert.accessoryView = textField
-        alert.addButton(withTitle: AppLocalization.localizedText("Save"))
+        alert.addButton(withTitle: L10n.AITerminalManager.saveWorkspace)
         alert.addButton(withTitle: L10n.Common.cancel)
         alert.window.initialFirstResponder = textField
 
         guard let window = controller.window else { return }
         alert.beginSheetModal(for: window) { [weak self] response in
             guard let self, response == .alertFirstButtonReturn else { return }
-            self.aiTerminalManagerStore.saveCurrentWorkspace(from: controller, name: textField.stringValue)
-            guard let message = self.aiTerminalManagerStore.lastError else { return }
-
-            let errorAlert = NSAlert()
-            errorAlert.messageText = AppLocalization.localizedText("Could Not Save Workspace")
-            errorAlert.informativeText = message
-            errorAlert.alertStyle = .warning
-            errorAlert.addButton(withTitle: L10n.App.ok)
-            errorAlert.beginSheetModal(for: window)
+            self.saveWorkspace(controller, name: textField.stringValue, in: window)
         }
+    }
+
+    @MainActor
+    private func saveWorkspace(
+        _ controller: TerminalController,
+        name: String,
+        in window: NSWindow
+    ) {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let existing = aiTerminalManagerStore.existingSavedWorkspaceTemplate(named: trimmedName) {
+            presentReplaceWorkspacePrompt(
+                for: controller,
+                name: trimmedName,
+                existingTemplate: existing,
+                in: window
+            )
+            return
+        }
+
+        aiTerminalManagerStore.saveCurrentWorkspace(from: controller, name: trimmedName)
+        presentSaveWorkspaceErrorIfNeeded(in: window)
+    }
+
+    @MainActor
+    private func presentReplaceWorkspacePrompt(
+        for controller: TerminalController,
+        name: String,
+        existingTemplate: AITerminalSavedWorkspaceTemplate,
+        in window: NSWindow
+    ) {
+        let alert = NSAlert()
+        alert.messageText = L10n.AITerminalManager.replaceWorkspaceTitle
+        alert.informativeText = L10n.AITerminalManager.replaceWorkspaceMessage(name)
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: L10n.AITerminalManager.replaceWorkspace)
+        alert.addButton(withTitle: L10n.Common.cancel)
+
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            self.aiTerminalManagerStore.saveCurrentWorkspace(
+                from: controller,
+                name: name,
+                replacingID: existingTemplate.id
+            )
+            self.presentSaveWorkspaceErrorIfNeeded(in: window)
+        }
+    }
+
+    @MainActor
+    private func presentSaveWorkspaceErrorIfNeeded(in window: NSWindow) {
+        guard let message = aiTerminalManagerStore.lastError else { return }
+
+        let errorAlert = NSAlert()
+        errorAlert.messageText = L10n.AITerminalManager.couldNotSaveWorkspace
+        errorAlert.informativeText = message
+        errorAlert.alertStyle = .warning
+        errorAlert.addButton(withTitle: L10n.App.ok)
+        errorAlert.beginSheetModal(for: window)
     }
 
     @IBAction func changeTitleContext(_ sender: Any?) {

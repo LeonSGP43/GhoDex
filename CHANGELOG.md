@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(workspaces): confirm before replacing an existing saved workspace
+
+- What changed: Workspace save now detects case-insensitive name collisions before writing, prompts the user to confirm replacement instead of silently overwriting an existing saved workspace, and preserves the existing workspace identity when the user confirms replace.
+- Why: Silent replacement makes saved workspace management unsafe. Users need an explicit conflict decision whenever a save target name already exists.
+- Impact: Saving with a duplicate name now shows a replace confirmation, accidental overwrites are blocked by default, and confirmed replacements keep a stable saved-workspace record instead of creating duplicates.
+- Verification: `git diff --check`; `xcodebuild -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' -only-testing:'GhosttyTests/AITerminalManagerTests/saveWorkspaceTemplateRejectsDuplicateNamesWithoutReplace()' test`; `xcodebuild -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' -only-testing:'GhosttyTests/AITerminalManagerTests/saveWorkspaceTemplateReplacesExistingTemplateWhenRequested()' test`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS' build`
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Features/AI Terminal Manager/AITerminalManagerStore.swift`, `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`, `CHANGELOG.md`
+- Decision trail: Keep duplicate-name enforcement in the store so all callers get the same safety, and layer the replace confirmation in AppKit so the user can explicitly choose overwrite only when they initiated a save.
+
 ### feat(macos): add direct workspace save shortcuts
 
 - What changed: Added `Cmd+Shift+S` as a native `Save Workspace...` shortcut in the File menu and added a `Save Workspace...` action to the native top-level tab right-click context menu.

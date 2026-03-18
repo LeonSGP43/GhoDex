@@ -1239,6 +1239,66 @@ struct AITerminalManagerTests {
         #expect(configuration.savedWorkspaceTemplates == [workspace])
     }
 
+    @Test @MainActor func saveWorkspaceTemplateRejectsDuplicateNamesWithoutReplace() {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        let root = AITerminalSavedWorkspaceNode.pane(.init(tabs: [
+            .init(hostID: "local", directory: "/tmp/app"),
+        ]))
+
+        #expect(store.saveWorkspaceTemplate(name: "Infra", root: root))
+        #expect(store.saveWorkspaceTemplate(name: "infra", root: root) == false)
+        #expect(store.configuration.savedWorkspaceTemplates.count == 1)
+        #expect(store.existingSavedWorkspaceTemplate(named: "INFRA")?.name == "Infra")
+    }
+
+    @Test @MainActor func saveWorkspaceTemplateReplacesExistingTemplateWhenRequested() {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        let originalRoot = AITerminalSavedWorkspaceNode.pane(.init(tabs: [
+            .init(hostID: "local", directory: "/tmp/app"),
+        ]))
+        let replacementRoot = AITerminalSavedWorkspaceNode.split(.init(
+            direction: .horizontal,
+            ratio: 0.5,
+            left: .pane(.init(tabs: [
+                .init(hostID: "local", directory: "/tmp/app"),
+            ])),
+            right: .pane(.init(tabs: [
+                .init(hostID: "ssh:buildbox", directory: "/srv/app"),
+            ]))
+        ))
+
+        #expect(store.saveWorkspaceTemplate(name: "Infra", root: originalRoot))
+        guard let original = store.existingSavedWorkspaceTemplate(named: "Infra") else {
+            Issue.record("Expected original saved workspace to exist")
+            return
+        }
+
+        #expect(store.saveWorkspaceTemplate(name: "Infra", root: replacementRoot, replacingID: original.id))
+        guard let replaced = store.existingSavedWorkspaceTemplate(named: "Infra") else {
+            Issue.record("Expected replaced saved workspace to exist")
+            return
+        }
+        #expect(store.configuration.savedWorkspaceTemplates.count == 1)
+        #expect(replaced.id == original.id)
+        #expect(replaced.root == replacementRoot)
+    }
+
     @Test @MainActor func storeSavesHostWithoutExplicitName() {
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)

@@ -820,7 +820,7 @@ extension TerminalWindow {
         menu.addItem(separator)
 
         let saveWorkspaceItem = NSMenuItem(
-            title: AppLocalization.localizedText("Save Workspace..."),
+            title: L10n.AITerminalManager.saveWorkspaceAction,
             action: #selector(AppDelegate.saveWorkspace(_:)),
             keyEquivalent: ""
         )

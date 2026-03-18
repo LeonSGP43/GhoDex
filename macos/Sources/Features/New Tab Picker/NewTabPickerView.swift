@@ -56,7 +56,7 @@ struct NewTabPickerView: View {
                         }
 
                         if !savedWorkspaceEntries.isEmpty {
-                            section(title: "Saved Workspaces", entries: savedWorkspaceEntries)
+                            section(title: L10n.AITerminalManager.savedWorkspacesSection, entries: savedWorkspaceEntries)
                         }
 
                         if !importedEntries.isEmpty {
@@ -352,7 +352,7 @@ struct NewTabPickerView: View {
         case .imported:
             return L10n.AITerminalManager.importedHostSource
         case .savedWorkspaces:
-            return "Saved Workspace"
+            return L10n.AITerminalManager.savedWorkspaceItem
         }
     }
 

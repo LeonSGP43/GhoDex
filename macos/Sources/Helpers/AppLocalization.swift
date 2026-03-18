@@ -104,6 +104,13 @@ enum AppLocalization {
         "ai.manager.workspaces.host": "Host",
         "ai.manager.workspaces.directory": "Directory",
         "ai.manager.workspaces.save": "Save Workspace",
+        "ai.manager.workspaces.save_action": "Save Workspace...",
+        "ai.manager.workspaces.save_prompt": "Save the current top-level tab layout so it can be reopened from the New Tab picker.",
+        "ai.manager.workspaces.saved_section": "Saved Workspaces",
+        "ai.manager.workspaces.saved_item": "Saved Workspace",
+        "ai.manager.workspaces.replace_title": "Workspace Already Exists",
+        "ai.manager.workspaces.replace_message": "A workspace named \"%@\" already exists. Do you want to replace it?",
+        "ai.manager.workspaces.replace": "Replace",
         "ai.manager.workspaces.empty": "No workspaces saved yet.",
         "ai.manager.open": "Open",
         "ai.manager.sessions": "Sessions",
@@ -147,6 +154,11 @@ enum AppLocalization {
         "ai.manager.error.local_mcd_commands_empty": "Provide at least one startup command.",
         "ai.manager.error.workspace_name_empty": "Workspace name cannot be empty.",
         "ai.manager.error.workspace_directory_empty": "Workspace directory cannot be empty.",
+        "ai.manager.error.workspace_empty": "Workspace is empty.",
+        "ai.manager.error.workspace_duplicate_name": "A workspace with this name already exists.",
+        "ai.manager.error.saved_workspace_empty_pane": "Saved workspace contains an empty pane.",
+        "ai.manager.error.saved_workspace_unknown_host": "Saved workspace references an unknown host.",
+        "ai.manager.error.could_not_save_workspace": "Could Not Save Workspace",
         "ai.manager.error.session_unavailable": "The selected terminal session is no longer available.",
         "ai.manager.error.input_empty": "Input cannot be empty.",
         "ai.manager.error.command_empty": "Command cannot be empty.",
@@ -408,6 +420,13 @@ enum AppLocalization {
         "ai.manager.workspaces.host": "主机",
         "ai.manager.workspaces.directory": "目录",
         "ai.manager.workspaces.save": "保存工作区",
+        "ai.manager.workspaces.save_action": "保存工作区...",
+        "ai.manager.workspaces.save_prompt": "保存当前顶层标签页布局，以便后续从新建标签选择器中重新打开。",
+        "ai.manager.workspaces.saved_section": "已保存工作区",
+        "ai.manager.workspaces.saved_item": "已保存工作区",
+        "ai.manager.workspaces.replace_title": "工作区已存在",
+        "ai.manager.workspaces.replace_message": "名为“%@”的工作区已存在。要替换它吗？",
+        "ai.manager.workspaces.replace": "替换",
         "ai.manager.workspaces.empty": "还没有保存任何工作区。",
         "ai.manager.open": "打开",
         "ai.manager.sessions": "会话",
@@ -451,6 +470,11 @@ enum AppLocalization {
         "ai.manager.error.local_mcd_commands_empty": "请至少填写一条启动命令。",
         "ai.manager.error.workspace_name_empty": "工作区名称不能为空。",
         "ai.manager.error.workspace_directory_empty": "工作区目录不能为空。",
+        "ai.manager.error.workspace_empty": "工作区为空。",
+        "ai.manager.error.workspace_duplicate_name": "已存在同名工作区。",
+        "ai.manager.error.saved_workspace_empty_pane": "已保存工作区包含空面板。",
+        "ai.manager.error.saved_workspace_unknown_host": "已保存工作区引用了未知主机。",
+        "ai.manager.error.could_not_save_workspace": "无法保存工作区",
         "ai.manager.error.session_unavailable": "选中的终端会话已不可用。",
         "ai.manager.error.input_empty": "输入不能为空。",
         "ai.manager.error.command_empty": "命令不能为空。",
@@ -1391,6 +1415,13 @@ enum L10n {
         nonisolated static var host: String { AppLocalization.localizedString("ai.manager.workspaces.host") }
         nonisolated static var directory: String { AppLocalization.localizedString("ai.manager.workspaces.directory") }
         nonisolated static var saveWorkspace: String { AppLocalization.localizedString("ai.manager.workspaces.save") }
+        nonisolated static var saveWorkspaceAction: String { AppLocalization.localizedString("ai.manager.workspaces.save_action") }
+        nonisolated static var saveWorkspacePrompt: String { AppLocalization.localizedString("ai.manager.workspaces.save_prompt") }
+        nonisolated static var savedWorkspacesSection: String { AppLocalization.localizedString("ai.manager.workspaces.saved_section") }
+        nonisolated static var savedWorkspaceItem: String { AppLocalization.localizedString("ai.manager.workspaces.saved_item") }
+        nonisolated static var replaceWorkspaceTitle: String { AppLocalization.localizedString("ai.manager.workspaces.replace_title") }
+        nonisolated static func replaceWorkspaceMessage(_ name: String) -> String { AppLocalization.localizedString("ai.manager.workspaces.replace_message", name) }
+        nonisolated static var replaceWorkspace: String { AppLocalization.localizedString("ai.manager.workspaces.replace") }
         nonisolated static var workspacesEmpty: String { AppLocalization.localizedString("ai.manager.workspaces.empty") }
         nonisolated static var open: String { AppLocalization.localizedString("ai.manager.open") }
         nonisolated static var sessions: String { AppLocalization.localizedString("ai.manager.sessions") }
@@ -1434,6 +1465,11 @@ enum L10n {
         nonisolated static var localMCDCommandsEmpty: String { AppLocalization.localizedString("ai.manager.error.local_mcd_commands_empty") }
         nonisolated static var workspaceNameEmpty: String { AppLocalization.localizedString("ai.manager.error.workspace_name_empty") }
         nonisolated static var workspaceDirectoryEmpty: String { AppLocalization.localizedString("ai.manager.error.workspace_directory_empty") }
+        nonisolated static var workspaceEmpty: String { AppLocalization.localizedString("ai.manager.error.workspace_empty") }
+        nonisolated static var workspaceDuplicateName: String { AppLocalization.localizedString("ai.manager.error.workspace_duplicate_name") }
+        nonisolated static var savedWorkspaceEmptyPane: String { AppLocalization.localizedString("ai.manager.error.saved_workspace_empty_pane") }
+        nonisolated static var savedWorkspaceUnknownHost: String { AppLocalization.localizedString("ai.manager.error.saved_workspace_unknown_host") }
+        nonisolated static var couldNotSaveWorkspace: String { AppLocalization.localizedString("ai.manager.error.could_not_save_workspace") }
         nonisolated static var sessionUnavailable: String { AppLocalization.localizedString("ai.manager.error.session_unavailable") }
         nonisolated static var inputEmpty: String { AppLocalization.localizedString("ai.manager.error.input_empty") }
         nonisolated static var commandEmpty: String { AppLocalization.localizedString("ai.manager.error.command_empty") }

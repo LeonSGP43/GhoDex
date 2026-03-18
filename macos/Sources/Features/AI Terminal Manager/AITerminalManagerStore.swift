@@ -660,6 +660,14 @@ final class AITerminalManagerStore: ObservableObject {
     }
 
     func saveCurrentWorkspace(from controller: TerminalController, name: String) {
+        saveCurrentWorkspace(from: controller, name: name, replacingID: nil)
+    }
+
+    func saveCurrentWorkspace(
+        from controller: TerminalController,
+        name: String,
+        replacingID: String?
+    ) {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else {
             lastError = L10n.AITerminalManager.workspaceNameEmpty
@@ -667,16 +675,60 @@ final class AITerminalManagerStore: ObservableObject {
         }
 
         guard let root = savedWorkspaceNode(from: controller.surfaceTree.root) else {
-            lastError = "Workspace is empty."
+            lastError = L10n.AITerminalManager.workspaceEmpty
             return
         }
 
-        configuration.savedWorkspaceTemplates.removeAll {
+        _ = saveWorkspaceTemplate(
+            name: trimmedName,
+            root: root,
+            replacingID: replacingID
+        )
+    }
+
+    func existingSavedWorkspaceTemplate(
+        named name: String,
+        excludingID: String? = nil
+    ) -> AITerminalSavedWorkspaceTemplate? {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return nil }
+
+        return configuration.savedWorkspaceTemplates.first {
+            $0.id != excludingID &&
             $0.name.localizedCaseInsensitiveCompare(trimmedName) == .orderedSame
         }
+    }
+
+    @discardableResult
+    func saveWorkspaceTemplate(
+        name: String,
+        root: AITerminalSavedWorkspaceNode,
+        replacingID: String? = nil
+    ) -> Bool {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            lastError = L10n.AITerminalManager.workspaceNameEmpty
+            return false
+        }
+
+        if existingSavedWorkspaceTemplate(named: trimmedName, excludingID: replacingID) != nil {
+            lastError = L10n.AITerminalManager.workspaceDuplicateName
+            return false
+        }
+
+        let existingTemplate = replacingID.flatMap { id in
+            configuration.savedWorkspaceTemplates.first { $0.id == id }
+        }
+
+        configuration.savedWorkspaceTemplates.removeAll {
+            $0.id == replacingID
+        }
         configuration.savedWorkspaceTemplates.append(.init(
+            id: existingTemplate?.id ?? "saved-workspace:\(UUID().uuidString)",
             name: trimmedName,
-            root: root
+            root: root,
+            createdAt: existingTemplate?.createdAt ?? .now,
+            updatedAt: .now
         ))
         configuration.savedWorkspaceTemplates.sort {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
@@ -684,6 +736,7 @@ final class AITerminalManagerStore: ObservableObject {
         lastError = nil
         persistConfiguration()
         rebuildSessions()
+        return true
     }
 
     func removeSavedWorkspaceTemplate(_ template: AITerminalSavedWorkspaceTemplate) {
@@ -745,7 +798,7 @@ final class AITerminalManagerStore: ObservableObject {
         switch node {
         case .pane(let pane):
             guard !pane.tabs.isEmpty else {
-                lastError = "Saved workspace contains an empty pane."
+                lastError = L10n.AITerminalManager.savedWorkspaceEmptyPane
                 return nil
             }
 
@@ -858,7 +911,7 @@ final class AITerminalManagerStore: ObservableObject {
         let hostID = tab.hostID
         let host = hostLookup[hostID] ?? (hostID == AITerminalHost.local.id ? .local : nil)
         guard let host else {
-            lastError = "Saved workspace references an unknown host."
+            lastError = L10n.AITerminalManager.savedWorkspaceUnknownHost
             return nil
         }
 
