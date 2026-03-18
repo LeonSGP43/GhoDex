@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(settings): move Preferences into the Settings Panel
+
+- What changed: Added a dedicated Preferences tab to the existing Settings Panel window, embedded the language/restart settings content there, removed the standalone preferences-window launch path from `AppDelegate`, and removed the separate `Preferences…` app-menu item so this functionality only lives inside the Settings Panel.
+- Why: Preferences and the Settings Panel were split across two separate windows even though both are app-level configuration surfaces. Keeping them separate adds friction and duplicates navigation.
+- Impact: Preferences now live only inside the Settings Panel, which continues to open the main connections/configuration workflow from its existing menu entry. There is no longer a separate app-menu button or standalone preferences window.
+- Verification: `git diff --check`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS' build`
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Features/SSH Connections/SSHConnectionsController.swift`, `macos/Sources/Features/SSH Connections/SSHConnectionsView.swift`, `macos/Sources/Features/Settings/SettingsView.swift`, `CHANGELOG.md`
+- Decision trail: Reuse the existing Settings Panel container instead of maintaining a second window controller. The panel now owns tab selection state so both the app-menu Preferences entry and the Settings Panel menu entry can target the same window with different initial tabs.
+
 ### feat(macos): close pane child tabs with middle click
 
 - What changed: Added middle-click close handling to the native pane child-tab strip so clicking the middle mouse button on a closable pane child tab now triggers the same close path as the existing close affordance.

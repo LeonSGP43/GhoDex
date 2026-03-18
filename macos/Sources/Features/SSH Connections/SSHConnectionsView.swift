@@ -3,24 +3,7 @@ import Foundation
 import SwiftUI
 
 struct SSHConnectionsView: View {
-    private enum CenterTab: String, CaseIterable, Identifiable {
-        case connections
-        case learning
-        case taskQueue
-
-        var id: String { rawValue }
-
-        var title: String {
-            switch self {
-            case .connections:
-                return L10n.SSHConnections.tabConnections
-            case .learning:
-                return L10n.SSHConnections.tabLearning
-            case .taskQueue:
-                return "Task Queue"
-            }
-        }
-    }
+    @ObservedObject private var presentation: SSHConnectionsPresentationState
 
     private enum ConnectionEditorType: String, CaseIterable, Identifiable {
         case ssh
@@ -96,7 +79,7 @@ struct SSHConnectionsView: View {
     @State private var isPresentingEditor = false
     @State private var selectedHostID: String?
     @State private var hostSearchText = ""
-    @State private var selectedTab: CenterTab = .connections
+
     @State private var learningEnabled = true
     @State private var learningChatWorkspacePath = ""
     @State private var learningCommandTemplate = ""
@@ -113,6 +96,17 @@ struct SSHConnectionsView: View {
     @State private var queueScheduleEnabled = false
     @State private var queueExecuteAt = Date().addingTimeInterval(60)
     @State private var queueStatusMessage: String?
+
+    init(presentation: SSHConnectionsPresentationState) {
+        self.presentation = presentation
+    }
+
+    private var selectedTab: Binding<SSHConnectionsPanelTab> {
+        Binding(
+            get: { presentation.selectedTab },
+            set: { presentation.selectedTab = $0 }
+        )
+    }
 
     var body: some View {
         ZStack {
@@ -132,7 +126,7 @@ struct SSHConnectionsView: View {
                     .padding(.horizontal, 20)
                     .padding(.bottom, 12)
 
-                switch selectedTab {
+                switch presentation.selectedTab {
                 case .connections:
                     connectionsTabContent
 
@@ -141,6 +135,9 @@ struct SSHConnectionsView: View {
 
                 case .taskQueue:
                     taskQueueTabContent
+
+                case .preferences:
+                    preferencesTabContent
                 }
             }
         }
@@ -161,10 +158,10 @@ struct SSHConnectionsView: View {
             syncLearningSettings()
             syncTaskQueueSettings()
         }
-        .onChange(of: selectedTab) { _ in
-            if selectedTab == .learning {
+        .onChange(of: presentation.selectedTab) { tab in
+            if tab == .learning {
                 syncLearningSettings()
-            } else if selectedTab == .taskQueue {
+            } else if tab == .taskQueue {
                 syncTaskQueueSettings()
             }
         }
@@ -179,8 +176,8 @@ struct SSHConnectionsView: View {
     }
 
     private var tabPicker: some View {
-        Picker("", selection: $selectedTab) {
-            ForEach(CenterTab.allCases) { tab in
+        Picker("", selection: selectedTab) {
+            ForEach(SSHConnectionsPanelTab.allCases) { tab in
                 Text(tab.title)
                     .tag(tab)
             }
@@ -311,6 +308,15 @@ struct SSHConnectionsView: View {
         .panelSurface()
         .padding(.horizontal, 20)
         .padding(.bottom, 20)
+    }
+
+    private var preferencesTabContent: some View {
+        ScrollView {
+            SettingsView()
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
+                .padding(.top, 4)
+        }
     }
 
     private var taskQueueTabContent: some View {
@@ -1852,7 +1858,8 @@ extension SSHConnectionsView {
 }
 
 #Preview {
-    SSHConnectionsView()
+    SSHConnectionsView(presentation: SSHConnectionsPresentationState())
+        .environmentObject(AppDelegate())
         .environmentObject(
             AITerminalManagerStore(
                 appDelegateProvider: { nil },

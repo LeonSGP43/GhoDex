@@ -144,14 +144,13 @@ class AppDelegate: NSObject,
     )
 
     @MainActor lazy var sshConnectionsController = SSHConnectionsController(
+        appDelegate: self,
         store: aiTerminalManagerStore
     )
 
     @MainActor lazy var newTabPickerController = NewTabPickerController(
         store: aiTerminalManagerStore
     )
-
-    @MainActor lazy var settingsController = SettingsController(appDelegate: self)
 
     /// The elapsed time since the process was started
     var timeSinceLaunch: TimeInterval {
@@ -454,12 +453,6 @@ class AppDelegate: NSObject,
             NSApp.terminate(nil)
         } catch {
             Self.logger.error("Failed to relaunch GhoDex: \(error.localizedDescription)")
-        }
-    }
-
-    @IBAction func showSettings(_ sender: Any?) {
-        Task { @MainActor in
-            settingsController.show()
         }
     }
 

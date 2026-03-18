@@ -1,8 +1,36 @@
 import Cocoa
 import SwiftUI
 
+enum SSHConnectionsPanelTab: String, CaseIterable, Identifiable {
+    case connections
+    case learning
+    case taskQueue
+    case preferences
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .connections:
+            return L10n.SSHConnections.tabConnections
+        case .learning:
+            return L10n.SSHConnections.tabLearning
+        case .taskQueue:
+            return "Task Queue"
+        case .preferences:
+            return L10n.Settings.title
+        }
+    }
+}
+
+@MainActor
+final class SSHConnectionsPresentationState: ObservableObject {
+    @Published var selectedTab: SSHConnectionsPanelTab = .connections
+}
+
 final class SSHConnectionsController: NSWindowController, NSWindowDelegate {
     private let store: AITerminalManagerStore
+    private let presentationState = SSHConnectionsPresentationState()
 
     static func windowsAreInSameTabGroup(_ lhs: NSWindow?, _ rhs: NSWindow?) -> Bool {
         guard
@@ -13,7 +41,7 @@ final class SSHConnectionsController: NSWindowController, NSWindowDelegate {
         return lhsGroup === rhsGroup
     }
 
-    init(store: AITerminalManagerStore) {
+    init(appDelegate: AppDelegate, store: AITerminalManagerStore) {
         self.store = store
 
         let window = NSWindow(
@@ -31,8 +59,9 @@ final class SSHConnectionsController: NSWindowController, NSWindowDelegate {
         }
         window.center()
         window.contentView = NSHostingView(
-            rootView: SSHConnectionsView()
+            rootView: SSHConnectionsView(presentation: presentationState)
                 .environmentObject(store)
+                .environmentObject(appDelegate)
         )
 
         super.init(window: window)
@@ -44,7 +73,11 @@ final class SSHConnectionsController: NSWindowController, NSWindowDelegate {
         fatalError("init(coder:) is not supported for SSHConnectionsController")
     }
 
-    func show(tabbedInto parentWindow: NSWindow? = TerminalController.preferredParent?.window) {
+    func show(
+        tab selectedTab: SSHConnectionsPanelTab = .connections,
+        tabbedInto parentWindow: NSWindow? = TerminalController.preferredParent?.window
+    ) {
+        presentationState.selectedTab = selectedTab
         store.refresh()
 
         if let window,

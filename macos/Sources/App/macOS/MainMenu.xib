@@ -95,11 +95,6 @@
                                 </connections>
                             </menuItem>
                             <menuItem isSeparatorItem="YES" id="VOq-y0-SEH"/>
-                            <menuItem title="Preferences…" id="BOF-NM-1cW">
-                                <connections>
-                                    <action selector="showSettings:" target="bbz-4X-AYv" id="X65-fg-iWU"/>
-                                </connections>
-                            </menuItem>
                             <menuItem title="Open Config" id="r1H-kf-o0x">
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>

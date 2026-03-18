@@ -67,8 +67,8 @@ struct SettingsView: View {
                 }
             }
         }
-        .padding()
-        .frame(minWidth: 520, maxWidth: 520, minHeight: 260, maxHeight: 320)
+        .padding(22)
+        .frame(maxWidth: 720, alignment: .leading)
     }
 }
 
