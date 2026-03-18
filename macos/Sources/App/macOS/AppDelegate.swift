@@ -142,6 +142,31 @@ class AppDelegate: NSObject,
         appDelegateProvider: { [weak self] in self }
     )
 
+    @MainActor lazy var controlHarnessAuditLogger = ControlHarnessAuditLogger(
+        bundleID: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex"
+    )
+
+    @MainActor lazy var controlHarnessCore = ControlHarnessCore(
+        appDelegate: self,
+        auditLogger: controlHarnessAuditLogger
+    )
+
+    lazy var controlHarnessService = ControlHarnessService(
+        bundleID: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
+        requestHandler: { [weak self] request, socketPath in
+            guard let self else {
+                return ControlHarnessResponse(
+                    requestID: request.requestID,
+                    status: "error",
+                    result: nil,
+                    errorCode: ControlHarnessCoreError.appUnavailable.code,
+                    errorMessage: ControlHarnessCoreError.appUnavailable.localizedDescription
+                )
+            }
+            return self.controlHarnessCore.handle(request, socketPath: socketPath)
+        }
+    )
+
     @MainActor lazy var sshConnectionsController = SSHConnectionsController(
         store: aiTerminalManagerStore
     )
@@ -217,6 +242,8 @@ class AppDelegate: NSObject,
 
         // Initial config loading
         ghosttyConfigDidChange(config: ghostty.config)
+
+        controlHarnessService.startIfNeeded()
 
         // Start our update checker.
         updateController.startUpdater()
@@ -435,6 +462,8 @@ class AppDelegate: NSObject,
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        controlHarnessService.stop()
+
         // We have no notifications we want to persist after death,
         // so remove them all now. In the future we may want to be
         // more selective and only remove surface-targeted notifications.

@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(control): finish the native control harness request path and CLI bridge
+
+- What changed: Completed the in-progress native control harness integration by wiring `AppDelegate` into a default `ControlHarnessCore` bootstrap path, adding request validation plus idempotent mutation caching, restoring stale-generation/idempotency/protocol errors, fixing event payload encoding and shared timestamp utilities, extending `ghodex +control` to understand protocol/generation/event subscription flags, and clearing the remaining SwiftLint blockers in the new harness support code.
+- Why: The interrupted branch had the service socket and core command handlers mostly sketched in, but the macOS build still stopped on missing control-core initialization, missing validation/error cases, a non-encodable event payload, and incomplete CLI flag coverage for the request schema.
+- Impact: The native control harness now builds as a coherent feature slice, the CLI can drive handshake/snapshot/mutation/subscription requests against the running app, repeated mutation retries can be deduplicated safely, and generation/protocol mismatches now fail with explicit machine-readable errors instead of undefined behavior or compile breaks.
+- Verification: `zig build -Demit-macos-app=false`; `zig build test -Dtest-filter=control`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' build`
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `macos/Sources/Features/Control Harness/ControlHarnessSupport.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `src/cli/control.zig`, `src/cli/ghostty.zig`, `CHANGELOG.md`
+- Decision trail: Keep the transport deliberately simple for this change set: one request per socket connection plus JSON responses, with idempotency and generation guards in the core so automation can rely on safe retries now without forcing a larger streaming-protocol redesign in the same branch.
+
 ### fix(testing): restore macOS workspace snapshot test coverage
 
 - What changed: Fixed the `MainMenu.xib` outlet mismatch that caused the macOS test host to crash on launch, added a pane-hierarchy workspace snapshot round-trip regression test that asserts top-level split layout, pane ownership, pane child-tab order, active child-tab selection, and focused surface identity all survive encode/decode, and rebuilt the bundled `GhoDexKit.xcframework` from current Zig sources so Xcode-linked test hosts pick up the repaired theme lookup logic.
