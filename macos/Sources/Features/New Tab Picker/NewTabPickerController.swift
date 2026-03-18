@@ -56,17 +56,21 @@ final class NewTabPickerController: NSWindowController {
 
     func show(
         relativeTo parentWindow: NSWindow?,
+        mode: NewTabPickerMode = .topLevel,
         title: String = L10n.AITerminalManager.newTab,
         subtitle: String = L10n.SSHConnections.newTabPickerSubtitle,
-        onOpenHost: ((AITerminalHost) -> Void)? = nil
+        onOpenHost: ((AITerminalHost) -> Void)? = nil,
+        onOpenWorkspace: ((AITerminalSavedWorkspaceTemplate) -> Void)? = nil
     ) {
         store.refresh()
         referenceWindow = parentWindow
         presentationID = UUID()
         hostingView.rootView = makeRootView(
+            mode: mode,
             title: title,
             subtitle: subtitle,
-            onOpenHost: onOpenHost)
+            onOpenHost: onOpenHost,
+            onOpenWorkspace: onOpenWorkspace)
         syncChrome()
 
         guard let window else { return }
@@ -89,12 +93,15 @@ final class NewTabPickerController: NSWindowController {
     }
 
     private func makeRootView(
+        mode: NewTabPickerMode = .topLevel,
         title: String = L10n.AITerminalManager.newTab,
         subtitle: String = L10n.SSHConnections.newTabPickerSubtitle,
-        onOpenHost: ((AITerminalHost) -> Void)? = nil
+        onOpenHost: ((AITerminalHost) -> Void)? = nil,
+        onOpenWorkspace: ((AITerminalSavedWorkspaceTemplate) -> Void)? = nil
     ) -> AnyView {
         AnyView(
             NewTabPickerView(
+                mode: mode,
                 title: title,
                 subtitle: subtitle,
                 onClose: { [weak self] in
@@ -105,7 +112,8 @@ final class NewTabPickerController: NSWindowController {
                         window.close()
                     }
                 },
-                onOpenHost: onOpenHost
+                onOpenHost: onOpenHost,
+                onOpenWorkspace: onOpenWorkspace
             )
             .id(presentationID)
             .environmentObject(store)

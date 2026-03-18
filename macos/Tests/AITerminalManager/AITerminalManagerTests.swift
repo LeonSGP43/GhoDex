@@ -1143,6 +1143,102 @@ struct AITerminalManagerTests {
 
         #expect(entries.map(\.id) == ["local"])
     }
+
+    @Test func newTabPickerEntriesIncludeSavedWorkspacesOnlyForTopLevelMode() {
+        let workspace = AITerminalSavedWorkspaceTemplate(
+            name: "Full Stack",
+            root: .split(.init(
+                direction: .horizontal,
+                ratio: 0.5,
+                left: .pane(.init(tabs: [
+                    .init(hostID: "local", directory: "/tmp/app"),
+                ])),
+                right: .pane(.init(tabs: [
+                    .init(hostID: "ssh:buildbox", directory: "/srv/app"),
+                ]))
+            ))
+        )
+
+        let topLevelEntries = NewTabPickerModel.entries(
+            favoriteHosts: [],
+            recentHosts: [],
+            savedHosts: [],
+            importedHosts: [],
+            savedWorkspaceTemplates: [workspace],
+            mode: .topLevel
+        ) { _ in true }
+
+        let paneEntries = NewTabPickerModel.entries(
+            favoriteHosts: [],
+            recentHosts: [],
+            savedHosts: [],
+            importedHosts: [],
+            savedWorkspaceTemplates: [workspace],
+            mode: .paneChild
+        ) { _ in true }
+
+        #expect(topLevelEntries.map(\.id) == ["local", workspace.id])
+        #expect(topLevelEntries.map(\.section) == [.local, .savedWorkspaces])
+        #expect(paneEntries.map(\.id) == ["local"])
+    }
+
+    @Test func configurationRoundTripsSavedWorkspaceTemplates() throws {
+        let workspace = AITerminalSavedWorkspaceTemplate(
+            name: "Infra",
+            root: .pane(.init(tabs: [
+                .init(hostID: "local", directory: "/Users/leongong/Desktop/LeonProjects/GhoDex"),
+                .init(hostID: "ssh:buildbox", directory: "/srv/app"),
+            ], activeTabIndex: 1))
+        )
+
+        let configuration = AITerminalManagerConfiguration(
+            savedWorkspaceTemplates: [workspace]
+        )
+
+        let data = try JSONEncoder().encode(configuration)
+        let decoded = try JSONDecoder().decode(AITerminalManagerConfiguration.self, from: data)
+
+        #expect(decoded.savedWorkspaceTemplates == [workspace])
+        #expect(decoded.schemaVersion == 6)
+    }
+
+    @Test @MainActor func storeLoadsSavedWorkspaceTemplatesFromGhoDexConfigWithoutDiagnostics() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let workspace = AITerminalSavedWorkspaceTemplate(
+            name: "Infra",
+            root: .split(.init(
+                direction: .horizontal,
+                ratio: 0.5,
+                left: .pane(.init(tabs: [
+                    .init(hostID: "local", directory: "/tmp/app"),
+                    .init(hostID: "ssh:buildbox", directory: "/srv/app"),
+                ], activeTabIndex: 1)),
+                right: .pane(.init(tabs: [
+                    .init(hostID: "local", directory: "/tmp/logs"),
+                ]))
+            ))
+        )
+
+        let payload = try AITerminalManagerTestSupport.encodedPayload(workspace)
+        let text = """
+        font-size = 14
+
+        \(AITerminalManagerTestSupport.managedConfigStartMarker)
+        ghodex-saved-workspace-template = \(try AITerminalManagerTestSupport.configStringLiteral(payload))
+        \(AITerminalManagerTestSupport.managedConfigEndMarker)
+        """
+        try text.write(to: tempURL, atomically: true, encoding: .utf8)
+
+        let ghosttyConfig = Ghostty.Config(at: tempURL.path(percentEncoded: false))
+        #expect(ghosttyConfig.errors.isEmpty)
+
+        let configuration = try AITerminalManagerStore.loadConfiguration(at: tempURL)
+        #expect(configuration.savedWorkspaceTemplates == [workspace])
+    }
+
     @Test @MainActor func storeSavesHostWithoutExplicitName() {
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)

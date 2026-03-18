@@ -1205,6 +1205,38 @@ class AppDelegate: NSObject,
         activeTerminalController()?.newPaneTab(sender)
     }
 
+    @IBAction func saveWorkspace(_ sender: Any?) {
+        guard let controller = activeTerminalController() else { return }
+
+        let alert = NSAlert()
+        alert.messageText = AppLocalization.localizedText("Save Workspace")
+        alert.informativeText = AppLocalization.localizedText("Save the current top-level tab layout so it can be reopened from the New Tab picker.")
+        alert.alertStyle = .informational
+
+        let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        textField.stringValue = controller.titleOverride?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? controller.titleOverride ?? ""
+            : (controller.window?.title ?? "")
+        alert.accessoryView = textField
+        alert.addButton(withTitle: AppLocalization.localizedText("Save"))
+        alert.addButton(withTitle: L10n.Common.cancel)
+        alert.window.initialFirstResponder = textField
+
+        guard let window = controller.window else { return }
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            self.aiTerminalManagerStore.saveCurrentWorkspace(from: controller, name: textField.stringValue)
+            guard let message = self.aiTerminalManagerStore.lastError else { return }
+
+            let errorAlert = NSAlert()
+            errorAlert.messageText = AppLocalization.localizedText("Could Not Save Workspace")
+            errorAlert.informativeText = message
+            errorAlert.alertStyle = .warning
+            errorAlert.addButton(withTitle: L10n.App.ok)
+            errorAlert.beginSheetModal(for: window)
+        }
+    }
+
     @IBAction func changeTitleContext(_ sender: Any?) {
         activeTerminalController()?.changeTitleContext(sender)
     }
@@ -1220,7 +1252,7 @@ class AppDelegate: NSObject,
     @MainActor
     func showNewTabPicker(from window: NSWindow?) {
         if let window {
-            newTabPickerController.show(relativeTo: window)
+            newTabPickerController.show(relativeTo: window, mode: .topLevel)
             return
         }
 
@@ -1241,6 +1273,7 @@ class AppDelegate: NSObject,
         if let window {
             newTabPickerController.show(
                 relativeTo: window,
+                mode: .paneChild,
                 title: AppLocalization.localizedText("New Pane Tab"),
                 subtitle: L10n.SSHConnections.newTabPickerSubtitle,
                 onOpenHost: openHost)
@@ -1458,6 +1491,9 @@ extension AppDelegate: NSMenuItemValidation {
             // Float on top items only active if the key window is a primary
             // terminal window (not quick terminal).
             return NSApp.keyWindow is TerminalWindow
+
+        case #selector(saveWorkspace(_:)):
+            return activeTerminalController() != nil
 
         case #selector(undo(_:)):
             if undoManager.canUndo {

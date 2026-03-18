@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(workspaces): save top-level split workspaces into the new-tab picker
+
+- What changed: Added a separate `AITerminalSavedWorkspaceTemplate` model for user-saved top-level workspaces, persisted those templates into the managed `config.ghodex` block, exposed a new `Save Workspace...` file-menu action that captures the current top-level tab's split/panel/child-tab structure, added a Saved Workspaces section to the top-level new-tab picker, kept pane child-tab picker host-only through an explicit picker mode, and added runtime launch logic that rebuilds split panes plus pane-local child tabs from a saved template without routing through `TerminalWorkspaceSnapshot`.
+- Why: The existing `TerminalWorkspaceSnapshot` is a runtime restore/undo snapshot, not a stable user template. Reusing it directly would mix restart recovery with reusable workspace launch behavior and make the pane picker incorrectly capable of opening whole workspaces.
+- Impact: Users can now save a top-level tab layout and reopen it from the top-level picker as a new workspace tab, while pane child-tab creation still only opens individual hosts. The saved model preserves pane structure and pane-local tab order without polluting runtime restore state.
+- Verification: `git diff --check`; `xcodebuild -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' -only-testing:GhosttyTests/AITerminalManagerTests test`
+- Files: `macos/Sources/Features/AI Terminal Manager/AITerminalManagerModels.swift`, `macos/Sources/Features/AI Terminal Manager/AITerminalManagerStore.swift`, `macos/Sources/Features/New Tab Picker/NewTabPickerModel.swift`, `macos/Sources/Features/New Tab Picker/NewTabPickerController.swift`, `macos/Sources/Features/New Tab Picker/NewTabPickerView.swift`, `macos/Sources/Features/Terminal/BaseTerminalController.swift`, `macos/Sources/Features/Terminal/TerminalController.swift`, `macos/Sources/Ghostty/Ghostty.Config.swift`, `macos/Sources/Ghostty/GhosttyPackage.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/App/macOS/MainMenu.xib`, `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`, `CHANGELOG.md`
+- Decision trail: Keep runtime restoration and user-saved workspaces as two different models. The runtime path continues to own transient restore concerns, while saved workspaces store only relaunchable pane/tab intent and are surfaced only in the top-level picker.
+
+### fix(config): register saved workspace config keys in the Zig core
+
+- What changed: Added the missing `ghodex-saved-workspace-template` repeatable config key to the Zig config schema and added a macOS regression test that writes a saved workspace entry into `config.ghodex`, verifies the core parser reports no diagnostics, and confirms the workspace template reloads back into the store.
+- Why: `Save Workspace...` persisted the new key from Swift, but the embedded Zig config parser still treated it as unknown, so saving immediately surfaced a config error even though the payload format itself was valid.
+- Impact: Saving a workspace no longer corrupts the config state with an unknown-key diagnostic, and saved workspace templates can round-trip through the real `config.ghodex` parser path used by the app.
+- Verification: `xcodebuild -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' -only-testing:GhosttyTests/AITerminalManagerTests test`
+- Files: `src/config/Config.zig`, `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`, `CHANGELOG.md`
+- Decision trail: Keep the managed workspace payload in `config.ghodex` rather than adding a separate store, but make the Swift and Zig layers register the exact same key set so config persistence stays authoritative and diagnosable.
+
 ### fix(testing): restore macOS workspace snapshot test coverage
 
 - What changed: Fixed the `MainMenu.xib` outlet mismatch that caused the macOS test host to crash on launch, added a pane-hierarchy workspace snapshot round-trip regression test that asserts top-level split layout, pane ownership, pane child-tab order, active child-tab selection, and focused surface identity all survive encode/decode, and rebuilt the bundled `GhoDexKit.xcframework` from current Zig sources so Xcode-linked test hosts pick up the repaired theme lookup logic.

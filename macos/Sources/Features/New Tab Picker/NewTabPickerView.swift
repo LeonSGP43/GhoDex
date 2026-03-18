@@ -4,10 +4,12 @@ struct NewTabPickerView: View {
     @EnvironmentObject private var store: AITerminalManagerStore
     @EnvironmentObject private var theme: GhosttyChromeTheme
 
+    let mode: NewTabPickerMode
     let title: String
     let subtitle: String
     let onClose: () -> Void
     let onOpenHost: ((AITerminalHost) -> Void)?
+    let onOpenWorkspace: ((AITerminalSavedWorkspaceTemplate) -> Void)?
 
     @State private var searchText = ""
     @State private var selectedID: String?
@@ -51,6 +53,10 @@ struct NewTabPickerView: View {
 
                         if !savedEntries.isEmpty {
                             section(title: L10n.AITerminalManager.savedHosts, entries: savedEntries)
+                        }
+
+                        if !savedWorkspaceEntries.isEmpty {
+                            section(title: "Saved Workspaces", entries: savedWorkspaceEntries)
                         }
 
                         if !importedEntries.isEmpty {
@@ -147,7 +153,7 @@ struct NewTabPickerView: View {
 
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 8) {
-                        Text(entry.host.name)
+                        Text(primaryTitle(for: entry))
                             .font(.headline)
                             .foregroundStyle(.primary)
                             .lineLimit(1)
@@ -165,7 +171,7 @@ struct NewTabPickerView: View {
                         }
                     }
 
-                    Text(primarySubtitle(for: entry.host))
+                    Text(primarySubtitle(for: entry))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
@@ -173,7 +179,7 @@ struct NewTabPickerView: View {
 
                 Spacer(minLength: 10)
 
-                Image(systemName: hostIconName(for: entry.host))
+                Image(systemName: iconName(for: entry))
                     .font(.body.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
             }
@@ -259,7 +265,7 @@ struct NewTabPickerView: View {
     }
 
     private var entries: [NewTabPickerEntry] {
-        NewTabPickerModel.filteredEntries(store.newTabPickerEntries(), query: searchText)
+        NewTabPickerModel.filteredEntries(store.newTabPickerEntries(mode: mode), query: searchText)
     }
 
     private var favoriteEntries: [NewTabPickerEntry] {
@@ -278,6 +284,10 @@ struct NewTabPickerView: View {
         entries.filter { $0.section == .imported }
     }
 
+    private var savedWorkspaceEntries: [NewTabPickerEntry] {
+        entries.filter { $0.section == .savedWorkspaces }
+    }
+
     private func moveSelection(_ offset: Int) {
         guard !entries.isEmpty else { return }
 
@@ -292,16 +302,41 @@ struct NewTabPickerView: View {
     }
 
     private func open(_ entry: NewTabPickerEntry) {
-        if let onOpenHost {
-            onOpenHost(entry.host)
-        } else {
-            store.openInNewTab(host: entry.host)
+        switch entry.kind {
+        case .host(let host):
+            if let onOpenHost {
+                onOpenHost(host)
+            } else {
+                store.openInNewTab(host: host)
+            }
+        case .savedWorkspace(let workspace):
+            if let onOpenWorkspace {
+                onOpenWorkspace(workspace)
+            } else {
+                store.open(savedWorkspaceTemplate: workspace)
+            }
         }
         onClose()
     }
 
-    private func primarySubtitle(for host: AITerminalHost) -> String {
-        host.connectionTarget ?? host.displaySubtitle
+    private func primaryTitle(for entry: NewTabPickerEntry) -> String {
+        switch entry.kind {
+        case .host(let host):
+            return host.name
+        case .savedWorkspace(let workspace):
+            return workspace.name
+        }
+    }
+
+    private func primarySubtitle(for entry: NewTabPickerEntry) -> String {
+        switch entry.kind {
+        case .host(let host):
+            return host.connectionTarget ?? host.displaySubtitle
+        case .savedWorkspace(let workspace):
+            let paneLabel = workspace.paneCount == 1 ? "1 pane" : "\(workspace.paneCount) panes"
+            let tabLabel = workspace.tabCount == 1 ? "1 tab" : "\(workspace.tabCount) tabs"
+            return "\(paneLabel) · \(tabLabel)"
+        }
     }
 
     private func sourceLabel(for entry: NewTabPickerEntry) -> String? {
@@ -316,15 +351,22 @@ struct NewTabPickerView: View {
             return L10n.AITerminalManager.savedHostSource
         case .imported:
             return L10n.AITerminalManager.importedHostSource
+        case .savedWorkspaces:
+            return "Saved Workspace"
         }
     }
 
-    private func hostIconName(for host: AITerminalHost) -> String {
-        switch host.transport {
-        case .local, .localmcd:
-            return "laptopcomputer"
-        case .ssh:
-            return "arrow.up.right.square"
+    private func iconName(for entry: NewTabPickerEntry) -> String {
+        switch entry.kind {
+        case .host(let host):
+            switch host.transport {
+            case .local, .localmcd:
+                return "laptopcomputer"
+            case .ssh:
+                return "arrow.up.right.square"
+            }
+        case .savedWorkspace:
+            return "square.grid.2x2"
         }
     }
 

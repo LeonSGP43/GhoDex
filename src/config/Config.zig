@@ -3770,6 +3770,7 @@ term: []const u8 = "xterm-ghostty",
 @"ghodex-favorite-host": RepeatableString = .{},
 @"ghodex-recent-host": RepeatableString = .{},
 @"ghodex-workspace": RepeatableString = .{},
+@"ghodex-saved-workspace-template": RepeatableString = .{},
 @"ghodex-heartbeat-task": RepeatableString = .{},
 @"ghodex-learning-log": RepeatableString = .{},
 

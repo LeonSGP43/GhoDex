@@ -437,6 +437,9 @@ extension Ghostty.Notification {
     /// Notification sent to the split root to equalize split sizes
     static let didEqualizeSplits = Notification.Name("com.leongong.ghodex.didEqualizeSplits")
 
+    /// Notification sent after AppKit creates a new split surface from an existing one.
+    static let didCreateSplitSurface = Notification.Name("com.leongong.ghodex.didCreateSplitSurface")
+
     /// Notification that renderer health changed
     static let didUpdateRendererHealth = Notification.Name("com.leongong.ghodex.didUpdateRendererHealth")
 

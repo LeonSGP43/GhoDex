@@ -295,6 +295,12 @@ class BaseTerminalController: NSWindowController,
             moveFocusFrom: oldView,
             undoAction: "New Split")
 
+        NotificationCenter.default.post(
+            name: Ghostty.Notification.didCreateSplitSurface,
+            object: newView,
+            userInfo: ["sourceSurface": oldView]
+        )
+
         return newView
     }
 

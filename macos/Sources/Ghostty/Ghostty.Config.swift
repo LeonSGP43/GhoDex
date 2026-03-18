@@ -754,6 +754,10 @@ extension Ghostty {
             repeatableStrings(for: "ghodex-workspace")
         }
 
+        var ghodexSavedWorkspaceTemplates: [String] {
+            repeatableStrings(for: "ghodex-saved-workspace-template")
+        }
+
         var ghodexHeartbeatTasks: [String] {
             repeatableStrings(for: "ghodex-heartbeat-task")
         }

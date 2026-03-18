@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import SwiftUI
+import GhoDexKit
 
 @MainActor
 final class AITerminalManagerStore: ObservableObject {
@@ -111,6 +112,7 @@ final class AITerminalManagerStore: ObservableObject {
     private var heartbeatTimer: Timer?
     private var heartbeatSchedulerTimer: Timer?
     private var ghosttyConfigObserver: NSObjectProtocol?
+    private var splitSurfaceObserver: NSObjectProtocol?
     nonisolated private static let maxLearningLogEntries = 200
     nonisolated private static let maxLearningLogSummaryCharacters = 400
     nonisolated private static let maxLearningLogDetailCharacters = 8_000
@@ -185,6 +187,7 @@ final class AITerminalManagerStore: ObservableObject {
         self.credentialStore = credentialStore
         self.configuration = (try? Self.loadConfiguration(at: self.configurationURL)) ?? .empty
         installGhosttyConfigObserver()
+        installSplitSurfaceObserver()
         refresh()
         migrateLegacyConfigurationIfNeeded()
     }
@@ -192,6 +195,9 @@ final class AITerminalManagerStore: ObservableObject {
     deinit {
         if let ghosttyConfigObserver {
             NotificationCenter.default.removeObserver(ghosttyConfigObserver)
+        }
+        if let splitSurfaceObserver {
+            NotificationCenter.default.removeObserver(splitSurfaceObserver)
         }
         sshPasswordAutomationTimer?.invalidate()
         sshPasswordAutomationTimer = nil
@@ -294,6 +300,12 @@ final class AITerminalManagerStore: ObservableObject {
 
     var workspaces: [AITerminalWorkspaceTemplate] {
         configuration.workspaces.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
+    var savedWorkspaceTemplates: [AITerminalSavedWorkspaceTemplate] {
+        configuration.savedWorkspaceTemplates.sorted {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
     }
@@ -477,12 +489,14 @@ final class AITerminalManagerStore: ObservableObject {
         open(host: host, directoryOverride: nil, inPaneOf: controller, sourceSurface: sourceSurface)
     }
 
-    func newTabPickerEntries() -> [NewTabPickerEntry] {
+    func newTabPickerEntries(mode: NewTabPickerMode = .topLevel) -> [NewTabPickerEntry] {
         NewTabPickerModel.entries(
             favoriteHosts: favoriteHosts,
             recentHosts: recentHosts,
             savedHosts: savedHosts,
-            importedHosts: mergedImportedHosts
+            importedHosts: mergedImportedHosts,
+            savedWorkspaceTemplates: savedWorkspaceTemplates,
+            mode: mode
         ) { [weak self] host in
             self?.hasStoredPassword(for: host) ?? false
         }
@@ -603,6 +617,290 @@ final class AITerminalManagerStore: ObservableObject {
         }
         if !host.isLocal {
             recordRecentHost(host.id, status: .connected)
+        }
+    }
+
+    func open(savedWorkspaceTemplate template: AITerminalSavedWorkspaceTemplate) {
+        guard let appDelegate = appDelegateProvider() else {
+            lastError = L10n.AITerminalManager.appDelegateUnavailable
+            return
+        }
+
+        guard let build = buildSavedWorkspaceRuntime(template: template) else { return }
+
+        let controller: TerminalController
+        switch launchTarget {
+        case .tab:
+            controller = TerminalController.newTab(
+                appDelegate.ghostty,
+                from: TerminalController.preferredParent?.window,
+                tree: build.tree
+            ) ?? TerminalController.newWindow(appDelegate.ghostty, tree: build.tree)
+        case .window:
+            controller = TerminalController.newWindow(appDelegate.ghostty, tree: build.tree)
+        }
+
+        controller.titleOverride = template.name
+
+        for registration in build.registrations {
+            registrations[registration.surfaceID] = registration.registration
+            if let remote = registration.pendingRemoteSession {
+                registerRemoteSession(
+                    registration.surfaceID,
+                    host: remote.host,
+                    savedPassword: remote.savedPassword,
+                    shouldRebuild: false
+                )
+                recordRecentHost(remote.host.id, status: .connected)
+            }
+        }
+
+        lastError = nil
+        rebuildSessions()
+    }
+
+    func saveCurrentWorkspace(from controller: TerminalController, name: String) {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            lastError = L10n.AITerminalManager.workspaceNameEmpty
+            return
+        }
+
+        guard let root = savedWorkspaceNode(from: controller.surfaceTree.root) else {
+            lastError = "Workspace is empty."
+            return
+        }
+
+        configuration.savedWorkspaceTemplates.removeAll {
+            $0.name.localizedCaseInsensitiveCompare(trimmedName) == .orderedSame
+        }
+        configuration.savedWorkspaceTemplates.append(.init(
+            name: trimmedName,
+            root: root
+        ))
+        configuration.savedWorkspaceTemplates.sort {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+        lastError = nil
+        persistConfiguration()
+        rebuildSessions()
+    }
+
+    func removeSavedWorkspaceTemplate(_ template: AITerminalSavedWorkspaceTemplate) {
+        configuration.savedWorkspaceTemplates.removeAll { $0.id == template.id }
+        lastError = nil
+        persistConfiguration()
+        rebuildSessions()
+    }
+
+    private struct PendingRemoteWorkspaceSession {
+        var host: AITerminalHost
+        var savedPassword: String?
+    }
+
+    private struct SavedWorkspaceSurfaceRegistration {
+        var surfaceID: UUID
+        var registration: AITerminalLaunchRegistration
+        var pendingRemoteSession: PendingRemoteWorkspaceSession?
+    }
+
+    private struct SavedWorkspaceRuntimeBuild {
+        var tree: SplitTree<TerminalPane>
+        var registrations: [SavedWorkspaceSurfaceRegistration]
+    }
+
+    private func buildSavedWorkspaceRuntime(
+        template: AITerminalSavedWorkspaceTemplate
+    ) -> SavedWorkspaceRuntimeBuild? {
+        guard let ghosttyApp = appDelegateProvider()?.ghostty.app else {
+            lastError = L10n.AITerminalManager.appDelegateUnavailable
+            return nil
+        }
+
+        let hostLookup = Dictionary(uniqueKeysWithValues: availableHosts.map { ($0.id, $0) })
+        var registrations: [SavedWorkspaceSurfaceRegistration] = []
+
+        guard let root = buildSavedWorkspaceRuntimeNode(
+            from: template.root,
+            ghosttyApp: ghosttyApp,
+            hostLookup: hostLookup,
+            workspaceName: template.name,
+            workspaceID: template.id,
+            registrations: &registrations
+        ) else {
+            return nil
+        }
+
+        return .init(tree: .init(root: root, zoomed: nil), registrations: registrations)
+    }
+
+    private func buildSavedWorkspaceRuntimeNode(
+        from node: AITerminalSavedWorkspaceNode,
+        ghosttyApp: ghostty_app_t,
+        hostLookup: [String: AITerminalHost],
+        workspaceName: String,
+        workspaceID: String,
+        registrations: inout [SavedWorkspaceSurfaceRegistration]
+    ) -> SplitTree<TerminalPane>.Node? {
+        switch node {
+        case .pane(let pane):
+            guard !pane.tabs.isEmpty else {
+                lastError = "Saved workspace contains an empty pane."
+                return nil
+            }
+
+            var surfaces: [Ghostty.SurfaceView] = []
+            for tab in pane.tabs {
+                guard let launch = launchSpec(
+                    for: tab,
+                    hostLookup: hostLookup,
+                    workspaceName: workspaceName,
+                    workspaceID: workspaceID
+                ) else {
+                    return nil
+                }
+
+                let surface = Ghostty.SurfaceView(ghosttyApp, baseConfig: launch.plan.surfaceConfiguration)
+                registrations.append(.init(
+                    surfaceID: surface.id,
+                    registration: launch.plan.registration,
+                    pendingRemoteSession: launch.pendingRemoteSession
+                ))
+                surfaces.append(surface)
+            }
+
+            let activeIndex = min(max(pane.normalizedActiveTabIndex, 0), surfaces.count - 1)
+            return .leaf(view: TerminalPane(
+                surfaces: surfaces,
+                activeSurfaceID: surfaces[activeIndex].id
+            ))
+
+        case .split(let split):
+            guard let left = buildSavedWorkspaceRuntimeNode(
+                from: split.left,
+                ghosttyApp: ghosttyApp,
+                hostLookup: hostLookup,
+                workspaceName: workspaceName,
+                workspaceID: workspaceID,
+                registrations: &registrations
+            ), let right = buildSavedWorkspaceRuntimeNode(
+                from: split.right,
+                ghosttyApp: ghosttyApp,
+                hostLookup: hostLookup,
+                workspaceName: workspaceName,
+                workspaceID: workspaceID,
+                registrations: &registrations
+            ) else {
+                return nil
+            }
+
+            let direction: SplitTree<TerminalPane>.Direction = switch split.direction {
+            case .horizontal: .horizontal
+            case .vertical: .vertical
+            }
+
+            return .split(.init(
+                direction: direction,
+                ratio: split.ratio,
+                left: left,
+                right: right
+            ))
+        }
+    }
+
+    private func savedWorkspaceNode(
+        from node: SplitTree<TerminalPane>.Node?
+    ) -> AITerminalSavedWorkspaceNode? {
+        guard let node else { return nil }
+
+        switch node {
+        case .leaf(let pane):
+            let tabs = pane.surfaces.map { savedWorkspaceTab(from: $0) }
+            return .pane(.init(
+                tabs: tabs,
+                activeTabIndex: pane.surfaces.firstIndex(where: { $0.id == pane.activeSurfaceID }) ?? 0
+            ))
+
+        case .split(let split):
+            guard let left = savedWorkspaceNode(from: split.left),
+                  let right = savedWorkspaceNode(from: split.right) else {
+                return nil
+            }
+
+            let direction: AITerminalSavedWorkspaceSplitDirection = switch split.direction {
+            case .horizontal: .horizontal
+            case .vertical: .vertical
+            }
+
+            return .split(.init(
+                direction: direction,
+                ratio: split.ratio,
+                left: left,
+                right: right
+            ))
+        }
+    }
+
+    private func savedWorkspaceTab(from surface: Ghostty.SurfaceView) -> AITerminalSavedWorkspaceTab {
+        let registration = registrations[surface.id]
+        return .init(
+            hostID: registration?.hostID ?? AITerminalHost.local.id,
+            directory: surface.pwd
+        )
+    }
+
+    private func launchSpec(
+        for tab: AITerminalSavedWorkspaceTab,
+        hostLookup: [String: AITerminalHost],
+        workspaceName: String,
+        workspaceID: String
+    ) -> (plan: AITerminalLaunchPlan, pendingRemoteSession: PendingRemoteWorkspaceSession?)? {
+        let hostID = tab.hostID
+        let host = hostLookup[hostID] ?? (hostID == AITerminalHost.local.id ? .local : nil)
+        guard let host else {
+            lastError = "Saved workspace references an unknown host."
+            return nil
+        }
+
+        switch host.transport {
+        case .local:
+            var plan = AITerminalLaunchPlan.localShell()
+            plan.surfaceConfiguration.workingDirectory = tab.directory
+            plan.registration.workspaceID = workspaceID
+            plan.registration.sourceLabel = workspaceName
+            return (plan, nil)
+
+        case .localmcd:
+            guard let plan = AITerminalLaunchPlan.localCommand(
+                host: host,
+                directoryOverride: tab.directory,
+                workspaceID: workspaceID,
+                sourceLabel: workspaceName
+            ) else {
+                lastError = L10n.AITerminalManager.localMCDCommandsEmpty
+                return nil
+            }
+            return (plan, nil)
+
+        case .ssh:
+            let passwordResolution = resolvedPasswordAutomation(for: host)
+            if let message = passwordResolution.error {
+                lastError = message
+                return nil
+            }
+            guard let plan = AITerminalLaunchPlan.remote(
+                host: host,
+                directoryOverride: tab.directory,
+                workspaceID: workspaceID,
+                sourceLabel: workspaceName
+            ) else {
+                lastError = L10n.AITerminalManager.hostMissingSSHDetails
+                return nil
+            }
+            return (
+                plan,
+                .init(host: host, savedPassword: passwordResolution.password)
+            )
         }
     }
 
@@ -2164,7 +2462,12 @@ final class AITerminalManagerStore: ObservableObject {
         }
     }
 
-    private func registerRemoteSession(_ sessionID: UUID, host: AITerminalHost, savedPassword: String?) {
+    private func registerRemoteSession(
+        _ sessionID: UUID,
+        host: AITerminalHost,
+        savedPassword: String?,
+        shouldRebuild: Bool = true
+    ) {
         if let savedPassword {
             pendingSSHPasswordAutomations[sessionID] = .init(
                 hostID: host.id,
@@ -2176,7 +2479,9 @@ final class AITerminalManagerStore: ObservableObject {
         } else {
             sshSessionAuthStates[sessionID] = .connecting
         }
-        rebuildSessions()
+        if shouldRebuild {
+            rebuildSessions()
+        }
     }
 
     private func rebuildRemoteSessions(hostLookup: [String: AITerminalHost]) {
@@ -2846,6 +3151,46 @@ final class AITerminalManagerStore: ObservableObject {
         }
     }
 
+    private func installSplitSurfaceObserver() {
+        splitSurfaceObserver = NotificationCenter.default.addObserver(
+            forName: Ghostty.Notification.didCreateSplitSurface,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor [weak self] in
+                self?.handleDidCreateSplitSurface(notification)
+            }
+        }
+    }
+
+    private func handleDidCreateSplitSurface(_ notification: Notification) {
+        guard let newSurface = notification.object as? Ghostty.SurfaceView,
+              let sourceSurface = notification.userInfo?["sourceSurface"] as? Ghostty.SurfaceView,
+              let sourceRegistration = registrations[sourceSurface.id] else {
+            return
+        }
+
+        registrations[newSurface.id] = sourceRegistration
+
+        if let hostID = sourceRegistration.hostID,
+           hostID != AITerminalHost.local.id,
+           let host = availableHosts.first(where: { $0.id == hostID }),
+           host.transport == .ssh {
+            let passwordResolution = resolvedPasswordAutomation(for: host)
+            if passwordResolution.error == nil {
+                registerRemoteSession(
+                    newSurface.id,
+                    host: host,
+                    savedPassword: passwordResolution.password,
+                    shouldRebuild: false
+                )
+                recordRecentHost(host.id, status: .connected)
+            }
+        }
+
+        rebuildSessions()
+    }
+
     private func applyGhosttyConfig(_ ghosttyConfig: Ghostty.Config) {
         applyConfiguration(Self.configuration(from: ghosttyConfig))
         importedSSHHosts = sshConfigHostLoader()
@@ -2885,6 +3230,7 @@ final class AITerminalManagerStore: ObservableObject {
             favoriteHostIDs: config.ghodexFavoriteHosts,
             recentHosts: decodePayloads(AITerminalRecentHostRecord.self, from: config.ghodexRecentHosts),
             workspaces: decodePayloads(AITerminalWorkspaceTemplate.self, from: config.ghodexWorkspaces),
+            savedWorkspaceTemplates: decodePayloads(AITerminalSavedWorkspaceTemplate.self, from: config.ghodexSavedWorkspaceTemplates),
             heartbeatQueueSettings: .init(
                 enabled: config.ghodexHeartbeatEnabled,
                 heartbeatIntervalSeconds: config.ghodexHeartbeatIntervalSeconds,
@@ -2933,6 +3279,7 @@ final class AITerminalManagerStore: ObservableObject {
         appendStringLines("ghodex-favorite-host", values: configuration.favoriteHostIDs, to: &lines)
         appendPayloadLines("ghodex-recent-host", values: configuration.recentHosts, to: &lines)
         appendPayloadLines("ghodex-workspace", values: configuration.workspaces, to: &lines)
+        appendPayloadLines("ghodex-saved-workspace-template", values: configuration.savedWorkspaceTemplates, to: &lines)
         appendPayloadLines("ghodex-heartbeat-task", values: configuration.heartbeatTasks, to: &lines)
         appendPayloadLines("ghodex-learning-log", values: configuration.learningLogs, to: &lines)
 
