@@ -1937,8 +1937,8 @@ final class AITerminalManagerStore: ObservableObject {
             return
         }
 
-        selectedSessionVisibleText = surface.aiManagerVisibleText()
-        selectedSessionScreenText = surface.aiManagerScreenText()
+        selectedSessionVisibleText = surface.aiManagerVisibleText().content
+        selectedSessionScreenText = surface.aiManagerScreenText().content
         lastError = nil
     }
 
@@ -2243,7 +2243,7 @@ final class AITerminalManagerStore: ObservableObject {
 
         for (sessionID, pending) in pendingSSHPasswordAutomations {
             guard let surface = appDelegate.findSurface(forUUID: sessionID) else { continue }
-            let visibleText = surface.aiManagerVisibleText()
+            let visibleText = surface.aiManagerVisibleText().content
 
             if Self.containsSSHAuthenticationFailure(in: visibleText) {
                 sshSessionAuthStates[sessionID] = .failed

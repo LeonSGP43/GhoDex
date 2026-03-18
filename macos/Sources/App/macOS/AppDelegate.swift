@@ -155,15 +155,18 @@ class AppDelegate: NSObject,
         bundleID: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
         requestHandler: { [weak self] request, socketPath in
             guard let self else {
-                return ControlHarnessResponse(
+                return .single(ControlHarnessResponse(
                     requestID: request.requestID,
                     status: "error",
                     result: nil,
                     errorCode: ControlHarnessCoreError.appUnavailable.code,
                     errorMessage: ControlHarnessCoreError.appUnavailable.localizedDescription
-                )
+                ))
             }
-            return self.controlHarnessCore.handle(request, socketPath: socketPath)
+            if request.command == "events.subscribe" {
+                return .subscription(self.controlHarnessCore.handleSubscription(request, socketPath: socketPath))
+            }
+            return .single(self.controlHarnessCore.handle(request, socketPath: socketPath))
         }
     )
 
@@ -1168,6 +1171,16 @@ class AppDelegate: NSObject,
         }
 
         return nil
+    }
+
+    @MainActor
+    func controlHarnessRunCommand(_ command: String, to terminalID: UUID) -> Bool {
+        guard let surface = findSurface(forUUID: terminalID) else {
+            return false
+        }
+
+        surface.aiManagerRunCommand(command)
+        return true
     }
 
     // MARK: - Dock Menu

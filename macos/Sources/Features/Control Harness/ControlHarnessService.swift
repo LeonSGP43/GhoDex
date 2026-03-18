@@ -4,9 +4,17 @@ import OSLog
 
 final class ControlHarnessService {
     private let bundleID: String
-    private let requestHandler: @MainActor (ControlHarnessRequest, String) -> ControlHarnessResponse
+    private let requestHandler: @MainActor (ControlHarnessRequest, String) -> ControlHarnessServiceReply
     private let logger: Logger
-    private let queue = DispatchQueue(label: "com.leongong.ghodex.control-harness.service", qos: .userInitiated)
+    private let acceptQueue = DispatchQueue(
+        label: "com.leongong.ghodex.control-harness.service.accept",
+        qos: .userInitiated
+    )
+    private let clientQueue = DispatchQueue(
+        label: "com.leongong.ghodex.control-harness.service.client",
+        qos: .userInitiated,
+        attributes: .concurrent
+    )
 
     private var listenerFD: Int32 = -1
     private var acceptSource: DispatchSourceRead?
@@ -14,12 +22,12 @@ final class ControlHarnessService {
 
     init(
         bundleID: String,
-        requestHandler: @escaping @MainActor (ControlHarnessRequest, String) -> ControlHarnessResponse
+        requestHandler: @escaping @MainActor (ControlHarnessRequest, String) -> ControlHarnessServiceReply
     ) {
         self.bundleID = bundleID
         self.requestHandler = requestHandler
         self.socketURL = Self.socketDirectory(bundleID: bundleID)
-            .appendingPathComponent("control-harness.sock", isDirectory: false)
+            .appendingPathComponent("harness.sock", isDirectory: false)
         self.logger = Logger(subsystem: bundleID, category: "ControlHarnessService")
     }
 
@@ -38,7 +46,7 @@ final class ControlHarnessService {
             )
             try removeStaleSocketIfNeeded()
             listenerFD = try makeListener(at: socketURL)
-            let source = DispatchSource.makeReadSource(fileDescriptor: listenerFD, queue: queue)
+            let source = DispatchSource.makeReadSource(fileDescriptor: listenerFD, queue: acceptQueue)
             source.setEventHandler { [weak self] in
                 self?.acceptAvailableConnections()
             }
@@ -92,7 +100,7 @@ final class ControlHarnessService {
                 continue
             }
 
-            queue.async { [weak self] in
+            clientQueue.async { [weak self] in
                 self?.handleClient(clientFD)
             }
         }
@@ -105,11 +113,13 @@ final class ControlHarnessService {
             let requestData = try Self.readAll(from: clientFD)
             let decoder = JSONDecoder()
             let request = try decoder.decode(ControlHarnessRequest.self, from: requestData)
-            let response = callRequestHandler(request)
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let responseData = try encoder.encode(response)
-            try Self.writeAll(responseData, to: clientFD)
+            let reply = callRequestHandler(request)
+            switch reply {
+            case .single(let response):
+                try Self.writeResponse(response, to: clientFD, prettyPrinted: true)
+            case .subscription(let envelope):
+                try streamSubscription(envelope, to: clientFD)
+            }
         } catch {
             logger.error("failed to process control harness client: \(error.localizedDescription, privacy: .public)")
             let fallback = ControlHarnessResponse(
@@ -127,23 +137,73 @@ final class ControlHarnessService {
         }
     }
 
-    private func callRequestHandler(_ request: ControlHarnessRequest) -> ControlHarnessResponse {
+    private func streamSubscription(
+        _ envelope: ControlHarnessSubscriptionEnvelope,
+        to clientFD: Int32
+    ) throws {
+        let session = envelope.session
         let semaphore = DispatchSemaphore(value: 0)
-        var response: ControlHarnessResponse?
+        let subscriberID = session?.addSubscriber(
+            sink: { [logger] data in
+                do {
+                    try Self.writeAll(data, to: clientFD)
+                    return true
+                } catch {
+                    logger.error("failed to stream control harness event: \(error.localizedDescription, privacy: .public)")
+                    return false
+                }
+            },
+            onFinish: {
+                semaphore.signal()
+            }
+        )
+
+        try Self.writeResponse(envelope.response, to: clientFD, prettyPrinted: false)
+
+        guard let session else {
+            return
+        }
+
+        for event in session.replayEvents {
+            try Self.writeAll(event, to: clientFD)
+        }
+
+        session.completeReplay()
+
+        if subscriberID != nil {
+            semaphore.wait()
+        }
+    }
+
+    private func callRequestHandler(_ request: ControlHarnessRequest) -> ControlHarnessServiceReply {
+        let semaphore = DispatchSemaphore(value: 0)
+        var reply: ControlHarnessServiceReply?
 
         Task { @MainActor in
-            response = requestHandler(request, socketURL.path)
+            reply = requestHandler(request, socketURL.path)
             semaphore.signal()
         }
 
         semaphore.wait()
-        return response ?? ControlHarnessResponse(
+        return reply ?? .single(ControlHarnessResponse(
             requestID: request.requestID,
             status: "error",
             result: nil,
             errorCode: "internal_failure",
             errorMessage: "The control harness failed to produce a response"
-        )
+        ))
+    }
+
+    private static func writeResponse(
+        _ response: ControlHarnessResponse,
+        to clientFD: Int32,
+        prettyPrinted: Bool
+    ) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = prettyPrinted ? [.prettyPrinted, .sortedKeys] : [.sortedKeys]
+        var responseData = try encoder.encode(response)
+        responseData.append(0x0A)
+        try writeAll(responseData, to: clientFD)
     }
 
     private func removeStaleSocketIfNeeded() throws {
@@ -162,8 +222,21 @@ final class ControlHarnessService {
             create: true
         )) ?? fileManager.temporaryDirectory
         return caches
-            .appendingPathComponent(bundleID, isDirectory: true)
+            .appendingPathComponent(socketNamespace(for: bundleID), isDirectory: true)
             .appendingPathComponent("ControlHarness", isDirectory: true)
+    }
+
+    private static func socketNamespace(for bundleID: String) -> String {
+        "ghdx-\(fnv1a64Hex(bundleID))"
+    }
+
+    private static func fnv1a64Hex(_ text: String) -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in text.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 0x100000001b3
+        }
+        return String(format: "%016llx", hash)
     }
 
     private func makeListener(at url: URL) throws -> Int32 {

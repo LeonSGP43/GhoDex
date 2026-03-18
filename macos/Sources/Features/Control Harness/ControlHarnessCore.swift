@@ -34,6 +34,12 @@ struct ControlHarnessRequest: Codable {
     let expectedGeneration: Int?
     let sinceSequence: Int64?
     let eventLimit: Int?
+    let mode: String?
+    let sinceFrameID: String?
+    let maxChars: Int?
+    let maxLines: Int?
+    let cursor: String?
+    let readAfterWriteID: String?
 
     enum CodingKeys: String, CodingKey {
         case requestID = "request_id"
@@ -54,6 +60,12 @@ struct ControlHarnessRequest: Codable {
         case expectedGeneration = "expected_generation"
         case sinceSequence = "since_sequence"
         case eventLimit = "event_limit"
+        case mode
+        case sinceFrameID = "since_frame_id"
+        case maxChars = "max_chars"
+        case maxLines = "max_lines"
+        case cursor
+        case readAfterWriteID = "read_after_write_id"
     }
 }
 
@@ -170,18 +182,48 @@ private struct ControlReadTerminalResult: Encodable {
     let terminalID: String
     let generation: Int
     let scope: String
+    let mode: String
+    let contentKind: String
     let consistency: String
     let capturedAt: String
+    let cacheAgeMs: Int
     let lastSequence: Int64
+    let frameID: String
+    let parentFrameID: String?
+    let hasChanges: Bool
+    let deltaKind: String
+    let deltaText: String?
+    let changedRows: [ControlHarnessReadChangedRow]
+    let totalLines: Int
+    let returnedLines: Int
+    let truncated: Bool
+    let nextCursor: String?
+    let observedWriteID: String?
+    let readAfterReady: Bool?
     let content: String
 
     enum CodingKeys: String, CodingKey {
         case terminalID = "terminal_id"
         case generation
         case scope
+        case mode
+        case contentKind = "content_kind"
         case consistency
         case capturedAt = "captured_at"
+        case cacheAgeMs = "cache_age_ms"
         case lastSequence = "last_sequence"
+        case frameID = "frame_id"
+        case parentFrameID = "parent_frame_id"
+        case hasChanges = "has_changes"
+        case deltaKind = "delta_kind"
+        case deltaText = "delta_text"
+        case changedRows = "changed_rows"
+        case totalLines = "total_lines"
+        case returnedLines = "returned_lines"
+        case truncated
+        case nextCursor = "next_cursor"
+        case observedWriteID = "observed_write_id"
+        case readAfterReady = "read_after_ready"
         case content
     }
 }
@@ -206,6 +248,7 @@ private struct ControlTerminalMutationResult: Encodable {
     let sequence: Int64
     let operation: String
     let acknowledged: Bool
+    let writeID: String?
 
     enum CodingKeys: String, CodingKey {
         case terminalID = "terminal_id"
@@ -213,6 +256,7 @@ private struct ControlTerminalMutationResult: Encodable {
         case sequence
         case operation
         case acknowledged
+        case writeID = "write_id"
     }
 }
 
@@ -222,6 +266,8 @@ private struct ControlEventSubscriptionResult: Encodable {
     let lastSequence: Int64
     let sinceSequence: Int64?
     let eventLimit: Int?
+    let replayedEventCount: Int
+    let liveStreamOpen: Bool
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol_version"
@@ -229,6 +275,8 @@ private struct ControlEventSubscriptionResult: Encodable {
         case lastSequence = "last_sequence"
         case sinceSequence = "since_sequence"
         case eventLimit = "event_limit"
+        case replayedEventCount = "replayed_event_count"
+        case liveStreamOpen = "live_stream_open"
     }
 }
 
@@ -382,13 +430,15 @@ final class ControlHarnessCore {
     private let eventHub: ControlHarnessEventHub
     private let generations: ControlHarnessGenerationTracker
     private let idempotencyStore: ControlHarnessIdempotencyStore
+    private let readStore: ControlHarnessTerminalReadStore
+    private let readAfterWriteStore: ControlHarnessReadAfterWriteStore
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
         category: "ControlHarnessCore"
     )
 
     convenience init(
-        appDelegate: AppDelegate,
+        appDelegate: AppDelegate?,
         auditLogger: ControlHarnessAuditLogger
     ) {
         let bundleID = Bundle.main.bundleIdentifier ?? "com.leongong.ghodex"
@@ -397,22 +447,87 @@ final class ControlHarnessCore {
             auditLogger: auditLogger,
             eventHub: ControlHarnessEventHub(bundleID: bundleID),
             generations: ControlHarnessGenerationTracker(),
-            idempotencyStore: ControlHarnessIdempotencyStore()
+            idempotencyStore: ControlHarnessIdempotencyStore(),
+            readStore: ControlHarnessTerminalReadStore(),
+            readAfterWriteStore: ControlHarnessReadAfterWriteStore()
         )
     }
 
     init(
-        appDelegate: AppDelegate,
+        appDelegate: AppDelegate?,
         auditLogger: ControlHarnessAuditLogger,
         eventHub: ControlHarnessEventHub,
         generations: ControlHarnessGenerationTracker,
-        idempotencyStore: ControlHarnessIdempotencyStore
+        idempotencyStore: ControlHarnessIdempotencyStore,
+        readStore: ControlHarnessTerminalReadStore,
+        readAfterWriteStore: ControlHarnessReadAfterWriteStore
     ) {
         self.appDelegate = appDelegate
         self.auditLogger = auditLogger
         self.eventHub = eventHub
         self.generations = generations
         self.idempotencyStore = idempotencyStore
+        self.readStore = readStore
+        self.readAfterWriteStore = readAfterWriteStore
+    }
+
+    func handleSubscription(
+        _ request: ControlHarnessRequest,
+        socketPath: String
+    ) -> ControlHarnessSubscriptionEnvelope {
+        let started = DispatchTime.now()
+        let response: ControlHarnessResponse
+        let session: ControlHarnessEventSubscriptionSession?
+
+        do {
+            try validateRequest(request)
+            let prepared = try makeEventSubscription(request, socketPath: socketPath)
+            response = .init(
+                requestID: request.requestID,
+                status: "ok",
+                result: AnyEncodable(prepared.result),
+                errorCode: nil,
+                errorMessage: nil
+            )
+            session = prepared.session
+        } catch let error as ControlHarnessCoreError {
+            response = .init(
+                requestID: request.requestID,
+                status: "error",
+                result: nil,
+                errorCode: error.code,
+                errorMessage: error.localizedDescription
+            )
+            session = nil
+        } catch {
+            logger.error("control harness subscription failed: \(error.localizedDescription, privacy: .public)")
+            response = .init(
+                requestID: request.requestID,
+                status: "error",
+                result: nil,
+                errorCode: ControlHarnessCoreError.internalFailure.code,
+                errorMessage: error.localizedDescription
+            )
+            session = nil
+        }
+
+        let durationNs = DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds
+        auditLogger.append(.init(
+            timestamp: Self.iso8601(Date()),
+            requestID: request.requestID,
+            command: request.command,
+            client: request.client,
+            idempotencyKey: request.idempotencyKey,
+            expectedGeneration: request.expectedGeneration,
+            tabID: request.tabID,
+            terminalID: request.terminalID,
+            status: response.status,
+            errorCode: response.errorCode,
+            sequence: nil,
+            durationMs: Double(durationNs) / 1_000_000
+        ))
+
+        return .init(response: response, session: session)
     }
 
     func handle(_ request: ControlHarnessRequest, socketPath: String) -> ControlHarnessResponse {
@@ -547,6 +662,14 @@ final class ControlHarnessCore {
         if let eventLimit = request.eventLimit, eventLimit < 1 {
             throw ControlHarnessCoreError.invalidArgument("event_limit must be >= 1")
         }
+
+        if let maxChars = request.maxChars, maxChars < 1 {
+            throw ControlHarnessCoreError.invalidArgument("max_chars must be >= 1")
+        }
+
+        if let maxLines = request.maxLines, maxLines < 1 {
+            throw ControlHarnessCoreError.invalidArgument("max_lines must be >= 1")
+        }
     }
 
     private func idempotencyFingerprint(for request: ControlHarnessRequest) throws -> Data? {
@@ -616,13 +739,7 @@ final class ControlHarnessCore {
 
         case "events.subscribe":
             return (
-                AnyEncodable(ControlEventSubscriptionResult(
-                    protocolVersion: Self.protocolVersion,
-                    subscribed: true,
-                    lastSequence: eventHub.currentSequence(),
-                    sinceSequence: request.sinceSequence,
-                    eventLimit: request.eventLimit
-                )),
+                AnyEncodable(makeEventSubscriptionResult(request, replayedEventCount: 0, liveStreamOpen: false)),
                 nil
             )
 
@@ -762,12 +879,21 @@ final class ControlHarnessCore {
             resource: .init(type: "terminal", id: terminalIDString, generation: generation),
             payload: AnyEncodable(["text_length": text.count])
         )
+        let writeID = Self.writeID(forSequence: sequence)
+        readAfterWriteStore.recordTextWrite(
+            terminalID: terminalIDString,
+            writeID: writeID,
+            sequence: sequence,
+            visibleFrameID: readStore.latestFrameID(for: terminalIDString, scope: "visible"),
+            screenFrameID: readStore.latestFrameID(for: terminalIDString, scope: "screen")
+        )
         return .init(
             terminalID: terminalIDString,
             generation: generation,
             sequence: sequence,
             operation: "send-text",
-            acknowledged: true
+            acknowledged: true,
+            writeID: writeID
         )
     }
 
@@ -787,7 +913,9 @@ final class ControlHarnessCore {
         guard let appDelegate else {
             throw ControlHarnessCoreError.appUnavailable
         }
-        appDelegate.aiTerminalManagerStore.sendCommand(commandText, to: terminalID)
+        guard appDelegate.controlHarnessRunCommand(commandText, to: terminalID) else {
+            throw ControlHarnessCoreError.terminalNotFound(terminalID.uuidString)
+        }
         let generation = generations.advanceTerminalGeneration(for: terminalIDString)
         let sequence = eventHub.emit(
             event: "terminal.command.sent",
@@ -795,12 +923,22 @@ final class ControlHarnessCore {
             resource: .init(type: "terminal", id: terminalIDString, generation: generation),
             payload: AnyEncodable(["command_length": commandText.count])
         )
+        let writeID = Self.writeID(forSequence: sequence)
+        readAfterWriteStore.recordCommandWrite(
+            terminalID: terminalIDString,
+            writeID: writeID,
+            sequence: sequence,
+            commandText: commandText,
+            visibleFrameID: readStore.latestFrameID(for: terminalIDString, scope: "visible"),
+            screenFrameID: readStore.latestFrameID(for: terminalIDString, scope: "screen")
+        )
         return .init(
             terminalID: terminalIDString,
             generation: generation,
             sequence: sequence,
             operation: "run-command",
-            acknowledged: true
+            acknowledged: true,
+            writeID: writeID
         )
     }
 
@@ -822,27 +960,99 @@ final class ControlHarnessCore {
         }
 
         let scope = request.scope ?? "visible"
+        let mode = request.mode ?? "snapshot"
+        let refresh = request.readAfterWriteID != nil
         let content: String
         let consistency: String
+        let cacheAgeMs: Int
         switch scope {
         case "visible":
-            content = surface.aiManagerVisibleText()
-            consistency = "cached_visible"
+            let read = surface.aiManagerVisibleText(refresh: refresh)
+            content = read.content
+            cacheAgeMs = read.cacheAgeMs
+            consistency = refresh ? "fresh_visible" : "cached_visible"
         case "screen":
-            content = surface.aiManagerScreenText()
-            consistency = "cached_screen"
+            let read = surface.aiManagerScreenText(refresh: refresh)
+            content = read.content
+            cacheAgeMs = read.cacheAgeMs
+            consistency = refresh ? "fresh_screen" : "cached_screen"
         default:
             throw ControlHarnessCoreError.invalidArgument("Unsupported read scope: \(scope)")
+        }
+
+        switch mode {
+        case "snapshot", "delta":
+            break
+        default:
+            throw ControlHarnessCoreError.invalidArgument("Unsupported read mode: \(mode)")
+        }
+
+        let frame = readStore.capture(terminalID: terminalIDString, scope: scope, content: content)
+        let delta = readStore.delta(from: request.sinceFrameID, to: frame.frameID)
+        let window = readStore.window(
+            frameID: frame.frameID,
+            cursor: request.cursor,
+            maxLines: request.maxLines,
+            maxChars: request.maxChars
+        )
+
+        let responseContent: String
+        let contentKind: String
+        switch mode {
+        case "snapshot":
+            responseContent = window.text
+            contentKind = "snapshot"
+        case "delta":
+            responseContent = Self.applyTextBudget(
+                delta.text,
+                maxChars: request.maxChars
+            )
+            contentKind = "delta"
+        default:
+            responseContent = window.text
+            contentKind = "snapshot"
+        }
+
+        let observedWriteID = request.readAfterWriteID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let readAfterReady: Bool?
+        if let observedWriteID, !observedWriteID.isEmpty {
+            let targetSequence = try Self.parseWriteID(observedWriteID)
+            let sequenceReady = eventHub.currentSequence() >= targetSequence
+            readAfterReady = sequenceReady && readAfterWriteStore.readiness(
+                for: observedWriteID,
+                terminalID: terminalIDString,
+                scope: scope,
+                currentSequence: eventHub.currentSequence(),
+                frame: frame,
+                delta: delta
+            )
+        } else {
+            readAfterReady = nil
         }
 
         return ControlReadTerminalResult(
             terminalID: terminalIDString,
             generation: generation,
             scope: scope,
+            mode: mode,
+            contentKind: contentKind,
             consistency: consistency,
             capturedAt: Self.iso8601(Date()),
+            cacheAgeMs: cacheAgeMs,
             lastSequence: eventHub.currentSequence(),
-            content: content
+            frameID: frame.frameID,
+            parentFrameID: frame.parentFrameID,
+            hasChanges: delta.hasChanges,
+            deltaKind: delta.kind,
+            deltaText: delta.text.isEmpty ? nil : Self.applyTextBudget(delta.text, maxChars: request.maxChars),
+            changedRows: Self.applyChangedRowBudget(delta.changedRows, maxLines: request.maxLines),
+            totalLines: window.totalLines,
+            returnedLines: window.returnedLines,
+            truncated: mode == "snapshot" ? window.truncated : false,
+            nextCursor: mode == "snapshot" ? window.nextCursor : nil,
+            observedWriteID: observedWriteID,
+            readAfterReady: readAfterReady,
+            content: responseContent
         )
     }
 
@@ -872,7 +1082,75 @@ final class ControlHarnessCore {
             generation: generation,
             sequence: sequence,
             operation: "close-terminal",
-            acknowledged: true
+            acknowledged: true,
+            writeID: nil
+        )
+    }
+
+    private static func applyChangedRowBudget(
+        _ rows: [ControlHarnessReadChangedRow],
+        maxLines: Int?
+    ) -> [ControlHarnessReadChangedRow] {
+        guard let maxLines else { return rows }
+        guard rows.count > maxLines else { return rows }
+        return Array(rows.suffix(maxLines))
+    }
+
+    private static func applyTextBudget(_ text: String, maxChars: Int?) -> String {
+        guard let maxChars else { return text }
+        guard text.count > maxChars else { return text }
+        return String(text.suffix(maxChars))
+    }
+
+    private static func writeID(forSequence sequence: Int64) -> String {
+        "seq_\(sequence)"
+    }
+
+    private static func parseWriteID(_ writeID: String) throws -> Int64 {
+        guard writeID.hasPrefix("seq_"), let sequence = Int64(writeID.dropFirst(4)) else {
+            throw ControlHarnessCoreError.invalidArgument("Invalid read_after_write_id: \(writeID)")
+        }
+        return sequence
+    }
+
+    private func makeEventSubscription(
+        _ request: ControlHarnessRequest,
+        socketPath: String
+    ) throws -> (result: ControlEventSubscriptionResult, session: ControlHarnessEventSubscriptionSession?) {
+        guard request.command == "events.subscribe" else {
+            throw ControlHarnessCoreError.unsupportedCommand(request.command)
+        }
+
+        let replay = eventHub.replay(afterSequence: request.sinceSequence, limit: request.eventLimit)
+        let session = ControlHarnessEventSubscriptionSession(
+            eventHub: eventHub,
+            replayEvents: replay,
+            eventLimit: request.eventLimit
+        )
+        let liveStreamOpen = session.shouldStreamLive
+        return (
+            makeEventSubscriptionResult(
+                request,
+                replayedEventCount: replay.count,
+                liveStreamOpen: liveStreamOpen
+            ),
+            liveStreamOpen ? session : nil
+        )
+    }
+
+    private func makeEventSubscriptionResult(
+        _ request: ControlHarnessRequest,
+        replayedEventCount: Int,
+        liveStreamOpen: Bool
+    ) -> ControlEventSubscriptionResult {
+        .init(
+            protocolVersion: Self.protocolVersion,
+            subscribed: true,
+            lastSequence: eventHub.currentSequence(),
+            sinceSequence: request.sinceSequence,
+            eventLimit: request.eventLimit,
+            replayedEventCount: replayedEventCount,
+            liveStreamOpen: liveStreamOpen
         )
     }
 

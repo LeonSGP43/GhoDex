@@ -45,6 +45,12 @@ const Request = struct {
     expected_generation: ?i64 = null,
     since_sequence: ?i64 = null,
     event_limit: ?u32 = null,
+    mode: ?[]const u8 = null,
+    since_frame_id: ?[]const u8 = null,
+    max_chars: ?u32 = null,
+    max_lines: ?u32 = null,
+    cursor: ?[]const u8 = null,
+    read_after_write_id: ?[]const u8 = null,
 };
 
 const ResponseStatus = struct {
@@ -67,7 +73,7 @@ const ParsedCommand = struct {
 ///   * `close-tab --tab-id=<id> [--force]`
 ///   * `send-text --terminal-id=<id> --text=<text>`
 ///   * `run-command --terminal-id=<id> --command=<text>`
-///   * `read-terminal --terminal-id=<id> [--scope=visible|screen]`
+///   * `read-terminal --terminal-id=<id> [--scope=visible|screen] [--mode=snapshot|delta] [--since-frame-id=<id>] [--max-lines=<n>] [--max-chars=<n>] [--cursor=<cursor>] [--read-after-write-id=<id>]`
 ///   * `close-terminal --terminal-id=<id>`
 ///   * `events.subscribe [--since-sequence=<n>] [--event-limit=<n>]`
 ///
@@ -138,13 +144,24 @@ fn runArgs(
         try stdout.writeByte('\n');
     }
 
-    const parsed_status = try std.json.parseFromSlice(ResponseStatus, alloc, response, .{
+    const status_source = if (std.mem.eql(u8, parsed.request.command, "events.subscribe"))
+        firstResponseLine(response)
+    else
+        response;
+
+    const parsed_status = try std.json.parseFromSlice(ResponseStatus, alloc, status_source, .{
         .ignore_unknown_fields = true,
     });
     defer parsed_status.deinit();
 
     if (std.mem.eql(u8, parsed_status.value.status, "ok")) return 0;
     return 1;
+}
+
+fn firstResponseLine(response: []const u8) []const u8 {
+    const trimmed = std.mem.trimLeft(u8, response, "\r\n\t ");
+    const end = std.mem.indexOfScalar(u8, trimmed, '\n') orelse trimmed.len;
+    return trimmed[0..end];
 }
 
 fn parseCommand(alloc: Allocator, args_list: []const [:0]const u8) !ParsedCommand {
@@ -206,6 +223,18 @@ fn parseCommand(alloc: Allocator, args_list: []const [:0]const u8) !ParsedComman
             result.request.since_sequence = try parseSignedInt(value);
         } else if (std.mem.eql(u8, key, "event-limit")) {
             result.request.event_limit = try parseUnsignedInt(value);
+        } else if (std.mem.eql(u8, key, "mode")) {
+            result.request.mode = try alloc.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "since-frame-id")) {
+            result.request.since_frame_id = try alloc.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "max-chars")) {
+            result.request.max_chars = try parseUnsignedInt(value);
+        } else if (std.mem.eql(u8, key, "max-lines")) {
+            result.request.max_lines = try parseUnsignedInt(value);
+        } else if (std.mem.eql(u8, key, "cursor")) {
+            result.request.cursor = try alloc.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "read-after-write-id")) {
+            result.request.read_after_write_id = try alloc.dupe(u8, value);
         } else {
             return error.UnknownFlag;
         }
@@ -279,7 +308,20 @@ fn resolveSocketPath(alloc: Allocator, override_path: ?[]const u8) ![]const u8 {
         "com.leongong.ghodex",
     };
     for (bundle_ids) |bundle_id| {
+        const namespace = try socketNamespace(alloc, bundle_id);
         const socket_path = try std.fs.path.join(alloc, &.{
+            home,
+            "Library",
+            "Caches",
+            namespace,
+            "ControlHarness",
+            "harness.sock",
+        });
+        if (std.fs.accessAbsolute(socket_path, .{})) |_| {
+            return socket_path;
+        } else |_| {}
+
+        const legacy_socket_path = try std.fs.path.join(alloc, &.{
             home,
             "Library",
             "Caches",
@@ -287,19 +329,33 @@ fn resolveSocketPath(alloc: Allocator, override_path: ?[]const u8) ![]const u8 {
             "ControlHarness",
             "control-harness.sock",
         });
-        if (std.fs.accessAbsolute(socket_path, .{})) |_| {
-            return socket_path;
+        if (std.fs.accessAbsolute(legacy_socket_path, .{})) |_| {
+            return legacy_socket_path;
         } else |_| {}
     }
 
+    const namespace = try socketNamespace(alloc, bundle_ids[0]);
     return try std.fs.path.join(alloc, &.{
         home,
         "Library",
         "Caches",
-        bundle_ids[0],
+        namespace,
         "ControlHarness",
-        "control-harness.sock",
+        "harness.sock",
     });
+}
+
+fn socketNamespace(alloc: Allocator, bundle_id: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(alloc, "ghdx-{x:0>16}", .{fnv1a64(bundle_id)});
+}
+
+fn fnv1a64(text: []const u8) u64 {
+    var hash: u64 = 0xcbf29ce484222325;
+    for (text) |byte| {
+        hash ^= byte;
+        hash *%= 0x100000001b3;
+    }
+    return hash;
 }
 
 fn sendRequest(alloc: Allocator, socket_path: []const u8, request_json: []const u8) ![]u8 {
@@ -424,4 +480,32 @@ test "parse control events subscribe arguments" {
     try testing.expectEqual(@as(?i64, 41), parsed.request.since_sequence);
     try testing.expectEqual(@as(?u32, 20), parsed.request.event_limit);
     try testing.expectEqualStrings("1.0", parsed.request.protocol_version.?);
+}
+
+test "parse control read-terminal delta arguments" {
+    const testing = std.testing;
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const argv = [_][:0]const u8{
+        "read-terminal",
+        "--terminal-id=01234567-89AB-CDEF-0123-456789ABCDEF",
+        "--mode",
+        "delta",
+        "--since-frame-id=frm_7",
+        "--max-lines=24",
+        "--max-chars=4096",
+        "--cursor=120",
+        "--read-after-write-id=seq_42",
+    };
+
+    const parsed = try parseCommand(alloc, &argv);
+    try testing.expectEqualStrings("read-terminal", parsed.request.command);
+    try testing.expectEqualStrings("delta", parsed.request.mode.?);
+    try testing.expectEqualStrings("frm_7", parsed.request.since_frame_id.?);
+    try testing.expectEqual(@as(?u32, 24), parsed.request.max_lines);
+    try testing.expectEqual(@as(?u32, 4096), parsed.request.max_chars);
+    try testing.expectEqualStrings("120", parsed.request.cursor.?);
+    try testing.expectEqualStrings("seq_42", parsed.request.read_after_write_id.?);
 }

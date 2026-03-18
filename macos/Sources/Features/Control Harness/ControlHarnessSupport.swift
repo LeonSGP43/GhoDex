@@ -115,6 +115,404 @@ final class ControlHarnessIdempotencyStore {
     }
 }
 
+struct ControlHarnessReadChangedRow: Encodable {
+    let index: Int
+    let kind: String
+    let text: String?
+}
+
+struct ControlHarnessReadDelta {
+    let kind: String
+    let text: String
+    let changedRows: [ControlHarnessReadChangedRow]
+    let hasChanges: Bool
+}
+
+struct ControlHarnessReadWindow {
+    let text: String
+    let totalLines: Int
+    let returnedLines: Int
+    let truncated: Bool
+    let nextCursor: String?
+}
+
+struct ControlHarnessReadFrameSnapshot {
+    let frameID: String
+    let parentFrameID: String?
+    let delta: ControlHarnessReadDelta
+}
+
+private enum ControlHarnessPendingWriteKind {
+    case text
+    case command(String)
+}
+
+private struct ControlHarnessPendingWriteScopeState {
+    let baselineFrameID: String?
+    var firstPostWriteFrameID: String?
+    var awaitingDistinctNonEchoFrame: Bool
+    var isReady: Bool
+}
+
+private struct ControlHarnessPendingWriteEntry {
+    let terminalID: String
+    let sequence: Int64
+    let kind: ControlHarnessPendingWriteKind
+    var scopeStates: [String: ControlHarnessPendingWriteScopeState]
+}
+
+@MainActor
+final class ControlHarnessTerminalReadStore {
+    private struct FrameKey: Hashable {
+        let terminalID: String
+        let scope: String
+    }
+
+    private struct Frame {
+        let frameID: String
+        let parentFrameID: String?
+        let terminalID: String
+        let scope: String
+        let content: String
+        let lines: [String]
+    }
+
+    private var nextFrameID: Int64 = 0
+    private var latestFrames: [FrameKey: Frame] = [:]
+    private var framesByID: [String: Frame] = [:]
+    private var frameOrder: [FrameKey: [String]] = [:]
+    private let maxFramesPerKey = 32
+
+    func latestFrameID(for terminalID: String, scope: String) -> String? {
+        latestFrames[.init(terminalID: terminalID, scope: scope)]?.frameID
+    }
+
+    func capture(terminalID: String, scope: String, content: String) -> ControlHarnessReadFrameSnapshot {
+        let key = FrameKey(terminalID: terminalID, scope: scope)
+        let lines = splitLines(content)
+
+        if let latest = latestFrames[key], latest.content == content {
+            return .init(
+                frameID: latest.frameID,
+                parentFrameID: latest.parentFrameID,
+                delta: .init(kind: "none", text: "", changedRows: [], hasChanges: false)
+            )
+        }
+
+        let previous = latestFrames[key]
+        let frameID = makeFrameID()
+        let frame = Frame(
+            frameID: frameID,
+            parentFrameID: previous?.frameID,
+            terminalID: terminalID,
+            scope: scope,
+            content: content,
+            lines: lines
+        )
+
+        latestFrames[key] = frame
+        framesByID[frameID] = frame
+        frameOrder[key, default: []].append(frameID)
+        pruneFrames(for: key)
+
+        return .init(
+            frameID: frameID,
+            parentFrameID: previous?.frameID,
+            delta: delta(from: previous, to: frame)
+        )
+    }
+
+    func delta(from sinceFrameID: String?, to frameID: String) -> ControlHarnessReadDelta {
+        guard let frame = framesByID[frameID] else {
+            return .init(kind: "none", text: "", changedRows: [], hasChanges: false)
+        }
+        guard let sinceFrameID, let base = framesByID[sinceFrameID] else {
+            return .init(kind: "reset", text: frame.content, changedRows: [], hasChanges: !frame.content.isEmpty)
+        }
+        guard base.terminalID == frame.terminalID, base.scope == frame.scope else {
+            return .init(kind: "reset", text: frame.content, changedRows: [], hasChanges: !frame.content.isEmpty)
+        }
+        return delta(from: base, to: frame)
+    }
+
+    func window(
+        frameID: String,
+        cursor: String?,
+        maxLines: Int?,
+        maxChars: Int?
+    ) -> ControlHarnessReadWindow {
+        guard let frame = framesByID[frameID] else {
+            return .init(text: "", totalLines: 0, returnedLines: 0, truncated: false, nextCursor: nil)
+        }
+
+        let totalLines = frame.lines.count
+        let end = min(max(parseCursor(cursor) ?? totalLines, 0), totalLines)
+        let start: Int
+        if let maxLines {
+            start = max(0, end - maxLines)
+        } else {
+            start = 0
+        }
+
+        var text = frame.lines[start..<end].joined(separator: "\n")
+        var truncated = start > 0 || end < totalLines
+        if let maxChars, maxChars >= 0, text.count > maxChars {
+            text = String(text.suffix(maxChars))
+            truncated = true
+        }
+
+        let nextCursor = start > 0 ? String(start) : nil
+        return .init(
+            text: text,
+            totalLines: totalLines,
+            returnedLines: max(end - start, 0),
+            truncated: truncated,
+            nextCursor: nextCursor
+        )
+    }
+
+    private func delta(from previous: Frame?, to current: Frame) -> ControlHarnessReadDelta {
+        guard let previous else {
+            return .init(
+                kind: "snapshot",
+                text: current.content,
+                changedRows: [],
+                hasChanges: !current.content.isEmpty
+            )
+        }
+
+        if previous.content == current.content {
+            return .init(kind: "none", text: "", changedRows: [], hasChanges: false)
+        }
+
+        let sharedPrefix = sharedPrefixLineCount(previous.lines, current.lines)
+        if sharedPrefix == previous.lines.count, current.lines.count >= previous.lines.count {
+            let appended = Array(current.lines[sharedPrefix...])
+            return .init(
+                kind: "append",
+                text: appended.joined(separator: "\n"),
+                changedRows: appended.enumerated().map { offset, line in
+                    .init(index: sharedPrefix + offset, kind: "insert", text: line)
+                },
+                hasChanges: true
+            )
+        }
+
+        var changedRows: [ControlHarnessReadChangedRow] = []
+        let limit = max(previous.lines.count, current.lines.count)
+        for index in 0..<limit {
+            let oldLine = index < previous.lines.count ? previous.lines[index] : nil
+            let newLine = index < current.lines.count ? current.lines[index] : nil
+            guard oldLine != newLine else { continue }
+
+            let kind: String
+            switch (oldLine, newLine) {
+            case (nil, .some):
+                kind = "insert"
+            case (.some, nil):
+                kind = "delete"
+            default:
+                kind = "update"
+            }
+
+            changedRows.append(.init(index: index, kind: kind, text: newLine))
+        }
+
+        let summary = changedRows.map { row -> String in
+            switch row.kind {
+            case "delete":
+                return "[line \(row.index)] <deleted>"
+            default:
+                return "[line \(row.index)] \(row.text ?? "")"
+            }
+        }.joined(separator: "\n")
+
+        return .init(kind: "rows", text: summary, changedRows: changedRows, hasChanges: !changedRows.isEmpty)
+    }
+
+    private func pruneFrames(for key: FrameKey) {
+        guard var ordered = frameOrder[key], ordered.count > maxFramesPerKey else { return }
+        while ordered.count > maxFramesPerKey {
+            let evicted = ordered.removeFirst()
+            framesByID.removeValue(forKey: evicted)
+        }
+        frameOrder[key] = ordered
+    }
+
+    private func makeFrameID() -> String {
+        nextFrameID += 1
+        return "frm_\(nextFrameID)"
+    }
+
+    private func parseCursor(_ cursor: String?) -> Int? {
+        guard let cursor, !cursor.isEmpty else { return nil }
+        return Int(cursor)
+    }
+
+    private func splitLines(_ content: String) -> [String] {
+        content.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
+    }
+
+    private func sharedPrefixLineCount(_ lhs: [String], _ rhs: [String]) -> Int {
+        let count = min(lhs.count, rhs.count)
+        var index = 0
+        while index < count, lhs[index] == rhs[index] {
+            index += 1
+        }
+        return index
+    }
+}
+
+final class ControlHarnessReadAfterWriteStore {
+    private let queue = DispatchQueue(label: "com.leongong.ghodex.control-harness.read-after-write")
+    private var entries: [String: ControlHarnessPendingWriteEntry] = [:]
+
+    func recordTextWrite(
+        terminalID: String,
+        writeID: String,
+        sequence: Int64,
+        visibleFrameID: String?,
+        screenFrameID: String?
+    ) {
+        recordWrite(
+            terminalID: terminalID,
+            writeID: writeID,
+            sequence: sequence,
+            kind: .text,
+            visibleFrameID: visibleFrameID,
+            screenFrameID: screenFrameID
+        )
+    }
+
+    func recordCommandWrite(
+        terminalID: String,
+        writeID: String,
+        sequence: Int64,
+        commandText: String,
+        visibleFrameID: String?,
+        screenFrameID: String?
+    ) {
+        recordWrite(
+            terminalID: terminalID,
+            writeID: writeID,
+            sequence: sequence,
+            kind: .command(commandText),
+            visibleFrameID: visibleFrameID,
+            screenFrameID: screenFrameID
+        )
+    }
+
+    func readiness(
+        for writeID: String,
+        terminalID: String,
+        scope: String,
+        currentSequence: Int64,
+        frame: ControlHarnessReadFrameSnapshot,
+        delta: ControlHarnessReadDelta
+    ) -> Bool {
+        queue.sync {
+            guard var entry = entries[writeID], entry.terminalID == terminalID else {
+                return false
+            }
+            guard currentSequence >= entry.sequence else {
+                return false
+            }
+
+            var scopeState = entry.scopeStates[scope] ?? .init(
+                baselineFrameID: nil,
+                firstPostWriteFrameID: nil,
+                awaitingDistinctNonEchoFrame: false,
+                isReady: false
+            )
+
+            if scopeState.isReady {
+                return true
+            }
+
+            if frame.frameID == scopeState.baselineFrameID {
+                entry.scopeStates[scope] = scopeState
+                entries[writeID] = entry
+                return false
+            }
+
+            let echoOnly = isEchoOnly(delta: delta, kind: entry.kind)
+            if scopeState.firstPostWriteFrameID == nil {
+                scopeState.firstPostWriteFrameID = frame.frameID
+                scopeState.awaitingDistinctNonEchoFrame = echoOnly
+                entry.scopeStates[scope] = scopeState
+                entries[writeID] = entry
+                return false
+            }
+
+            if scopeState.awaitingDistinctNonEchoFrame {
+                if frame.frameID == scopeState.firstPostWriteFrameID || echoOnly {
+                    if frame.frameID != scopeState.firstPostWriteFrameID {
+                        scopeState.firstPostWriteFrameID = frame.frameID
+                    }
+                    entry.scopeStates[scope] = scopeState
+                    entries[writeID] = entry
+                    return false
+                }
+            }
+
+            scopeState.awaitingDistinctNonEchoFrame = false
+            scopeState.isReady = true
+            entry.scopeStates[scope] = scopeState
+            entries[writeID] = entry
+            return true
+        }
+    }
+
+    private func recordWrite(
+        terminalID: String,
+        writeID: String,
+        sequence: Int64,
+        kind: ControlHarnessPendingWriteKind,
+        visibleFrameID: String?,
+        screenFrameID: String?
+    ) {
+        queue.sync {
+            entries[writeID] = .init(
+                terminalID: terminalID,
+                sequence: sequence,
+                kind: kind,
+                scopeStates: [
+                    "visible": .init(
+                        baselineFrameID: visibleFrameID,
+                        firstPostWriteFrameID: nil,
+                        awaitingDistinctNonEchoFrame: false,
+                        isReady: false
+                    ),
+                    "screen": .init(
+                        baselineFrameID: screenFrameID,
+                        firstPostWriteFrameID: nil,
+                        awaitingDistinctNonEchoFrame: false,
+                        isReady: false
+                    ),
+                ]
+            )
+        }
+    }
+
+    private func isEchoOnly(delta: ControlHarnessReadDelta, kind: ControlHarnessPendingWriteKind) -> Bool {
+        guard case .command(let commandText) = kind else {
+            return false
+        }
+
+        let trimmedCommand = commandText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedCommand.isEmpty else { return false }
+
+        let changedTexts = delta.changedRows.compactMap(\.text)
+        guard !changedTexts.isEmpty, changedTexts.count == 1 else {
+            return false
+        }
+
+        let line = changedTexts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !line.isEmpty else { return false }
+        return line.contains(trimmedCommand)
+    }
+}
+
 @MainActor
 final class ControlHarnessGenerationTracker {
     private enum ResourceType: String {
@@ -332,5 +730,135 @@ final class ControlHarnessEventHub {
             return sequence.int64Value
         }
         return nil
+    }
+}
+
+struct ControlHarnessSubscriptionEnvelope {
+    let response: ControlHarnessResponse
+    let session: ControlHarnessEventSubscriptionSession?
+}
+
+enum ControlHarnessServiceReply {
+    case single(ControlHarnessResponse)
+    case subscription(ControlHarnessSubscriptionEnvelope)
+}
+
+final class ControlHarnessEventSubscriptionSession {
+    private let queue = DispatchQueue(label: "com.leongong.ghodex.control-harness.subscription")
+    private let eventHub: ControlHarnessEventHub
+
+    let replayEvents: [Data]
+    private var remainingLiveEvents: Int?
+    private var finished = false
+    private var bufferingLiveEvents = false
+    private var bufferedLiveEvents: [Data] = []
+    private var deliverySink: (@Sendable (Data) -> Bool)?
+    private var finishHandler: (@Sendable () -> Void)?
+    private var finishSignaled = false
+    private var completionPending = false
+
+    init(eventHub: ControlHarnessEventHub, replayEvents: [Data], eventLimit: Int?) {
+        self.eventHub = eventHub
+        self.replayEvents = replayEvents
+        if let eventLimit {
+            self.remainingLiveEvents = max(eventLimit - replayEvents.count, 0)
+        } else {
+            self.remainingLiveEvents = nil
+        }
+    }
+
+    var shouldStreamLive: Bool {
+        queue.sync { !finished && remainingLiveEvents != 0 }
+    }
+
+    func addSubscriber(
+        sink: @escaping @Sendable (Data) -> Bool,
+        onFinish: @escaping @Sendable () -> Void
+    ) -> UUID? {
+        queue.sync {
+            guard !finished, remainingLiveEvents != 0 else {
+                finished = true
+                signalFinishLocked(onFinish)
+                return nil
+            }
+            bufferingLiveEvents = true
+            bufferedLiveEvents.removeAll(keepingCapacity: true)
+            deliverySink = sink
+            finishHandler = onFinish
+            completionPending = false
+            return eventHub.addSubscriber { [weak self] data in
+                guard let self else {
+                    onFinish()
+                    return false
+                }
+                return self.consumeLiveEvent(data: data)
+            }
+        }
+    }
+
+    func completeReplay() {
+        queue.sync {
+            bufferingLiveEvents = false
+
+            while !bufferedLiveEvents.isEmpty {
+                let data = bufferedLiveEvents.removeFirst()
+                guard let deliverySink, deliverySink(data) else {
+                    finished = true
+                    completionPending = true
+                    bufferedLiveEvents.removeAll(keepingCapacity: false)
+                    break
+                }
+            }
+
+            if completionPending {
+                signalFinishLocked()
+            }
+        }
+    }
+
+    private func consumeLiveEvent(data: Data) -> Bool {
+        queue.sync {
+            guard !finished, remainingLiveEvents != 0 else {
+                finished = true
+                if bufferingLiveEvents {
+                    completionPending = true
+                } else {
+                    signalFinishLocked()
+                }
+                return false
+            }
+
+            if bufferingLiveEvents {
+                bufferedLiveEvents.append(data)
+            } else {
+                guard let deliverySink, deliverySink(data) else {
+                    finished = true
+                    signalFinishLocked()
+                    return false
+                }
+            }
+
+            if let remainingLiveEvents {
+                let next = remainingLiveEvents - 1
+                self.remainingLiveEvents = next
+                if next == 0 {
+                    finished = true
+                    if bufferingLiveEvents {
+                        completionPending = true
+                    } else {
+                        signalFinishLocked()
+                    }
+                    return false
+                }
+            }
+
+            return true
+        }
+    }
+
+    private func signalFinishLocked(_ finishHandlerOverride: (@Sendable () -> Void)? = nil) {
+        guard !finishSignaled else { return }
+        finishSignaled = true
+        (finishHandlerOverride ?? finishHandler)?()
     }
 }
