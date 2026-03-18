@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(macos): close pane child tabs with middle click
+
+- What changed: Added middle-click close handling to the native pane child-tab strip so clicking the middle mouse button on a closable pane child tab now triggers the same close path as the existing close affordance.
+- Why: Pane child tabs already expose close semantics in their strip UI, and middle-click close is the expected high-speed tab gesture for mouse users.
+- Impact: Mouse users can dismiss pane child tabs directly from the strip without aiming for the small close icon, while single-tab panes remain protected because middle-click close only activates when pane-tab close buttons are available.
+- Verification: `git diff --check`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS' build`
+- Files: `macos/Sources/Features/Splits/TerminalSplitTreeView.swift`, `CHANGELOG.md`
+- Decision trail: Keep the gesture entirely inside the pane child-tab strip's AppKit host view so it only affects pane-local tabs and reuses the existing close callback. Gate the gesture behind the same `showsCloseButton` state as the visible close affordance so single-tab panes do not unexpectedly close.
+
 ### fix(workspaces): confirm before replacing an existing saved workspace
 
 - What changed: Workspace save now detects case-insensitive name collisions before writing, prompts the user to confirm replacement instead of silently overwriting an existing saved workspace, and preserves the existing workspace identity when the user confirms replace.
