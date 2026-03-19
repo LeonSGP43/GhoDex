@@ -376,15 +376,46 @@ private struct BrowserCEFDeckView: NSViewRepresentable {
 
                         completion(.success(for: request, valueJSON: resultJSON))
                     }
-                case .query, .click, .typeText, .waitForSelector:
+                case .query, .click, .typeText:
+                    self.routeDOMCommand(request, view: view, completion: completion)
+                case .waitForSelector:
                     completion(.failure(
                         for: request,
                         error: .commandUnsupported(
-                            "The \(request.command.rawValue) command is reserved for the future page-agent transport."
+                            "The waitForSelector command still needs the follow-up observer transport commit."
                         )
                     ))
                 }
             })
+        }
+
+        private func routeDOMCommand(
+            _ request: BrowserControlRequest,
+            view: GhoDexCEFView,
+            completion: @escaping BrowserControlCompletion
+        ) {
+            let script: String
+            do {
+                script = try BrowserControlScriptBuilder.script(for: request)
+            } catch let error as BrowserControlScriptBuilderError {
+                completion(.failure(for: request, error: .invalidRequest(error.localizedDescription)))
+                return
+            } catch {
+                completion(.failure(for: request, error: .internalFailure(error.localizedDescription)))
+                return
+            }
+
+            view.evaluateJavaScript(script) { resultJSON, error in
+                if let error {
+                    completion(.failure(
+                        for: request,
+                        error: .internalFailure(error.localizedDescription)
+                    ))
+                    return
+                }
+
+                completion(.success(for: request, valueJSON: resultJSON))
+            }
         }
     }
 }

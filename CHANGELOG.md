@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): add selector-based DOM command primitives
+
+- What changed: Added `BrowserControlScriptBuilder.swift` to generate selector-based DOM control scripts for `query`, `click`, and `typeText`, and taught `BrowserTabView`'s page-scoped control bridge to route those browser commands through the new `evaluateJavaScript` transport instead of rejecting every non-navigation command.
+- Why: The browser control plane needed its first real DOM-level commands so the architecture can move beyond raw navigation and low-level JS hooks. Shipping a small set of selector-based primitives now validates the new transport and gives the future page-agent layer a practical API shape to grow from.
+- Impact: Browser control callers can now ask a tab to inspect a selector, click an element, or type into value-backed elements through the typed browser control plane. `waitForSelector` remains intentionally unsupported until the follow-up observer-based transport lands, so this commit stays focused on synchronous DOM primitives only.
+- Verification: `tmp_dd=$(mktemp -d /tmp/ghodex-browser-dom-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-dom-build.XXXXXX) && xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" build`
+- Files: `macos/Sources/Features/Browser/BrowserControlScriptBuilder.swift`, `macos/Sources/Features/Browser/BrowserTabView.swift`, `CHANGELOG.md`
+
 ### feat(cef): add request-response JavaScript evaluation transport
 
 - What changed: Replaced the placeholder `evaluateJavaScript` CEF bridge with a real browser-to-renderer process-message round-trip, added renderer-side V8 evaluation handling inside `GhoDexCEFBridge.mm`, serialized synchronous JavaScript results back into JSON fragments, and taught the browser-side bridge to track pending evaluation completions and fail them if the page closes before the response returns.
