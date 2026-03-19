@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(build): isolate Zig-driven Xcode test state
+
+- What changed: Updated the Zig macOS test step to pass `HOME` through to `xcodebuild`, pin the destination to the host macOS architecture, and route `-derivedDataPath` into an isolated `/tmp` location instead of sharing Xcode's default global state, while excluding the macOS `.zig-cache` helper directory from SwiftLint so generated artifacts do not poison app-hosted test runs.
+- Why: The previous `zig build test` path relied on Xcode defaults, so runner state, multi-destination resolution, and shared DerivedData leftovers could leak into app-hosted test runs and cause intermittent daemon/bootstrap failures unrelated to product behavior.
+- Impact: Zig-triggered macOS tests now run with a more isolated Xcode environment, and SwiftLint no longer scans stale Zig-generated Xcode artifacts under `macos/.zig-cache`, which reduces cross-run contamination and makes failures easier to attribute to the actual suite instead of ambient Xcode state.
+- Verification: `cd macos && env -i HOME="$HOME" PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" xcodebuild test -project GhoDex.xcodeproj -scheme GhoDex -configuration Debug SYMROOT=build -skip-testing GhosttyUITests -arch arm64`; `zig build test`
+- Files: `src/build/GhosttyXcodebuild.zig`, `CHANGELOG.md`
+- Decision trail: Keep the Zig build graph responsible for invoking `xcodebuild`, but remove dependence on ambient Xcode defaults by making the macOS test destination and derived-data location explicit.
+
 ### test(ai-terminal-manager): stabilize heartbeat concurrency coverage
 
 - What changed: Removed the wall-clock speedup assertion from `storeRunsDueHeartbeatTasksWithBoundedConcurrencyUnderLoad()` and kept the test focused on completion plus bounded parallelism while leaving the dedicated heartbeat benchmark coverage in place for timing observations.
