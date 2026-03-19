@@ -423,6 +423,11 @@ private final class PageDelegate: NSObject, GhoDexCEFViewDelegate {
         self.pageID = pageID
     }
 
+    func cefViewDidBecomeReady(_ view: GhoDexCEFView) {
+        guard let target = model.controlTarget(for: pageID) else { return }
+        model.handle(.bridgeReady(target: target, url: model.pageNavigationState(for: pageID).url), from: pageID)
+    }
+
     func cefView(_ view: GhoDexCEFView, didUpdateTitle title: String) {
         guard let target = model.controlTarget(for: pageID) else { return }
         model.handle(.pageTitleChanged(target: target, title: title), from: pageID)
@@ -443,6 +448,26 @@ private final class PageDelegate: NSObject, GhoDexCEFViewDelegate {
                 canGoBack: canGoBack,
                 canGoForward: canGoForward,
                 isLoading: isLoading
+            ),
+            from: pageID
+        )
+    }
+
+    func cefView(
+        _ view: GhoDexCEFView,
+        didReceiveConsoleMessage message: String,
+        level: String,
+        source: String,
+        line: NSInteger
+    ) {
+        guard let target = model.controlTarget(for: pageID) else { return }
+        model.handle(
+            .consoleMessage(
+                target: target,
+                level: level,
+                message: message,
+                source: source,
+                line: Int(line)
             ),
             from: pageID
         )

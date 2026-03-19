@@ -8,6 +8,11 @@ NSString * const GhoDexCEFControlErrorDomain = @"com.leongong.ghodex.browser.cef
 - (void)completeEvaluationRequestID:(NSString *)requestID
                          resultJSON:(NSString * _Nullable)resultJSON
                               error:(NSError * _Nullable)error;
+- (void)notifyBridgeReady;
+- (void)notifyConsoleMessage:(NSString *)message
+                       level:(NSString *)level
+                      source:(NSString *)source
+                        line:(NSInteger)line;
 @end
 
 #if GHODEX_CEF_ENABLED
@@ -46,6 +51,24 @@ NSError *MakeControlError(GhoDexCEFControlErrorCode code, NSString *description)
   return [NSError errorWithDomain:GhoDexCEFControlErrorDomain
                              code:code
                          userInfo:@{NSLocalizedDescriptionKey : description ?: @"Unknown browser control error."}];
+}
+
+NSString *ConsoleLevelString(cef_log_severity_t level) {
+  switch (level) {
+  case LOGSEVERITY_VERBOSE:
+    return @"verbose";
+  case LOGSEVERITY_INFO:
+    return @"info";
+  case LOGSEVERITY_WARNING:
+    return @"warning";
+  case LOGSEVERITY_ERROR:
+    return @"error";
+  case LOGSEVERITY_FATAL:
+    return @"fatal";
+  case LOGSEVERITY_DEFAULT:
+  default:
+    return @"info";
+  }
 }
 
 id _Nullable FoundationObjectFromV8Value(CefRefPtr<CefV8Value> value,
@@ -380,10 +403,20 @@ public:
                                 CefRefPtr<CefProcessMessage> message) override;
 
   void OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString &title) override;
+  bool OnConsoleMessage(CefRefPtr<CefBrowser> browser,
+                        cef_log_severity_t level,
+                        const CefString &message,
+                        const CefString &source,
+                        int line) override;
 
   void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
     browser_ = browser;
     NSLog(@"[CEF] Browser created for %@", owner_);
+    if (owner_) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        [owner_ notifyBridgeReady];
+      });
+    }
     EmitState(browser->IsLoading(), browser->CanGoBack(), browser->CanGoForward());
   }
 
@@ -576,8 +609,19 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
   [self.delegate cefView:self didUpdateTitle:title];
 }
 
+- (void)notifyBridgeReady {
+  [self.delegate cefViewDidBecomeReady:self];
+}
+
 - (void)notifyURL:(NSString *)url canGoBack:(BOOL)canGoBack canGoForward:(BOOL)canGoForward isLoading:(BOOL)isLoading {
   [self.delegate cefView:self didUpdateURL:url canGoBack:canGoBack canGoForward:canGoForward isLoading:isLoading];
+}
+
+- (void)notifyConsoleMessage:(NSString *)message
+                       level:(NSString *)level
+                      source:(NSString *)source
+                        line:(NSInteger)line {
+  [self.delegate cefView:self didReceiveConsoleMessage:message level:level source:source line:line];
 }
 
 - (void)notifyOpenURLInNewTab:(NSString *)urlString {
@@ -636,6 +680,27 @@ void GhoDexCEFClient::OnTitleChange(CefRefPtr<CefBrowser> browser, const CefStri
   dispatch_async(dispatch_get_main_queue(), ^{
     [owner_ notifyTitle:title_string ?: @""];
   });
+}
+
+bool GhoDexCEFClient::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
+                                       cef_log_severity_t level,
+                                       const CefString &message,
+                                       const CefString &source,
+                                       int line) {
+  if (!owner_) {
+    return false;
+  }
+
+  NSString *message_string = [NSString stringWithUTF8String:message.ToString().c_str() ?: ""];
+  NSString *source_string = [NSString stringWithUTF8String:source.ToString().c_str() ?: ""];
+  NSString *level_string = ConsoleLevelString(level);
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [owner_ notifyConsoleMessage:message_string ?: @""
+                           level:level_string ?: @"info"
+                          source:source_string ?: @""
+                            line:line];
+  });
+  return false;
 }
 
 bool GhoDexCEFClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,

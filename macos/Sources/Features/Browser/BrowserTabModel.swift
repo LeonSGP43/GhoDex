@@ -169,9 +169,33 @@ struct BrowserControlEvent: Identifiable, Hashable, Codable {
     static func openURLInNewTabRequested(target: BrowserControlTarget, url: String) -> BrowserControlEvent {
         BrowserControlEvent(target: target, kind: .openURLInNewTabRequested, payload: ["url": url])
     }
+
+    static func consoleMessage(
+        target: BrowserControlTarget,
+        level: String,
+        message: String,
+        source: String,
+        line: Int
+    ) -> BrowserControlEvent {
+        BrowserControlEvent(
+            target: target,
+            kind: .consoleMessage,
+            payload: [
+                "level": level,
+                "message": message,
+                "source": source,
+                "line": String(line),
+            ]
+        )
+    }
+
+    static func bridgeReady(target: BrowserControlTarget, url: String) -> BrowserControlEvent {
+        BrowserControlEvent(target: target, kind: .bridgeReady, payload: ["url": url])
+    }
 }
 
 typealias BrowserControlCompletion = (BrowserControlResponse) -> Void
+typealias BrowserControlEventObserver = (BrowserControlEvent) -> Void
 
 struct BrowserPageControlBridge {
     let dispatch: (BrowserControlRequest, @escaping BrowserControlCompletion) -> Void
@@ -311,6 +335,13 @@ final class BrowserPageState: ObservableObject, Identifiable {
 
 @MainActor
 final class BrowserTabModel: ObservableObject {
+    struct PageNavigationSnapshot {
+        let url: String
+        let canGoBack: Bool
+        let canGoForward: Bool
+        let isLoading: Bool
+    }
+
     enum RuntimeState: Equatable {
         case ready
         case unsupportedBuild
@@ -331,6 +362,7 @@ final class BrowserTabModel: ObservableObject {
 
     private let defaultPageURL: URL
     private var installTask: Task<Void, Never>?
+    private var eventObservers: [UUID: EventObserverRegistration] = [:]
 
     init(initialURL: URL) {
         self.defaultPageURL = initialURL
@@ -347,6 +379,21 @@ final class BrowserTabModel: ObservableObject {
 
     deinit {
         installTask?.cancel()
+    }
+
+    @discardableResult
+    func subscribeToControlEvents(
+        pageID: UUID? = nil,
+        kinds: Set<BrowserControlEventKind>? = nil,
+        using observer: @escaping BrowserControlEventObserver
+    ) -> UUID {
+        let id = UUID()
+        eventObservers[id] = EventObserverRegistration(pageID: pageID, kinds: kinds, observer: observer)
+        return id
+    }
+
+    func unsubscribeFromControlEvents(_ id: UUID) {
+        eventObservers.removeValue(forKey: id)
     }
 
     var activePage: BrowserPageState? {
@@ -525,13 +572,20 @@ final class BrowserTabModel: ObservableObject {
         case .consoleMessage, .bridgeReady:
             break
         }
+
+        emit(event)
     }
 
-    func pageNavigationState(for pageID: UUID) -> (canGoBack: Bool, canGoForward: Bool, isLoading: Bool) {
+    func pageNavigationState(for pageID: UUID) -> PageNavigationSnapshot {
         guard let page = pages.first(where: { $0.id == pageID }) else {
-            return (false, false, false)
+            return PageNavigationSnapshot(url: "", canGoBack: false, canGoForward: false, isLoading: false)
         }
-        return (page.canGoBack, page.canGoForward, page.isLoading)
+        return PageNavigationSnapshot(
+            url: page.displayedURL,
+            canGoBack: page.canGoBack,
+            canGoForward: page.canGoForward,
+            isLoading: page.isLoading
+        )
     }
 
     func runtimeInstructions() -> [String] {
@@ -665,5 +719,23 @@ final class BrowserTabModel: ObservableObject {
         } else {
             runtimeState = .runtimeUnavailable
         }
+    }
+
+    private func emit(_ event: BrowserControlEvent) {
+        for registration in eventObservers.values {
+            if let pageID = registration.pageID, pageID != event.target.pageID {
+                continue
+            }
+            if let kinds = registration.kinds, !kinds.contains(event.kind) {
+                continue
+            }
+            registration.observer(event)
+        }
+    }
+
+    private struct EventObserverRegistration {
+        let pageID: UUID?
+        let kinds: Set<BrowserControlEventKind>?
+        let observer: BrowserControlEventObserver
     }
 }

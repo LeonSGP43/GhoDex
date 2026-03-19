@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): add console and lifecycle event subscriptions
+
+- What changed: Added typed browser control-event subscription APIs to `BrowserTabModel.swift`, expanded `BrowserControlEvent` with `consoleMessage` and `bridgeReady` helpers, and wired `GhoDexCEFBridge` plus `BrowserTabView` to forward browser-ready and console callbacks into the existing typed event stream alongside the already-routed navigation lifecycle events.
+- Why: The browser control plane needs subscription-style visibility into runtime behavior before higher-level agents and APIs can react to page readiness, navigation, and console output without polling. Landing event delivery now keeps future control adapters on the same typed bridge-first architecture as commands and waits.
+- Impact: Future browser-control callers can subscribe to typed per-page or per-kind events and observe lifecycle transitions, popup requests, bridge readiness, and runtime console messages through `BrowserTabModel` instead of scraping logs or polling the page. Existing browser-tab UI behavior stays unchanged.
+- Verification: `swiftlint lint /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/Browser/BrowserTabModel.swift /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/Browser/BrowserTabView.swift`, `tmp_dd=$(mktemp -d /tmp/ghodex-browser-events-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-events-build.XXXXXX) && xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" build`, and `tmp_dd=$(mktemp -d /tmp/ghodex-browser-events-cef-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-events-cef-build.XXXXXX) && env GITHUB_ACTIONS=1 xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" GHODEX_CEF_ENABLED=1 GHODEX_CEF_ROOT=$(pwd)/macos/build/cef-runtime/current GHODEX_CEF_OTHER_LDFLAGS='' GHODEX_CEF_WRAPPER_LIB=$(pwd)/macos/build/cef-runtime/current/lib/Debug/libcef_dll_wrapper.a build`
+- Files: `macos/Sources/Features/Browser/BrowserTabModel.swift`, `macos/Sources/Features/Browser/BrowserTabView.swift`, `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.h`, `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `CHANGELOG.md`
+
 ### feat(browser): add observer-based waitForSelector commands
 
 - What changed: Extended `BrowserControlScriptBuilder.swift` with a Promise-backed `waitForSelector` script that uses `MutationObserver` plus an in-page timeout, routed `waitForSelector` through the same typed DOM command path in `BrowserTabView.swift`, and taught `GhoDexCEFBridge.mm` to forward asynchronous Promise results back over the existing JS evaluation transport while failing pending requests if a navigation replaces the document first.

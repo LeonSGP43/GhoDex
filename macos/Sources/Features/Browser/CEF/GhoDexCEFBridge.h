@@ -33,12 +33,18 @@ typedef void (^GhoDexCEFJavaScriptEvaluationCompletion)(NSString * _Nullable res
 @end
 
 @protocol GhoDexCEFViewDelegate <NSObject>
+- (void)cefViewDidBecomeReady:(GhoDexCEFView *)view;
 - (void)cefView:(GhoDexCEFView *)view didUpdateTitle:(NSString *)title;
 - (void)cefView:(GhoDexCEFView *)view
     didUpdateURL:(NSString *)url
        canGoBack:(BOOL)canGoBack
     canGoForward:(BOOL)canGoForward
        isLoading:(BOOL)isLoading;
+- (void)cefView:(GhoDexCEFView *)view
+    didReceiveConsoleMessage:(NSString *)message
+                       level:(NSString *)level
+                      source:(NSString *)source
+                        line:(NSInteger)line;
 - (void)cefView:(GhoDexCEFView *)view requestOpenURLInNewTab:(NSString *)urlString;
 @end
 
