@@ -150,6 +150,53 @@ struct BrowserDOMTypeTextResult: Hashable, Codable {
     let value: String
 }
 
+struct BrowserDOMTextResult: Hashable, Codable {
+    let found: Bool
+    let selector: String
+    let text: String?
+}
+
+struct BrowserDOMAttributesResult: Hashable, Codable {
+    let found: Bool
+    let selector: String
+    let attributes: [String: String]?
+}
+
+struct BrowserDOMBoundingBoxResult: Hashable, Codable {
+    let found: Bool
+    let selector: String
+    let x: Double?
+    let y: Double?
+    let width: Double?
+    let height: Double?
+    let top: Double?
+    let right: Double?
+    let bottom: Double?
+    let left: Double?
+    let scrollX: Double?
+    let scrollY: Double?
+    let viewportWidth: Double?
+    let viewportHeight: Double?
+}
+
+struct BrowserDOMSnapshotNode: Hashable, Codable {
+    let tagName: String?
+    let id: String?
+    let className: String?
+    let text: String?
+    let attributes: [String: String]
+    let childCount: Int
+    let children: [BrowserDOMSnapshotNode]
+}
+
+struct BrowserDOMSnapshotResult: Hashable, Codable {
+    let found: Bool
+    let selector: String?
+    let maxDepth: Int
+    let includeText: Bool?
+    let snapshot: BrowserDOMSnapshotNode?
+}
+
 enum BrowserDOMBatchCommandKind: String, Codable, Hashable {
     case query
     case click
@@ -400,6 +447,52 @@ final class BrowserPageState: ObservableObject, Identifiable {
     ) {
         send(.typeText, payload: ["selector": selector, "text": text]) { response in
             completion(self.decodeResponse(response, as: BrowserDOMTypeTextResult.self))
+        }
+    }
+
+    func getText(
+        selector: String,
+        completion: @escaping (Result<BrowserDOMTextResult, BrowserControlError>) -> Void
+    ) {
+        send(.getText, payload: ["selector": selector]) { response in
+            completion(self.decodeResponse(response, as: BrowserDOMTextResult.self))
+        }
+    }
+
+    func getAttributes(
+        selector: String,
+        completion: @escaping (Result<BrowserDOMAttributesResult, BrowserControlError>) -> Void
+    ) {
+        send(.getAttributes, payload: ["selector": selector]) { response in
+            completion(self.decodeResponse(response, as: BrowserDOMAttributesResult.self))
+        }
+    }
+
+    func getBoundingBox(
+        selector: String,
+        completion: @escaping (Result<BrowserDOMBoundingBoxResult, BrowserControlError>) -> Void
+    ) {
+        send(.getBoundingBox, payload: ["selector": selector]) { response in
+            completion(self.decodeResponse(response, as: BrowserDOMBoundingBoxResult.self))
+        }
+    }
+
+    func getDOMSnapshot(
+        selector: String? = nil,
+        maxDepth: Int = 2,
+        includeText: Bool = true,
+        completion: @escaping (Result<BrowserDOMSnapshotResult, BrowserControlError>) -> Void
+    ) {
+        var payload: [String: String] = [
+            "maxDepth": String(max(0, maxDepth)),
+            "includeText": String(includeText),
+        ]
+        if let selector, !selector.isEmpty {
+            payload["selector"] = selector
+        }
+
+        send(.getDOMSnapshot, payload: payload) { response in
+            completion(self.decodeResponse(response, as: BrowserDOMSnapshotResult.self))
         }
     }
 

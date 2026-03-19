@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): add typed DOM inspection helper APIs
+
+- What changed: Added typed Swift result models for `getText`, `getAttributes`, `getBoundingBox`, and `getDOMSnapshot`, then exposed matching page-scoped helper APIs on `BrowserPageState` so callers can invoke the inspection commands without assembling raw payloads or decoding JSON manually.
+- Why: The browser control plane already had higher-level DOM inspection commands at the script-builder layer, but callers still had to treat them as low-level request/response primitives. Promoting them to typed page helpers keeps the Swift-side control surface consistent with the earlier `query` / `click` / `typeText` ergonomics work.
+- Impact: Browser control callers can now inspect text, attributes, layout geometry, and DOM snapshots through typed completion results, which makes future command adapters and automation layers easier to build safely on top of the page model.
+- Verification: `swiftlint lint /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/Browser/BrowserTabModel.swift`, `tmp_dd=$(mktemp -d /tmp/ghodex-browser-inspect-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-inspect-build.XXXXXX) && xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" build`, and `tmp_dd=$(mktemp -d /tmp/ghodex-browser-inspect-cef-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-inspect-cef-build.XXXXXX) && env GITHUB_ACTIONS=1 xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" GHODEX_CEF_ENABLED=1 GHODEX_CEF_ROOT=$(pwd)/macos/build/cef-runtime/current GHODEX_CEF_OTHER_LDFLAGS='' GHODEX_CEF_WRAPPER_LIB=$(pwd)/macos/build/cef-runtime/current/lib/Debug/libcef_dll_wrapper.a build`
+- Files: `macos/Sources/Features/Browser/BrowserTabModel.swift`, `CHANGELOG.md`
+
 ### feat(browser): add page-agent style batch DOM commands
 
 - What changed: Added a `batchDOMCommands` browser control command, typed Swift request/response models for DOM command batches, and a single-page JavaScript batch executor that can run `query`, `click`, `typeText`, `getText`, `getAttributes`, `getBoundingBox`, and `getDOMSnapshot` in one evaluation round-trip.
