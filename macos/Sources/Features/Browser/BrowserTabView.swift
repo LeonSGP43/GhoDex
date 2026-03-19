@@ -383,7 +383,8 @@ private struct BrowserCEFDeckView: NSViewRepresentable {
                      .getDOMSnapshot,
                      .getText,
                      .getAttributes,
-                     .getBoundingBox:
+                     .getBoundingBox,
+                     .batchDOMCommands:
                     self.routeDOMCommand(request, view: view, completion: completion)
                 }
             })

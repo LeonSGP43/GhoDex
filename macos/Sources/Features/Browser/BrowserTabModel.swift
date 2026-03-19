@@ -16,6 +16,7 @@ enum BrowserControlCommandKind: String, Codable, Hashable {
     case getText
     case getAttributes
     case getBoundingBox
+    case batchDOMCommands
 }
 
 enum BrowserControlEventKind: String, Codable, Hashable {
@@ -147,6 +148,53 @@ struct BrowserDOMTypeTextResult: Hashable, Codable {
     let typed: Bool
     let selector: String
     let value: String
+}
+
+enum BrowserDOMBatchCommandKind: String, Codable, Hashable {
+    case query
+    case click
+    case typeText
+    case getText
+    case getAttributes
+    case getBoundingBox
+    case getDOMSnapshot
+}
+
+struct BrowserDOMBatchCommand: Identifiable, Hashable, Codable {
+    let id: UUID
+    let command: BrowserDOMBatchCommandKind
+    let selector: String?
+    let text: String?
+    let maxDepth: Int?
+    let includeText: Bool?
+
+    init(
+        id: UUID = UUID(),
+        command: BrowserDOMBatchCommandKind,
+        selector: String? = nil,
+        text: String? = nil,
+        maxDepth: Int? = nil,
+        includeText: Bool? = nil
+    ) {
+        self.id = id
+        self.command = command
+        self.selector = selector
+        self.text = text
+        self.maxDepth = maxDepth
+        self.includeText = includeText
+    }
+}
+
+struct BrowserDOMBatchCommandResult: Hashable, Codable {
+    let id: UUID
+    let command: BrowserDOMBatchCommandKind
+    let ok: Bool
+    let valueJSON: String?
+    let errorMessage: String?
+}
+
+struct BrowserDOMBatchResult: Hashable, Codable {
+    let results: [BrowserDOMBatchCommandResult]
 }
 
 struct BrowserControlEvent: Identifiable, Hashable, Codable {
@@ -352,6 +400,28 @@ final class BrowserPageState: ObservableObject, Identifiable {
     ) {
         send(.typeText, payload: ["selector": selector, "text": text]) { response in
             completion(self.decodeResponse(response, as: BrowserDOMTypeTextResult.self))
+        }
+    }
+
+    func runDOMCommandBatch(
+        _ commands: [BrowserDOMBatchCommand],
+        completion: @escaping (Result<BrowserDOMBatchResult, BrowserControlError>) -> Void
+    ) {
+        guard !commands.isEmpty else {
+            completion(.failure(.invalidRequest("The browser DOM batch requires at least one command.")))
+            return
+        }
+
+        let encoder = JSONEncoder()
+        guard let encodedCommands = try? encoder.encode(commands),
+              let commandsJSON = String(data: encodedCommands, encoding: .utf8)
+        else {
+            completion(.failure(.internalFailure("The browser DOM batch could not be encoded as JSON.")))
+            return
+        }
+
+        send(.batchDOMCommands, payload: ["commandsJSON": commandsJSON]) { response in
+            completion(self.decodeResponse(response, as: BrowserDOMBatchResult.self))
         }
     }
 

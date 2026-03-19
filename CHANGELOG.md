@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): add page-agent style batch DOM commands
+
+- What changed: Added a `batchDOMCommands` browser control command, typed Swift request/response models for DOM command batches, and a single-page JavaScript batch executor that can run `query`, `click`, `typeText`, `getText`, `getAttributes`, `getBoundingBox`, and `getDOMSnapshot` in one evaluation round-trip.
+- Why: The control plane already had working single-command DOM actions, but higher-level automation would otherwise need to pay one bridge hop per selector action. A batched page-agent style command reduces cross-process overhead while keeping the transport and per-command semantics aligned with the existing DOM helpers.
+- Impact: Browser-tab callers can now submit a page-scoped DOM command list as one request and receive per-command success/error results, which gives future command APIs a fast path for multi-step inspections and interactions without adding a new CEF transport layer.
+- Verification: `swiftlint lint /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/Browser/BrowserTabModel.swift /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/Browser/BrowserControlScriptBuilder.swift /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/Browser/BrowserTabView.swift`, `tmp_dd=$(mktemp -d /tmp/ghodex-browser-batch-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-batch-build.XXXXXX) && xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" build`, and `tmp_dd=$(mktemp -d /tmp/ghodex-browser-batch-cef-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-batch-cef-build.XXXXXX) && env GITHUB_ACTIONS=1 xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" GHODEX_CEF_ENABLED=1 GHODEX_CEF_ROOT=$(pwd)/macos/build/cef-runtime/current GHODEX_CEF_OTHER_LDFLAGS='' GHODEX_CEF_WRAPPER_LIB=$(pwd)/macos/build/cef-runtime/current/lib/Debug/libcef_dll_wrapper.a build`
+- Files: `macos/Sources/Features/Browser/BrowserTabModel.swift`, `macos/Sources/Features/Browser/BrowserControlScriptBuilder.swift`, `macos/Sources/Features/Browser/BrowserTabView.swift`, `CHANGELOG.md`
+
 ### feat(browser): add typed click/type/query helper APIs
 
 - What changed: Added typed Swift result models for the existing low-level `query`, `click`, and `typeText` browser control commands, and exposed matching page-scoped convenience APIs on `BrowserPageState` so callers no longer need to hand-build requests or decode `valueJSON` manually.
