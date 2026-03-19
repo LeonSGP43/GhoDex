@@ -190,6 +190,70 @@ void SendEvaluationResponse(CefRefPtr<CefFrame> frame,
   frame->SendProcessMessage(PID_BROWSER, message);
 }
 
+class GhoDexCEFEvaluationPromiseHandler final : public CefV8Handler {
+public:
+  GhoDexCEFEvaluationPromiseHandler(CefRefPtr<CefFrame> frame,
+                                    const CefString &request_id,
+                                    bool success)
+      : frame_(frame), request_id_(request_id), success_(success) {}
+
+  bool Execute(const CefString &name,
+               CefRefPtr<CefV8Value> object,
+               const CefV8ValueList &arguments,
+               CefRefPtr<CefV8Value> &retval,
+               CefString &exception) override {
+    CEF_REQUIRE_RENDERER_THREAD();
+
+    CefRefPtr<CefV8Value> payload_value = arguments.empty() ? nullptr : arguments.front();
+    if (success_) {
+      NSString *serialization_error = nil;
+      NSString *result_json = JSONStringFromV8Value(payload_value, &serialization_error);
+      if (result_json.length == 0 && serialization_error != nil) {
+        SendEvaluationResponse(
+            frame_,
+            request_id_,
+            false,
+            std::string(serialization_error.UTF8String
+                            ?: "The renderer could not serialize the JavaScript promise result."));
+        return true;
+      }
+
+      SendEvaluationResponse(frame_, request_id_, true, std::string(result_json.UTF8String ?: "null"));
+      return true;
+    }
+
+    std::string rejection_message = "JavaScript promise rejected.";
+    if (payload_value.get()) {
+      if (payload_value->IsString()) {
+        rejection_message = payload_value->GetStringValue().ToString();
+      } else if (payload_value->IsObject()) {
+        CefRefPtr<CefV8Value> message_value = payload_value->GetValue("message");
+        if (message_value.get() && message_value->IsString()) {
+          rejection_message = message_value->GetStringValue().ToString();
+        } else {
+          NSString *serialization_error = nil;
+          NSString *payload_json = JSONStringFromV8Value(payload_value, &serialization_error);
+          if (payload_json.length > 0) {
+            rejection_message = std::string(payload_json.UTF8String ?: "JavaScript promise rejected.");
+          } else if (serialization_error != nil) {
+            rejection_message = std::string(serialization_error.UTF8String ?: "JavaScript promise rejected.");
+          }
+        }
+      }
+    }
+
+    SendEvaluationResponse(frame_, request_id_, false, rejection_message);
+    return true;
+  }
+
+private:
+  CefRefPtr<CefFrame> frame_;
+  CefString request_id_;
+  bool success_;
+
+  IMPLEMENT_REFCOUNTING(GhoDexCEFEvaluationPromiseHandler);
+};
+
 class ScopedMainArgs {
 public:
   ScopedMainArgs() {
@@ -615,6 +679,12 @@ void GhoDexCEFClient::OnLoadingStateChange(CefRefPtr<CefBrowser> browser, bool i
         canGoBack,
         canGoForward,
         browser ? browser->GetMainFrame()->GetURL().ToString().c_str() : "");
+  if (isLoading && owner_) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [owner_ failPendingEvaluationRequestsWithCode:GhoDexCEFControlErrorCodeEvaluationUnavailable
+                                        description:@"The browser page navigated before JavaScript evaluation completed."];
+    });
+  }
   EmitState(isLoading, canGoBack, canGoForward);
 }
 
@@ -1123,17 +1193,47 @@ bool GhoDexCEFApp::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
   CefRefPtr<CefV8Value> return_value;
   CefRefPtr<CefV8Exception> exception;
   bool did_evaluate = context->Eval(script, frame->GetURL(), 0, return_value, exception);
-  context->Exit();
 
   if (!did_evaluate) {
+    context->Exit();
     std::string message_text =
         exception.get() ? exception->GetMessage().ToString() : "JavaScript evaluation failed.";
     SendEvaluationResponse(frame, request_id, false, message_text);
     return true;
   }
 
+  if (return_value.get() && return_value->IsPromise()) {
+    CefRefPtr<CefV8Value> then_function = return_value->GetValue("then");
+    if (!then_function.get() || !then_function->IsFunction()) {
+      context->Exit();
+      SendEvaluationResponse(frame, request_id, false, "The JavaScript promise result could not be observed.");
+      return true;
+    }
+
+    CefV8ValueList then_arguments;
+    then_arguments.push_back(CefV8Value::CreateFunction(
+        "ghodexResolveEvaluation",
+        new GhoDexCEFEvaluationPromiseHandler(frame, request_id, true)));
+    then_arguments.push_back(CefV8Value::CreateFunction(
+        "ghodexRejectEvaluation",
+        new GhoDexCEFEvaluationPromiseHandler(frame, request_id, false)));
+
+    CefRefPtr<CefV8Value> then_result =
+        then_function->ExecuteFunctionWithContext(context, return_value, then_arguments);
+    context->Exit();
+
+    if (!then_result.get()) {
+      SendEvaluationResponse(frame,
+                             request_id,
+                             false,
+                             "The JavaScript promise callbacks could not be attached.");
+    }
+    return true;
+  }
+
   NSString *serialization_error = nil;
   NSString *result_json = JSONStringFromV8Value(return_value, &serialization_error);
+  context->Exit();
   if (result_json.length == 0 && serialization_error != nil) {
     SendEvaluationResponse(frame,
                            request_id,

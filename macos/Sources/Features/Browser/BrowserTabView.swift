@@ -376,15 +376,8 @@ private struct BrowserCEFDeckView: NSViewRepresentable {
 
                         completion(.success(for: request, valueJSON: resultJSON))
                     }
-                case .query, .click, .typeText:
+                case .query, .click, .typeText, .waitForSelector:
                     self.routeDOMCommand(request, view: view, completion: completion)
-                case .waitForSelector:
-                    completion(.failure(
-                        for: request,
-                        error: .commandUnsupported(
-                            "The waitForSelector command still needs the follow-up observer transport commit."
-                        )
-                    ))
                 }
             })
         }

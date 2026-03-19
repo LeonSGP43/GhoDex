@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): add observer-based waitForSelector commands
+
+- What changed: Extended `BrowserControlScriptBuilder.swift` with a Promise-backed `waitForSelector` script that uses `MutationObserver` plus an in-page timeout, routed `waitForSelector` through the same typed DOM command path in `BrowserTabView.swift`, and taught `GhoDexCEFBridge.mm` to forward asynchronous Promise results back over the existing JS evaluation transport while failing pending requests if a navigation replaces the document first.
+- Why: The browser control plane needed a real wait primitive before higher-level inspection APIs can reliably coordinate page readiness. Reusing the existing typed request/response path keeps waits inside the embedded browser runtime instead of forcing polling loops or external automation protocols onto the main product surface.
+- Impact: Browser control callers can now wait for a selector to appear and receive a structured JSON result with `found`, `timedOut`, `elapsedMS`, and lightweight element details. The CEF transport also now supports Promise-based evaluations, which unlocks future observer-driven commands without changing the public control API.
+- Verification: `swiftlint lint /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/Browser/BrowserControlScriptBuilder.swift /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/Browser/BrowserTabView.swift`, `tmp_dd=$(mktemp -d /tmp/ghodex-browser-wait-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-wait-build.XXXXXX) && xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" build`, and `tmp_dd=$(mktemp -d /tmp/ghodex-browser-wait-cef-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-wait-cef-build.XXXXXX) && env GITHUB_ACTIONS=1 xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" GHODEX_CEF_ENABLED=1 GHODEX_CEF_ROOT=$(pwd)/macos/build/cef-runtime/current GHODEX_CEF_OTHER_LDFLAGS='' GHODEX_CEF_WRAPPER_LIB=$(pwd)/macos/build/cef-runtime/current/lib/Debug/libcef_dll_wrapper.a build`
+- Files: `macos/Sources/Features/Browser/BrowserControlScriptBuilder.swift`, `macos/Sources/Features/Browser/BrowserTabView.swift`, `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `CHANGELOG.md`
+
 ### feat(browser): add selector-based DOM command primitives
 
 - What changed: Added `BrowserControlScriptBuilder.swift` to generate selector-based DOM control scripts for `query`, `click`, and `typeText`, and taught `BrowserTabView`'s page-scoped control bridge to route those browser commands through the new `evaluateJavaScript` transport instead of rejecting every non-navigation command.
