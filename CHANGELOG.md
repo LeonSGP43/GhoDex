@@ -12,6 +12,16 @@ All notable changes to this project are documented in this file.
 - Verification: `zig build test -Dtest-filter=control`; `zig build -Demit-macos-app=false`
 - Files: `src/cli/control.zig`, `CHANGELOG.md`
 - Decision trail: Keep the existing explicit override paths untouched, but make the implicit discovery path conservative so the CLI only auto-targets a harness when there is exactly one live candidate.
+
+### fix(control): reject false-positive terminal mutations and invalid read windows
+
+- What changed: Taught the macOS control harness to reject `send-text` and `close-terminal` requests when the target terminal does not exist instead of emitting success events anyway, reject newline-only `run-command` payloads before they can produce a fake `write_id`, and enforce runtime `read-terminal` validation for non-numeric cursors plus the invalid `cursor + since_frame_id` delta combination.
+- Why: Critical acceptance found several places where the harness would acknowledge a mutation even though no terminal action actually happened, plus a mismatch between the documented/CLI-tested `read-terminal` validation contract and what the Swift runtime really accepted.
+- Impact: Automation clients no longer advance generations, consume bogus `write_id` values, or observe phantom `terminal.input.sent` / `terminal.closed` / `terminal.command.sent` events for no-op requests, and invalid `read-terminal` cursor combinations now fail consistently at the service boundary.
+- Verification: `zig build test -Dtest-filter=control`; `zig build -Demit-macos-app=false`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' -derivedDataPath /tmp/ghodex-acceptance-control -only-testing:GhosttyTests/ControlHarnessTests test`
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `CHANGELOG.md`
+- Decision trail: Keep the external protocol shape unchanged, but move the acceptance boundary to the real terminal action so the harness only emits success metadata after an operation is known to be executable, and validate ambiguous read-window arguments in Swift where every transport path sees the same rules.
+
 ### fix(control): distinguish CLI transport failures from invalid harness responses
 
 - What changed: Refined CLI-side control error classification so transport/connectivity failures still surface as `control_unavailable`, but empty socket closes now return `control_empty_response`, oversized payloads return `control_response_too_large`, and malformed harness responses return `control_invalid_response`.

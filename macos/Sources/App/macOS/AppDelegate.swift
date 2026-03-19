@@ -1174,12 +1174,33 @@ class AppDelegate: NSObject,
     }
 
     @MainActor
+    func controlHarnessSendText(_ text: String, to terminalID: UUID) -> Bool {
+        guard let surface = findSurface(forUUID: terminalID) else {
+            return false
+        }
+
+        surface.aiManagerSendText(text)
+        return true
+    }
+
+    @MainActor
     func controlHarnessRunCommand(_ command: String, to terminalID: UUID) -> Bool {
         guard let surface = findSurface(forUUID: terminalID) else {
             return false
         }
 
         surface.aiManagerRunCommand(command)
+        return true
+    }
+
+    @MainActor
+    func controlHarnessCloseTerminal(_ terminalID: UUID) -> Bool {
+        guard let surface = findSurface(forUUID: terminalID),
+              let nativeSurface = surface.surface else {
+            return false
+        }
+
+        ghostty.requestClose(surface: nativeSurface)
         return true
     }
 

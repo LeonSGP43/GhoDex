@@ -670,6 +670,34 @@ final class ControlHarnessCore {
         if let maxLines = request.maxLines, maxLines < 1 {
             throw ControlHarnessCoreError.invalidArgument("max_lines must be >= 1")
         }
+
+        if request.command == "run-command",
+           let commandText = request.commandText,
+           !commandText.isEmpty,
+           commandText.trimmingCharacters(in: .newlines).isEmpty {
+            throw ControlHarnessCoreError.invalidArgument(
+                "command_text must contain at least one non-newline character"
+            )
+        }
+
+        if request.command == "read-terminal" {
+            if let cursor = request.cursor?.trimmingCharacters(in: .whitespacesAndNewlines) {
+                guard !cursor.isEmpty, let cursorValue = Int(cursor), cursorValue >= 0 else {
+                    throw ControlHarnessCoreError.invalidArgument(
+                        "cursor must be a non-negative integer"
+                    )
+                }
+            }
+
+            let mode = request.mode ?? "snapshot"
+            if mode == "delta",
+               request.sinceFrameID != nil,
+               request.cursor != nil {
+                throw ControlHarnessCoreError.invalidArgument(
+                    "cursor cannot be combined with since_frame_id in delta mode"
+                )
+            }
+        }
     }
 
     private func idempotencyFingerprint(for request: ControlHarnessRequest) throws -> Data? {
@@ -871,7 +899,9 @@ final class ControlHarnessCore {
         guard let appDelegate else {
             throw ControlHarnessCoreError.appUnavailable
         }
-        appDelegate.aiTerminalManagerStore.sendInput(text, to: terminalID)
+        guard appDelegate.controlHarnessSendText(text, to: terminalID) else {
+            throw ControlHarnessCoreError.terminalNotFound(terminalID.uuidString)
+        }
         let generation = generations.advanceTerminalGeneration(for: terminalIDString)
         let sequence = eventHub.emit(
             event: "terminal.input.sent",
@@ -1069,7 +1099,9 @@ final class ControlHarnessCore {
         guard let appDelegate else {
             throw ControlHarnessCoreError.appUnavailable
         }
-        appDelegate.aiTerminalManagerStore.closeSession(terminalID)
+        guard appDelegate.controlHarnessCloseTerminal(terminalID) else {
+            throw ControlHarnessCoreError.terminalNotFound(terminalID.uuidString)
+        }
         let generation = generations.advanceTerminalGeneration(for: terminalIDString)
         let sequence = eventHub.emit(
             event: "terminal.closed",
