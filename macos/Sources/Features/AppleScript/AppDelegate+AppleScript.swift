@@ -110,6 +110,25 @@ extension NSApplication {
     }
 }
 
+// MARK: - Browser Tabs
+
+@MainActor
+extension NSApplication {
+    /// Backing collection for `application.browser tabs`.
+    @objc(browserTabs)
+    var browserTabs: [ScriptBrowserTab] {
+        guard isAppleScriptEnabled else { return [] }
+        return BrowserTabController.all.map { ScriptBrowserTab(controller: $0) }
+    }
+
+    /// Enables AppleScript unique-ID lookup for browser tab references.
+    @objc(valueInBrowserTabsWithUniqueID:)
+    func valueInBrowserTabs(uniqueID: String) -> ScriptBrowserTab? {
+        guard isAppleScriptEnabled else { return nil }
+        return browserTabs.first(where: { $0.stableID == uniqueID })
+    }
+}
+
 // MARK: - Commands
 
 @MainActor
@@ -290,6 +309,37 @@ extension NSApplication {
         // bookkeeping has not fully refreshed in the current run loop.
         let fallbackWindow = ScriptWindow(primaryController: createdController)
         return ScriptTab(window: fallbackWindow, controller: createdController)
+    }
+
+    /// Handler for the `new browser tab` AppleScript command.
+    @objc(handleNewBrowserTabScriptCommand:)
+    func handleNewBrowserTabScriptCommand(_ command: NSScriptCommand) -> ScriptBrowserTab? {
+        guard validateScript(command: command) else { return nil }
+
+        guard let appDelegate = delegate as? AppDelegate else {
+            command.scriptErrorNumber = errAEEventFailed
+            command.scriptErrorString = "GhoDex app delegate is unavailable."
+            return nil
+        }
+
+        let initialURL: URL?
+        if let rawURL = command.evaluatedArguments?["url"] as? String, !rawURL.isEmpty {
+            let normalizedURL = BrowserPaths.normalizedURLString(
+                rawURL,
+                fallback: BrowserTabController.defaultHomePageURL(for: appDelegate.ghostty).absoluteString
+            )
+            guard let url = URL(string: normalizedURL) else {
+                command.scriptErrorNumber = errAECoercionFail
+                command.scriptErrorString = "The Browser tab URL is invalid."
+                return nil
+            }
+            initialURL = url
+        } else {
+            initialURL = nil
+        }
+
+        let controller = BrowserTabController.newWindow(appDelegate.ghostty, initialURL: initialURL)
+        return ScriptBrowserTab(controller: controller)
     }
 }
 

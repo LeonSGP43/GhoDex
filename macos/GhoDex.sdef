@@ -22,6 +22,9 @@
       <responds-to command="new tab">
         <cocoa method="handleNewTabScriptCommand:"/>
       </responds-to>
+      <responds-to command="new browser tab">
+        <cocoa method="handleNewBrowserTabScriptCommand:"/>
+      </responds-to>
       <responds-to command="new surface configuration">
         <cocoa method="handleNewSurfaceConfigurationScriptCommand:"/>
       </responds-to>
@@ -31,6 +34,10 @@
 
       <element type="window" access="r">
         <cocoa key="scriptWindows"/>
+      </element>
+
+      <element type="browser tab" access="r">
+        <cocoa key="browserTabs"/>
       </element>
 
       <element type="terminal" access="r">
@@ -81,6 +88,15 @@
       <element type="terminal" access="r">
         <cocoa key="terminals"/>
       </element>
+    </class>
+
+    <class name="browser tab" code="GbTb" plural="browser tabs" description="A Browser tab controller with a command-addressable active page.">
+      <cocoa class="GhosttyScriptBrowserTab"/>
+      <property name="id" code="ID  " type="text" access="r" description="Stable ID for this browser tab."/>
+      <property name="name" code="pnam" type="text" access="r" description="The title of the active browser page.">
+        <cocoa key="title"/>
+      </property>
+      <property name="url" code="GbUr" type="text" access="r" description="Current URL of the active browser page."/>
     </class>
 
     <class name="terminal" code="Gtrm" plural="terminals" description="An individual terminal surface.">
@@ -179,6 +195,13 @@
         <cocoa key="configuration"/>
       </parameter>
       <result type="tab" description="The newly created tab."/>
+    </command>
+
+    <command name="new browser tab" code="GhNbTb" description="Create a new Browser tab.">
+      <parameter name="at url" code="GbTU" type="text" optional="yes" description="Initial URL for the new Browser tab.">
+        <cocoa key="url"/>
+      </parameter>
+      <result type="browser tab" description="The newly created Browser tab."/>
     </command>
 
     <command name="split" code="GhstSplt" description="Split a terminal in the given direction.">
@@ -285,6 +308,33 @@
       <parameter name="to" code="GMsT" type="terminal" description="The terminal to send the event to.">
         <cocoa key="terminal"/>
       </parameter>
+    </command>
+
+    <command name="load browser url" code="GhLdBU" description="Load a URL in a Browser tab's active page.">
+      <cocoa class="GhosttyScriptBrowserLoadURLCommand"/>
+      <direct-parameter type="text" description="The URL to load."/>
+      <parameter name="in" code="GbIn" type="browser tab" description="The Browser tab to load the URL in.">
+        <cocoa key="browserTab"/>
+      </parameter>
+      <result type="boolean" description="True when the request was dispatched."/>
+    </command>
+
+    <command name="evaluate browser javascript" code="GhEvBJ" description="Evaluate JavaScript in a Browser tab's active page and return the JSON result string.">
+      <cocoa class="GhosttyScriptBrowserEvaluateCommand"/>
+      <direct-parameter type="text" description="The JavaScript source to evaluate."/>
+      <parameter name="in" code="GbJB" type="browser tab" description="The Browser tab to evaluate the script in.">
+        <cocoa key="browserTab"/>
+      </parameter>
+      <result type="text" description="The JSON-encoded result from browser evaluation."/>
+    </command>
+
+    <command name="run browser dom batch" code="GhBtDM" description="Run a JSON-encoded DOM command batch against a Browser tab's active page and return typed JSON results.">
+      <cocoa class="GhosttyScriptBrowserDOMBatchCommand"/>
+      <direct-parameter type="text" description="JSON array of DOM batch commands."/>
+      <parameter name="in" code="GbDB" type="browser tab" description="The Browser tab to run the DOM batch in.">
+        <cocoa key="browserTab"/>
+      </parameter>
+      <result type="text" description="A JSON string describing the decoded DOM batch results."/>
     </command>
   </suite>
 

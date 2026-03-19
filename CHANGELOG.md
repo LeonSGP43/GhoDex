@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): add AppleScript browser command adapter
+
+- What changed: Added an AppleScript-facing `browser tab` object plus `new browser tab`, `load browser url`, `evaluate browser javascript`, and `run browser dom batch` commands. The adapter targets each Browser tab controller's active page and returns JSON strings for evaluation and decoded DOM batch results.
+- Why: The internal browser control plane was already strong enough for command-based automation, but it still had no external adapter surface. Exposing the first scripting adapter through AppleScript gives the feature a real command API without touching settings or UI flows.
+- Impact: GhoDex can now enumerate Browser tabs from AppleScript, create new ones, load URLs, evaluate page JavaScript, and run typed DOM command batches through a scriptable command surface. This is the first outward-facing control adapter for the browser tab architecture.
+- Verification: `swiftlint lint /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/AppleScript/AppDelegate+AppleScript.swift /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `tmp_dd=$(mktemp -d /tmp/ghodex-browser-script-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-script-build.XXXXXX) && xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" build`, and `tmp_dd=$(mktemp -d /tmp/ghodex-browser-script-cef-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-script-cef-build.XXXXXX) && env GITHUB_ACTIONS=1 xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" GHODEX_CEF_ENABLED=1 GHODEX_CEF_ROOT=$(pwd)/macos/build/cef-runtime/current GHODEX_CEF_OTHER_LDFLAGS='' GHODEX_CEF_WRAPPER_LIB=$(pwd)/macos/build/cef-runtime/current/lib/Debug/libcef_dll_wrapper.a build`
+- Files: `macos/GhoDex.sdef`, `macos/Sources/Features/AppleScript/AppDelegate+AppleScript.swift`, `macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `CHANGELOG.md`
+
 ### feat(browser): add decoded batch result helpers
 
 - What changed: Added high-level decoded batch result models for DOM command batches, plus `runDecodedDOMCommandBatch` on `BrowserPageState` so callers can receive typed per-step values and errors instead of reading raw `valueJSON` strings from `BrowserDOMBatchCommandResult`.
