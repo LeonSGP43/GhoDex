@@ -2558,18 +2558,58 @@ extension Ghostty.SurfaceView: NSTextInputClient {
 
 extension Ghostty.SurfaceView {
     @MainActor
-    func aiManagerVisibleText() -> String {
-        cachedVisibleContents.get()
+    func aiManagerVisibleText(refresh: Bool = false) -> (content: String, cacheAgeMs: Int) {
+        if refresh {
+            return (readAIManagerText(tag: GHOSTTY_POINT_VIEWPORT), 0)
+        }
+        let content = cachedVisibleContents.get()
+        return (content, cachedVisibleContents.cacheAgeMilliseconds() ?? 0)
     }
 
     @MainActor
-    func aiManagerScreenText() -> String {
-        cachedScreenContents.get()
+    func aiManagerScreenText(refresh: Bool = false) -> (content: String, cacheAgeMs: Int) {
+        if refresh {
+            return (readAIManagerText(tag: GHOSTTY_POINT_SCREEN), 0)
+        }
+        let content = cachedScreenContents.get()
+        return (content, cachedScreenContents.cacheAgeMilliseconds() ?? 0)
     }
 
     @MainActor
     func aiManagerSendText(_ text: String) {
         surfaceModel?.sendText(text)
+    }
+
+    @MainActor
+    func aiManagerRunCommand(_ command: String) {
+        let trimmed = command.trimmingCharacters(in: .newlines)
+        guard !trimmed.isEmpty else { return }
+        surfaceModel?.sendText(trimmed)
+        surfaceModel?.sendKeyEvent(.init(key: .enter))
+    }
+
+    @MainActor
+    private func readAIManagerText(tag: ghostty_point_tag_e) -> String {
+        guard let surface else { return "" }
+        var text = ghostty_text_s()
+        let selection = ghostty_selection_s(
+            top_left: ghostty_point_s(
+                tag: tag,
+                coord: GHOSTTY_POINT_COORD_TOP_LEFT,
+                x: 0,
+                y: 0
+            ),
+            bottom_right: ghostty_point_s(
+                tag: tag,
+                coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
+                x: 0,
+                y: 0
+            ),
+            rectangle: false
+        )
+        guard ghostty_surface_read_text(surface, selection, &text) else { return "" }
+        defer { ghostty_surface_free_text(surface, &text) }
+        return String(cString: text.text)
     }
 }
 
@@ -2845,6 +2885,7 @@ class CachedValue<T> {
     private let fetch: () -> T
     private let duration: Duration
     private var expiryTask: Task<Void, Never>?
+    private var fetchedAt: ContinuousClock.Instant?
 
     init(duration: Duration, fetch: @escaping () -> T) {
         self.duration = duration
@@ -2865,12 +2906,14 @@ class CachedValue<T> {
         let now = ContinuousClock.now
         let expires = now + duration
         self.value = result
+        self.fetchedAt = now
 
         // Schedule a task to clear the value
         expiryTask = Task { [weak self] in
             do {
                 try await Task.sleep(until: expires)
                 self?.value = nil
+                self?.fetchedAt = nil
                 self?.expiryTask = nil
             } catch {
                 // Task was cancelled, do nothing
@@ -2878,5 +2921,15 @@ class CachedValue<T> {
         }
 
         return result
+    }
+
+    func cacheAgeMilliseconds() -> Int? {
+        guard let fetchedAt else { return nil }
+        let duration = fetchedAt.duration(to: ContinuousClock.now)
+        let components = duration.components
+        let secondsMs = components.seconds * 1_000
+        let attosecondsMs = components.attoseconds / 1_000_000_000_000_000
+        let totalMs = secondsMs + attosecondsMs
+        return max(Int(totalMs), 0)
     }
 }
