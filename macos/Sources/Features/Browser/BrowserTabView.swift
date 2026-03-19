@@ -422,7 +422,7 @@ private struct BrowserCEFDeckView: NSViewRepresentable {
 }
 
 @MainActor
-private final class PageDelegate: NSObject, GhoDexCEFViewDelegate {
+private final class PageDelegate: NSObject, @preconcurrency GhoDexCEFViewDelegate {
     private let model: BrowserTabModel
     private let pageID: UUID
 
@@ -476,6 +476,37 @@ private final class PageDelegate: NSObject, GhoDexCEFViewDelegate {
                 message: message,
                 source: source,
                 line: Int(line)
+            ),
+            from: pageID
+        )
+    }
+
+    // swiftlint:disable:next function_parameter_count
+    func cefView(
+        _ view: GhoDexCEFView,
+        didFinishNetworkRequestForURL url: String,
+        method: String,
+        requestStatus: String,
+        statusCode: NSInteger,
+        statusText: String,
+        mimeType: String,
+        receivedContentLength: Int64,
+        isMainFrame: Bool,
+        frameName: String
+    ) {
+        guard let target = model.controlTarget(for: pageID) else { return }
+        model.handle(
+            .networkRequestFinished(
+                target: target,
+                url: url,
+                method: method,
+                requestStatus: requestStatus,
+                statusCode: Int(statusCode),
+                statusText: statusText,
+                mimeType: mimeType,
+                receivedContentLength: receivedContentLength,
+                isMainFrame: isMainFrame,
+                frameName: frameName
             ),
             from: pageID
         )

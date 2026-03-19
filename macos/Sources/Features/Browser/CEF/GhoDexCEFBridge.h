@@ -45,6 +45,16 @@ typedef void (^GhoDexCEFJavaScriptEvaluationCompletion)(NSString * _Nullable res
                        level:(NSString *)level
                       source:(NSString *)source
                         line:(NSInteger)line;
+- (void)cefView:(GhoDexCEFView *)view
+    didFinishNetworkRequestForURL:(NSString *)url
+                           method:(NSString *)method
+                    requestStatus:(NSString *)requestStatus
+                       statusCode:(NSInteger)statusCode
+                       statusText:(NSString *)statusText
+                         mimeType:(NSString *)mimeType
+            receivedContentLength:(int64_t)receivedContentLength
+                      isMainFrame:(BOOL)isMainFrame
+                        frameName:(NSString *)frameName;
 - (void)cefView:(GhoDexCEFView *)view requestOpenURLInNewTab:(NSString *)urlString;
 @end
 

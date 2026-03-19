@@ -20,6 +20,8 @@ enum BrowserExternalEventKind: String, Codable, Hashable {
     case bridgeReady
     case navigationStateChanged
     case pageTitleChanged
+    case networkRequestFinished
+    case pageInspectionSnapshot
 }
 
 struct BrowserExternalCommandError: Error, Hashable, Codable {

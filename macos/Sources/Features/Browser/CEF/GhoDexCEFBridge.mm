@@ -13,6 +13,15 @@ NSString * const GhoDexCEFControlErrorDomain = @"com.leongong.ghodex.browser.cef
                        level:(NSString *)level
                       source:(NSString *)source
                         line:(NSInteger)line;
+- (void)notifyNetworkRequestForURL:(NSString *)url
+                            method:(NSString *)method
+                     requestStatus:(NSString *)requestStatus
+                        statusCode:(NSInteger)statusCode
+                        statusText:(NSString *)statusText
+                          mimeType:(NSString *)mimeType
+             receivedContentLength:(int64_t)receivedContentLength
+                       isMainFrame:(BOOL)isMainFrame
+                         frameName:(NSString *)frameName;
 @end
 
 #if GHODEX_CEF_ENABLED
@@ -68,6 +77,23 @@ NSString *ConsoleLevelString(cef_log_severity_t level) {
   case LOGSEVERITY_DEFAULT:
   default:
     return @"info";
+  }
+}
+
+NSString *RequestStatusString(cef_urlrequest_status_t status) {
+  switch (status) {
+  case UR_UNKNOWN:
+    return @"unknown";
+  case UR_SUCCESS:
+    return @"success";
+  case UR_IO_PENDING:
+    return @"io_pending";
+  case UR_CANCELED:
+    return @"canceled";
+  case UR_FAILED:
+    return @"failed";
+  default:
+    return @"unknown";
   }
 }
 
@@ -390,13 +416,26 @@ public:
 class GhoDexCEFClient final : public CefClient,
                               public CefDisplayHandler,
                               public CefLifeSpanHandler,
-                              public CefLoadHandler {
+                              public CefLoadHandler,
+                              public CefRequestHandler,
+                              public CefResourceRequestHandler {
 public:
   explicit GhoDexCEFClient(GhoDexCEFView *owner) : owner_(owner) {}
 
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
   CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
+  CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
+  CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(
+      CefRefPtr<CefBrowser> browser,
+      CefRefPtr<CefFrame> frame,
+      CefRefPtr<CefRequest> request,
+      bool is_navigation,
+      bool is_download,
+      const CefString &request_initiator,
+      bool &disable_default_handling) override {
+    return this;
+  }
   bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                 CefRefPtr<CefFrame> frame,
                                 CefProcessId source_process,
@@ -408,6 +447,12 @@ public:
                         const CefString &message,
                         const CefString &source,
                         int line) override;
+  void OnResourceLoadComplete(CefRefPtr<CefBrowser> browser,
+                              CefRefPtr<CefFrame> frame,
+                              CefRefPtr<CefRequest> request,
+                              CefRefPtr<CefResponse> response,
+                              URLRequestStatus status,
+                              int64_t received_content_length) override;
 
   void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
     browser_ = browser;
@@ -624,6 +669,27 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
   [self.delegate cefView:self didReceiveConsoleMessage:message level:level source:source line:line];
 }
 
+- (void)notifyNetworkRequestForURL:(NSString *)url
+                            method:(NSString *)method
+                     requestStatus:(NSString *)requestStatus
+                        statusCode:(NSInteger)statusCode
+                        statusText:(NSString *)statusText
+                          mimeType:(NSString *)mimeType
+             receivedContentLength:(int64_t)receivedContentLength
+                       isMainFrame:(BOOL)isMainFrame
+                         frameName:(NSString *)frameName {
+  [self.delegate cefView:self
+      didFinishNetworkRequestForURL:url
+                             method:method
+                      requestStatus:requestStatus
+                         statusCode:statusCode
+                         statusText:statusText
+                           mimeType:mimeType
+              receivedContentLength:receivedContentLength
+                        isMainFrame:isMainFrame
+                          frameName:frameName];
+}
+
 - (void)notifyOpenURLInNewTab:(NSString *)urlString {
   [self.delegate cefView:self requestOpenURLInNewTab:urlString];
 }
@@ -701,6 +767,47 @@ bool GhoDexCEFClient::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
                             line:line];
   });
   return false;
+}
+
+void GhoDexCEFClient::OnResourceLoadComplete(CefRefPtr<CefBrowser> browser,
+                                             CefRefPtr<CefFrame> frame,
+                                             CefRefPtr<CefRequest> request,
+                                             CefRefPtr<CefResponse> response,
+                                             URLRequestStatus status,
+                                             int64_t received_content_length) {
+  if (!owner_ || !request.get()) {
+    return;
+  }
+
+  NSString *url_string = [NSString stringWithUTF8String:request->GetURL().ToString().c_str() ?: ""];
+  NSString *method_string = [NSString stringWithUTF8String:request->GetMethod().ToString().c_str() ?: "GET"];
+  NSString *request_status_string = RequestStatusString(status);
+  NSString *status_text = @"";
+  NSString *mime_type = @"";
+  NSInteger status_code = 0;
+  if (response.get()) {
+    status_code = response->GetStatus();
+    status_text = [NSString stringWithUTF8String:response->GetStatusText().ToString().c_str() ?: ""];
+    mime_type = [NSString stringWithUTF8String:response->GetMimeType().ToString().c_str() ?: ""];
+  }
+
+  BOOL is_main_frame = frame.get() ? (frame->IsMain() ? YES : NO) : NO;
+  NSString *frame_name = @"";
+  if (frame.get()) {
+    frame_name = [NSString stringWithUTF8String:frame->GetName().ToString().c_str() ?: ""];
+  }
+
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [owner_ notifyNetworkRequestForURL:url_string ?: @""
+                                method:method_string ?: @"GET"
+                         requestStatus:request_status_string ?: @"unknown"
+                            statusCode:status_code
+                            statusText:status_text ?: @""
+                              mimeType:mime_type ?: @""
+                 receivedContentLength:received_content_length
+                           isMainFrame:is_main_frame
+                             frameName:frame_name ?: @""];
+  });
 }
 
 bool GhoDexCEFClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,

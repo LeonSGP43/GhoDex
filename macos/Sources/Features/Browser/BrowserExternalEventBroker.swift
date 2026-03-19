@@ -70,18 +70,29 @@ final class BrowserExternalEventBroker {
     }
 
     private func internalKinds(for externalKinds: Set<BrowserExternalEventKind>) -> Set<BrowserControlEventKind> {
-        Set(externalKinds.compactMap { eventKind in
+        var kinds = Set<BrowserControlEventKind>(externalKinds.compactMap { eventKind in
             switch eventKind {
             case .consoleMessage:
-                return .consoleMessage
+                return BrowserControlEventKind.consoleMessage
             case .bridgeReady:
-                return .bridgeReady
+                return BrowserControlEventKind.bridgeReady
             case .navigationStateChanged:
-                return .navigationStateChanged
+                return BrowserControlEventKind.navigationStateChanged
             case .pageTitleChanged:
-                return .pageTitleChanged
+                return BrowserControlEventKind.pageTitleChanged
+            case .networkRequestFinished:
+                return BrowserControlEventKind.networkRequestFinished
+            case .pageInspectionSnapshot:
+                return nil
             }
         })
+
+        if externalKinds.contains(.pageInspectionSnapshot) {
+            kinds.insert(BrowserControlEventKind.bridgeReady)
+            kinds.insert(BrowserControlEventKind.navigationStateChanged)
+        }
+
+        return kinds
     }
 
     private func externalKind(for event: BrowserControlEvent) -> BrowserExternalEventKind? {
@@ -94,6 +105,8 @@ final class BrowserExternalEventBroker {
             return .navigationStateChanged
         case .pageTitleChanged:
             return .pageTitleChanged
+        case .networkRequestFinished:
+            return .networkRequestFinished
         case .openURLInNewTabRequested:
             return nil
         }
@@ -109,6 +122,10 @@ final class BrowserExternalEventBroker {
 
         if subscription.controller == nil {
             subscription.controller = controller
+        }
+
+        if shouldCaptureInspectionSnapshot(for: subscription, event: event) {
+            captureInspectionSnapshot(for: subscriptionID, event: event, controller: controller)
         }
 
         guard let externalKind = externalKind(for: event) else {
@@ -128,22 +145,101 @@ final class BrowserExternalEventBroker {
             payload["frameName"] = frameName
         }
 
-        subscription.bufferedEvents.append(
+        appendEvent(
             BrowserExternalEventEnvelope(
                 subscriptionID: subscriptionID,
                 browserTabID: browserTabID,
                 kind: externalKind,
                 payload: payload
-            )
+            ),
+            to: &subscription
         )
+        subscriptions[subscriptionID] = subscription
+    }
 
+    private func shouldCaptureInspectionSnapshot(
+        for subscription: Subscription,
+        event: BrowserControlEvent
+    ) -> Bool {
+        guard subscription.eventKinds.contains(.pageInspectionSnapshot) else {
+            return false
+        }
+
+        switch event.kind {
+        case .bridgeReady:
+            return true
+        case .navigationStateChanged:
+            return event.payload["isLoading"] == "false"
+        default:
+            return false
+        }
+    }
+
+    private func captureInspectionSnapshot(
+        for subscriptionID: UUID,
+        event: BrowserControlEvent,
+        controller: BrowserTabController?
+    ) {
+        guard let controller else { return }
+
+        let browserTabID = ScriptBrowserTab.stableID(controller: controller)
+        controller.model.requestInspectionSnapshot(for: event.target.pageID, maxDepth: 2, includeText: true) { [weak self] result in
+            guard let self else { return }
+            guard var subscription = self.subscriptions[subscriptionID] else { return }
+            guard subscription.eventKinds.contains(.pageInspectionSnapshot) else { return }
+
+            var payload: [String: String] = [
+                "pageID": event.target.pageID.uuidString,
+                "documentRevision": String(event.target.documentRevision),
+                "triggerKind": event.kind.rawValue,
+            ]
+            if let frameName = event.target.frameName {
+                payload["frameName"] = frameName
+            }
+
+            switch result {
+            case let .success(snapshot):
+                payload["ok"] = "true"
+                payload["snapshotJSON"] = (try? encodeJSON(snapshot)) ?? ""
+            case let .failure(error):
+                payload["ok"] = "false"
+                payload["errorCode"] = error.code.rawValue
+                payload["errorMessage"] = error.message
+            }
+
+            self.appendEvent(
+                BrowserExternalEventEnvelope(
+                    subscriptionID: subscriptionID,
+                    browserTabID: browserTabID,
+                    kind: .pageInspectionSnapshot,
+                    payload: payload
+                ),
+                to: &subscription
+            )
+            self.subscriptions[subscriptionID] = subscription
+        }
+    }
+
+    private func appendEvent(
+        _ event: BrowserExternalEventEnvelope,
+        to subscription: inout Subscription
+    ) {
+        subscription.bufferedEvents.append(event)
         if subscription.bufferedEvents.count > maxBufferedEvents {
             let overflow = subscription.bufferedEvents.count - maxBufferedEvents
             subscription.bufferedEvents.removeFirst(overflow)
             subscription.droppedCount += overflow
         }
+    }
 
-        subscriptions[subscriptionID] = subscription
+    private func encodeJSON<T: Encodable>(_ value: T) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(value)
+        guard let encoded = String(data: data, encoding: .utf8) else {
+            throw BrowserExternalCommandError.internalFailure("The browser inspection event payload could not be serialized as UTF-8.")
+        }
+        return encoded
     }
 
     private struct Subscription {

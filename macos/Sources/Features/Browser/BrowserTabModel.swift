@@ -25,6 +25,7 @@ enum BrowserControlEventKind: String, Codable, Hashable {
     case openURLInNewTabRequested
     case consoleMessage
     case bridgeReady
+    case networkRequestFinished
 }
 
 enum BrowserControlErrorCode: String, Codable, Hashable {
@@ -406,6 +407,36 @@ struct BrowserControlEvent: Identifiable, Hashable, Codable {
 
     static func bridgeReady(target: BrowserControlTarget, url: String) -> BrowserControlEvent {
         BrowserControlEvent(target: target, kind: .bridgeReady, payload: ["url": url])
+    }
+
+    // swiftlint:disable:next function_parameter_count
+    static func networkRequestFinished(
+        target: BrowserControlTarget,
+        url: String,
+        method: String,
+        requestStatus: String,
+        statusCode: Int,
+        statusText: String,
+        mimeType: String,
+        receivedContentLength: Int64,
+        isMainFrame: Bool,
+        frameName: String
+    ) -> BrowserControlEvent {
+        BrowserControlEvent(
+            target: target,
+            kind: .networkRequestFinished,
+            payload: [
+                "url": url,
+                "method": method,
+                "requestStatus": requestStatus,
+                "statusCode": String(statusCode),
+                "statusText": statusText,
+                "mimeType": mimeType,
+                "receivedContentLength": String(receivedContentLength),
+                "isMainFrame": String(isMainFrame),
+                "frameName": frameName,
+            ]
+        )
     }
 }
 
@@ -890,6 +921,24 @@ final class BrowserTabModel: ObservableObject {
         pages.first(where: { $0.id == pageID })?.controlTarget
     }
 
+    func requestInspectionSnapshot(
+        for pageID: UUID,
+        maxDepth: Int = 2,
+        includeText: Bool = true,
+        completion: @escaping (Result<BrowserDOMSnapshotResult, BrowserControlError>) -> Void
+    ) {
+        guard let page = pages.first(where: { $0.id == pageID }) else {
+            completion(.failure(.pageNotFound("The browser page is no longer available.")))
+            return
+        }
+
+        page.getDOMSnapshot(
+            maxDepth: maxDepth,
+            includeText: includeText,
+            completion: completion
+        )
+    }
+
     func handle(_ event: BrowserControlEvent, from pageID: UUID) {
         switch event.kind {
         case .pageTitleChanged:
@@ -914,7 +963,7 @@ final class BrowserTabModel: ObservableObject {
             if let url = event.payload["url"] {
                 openURLInNewTab(url)
             }
-        case .consoleMessage, .bridgeReady:
+        case .consoleMessage, .bridgeReady, .networkRequestFinished:
             break
         }
 
