@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### docs(browser): add command protocol guide for external clients
+
+- What changed: Added `browser-tab-command-protocol.md` with the current `browser.tab.v1` request/response contract, transport notes, event-kind reference, CLI examples, and AppleScript examples, and linked the architecture plan back to that guide so the product-facing contract has a durable home.
+- Why: The Browser control plane had gained a real versioned protocol, CLI transport options, and buffered event subscriptions, but external callers still had to reverse-engineer the contract from code. A focused protocol guide makes future clients easier to build and keeps examples aligned with the intended control surface.
+- Impact: Future agents, scripts, and local tools now have one practical document to follow when integrating with Browser tabs over IPC or AppleScript, including the new network and page inspection event streams.
+- Verification: `python3 - <<'PY'\nfrom pathlib import Path\ntext = Path('browser-tab-command-protocol.md').read_text()\nassert 'browser.tab.v1' in text\nassert 'networkRequestFinished' in text\nassert 'pageInspectionSnapshot' in text\nprint('DOC OK')\nPY`, plus manual review against `src/cli/browser_control.zig`, `macos/Sources/Features/Browser/BrowserCommandProtocol.swift`, and `macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`
+- Files: `browser-tab-command-protocol.md`, `browser-tab-control-architecture.md`, `CHANGELOG.md`
+
 ### feat(browser): expose network and page inspection events through browser.tab.v1
 
 - What changed: Extended the external Browser event protocol with `networkRequestFinished` and `pageInspectionSnapshot`, taught the CEF bridge to emit per-request network completion callbacks, and synthesized inspection snapshot events from the existing DOM snapshot helper whenever subscribed clients observe a ready/settled page.

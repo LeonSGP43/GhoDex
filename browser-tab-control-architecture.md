@@ -255,6 +255,8 @@ Error requirements:
       adapters can call
 - [ ] expose browser-specific scripting verbs without leaking raw renderer
       internals into every caller
+- [ ] keep the external client contract documented in
+      `browser-tab-command-protocol.md` as commands and event kinds evolve
 
 ### Phase 5: Optional Debug Lane
 
