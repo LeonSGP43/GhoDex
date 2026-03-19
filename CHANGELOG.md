@@ -13,6 +13,15 @@ All notable changes to this project are documented in this file.
 - Files: `src/build/GhosttyXcodebuild.zig`, `CHANGELOG.md`
 - Decision trail: Keep the Zig build graph responsible for invoking `xcodebuild`, but remove dependence on ambient Xcode defaults by making the macOS test destination and derived-data location explicit.
 
+### test(ai-terminal-manager): move heartbeat benchmarks behind opt-in coverage
+
+- What changed: Moved the two heartbeat throughput benchmark tests into a dedicated disabled-by-default benchmark suite tagged with `.benchmark` so they no longer run as part of the normal app-hosted regression path.
+- Why: Those benchmark tests intentionally assert timing and throughput trends across different concurrency levels, which makes them useful for profiling but too load-sensitive for the default `xcodebuild test` path that Zig drives in CI-style verification.
+- Impact: Regular regression runs focus on deterministic correctness checks, while the heartbeat benchmark curves remain available for explicit local profiling when someone intentionally enables benchmark coverage.
+- Verification: `cd macos && xcodebuild test -project GhoDex.xcodeproj -scheme GhoDex -skip-testing GhosttyUITests -arch arm64 -derivedDataPath /tmp/ghodex-zig-xcode-repro`; `zig build test`
+- Files: `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`, `CHANGELOG.md`
+- Decision trail: Keep the benchmark logic in-tree for performance investigation, but gate it the same way as the existing benchmark suite so default regression jobs only enforce correctness contracts.
+
 ### test(ai-terminal-manager): stabilize heartbeat concurrency coverage
 
 - What changed: Removed the wall-clock speedup assertion from `storeRunsDueHeartbeatTasksWithBoundedConcurrencyUnderLoad()` and kept the test focused on completion plus bounded parallelism while leaving the dedicated heartbeat benchmark coverage in place for timing observations.
