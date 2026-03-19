@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): add typed click/type/query helper APIs
+
+- What changed: Added typed Swift result models for the existing low-level `query`, `click`, and `typeText` browser control commands, and exposed matching page-scoped convenience APIs on `BrowserPageState` so callers no longer need to hand-build requests or decode `valueJSON` manually.
+- Why: The browser control plane already had working selector commands, but the only ergonomic way to use them was to assemble raw `BrowserControlRequest` values and parse JSON strings at every call site. Tightening that into typed helper APIs makes the current control surface easier to use without changing the underlying transport or DOM command semantics.
+- Impact: Browser-tab callers can now invoke `query`, `click`, and `typeText` with typed Swift completions and receive strongly-typed decoded results instead of raw JSON strings. This makes it much easier for later adapters and higher-level APIs to build on the control plane safely.
+- Verification: `swiftlint lint /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/Browser/BrowserTabModel.swift`, `tmp_dd=$(mktemp -d /tmp/ghodex-browser-typed-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-typed-build.XXXXXX) && xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" build`, and `tmp_dd=$(mktemp -d /tmp/ghodex-browser-typed-cef-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-typed-cef-build.XXXXXX) && env GITHUB_ACTIONS=1 xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" GHODEX_CEF_ENABLED=1 GHODEX_CEF_ROOT=$(pwd)/macos/build/cef-runtime/current GHODEX_CEF_OTHER_LDFLAGS='' GHODEX_CEF_WRAPPER_LIB=$(pwd)/macos/build/cef-runtime/current/lib/Debug/libcef_dll_wrapper.a build`
+- Files: `macos/Sources/Features/Browser/BrowserTabModel.swift`, `CHANGELOG.md`
+
 ### feat(browser): add higher-level DOM inspection helpers
 
 - What changed: Extended the browser control command set with `getDOMSnapshot`, `getText`, `getAttributes`, and `getBoundingBox`, added matching inspection script generation in `BrowserControlScriptBuilder.swift`, and routed those inspection commands through the existing typed DOM command bridge in `BrowserTabView.swift`.

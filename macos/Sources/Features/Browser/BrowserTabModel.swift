@@ -129,6 +129,26 @@ struct BrowserControlResponse: Hashable, Codable {
     }
 }
 
+struct BrowserDOMQueryResult: Hashable, Codable {
+    let found: Bool
+    let selector: String
+    let tagName: String?
+    let text: String
+    let value: String?
+    let html: String?
+}
+
+struct BrowserDOMClickResult: Hashable, Codable {
+    let clicked: Bool
+    let selector: String
+}
+
+struct BrowserDOMTypeTextResult: Hashable, Codable {
+    let typed: Bool
+    let selector: String
+    let value: String
+}
+
 struct BrowserControlEvent: Identifiable, Hashable, Codable {
     let id: UUID
     let target: BrowserControlTarget
@@ -307,6 +327,34 @@ final class BrowserPageState: ObservableObject, Identifiable {
         route(request, completion: completion)
     }
 
+    func query(
+        selector: String,
+        completion: @escaping (Result<BrowserDOMQueryResult, BrowserControlError>) -> Void
+    ) {
+        send(.query, payload: ["selector": selector]) { response in
+            completion(self.decodeResponse(response, as: BrowserDOMQueryResult.self))
+        }
+    }
+
+    func click(
+        selector: String,
+        completion: @escaping (Result<BrowserDOMClickResult, BrowserControlError>) -> Void
+    ) {
+        send(.click, payload: ["selector": selector]) { response in
+            completion(self.decodeResponse(response, as: BrowserDOMClickResult.self))
+        }
+    }
+
+    func typeText(
+        selector: String,
+        text: String,
+        completion: @escaping (Result<BrowserDOMTypeTextResult, BrowserControlError>) -> Void
+    ) {
+        send(.typeText, payload: ["selector": selector, "text": text]) { response in
+            completion(self.decodeResponse(response, as: BrowserDOMTypeTextResult.self))
+        }
+    }
+
     func updatePageState(
         title: String?,
         url: String?,
@@ -334,6 +382,26 @@ final class BrowserPageState: ObservableObject, Identifiable {
         self.canGoForward = canGoForward
         self.isLoading = isLoading
         onStateChange?()
+    }
+
+    private func decodeResponse<T: Decodable>(
+        _ response: BrowserControlResponse,
+        as type: T.Type
+    ) -> Result<T, BrowserControlError> {
+        if let error = response.error {
+            return .failure(error)
+        }
+
+        guard let valueJSON = response.valueJSON, let data = valueJSON.data(using: .utf8) else {
+            return .failure(.internalFailure("The browser control command returned no JSON payload."))
+        }
+
+        do {
+            let decodedValue = try JSONDecoder().decode(T.self, from: data)
+            return .success(decodedValue)
+        } catch {
+            return .failure(.internalFailure("The browser control command returned an unexpected JSON payload: \(error.localizedDescription)"))
+        }
     }
 }
 
