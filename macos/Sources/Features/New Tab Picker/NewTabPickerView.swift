@@ -7,7 +7,9 @@ struct NewTabPickerView: View {
     let title: String
     let subtitle: String
     let onClose: () -> Void
+    let includeBrowserEntry: Bool
     let onOpenHost: ((AITerminalHost) -> Void)?
+    let onOpenBrowser: (() -> Void)?
 
     @State private var searchText = ""
     @State private var selectedID: String?
@@ -37,6 +39,10 @@ struct NewTabPickerView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
+                        if !browserEntries.isEmpty {
+                            section(title: nil, entries: browserEntries)
+                        }
+
                         if let localEntry = entries.first(where: { $0.section == .local }) {
                             section(title: nil, entries: [localEntry])
                         }
@@ -147,7 +153,7 @@ struct NewTabPickerView: View {
 
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 8) {
-                        Text(entry.host.name)
+                        Text(entry.title)
                             .font(.headline)
                             .foregroundStyle(.primary)
                             .lineLimit(1)
@@ -165,7 +171,7 @@ struct NewTabPickerView: View {
                         }
                     }
 
-                    Text(primarySubtitle(for: entry.host))
+                    Text(primarySubtitle(for: entry))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
@@ -173,7 +179,7 @@ struct NewTabPickerView: View {
 
                 Spacer(minLength: 10)
 
-                Image(systemName: hostIconName(for: entry.host))
+                Image(systemName: iconName(for: entry))
                     .font(.body.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
             }
@@ -259,7 +265,13 @@ struct NewTabPickerView: View {
     }
 
     private var entries: [NewTabPickerEntry] {
-        NewTabPickerModel.filteredEntries(store.newTabPickerEntries(), query: searchText)
+        let hostEntries = store.newTabPickerEntries()
+        let allEntries = NewTabPickerModel.withBrowserEntry(hostEntries, includeBrowserEntry: includeBrowserEntry)
+        return NewTabPickerModel.filteredEntries(allEntries, query: searchText)
+    }
+
+    private var browserEntries: [NewTabPickerEntry] {
+        entries.filter { $0.section == .browser }
     }
 
     private var favoriteEntries: [NewTabPickerEntry] {
@@ -292,20 +304,28 @@ struct NewTabPickerView: View {
     }
 
     private func open(_ entry: NewTabPickerEntry) {
-        if let onOpenHost {
-            onOpenHost(entry.host)
-        } else {
-            store.openInNewTab(host: entry.host)
+        switch entry.destination {
+        case .browser:
+            onOpenBrowser?()
+
+        case .host(let host):
+            if let onOpenHost {
+                onOpenHost(host)
+            } else {
+                store.openInNewTab(host: host)
+            }
         }
         onClose()
     }
 
-    private func primarySubtitle(for host: AITerminalHost) -> String {
-        host.connectionTarget ?? host.displaySubtitle
+    private func primarySubtitle(for entry: NewTabPickerEntry) -> String {
+        entry.subtitle
     }
 
     private func sourceLabel(for entry: NewTabPickerEntry) -> String? {
         switch entry.section {
+        case .browser:
+            return AppLocalization.localizedText("Built-in")
         case .local:
             return nil
         case .favorites:
@@ -319,13 +339,8 @@ struct NewTabPickerView: View {
         }
     }
 
-    private func hostIconName(for host: AITerminalHost) -> String {
-        switch host.transport {
-        case .local, .localmcd:
-            return "laptopcomputer"
-        case .ssh:
-            return "arrow.up.right.square"
-        }
+    private func iconName(for entry: NewTabPickerEntry) -> String {
+        entry.iconName
     }
 
     private func rowBackground(for entry: NewTabPickerEntry) -> Color {

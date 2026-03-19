@@ -941,18 +941,18 @@ class AppDelegate: NSObject,
         // Keep keyboard-triggered new-tab actions aligned with the picker flow
         // used by the menu and tab-bar affordances in the sidebar workspace UI.
         guard window.windowController is TerminalController else { return }
-        showNewTabPicker(from: selectedTerminalWindow(for: window) ?? window)
+        showNewTabPicker(from: selectedTopLevelWindow(for: window) ?? window)
     }
 
     @MainActor @objc private func ghosttyNewPaneTab(_ notification: Notification) {
         let notificationSurface = notification.object as? Ghostty.SurfaceView
-        let notificationWindow = selectedTerminalWindow(for: notificationSurface?.window)
+        let notificationWindow = selectedTopLevelWindow(for: notificationSurface?.window)
         let notificationController = selectedTerminalController(for: notificationWindow)
 
         guard let controller = activeTerminalController(preferred: notificationWindow)
             ?? notificationController else { return }
 
-        let window = selectedTerminalWindow(for: controller.window) ?? notificationWindow
+        let window = selectedTopLevelWindow(for: controller.window) ?? notificationWindow
         guard let sourceSurface = activePaneSurface(in: controller) else { return }
 
         showNewPaneTabPicker(from: window, in: controller, sourceSurface: sourceSurface)
@@ -1201,12 +1201,18 @@ class AppDelegate: NSObject,
         showNewTabPicker(from: TerminalController.preferredParent?.window ?? NSApp.keyWindow)
     }
 
+    @IBAction func newBrowserTab(_ sender: Any?) {
+        let parentWindow = selectedTopLevelWindow(for: NSApp.keyWindow)
+            ?? selectedTopLevelWindow(for: TerminalController.preferredParent?.window)
+        _ = BrowserTabController.newTab(ghostty, from: parentWindow)
+    }
+
     @IBAction func newPaneTab(_ sender: Any?) {
         activeTerminalController()?.newPaneTab(sender)
     }
 
     @IBAction func changeTitleContext(_ sender: Any?) {
-        activeTerminalController()?.changeTitleContext(sender)
+        activeTopLevelTabController(preferred: NSApp.keyWindow)?.promptTabTitle()
     }
 
     @IBAction func previousPaneTab(_ sender: Any?) {
@@ -1219,12 +1225,25 @@ class AppDelegate: NSObject,
 
     @MainActor
     func showNewTabPicker(from window: NSWindow?) {
+        let browserAction = { [weak self] in
+            guard let self else { return }
+            let parentWindow = self.selectedTopLevelWindow(for: window)
+                ?? self.selectedTopLevelWindow(for: NSApp.keyWindow)
+            _ = BrowserTabController.newTab(self.ghostty, from: parentWindow)
+        }
+
         if let window {
-            newTabPickerController.show(relativeTo: window)
+            newTabPickerController.show(
+                relativeTo: window,
+                includeBrowserEntry: true,
+                onOpenBrowser: browserAction)
             return
         }
 
-        aiTerminalManagerStore.openLocalShell(launchTarget: .window)
+        newTabPickerController.show(
+            relativeTo: nil,
+            includeBrowserEntry: true,
+            onOpenBrowser: browserAction)
     }
 
     @MainActor
@@ -1243,6 +1262,7 @@ class AppDelegate: NSObject,
                 relativeTo: window,
                 title: AppLocalization.localizedText("New Pane Tab"),
                 subtitle: L10n.SSHConnections.newTabPickerSubtitle,
+                includeBrowserEntry: false,
                 onOpenHost: openHost)
             return
         }
@@ -1270,11 +1290,31 @@ class AppDelegate: NSObject,
         return TerminalController.preferredParent
     }
 
-    private func selectedTerminalController(for window: NSWindow?) -> TerminalController? {
-        selectedTerminalWindow(for: window)?.windowController as? TerminalController
+    private func activeTopLevelTabController(preferred window: NSWindow? = nil) -> TopLevelTabController? {
+        if let controller = selectedTopLevelTabController(for: window) {
+            return controller
+        }
+
+        if let controller = selectedTopLevelTabController(for: NSApp.keyWindow) {
+            return controller
+        }
+
+        if let controller = selectedTopLevelTabController(for: NSApp.mainWindow) {
+            return controller
+        }
+
+        return selectedTopLevelTabController(for: TerminalController.preferredParent?.window)
     }
 
-    private func selectedTerminalWindow(for window: NSWindow?) -> NSWindow? {
+    private func selectedTerminalController(for window: NSWindow?) -> TerminalController? {
+        selectedTopLevelWindow(for: window)?.windowController as? TerminalController
+    }
+
+    private func selectedTopLevelTabController(for window: NSWindow?) -> TopLevelTabController? {
+        selectedTopLevelWindow(for: window)?.windowController as? TopLevelTabController
+    }
+
+    private func selectedTopLevelWindow(for window: NSWindow?) -> NSWindow? {
         window?.tabGroup?.selectedWindow ?? window
     }
 
@@ -1285,7 +1325,35 @@ class AppDelegate: NSObject,
     }
 
     @IBAction func closeAllWindows(_ sender: Any?) {
-        TerminalController.closeAllWindows()
+        let browserControllers = BrowserTabController.all
+        let confirmWindow = TerminalController.all
+            .first(where: { $0.allSurfaces.contains(where: { $0.needsConfirmQuit }) })?
+            .allSurfaces.first(where: { $0.needsConfirmQuit })?
+            .window
+
+        guard let confirmWindow else {
+            TerminalController.closeAllWindowsImmediately()
+            BrowserTabController.closeAllWindowsImmediately()
+            AboutController.shared.hide()
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = L10n.App.closeAllWindowsQuestion
+        alert.informativeText = L10n.App.allSessionsTerminated
+        alert.addButton(withTitle: L10n.App.closeAllWindows)
+        alert.addButton(withTitle: L10n.App.cancel)
+        alert.alertStyle = .warning
+        alert.beginSheetModal(for: confirmWindow) { response in
+            guard response == .alertFirstButtonReturn else { return }
+
+            // Avoid focus loss while closing a whole tab group under Stage Manager.
+            alert.window.orderOut(nil)
+            TerminalController.closeAllWindowsImmediately()
+            browserControllers.forEach { $0.window?.close() }
+            AboutController.shared.hide()
+        }
+
         AboutController.shared.hide()
     }
 

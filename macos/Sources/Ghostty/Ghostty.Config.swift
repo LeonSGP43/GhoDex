@@ -790,6 +790,18 @@ extension Ghostty {
             optionalString(for: "ghodex-learning-prompt-template")
         }
 
+        var ghodexBrowserHomepage: String? {
+            optionalString(for: "ghodex-browser-homepage")
+        }
+
+        var ghodexBrowserProfilePath: String? {
+            optionalString(for: "ghodex-browser-profile-path")
+        }
+
+        var ghodexBrowserRuntimePath: String? {
+            optionalString(for: "ghodex-browser-runtime-path")
+        }
+
         var ghodexHeartbeatEnabled: Bool {
             bool(for: "ghodex-heartbeat-enabled", default: true)
         }

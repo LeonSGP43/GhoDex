@@ -911,10 +911,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
         // Iterate through all tabs except the current one.
         for window in tabGroup.windows where window != self.window {
-            // We ignore any non-terminal tabs. They don't currently exist and we can't
-            // properly undo them anyways so I'd rather ignore them and get a bug report
-            // later if and when we introduce non-terminal tabs.
-            if let controller = window.windowController as? TerminalController {
+            if let controller = window.windowController as? TopLevelTabController {
                 // We must not register a redo, because it messes with our own redo
                 // that we register later.
                 controller.closeTabImmediately(registerRedo: false)
@@ -959,7 +956,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         }
 
         for (_, candidate) in tabsToClose {
-            if let controller = candidate.windowController as? TerminalController {
+            if let controller = candidate.windowController as? TopLevelTabController {
                 controller.closeTabImmediately(registerRedo: false)
             }
         }
@@ -1150,7 +1147,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         })
     }
 
-    static private func closeAllWindowsImmediately() {
+    static func closeAllWindowsImmediately() {
         let undoManager = (NSApp.delegate as? AppDelegate)?.undoManager
         undoManager?.beginUndoGrouping()
         all.forEach { $0.closeWindowImmediately() }
@@ -1855,6 +1852,8 @@ extension TerminalController: TerminalPaneTabModel {
         _ = closePaneTabInternal(tabID, in: pane, withConfirmation: true)
     }
 }
+
+extension TerminalController: TopLevelTabController {}
 
 // MARK: NSMenuItemValidation
 

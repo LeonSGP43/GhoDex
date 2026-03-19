@@ -269,7 +269,7 @@ class TerminalWindow: NSWindow {
             return
         }
 
-        guard let targetController = targetWindow.windowController as? BaseTerminalController else { return }
+        guard let targetController = targetWindow.windowController as? TopLevelTabController else { return }
         targetController.promptTabTitle()
     }
 
@@ -859,14 +859,14 @@ extension TerminalWindow: TabTitleEditorDelegate {
         _ editor: TabTitleEditor,
         canRenameTabFor targetWindow: NSWindow
     ) -> Bool {
-        targetWindow.windowController is BaseTerminalController
+        targetWindow.windowController is TopLevelTabController
     }
 
     func tabTitleEditor(
         _ editor: TabTitleEditor,
         titleFor targetWindow: NSWindow
     ) -> String {
-        guard let targetController = targetWindow.windowController as? BaseTerminalController else {
+        guard let targetController = targetWindow.windowController as? TopLevelTabController else {
             return targetWindow.title
         }
 
@@ -878,7 +878,7 @@ extension TerminalWindow: TabTitleEditorDelegate {
         didCommitTitle editedTitle: String,
         for targetWindow: NSWindow
     ) {
-        guard let targetController = targetWindow.windowController as? BaseTerminalController else { return }
+        guard let targetController = targetWindow.windowController as? TopLevelTabController else { return }
         targetController.titleOverride = editedTitle.isEmpty ? nil : editedTitle
     }
 
@@ -886,7 +886,7 @@ extension TerminalWindow: TabTitleEditorDelegate {
         _ editor: TabTitleEditor,
         performFallbackRenameFor targetWindow: NSWindow
     ) {
-        guard let targetController = targetWindow.windowController as? BaseTerminalController else { return }
+        guard let targetController = targetWindow.windowController as? TopLevelTabController else { return }
         targetController.promptTabTitle()
     }
 }
