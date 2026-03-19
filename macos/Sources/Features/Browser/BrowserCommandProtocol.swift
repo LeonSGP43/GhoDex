@@ -1,0 +1,147 @@
+import Foundation
+
+enum BrowserCommandProtocolVersion {
+    static let v1 = "browser.tab.v1"
+}
+
+enum BrowserExternalCommandKind: String, Codable, Hashable {
+    case listTabs
+    case newTab
+    case loadURL
+    case evaluateJavaScript
+    case runDOMBatch
+    case subscribeEvents
+    case drainEvents
+    case unsubscribeEvents
+}
+
+enum BrowserExternalEventKind: String, Codable, Hashable {
+    case consoleMessage
+    case bridgeReady
+    case navigationStateChanged
+    case pageTitleChanged
+}
+
+struct BrowserExternalCommandError: Error, Hashable, Codable {
+    let code: String
+    let message: String
+    let isRetryable: Bool
+
+    init(code: String, message: String, isRetryable: Bool = false) {
+        self.code = code
+        self.message = message
+        self.isRetryable = isRetryable
+    }
+
+    static func invalidRequest(_ message: String) -> BrowserExternalCommandError {
+        BrowserExternalCommandError(code: "invalid_request", message: message)
+    }
+
+    static func unsupportedVersion(_ message: String) -> BrowserExternalCommandError {
+        BrowserExternalCommandError(code: "unsupported_version", message: message)
+    }
+
+    static func internalFailure(_ message: String) -> BrowserExternalCommandError {
+        BrowserExternalCommandError(code: "internal_failure", message: message)
+    }
+}
+
+struct BrowserExternalCommandRequest: Identifiable, Hashable, Codable {
+    let id: UUID
+    let version: String
+    let command: BrowserExternalCommandKind
+    let browserTabID: String?
+    let payload: [String: String]
+
+    init(
+        id: UUID = UUID(),
+        version: String = BrowserCommandProtocolVersion.v1,
+        command: BrowserExternalCommandKind,
+        browserTabID: String? = nil,
+        payload: [String: String] = [:]
+    ) {
+        self.id = id
+        self.version = version
+        self.command = command
+        self.browserTabID = browserTabID
+        self.payload = payload
+    }
+
+    func validateVersion() -> BrowserExternalCommandError? {
+        guard version == BrowserCommandProtocolVersion.v1 else {
+            return .unsupportedVersion(
+                "The browser command protocol version \(version) is not supported. Expected \(BrowserCommandProtocolVersion.v1)."
+            )
+        }
+
+        return nil
+    }
+}
+
+struct BrowserExternalCommandResponse: Hashable, Codable {
+    let id: UUID
+    let version: String
+    let ok: Bool
+    let resultJSON: String?
+    let error: BrowserExternalCommandError?
+
+    static func success(
+        for request: BrowserExternalCommandRequest,
+        resultJSON: String? = nil
+    ) -> BrowserExternalCommandResponse {
+        BrowserExternalCommandResponse(
+            id: request.id,
+            version: BrowserCommandProtocolVersion.v1,
+            ok: true,
+            resultJSON: resultJSON,
+            error: nil
+        )
+    }
+
+    static func failure(
+        for request: BrowserExternalCommandRequest,
+        error: BrowserExternalCommandError
+    ) -> BrowserExternalCommandResponse {
+        BrowserExternalCommandResponse(
+            id: request.id,
+            version: BrowserCommandProtocolVersion.v1,
+            ok: false,
+            resultJSON: nil,
+            error: error
+        )
+    }
+}
+
+struct BrowserExternalTabSummary: Hashable, Codable {
+    let id: String
+    let title: String
+    let url: String
+}
+
+struct BrowserExternalEventEnvelope: Identifiable, Hashable, Codable {
+    let id: UUID
+    let version: String
+    let subscriptionID: UUID
+    let browserTabID: String
+    let kind: BrowserExternalEventKind
+    let payload: [String: String]
+    let createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        version: String = BrowserCommandProtocolVersion.v1,
+        subscriptionID: UUID,
+        browserTabID: String,
+        kind: BrowserExternalEventKind,
+        payload: [String: String],
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.version = version
+        self.subscriptionID = subscriptionID
+        self.browserTabID = browserTabID
+        self.kind = kind
+        self.payload = payload
+        self.createdAt = createdAt
+    }
+}

@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): add versioned browser command protocol
+
+- What changed: Added `browser.tab.v1` protocol types for external browser control, including versioned request/response envelopes, tab summaries, external event envelopes, and command/event enums that cover tab listing, page control, DOM batches, and future event subscription flows.
+- Why: The browser control plane and adapters already had useful behavior, but they still lacked a durable protocol contract. Freezing a versioned envelope layer first makes later CLI/IPC adapters and event subscriptions easier to evolve without tying callers directly to internal Swift model types.
+- Impact: Browser control now has a stable protocol vocabulary that external adapters can use for requests, responses, and event delivery. This is the compatibility boundary for future command APIs instead of ad hoc JSON payloads.
+- Verification: `swiftlint lint /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/Browser/BrowserCommandProtocol.swift`, `tmp_dd=$(mktemp -d /tmp/ghodex-browser-protocol-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-protocol-build.XXXXXX) && xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" build`, and `tmp_dd=$(mktemp -d /tmp/ghodex-browser-protocol-cef-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-protocol-cef-build.XXXXXX) && env GITHUB_ACTIONS=1 xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" GHODEX_CEF_ENABLED=1 GHODEX_CEF_ROOT=$(pwd)/macos/build/cef-runtime/current GHODEX_CEF_OTHER_LDFLAGS='' GHODEX_CEF_WRAPPER_LIB=$(pwd)/macos/build/cef-runtime/current/lib/Debug/libcef_dll_wrapper.a build`
+- Files: `macos/Sources/Features/Browser/BrowserCommandProtocol.swift`, `CHANGELOG.md`
+
 ### feat(browser): add AppleScript browser command adapter
 
 - What changed: Added an AppleScript-facing `browser tab` object plus `new browser tab`, `load browser url`, `evaluate browser javascript`, and `run browser dom batch` commands. The adapter targets each Browser tab controller's active page and returns JSON strings for evaluation and decoded DOM batch results.
