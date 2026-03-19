@@ -16,6 +16,7 @@ FOUNDATION_EXPORT NSString * const GhoDexCEFControlErrorDomain;
 typedef NS_ENUM(NSInteger, GhoDexCEFControlErrorCode) {
     GhoDexCEFControlErrorCodeBridgeUnavailable = 1,
     GhoDexCEFControlErrorCodeEvaluationUnavailable = 2,
+    GhoDexCEFControlErrorCodeEvaluationFailed = 3,
 };
 
 typedef void (^GhoDexCEFJavaScriptEvaluationCompletion)(NSString * _Nullable resultJSON, NSError * _Nullable error);

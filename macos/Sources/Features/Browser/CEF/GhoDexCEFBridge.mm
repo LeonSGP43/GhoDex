@@ -2,6 +2,14 @@
 
 NSString * const GhoDexCEFControlErrorDomain = @"com.leongong.ghodex.browser.cef.control";
 
+@interface GhoDexCEFView (GhoDexCEFPrivateEvaluation)
+- (void)failPendingEvaluationRequestsWithCode:(GhoDexCEFControlErrorCode)code
+                                  description:(NSString *)description;
+- (void)completeEvaluationRequestID:(NSString *)requestID
+                         resultJSON:(NSString * _Nullable)resultJSON
+                              error:(NSError * _Nullable)error;
+@end
+
 #if GHODEX_CEF_ENABLED
 
 #include <algorithm>
@@ -14,6 +22,9 @@ NSString * const GhoDexCEFControlErrorDomain = @"com.leongong.ghodex.browser.cef
 #include "include/cef_app.h"
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
+#include "include/cef_parser.h"
+#include "include/cef_render_process_handler.h"
+#include "include/cef_v8.h"
 #include "include/wrapper/cef_library_loader.h"
 #include "include/wrapper/cef_helpers.h"
 
@@ -23,11 +34,160 @@ std::atomic<bool> g_cef_initialized{false};
 std::atomic<bool> g_cef_initializing{false};
 std::atomic<bool> g_cef_library_loaded{false};
 dispatch_source_t g_message_pump_timer = nullptr;
+constexpr char kEvaluateRequestMessageName[] = "ghodex.browser.evaluate";
+constexpr char kEvaluateResultMessageName[] = "ghodex.browser.evaluate.result";
+
+constexpr size_t kEvaluateRequestIDIndex = 0;
+constexpr size_t kEvaluateScriptIndex = 1;
+constexpr size_t kEvaluateSuccessIndex = 1;
+constexpr size_t kEvaluatePayloadIndex = 2;
 
 NSError *MakeControlError(GhoDexCEFControlErrorCode code, NSString *description) {
   return [NSError errorWithDomain:GhoDexCEFControlErrorDomain
                              code:code
                          userInfo:@{NSLocalizedDescriptionKey : description ?: @"Unknown browser control error."}];
+}
+
+id _Nullable FoundationObjectFromV8Value(CefRefPtr<CefV8Value> value,
+                                         NSMutableSet<NSValue *> *visited_values,
+                                         NSString **error_message,
+                                         NSUInteger depth) {
+  if (!value.get()) {
+    return NSNull.null;
+  }
+
+  if (depth > 64) {
+    if (error_message != nullptr) {
+      *error_message = @"JavaScript evaluation exceeded the maximum serialization depth.";
+    }
+    return nil;
+  }
+
+  if (value->IsUndefined() || value->IsNull()) {
+    return NSNull.null;
+  }
+  if (value->IsBool()) {
+    return @(value->GetBoolValue());
+  }
+  if (value->IsInt()) {
+    return @(value->GetIntValue());
+  }
+  if (value->IsUInt()) {
+    return @((unsigned int)value->GetUIntValue());
+  }
+  if (value->IsDouble()) {
+    return @(value->GetDoubleValue());
+  }
+  if (value->IsString()) {
+    return [NSString stringWithUTF8String:value->GetStringValue().ToString().c_str() ?: ""];
+  }
+  if (value->IsArray()) {
+    NSValue *identity = [NSValue valueWithPointer:value.get()];
+    if ([visited_values containsObject:identity]) {
+      if (error_message != nullptr) {
+        *error_message = @"JavaScript evaluation returned a cyclic array value that cannot be serialized.";
+      }
+      return nil;
+    }
+
+    [visited_values addObject:identity];
+    NSMutableArray *items = [NSMutableArray arrayWithCapacity:(NSUInteger)value->GetArrayLength()];
+    for (int index = 0; index < value->GetArrayLength(); index++) {
+      NSString *nested_error = nil;
+      id item = FoundationObjectFromV8Value(value->GetValue(index), visited_values, &nested_error, depth + 1);
+      if (item == nil) {
+        if (error_message != nullptr) {
+          *error_message = nested_error ?: @"JavaScript evaluation returned an unsupported array element.";
+        }
+        [visited_values removeObject:identity];
+        return nil;
+      }
+      [items addObject:item];
+    }
+    [visited_values removeObject:identity];
+    return items;
+  }
+  if (value->IsObject()) {
+    NSValue *identity = [NSValue valueWithPointer:value.get()];
+    if ([visited_values containsObject:identity]) {
+      if (error_message != nullptr) {
+        *error_message = @"JavaScript evaluation returned a cyclic object value that cannot be serialized.";
+      }
+      return nil;
+    }
+
+    [visited_values addObject:identity];
+    std::vector<CefString> keys;
+    if (!value->GetKeys(keys)) {
+      if (error_message != nullptr) {
+        *error_message = @"JavaScript evaluation returned an object whose keys could not be enumerated.";
+      }
+      [visited_values removeObject:identity];
+      return nil;
+    }
+
+    NSMutableDictionary<NSString *, id> *dictionary =
+        [NSMutableDictionary dictionaryWithCapacity:keys.size()];
+    for (const CefString &key : keys) {
+      NSString *key_string = [NSString stringWithUTF8String:key.ToString().c_str() ?: ""];
+      NSString *nested_error = nil;
+      id nested_value =
+          FoundationObjectFromV8Value(value->GetValue(key), visited_values, &nested_error, depth + 1);
+      if (nested_value == nil) {
+        if (error_message != nullptr) {
+          *error_message = nested_error ?: @"JavaScript evaluation returned an unsupported object property.";
+        }
+        [visited_values removeObject:identity];
+        return nil;
+      }
+      dictionary[key_string ?: @""] = nested_value;
+    }
+
+    [visited_values removeObject:identity];
+    return dictionary;
+  }
+
+  if (error_message != nullptr) {
+    *error_message = @"JavaScript evaluation returned a non-serializable value.";
+  }
+  return nil;
+}
+
+NSString *_Nullable JSONStringFromV8Value(CefRefPtr<CefV8Value> value, NSString **error_message) {
+  NSMutableSet<NSValue *> *visited_values = [NSMutableSet set];
+  id object = FoundationObjectFromV8Value(value, visited_values, error_message, 0);
+  if (object == nil) {
+    return nil;
+  }
+
+  NSError *json_error = nil;
+  NSData *json_data = [NSJSONSerialization dataWithJSONObject:object
+                                                      options:NSJSONWritingFragmentsAllowed
+                                                        error:&json_error];
+  if (json_data == nil) {
+    if (error_message != nullptr) {
+      *error_message = json_error.localizedDescription ?: @"JavaScript evaluation returned an unsupported JSON fragment.";
+    }
+    return nil;
+  }
+
+  return [[NSString alloc] initWithData:json_data encoding:NSUTF8StringEncoding];
+}
+
+void SendEvaluationResponse(CefRefPtr<CefFrame> frame,
+                            const CefString &request_id,
+                            bool success,
+                            const CefString &payload) {
+  if (!frame.get()) {
+    return;
+  }
+
+  CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create(kEvaluateResultMessageName);
+  CefRefPtr<CefListValue> arguments = message->GetArgumentList();
+  arguments->SetString(kEvaluateRequestIDIndex, request_id);
+  arguments->SetBool(kEvaluateSuccessIndex, success);
+  arguments->SetString(kEvaluatePayloadIndex, payload);
+  frame->SendProcessMessage(PID_BROWSER, message);
 }
 
 class ScopedMainArgs {
@@ -114,15 +274,24 @@ void StopMessagePumpTimer() {
   g_message_pump_timer = nullptr;
 }
 
-class GhoDexCEFApp final : public CefApp, public CefBrowserProcessHandler {
+class GhoDexCEFApp final : public CefApp,
+                           public CefBrowserProcessHandler,
+                           public CefRenderProcessHandler {
 public:
   CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override {
+    return this;
+  }
+  CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override {
     return this;
   }
 
   void OnBeforeCommandLineProcessing(
       const CefString &process_type,
       CefRefPtr<CefCommandLine> command_line) override;
+  bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+                                CefRefPtr<CefFrame> frame,
+                                CefProcessId source_process,
+                                CefRefPtr<CefProcessMessage> message) override;
 
   void OnScheduleMessagePumpWork(int64_t delay_ms) override {
     ScheduleMessagePumpWork(delay_ms);
@@ -141,6 +310,10 @@ public:
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
   CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
+  bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+                                CefRefPtr<CefFrame> frame,
+                                CefProcessId source_process,
+                                CefRefPtr<CefProcessMessage> message) override;
 
   void OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString &title) override;
 
@@ -152,6 +325,12 @@ public:
 
   void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
     if (browser_ && browser_->GetIdentifier() == browser->GetIdentifier()) {
+      if (owner_) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+          [owner_ failPendingEvaluationRequestsWithCode:GhoDexCEFControlErrorCodeBridgeUnavailable
+                                            description:@"The browser page closed before JavaScript evaluation completed."];
+        });
+      }
       browser_ = nullptr;
     }
   }
@@ -177,7 +356,9 @@ public:
   void GoForward();
   void Reload();
   void ExecuteJavaScript(const std::string &script);
-  void EvaluateJavaScript(const std::string &script, GhoDexCEFJavaScriptEvaluationCompletion completion);
+  bool EvaluateJavaScript(const std::string &script,
+                          const std::string &request_id,
+                          std::string *error_description);
   void WasResized();
   void CloseBrowser();
 
@@ -196,7 +377,15 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
 @interface GhoDexCEFView () {
   CefRefPtr<GhoDexCEFClient> _client;
   NSString *_initialURLString;
+  int64_t _nextEvaluationRequestID;
+  NSMutableDictionary<NSString *, GhoDexCEFJavaScriptEvaluationCompletion> *_pendingEvaluationCompletions;
 }
+- (NSString *)registerEvaluationCompletion:(GhoDexCEFJavaScriptEvaluationCompletion)completion;
+- (void)completeEvaluationRequestID:(NSString *)requestID
+                         resultJSON:(NSString * _Nullable)resultJSON
+                              error:(NSError * _Nullable)error;
+- (void)failPendingEvaluationRequestsWithCode:(GhoDexCEFControlErrorCode)code
+                                  description:(NSString *)description;
 @end
 
 @implementation GhoDexCEFView
@@ -205,6 +394,7 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
   self = [super initWithFrame:NSZeroRect];
   if (self) {
     _initialURLString = [initialURLString copy];
+    _pendingEvaluationCompletions = [NSMutableDictionary dictionary];
     self.wantsLayer = YES;
   }
   return self;
@@ -222,6 +412,8 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
   [super viewDidMoveToWindow];
 
   if (self.window == nil) {
+    [self failPendingEvaluationRequestsWithCode:GhoDexCEFControlErrorCodeBridgeUnavailable
+                                    description:@"The browser page was detached before JavaScript evaluation completed."];
     if (_client) {
       _client->CloseBrowser();
       _client = nullptr;
@@ -295,7 +487,19 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
 
 - (void)evaluateJavaScript:(NSString *)javaScript completion:(GhoDexCEFJavaScriptEvaluationCompletion)completion {
   if (_client) {
-    _client->EvaluateJavaScript(std::string(javaScript.UTF8String ?: ""), [completion copy]);
+    NSString *request_id = [self registerEvaluationCompletion:completion];
+    std::string error_description;
+    if (_client->EvaluateJavaScript(std::string(javaScript.UTF8String ?: ""),
+                                    std::string(request_id.UTF8String ?: ""),
+                                    &error_description)) {
+      return;
+    }
+
+    [self completeEvaluationRequestID:request_id
+                           resultJSON:nil
+                                error:MakeControlError(
+                                          GhoDexCEFControlErrorCodeEvaluationFailed,
+                                          [NSString stringWithUTF8String:error_description.c_str() ?: "The browser could not dispatch the JavaScript evaluation request."])];
     return;
   }
 
@@ -316,6 +520,46 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
   [self.delegate cefView:self requestOpenURLInNewTab:urlString];
 }
 
+- (NSString *)registerEvaluationCompletion:(GhoDexCEFJavaScriptEvaluationCompletion)completion {
+  NSString *request_id = [NSString stringWithFormat:@"%lld", ++_nextEvaluationRequestID];
+  if (completion != nil) {
+    _pendingEvaluationCompletions[request_id] = [completion copy];
+  }
+  return request_id;
+}
+
+- (void)completeEvaluationRequestID:(NSString *)requestID
+                         resultJSON:(NSString *)resultJSON
+                              error:(NSError *)error {
+  if (requestID.length == 0) {
+    return;
+  }
+
+  GhoDexCEFJavaScriptEvaluationCompletion completion = _pendingEvaluationCompletions[requestID];
+  if (completion == nil) {
+    return;
+  }
+
+  [_pendingEvaluationCompletions removeObjectForKey:requestID];
+  completion(resultJSON, error);
+}
+
+- (void)failPendingEvaluationRequestsWithCode:(GhoDexCEFControlErrorCode)code
+                                  description:(NSString *)description {
+  if (_pendingEvaluationCompletions.count == 0) {
+    return;
+  }
+
+  NSDictionary<NSString *, GhoDexCEFJavaScriptEvaluationCompletion> *pending =
+      [_pendingEvaluationCompletions copy];
+  [_pendingEvaluationCompletions removeAllObjects];
+
+  NSError *error = MakeControlError(code, description);
+  for (GhoDexCEFJavaScriptEvaluationCompletion completion in pending.objectEnumerator) {
+    completion(nil, error);
+  }
+}
+
 @end
 
 namespace {
@@ -328,6 +572,41 @@ void GhoDexCEFClient::OnTitleChange(CefRefPtr<CefBrowser> browser, const CefStri
   dispatch_async(dispatch_get_main_queue(), ^{
     [owner_ notifyTitle:title_string ?: @""];
   });
+}
+
+bool GhoDexCEFClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+                                               CefRefPtr<CefFrame> frame,
+                                               CefProcessId source_process,
+                                               CefRefPtr<CefProcessMessage> message) {
+  if (source_process != PID_RENDERER || !owner_ || !message.get() ||
+      message->GetName() != kEvaluateResultMessageName) {
+    return false;
+  }
+
+  CefRefPtr<CefListValue> arguments = message->GetArgumentList();
+  if (!arguments.get()) {
+    return false;
+  }
+
+  NSString *request_id =
+      [NSString stringWithUTF8String:arguments->GetString(kEvaluateRequestIDIndex).ToString().c_str() ?: ""];
+  BOOL success = arguments->GetBool(kEvaluateSuccessIndex) ? YES : NO;
+  NSString *payload =
+      [NSString stringWithUTF8String:arguments->GetString(kEvaluatePayloadIndex).ToString().c_str() ?: ""];
+
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (success) {
+      [owner_ completeEvaluationRequestID:request_id resultJSON:payload error:nil];
+    } else {
+      [owner_ completeEvaluationRequestID:request_id
+                               resultJSON:nil
+                                    error:MakeControlError(
+                                              GhoDexCEFControlErrorCodeEvaluationFailed,
+                                              payload.length > 0 ? payload
+                                                                 : @"The renderer failed to evaluate JavaScript.")];
+    }
+  });
+  return true;
 }
 
 void GhoDexCEFClient::OnLoadingStateChange(CefRefPtr<CefBrowser> browser, bool isLoading, bool canGoBack, bool canGoForward) {
@@ -410,22 +689,31 @@ void GhoDexCEFClient::ExecuteJavaScript(const std::string &script) {
   }
 }
 
-void GhoDexCEFClient::EvaluateJavaScript(const std::string &script,
-                                         GhoDexCEFJavaScriptEvaluationCompletion completion) {
+bool GhoDexCEFClient::EvaluateJavaScript(const std::string &script,
+                                         const std::string &request_id,
+                                         std::string *error_description) {
   CEF_REQUIRE_UI_THREAD();
-  if (completion == nil) {
-    return;
-  }
-
   if (!browser_) {
-    completion(nil, MakeControlError(GhoDexCEFControlErrorCodeBridgeUnavailable, @"The CEF browser instance is not ready."));
-    return;
+    if (error_description != nullptr) {
+      *error_description = "The CEF browser instance is not ready.";
+    }
+    return false;
   }
 
-  ExecuteJavaScript(script);
-  completion(nil,
-             MakeControlError(GhoDexCEFControlErrorCodeEvaluationUnavailable,
-                              @"Structured JavaScript evaluation is not wired yet."));
+  CefRefPtr<CefFrame> frame = browser_->GetMainFrame();
+  if (!frame.get()) {
+    if (error_description != nullptr) {
+      *error_description = "The CEF main frame is unavailable.";
+    }
+    return false;
+  }
+
+  CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create(kEvaluateRequestMessageName);
+  CefRefPtr<CefListValue> arguments = message->GetArgumentList();
+  arguments->SetString(kEvaluateRequestIDIndex, request_id);
+  arguments->SetString(kEvaluateScriptIndex, script);
+  frame->SendProcessMessage(PID_RENDERER, message);
+  return true;
 }
 
 void GhoDexCEFClient::WasResized() {
@@ -808,6 +1096,57 @@ BOOL GhoDexCEFBuildHasRuntime(void) {
   }
 
   return [[NSFileManager defaultManager] fileExistsAtPath:framework_path];
+}
+
+bool GhoDexCEFApp::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+                                            CefRefPtr<CefFrame> frame,
+                                            CefProcessId source_process,
+                                            CefRefPtr<CefProcessMessage> message) {
+  if (source_process != PID_BROWSER || !frame.get() || !message.get() ||
+      message->GetName() != kEvaluateRequestMessageName) {
+    return false;
+  }
+
+  CefRefPtr<CefListValue> arguments = message->GetArgumentList();
+  if (!arguments.get()) {
+    return false;
+  }
+
+  CefString request_id = arguments->GetString(kEvaluateRequestIDIndex);
+  CefString script = arguments->GetString(kEvaluateScriptIndex);
+  CefRefPtr<CefV8Context> context = frame->GetV8Context();
+  if (!context.get() || !context->Enter()) {
+    SendEvaluationResponse(frame, request_id, false, "The renderer context is not ready.");
+    return true;
+  }
+
+  CefRefPtr<CefV8Value> return_value;
+  CefRefPtr<CefV8Exception> exception;
+  bool did_evaluate = context->Eval(script, frame->GetURL(), 0, return_value, exception);
+  context->Exit();
+
+  if (!did_evaluate) {
+    std::string message_text =
+        exception.get() ? exception->GetMessage().ToString() : "JavaScript evaluation failed.";
+    SendEvaluationResponse(frame, request_id, false, message_text);
+    return true;
+  }
+
+  NSString *serialization_error = nil;
+  NSString *result_json = JSONStringFromV8Value(return_value, &serialization_error);
+  if (result_json.length == 0 && serialization_error != nil) {
+    SendEvaluationResponse(frame,
+                           request_id,
+                           false,
+                           std::string(serialization_error.UTF8String ?: "The renderer could not serialize the JavaScript result."));
+    return true;
+  }
+
+  SendEvaluationResponse(frame,
+                         request_id,
+                         true,
+                         std::string(result_json.UTF8String ?: "null"));
+  return true;
 }
 
 BOOL GhoDexCEFIsInitialized(void) {

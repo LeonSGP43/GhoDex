@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(cef): add request-response JavaScript evaluation transport
+
+- What changed: Replaced the placeholder `evaluateJavaScript` CEF bridge with a real browser-to-renderer process-message round-trip, added renderer-side V8 evaluation handling inside `GhoDexCEFBridge.mm`, serialized synchronous JavaScript results back into JSON fragments, and taught the browser-side bridge to track pending evaluation completions and fail them if the page closes before the response returns.
+- Why: The first browser control-plane skeleton needed a working request-response transport before higher-level page-agent commands like `query`, `click`, and `waitForSelector` can be implemented on top of it. A direct CEF process-message path keeps the transport inside the embedded browser runtime instead of forcing the feature onto CDP or one-off script hacks.
+- Impact: Browser tabs can now execute synchronous JavaScript and receive structured JSON results back through the native bridge, which gives the upcoming browser control API a real low-overhead transport for DOM inspection and command responses. Pending JS requests also fail cleanly when the owning browser page disappears instead of hanging forever.
+- Verification: `env GITHUB_ACTIONS=1 xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath $(pwd)/macos/DerivedDataManagedCEF-transport SYMROOT=$(pwd)/macos/build-managed-cef-transport GHODEX_CEF_ENABLED=1 GHODEX_CEF_ROOT=$(pwd)/macos/build/cef-runtime/current GHODEX_CEF_OTHER_LDFLAGS='' GHODEX_CEF_WRAPPER_LIB=$(pwd)/macos/build/cef-runtime/current/lib/Debug/libcef_dll_wrapper.a build`
+- Files: `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.h`, `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `CHANGELOG.md`
+
 ### feat(browser): add the first browser tab control-plane skeleton
 
 - What changed: Added typed browser control-plane request, response, event, and error types to `BrowserTabModel.swift`, switched per-page bridge binding from ad-hoc navigation closures to a page-scoped control dispatcher, routed browser-page delegate callbacks through typed control events, and extended `GhoDexCEFView` with `executeJavaScript` plus a placeholder `evaluateJavaScript` entry point so the Swift-side control plane now has a stable CEF seam for future renderer-agent work.
