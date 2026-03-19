@@ -152,6 +152,7 @@ class AppDelegate: NSObject,
     )
 
     @MainActor lazy var settingsController = SettingsController(appDelegate: self)
+    private let browserControlIPCService = BrowserControlIPCService()
 
     /// The elapsed time since the process was started
     var timeSinceLaunch: TimeInterval {
@@ -348,6 +349,8 @@ class AppDelegate: NSObject,
                 NSApp.arrangeInFront(nil)
             }
         }
+
+        browserControlIPCService.start()
     }
 
     func applicationDidHide(_ notification: Notification) {
@@ -442,6 +445,7 @@ class AppDelegate: NSObject,
         // so remove them all now. In the future we may want to be
         // more selective and only remove surface-targeted notifications.
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        browserControlIPCService.stop()
         GhoDexCEFShutdownGlobal()
     }
 

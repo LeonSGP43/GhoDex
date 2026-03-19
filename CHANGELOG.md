@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): add local IPC service for long-lived browser control sessions
+
+- What changed: Added a local Browser control IPC socket service inside the macOS app, started it during app launch, and taught `ghodex +browser-control` to prefer the socket in `auto` mode before falling back to the existing AppleScript transport.
+- Why: The first external Browser command adapter worked, but every CLI request still paid AppleScript startup overhead and could not participate in a long-lived control session. A local socket keeps the app-side control plane alive across multiple requests while preserving a backwards-compatible fallback path.
+- Impact: External clients can now reuse one Browser control connection against a running GhoDex instance, and the CLI gets a faster default path without losing the previous AppleScript bridge when the IPC socket is unavailable.
+- Verification: `swiftlint lint /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/App/macOS/AppDelegate.swift /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/Browser/BrowserControlIPCService.swift /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/Browser/BrowserPaths.swift`, `tmp_dd=$(mktemp -d /tmp/ghodex-browser-ipc-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-ipc-build.XXXXXX) && xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" build`, `tmp_dd=$(mktemp -d /tmp/ghodex-browser-ipc-cef-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-ipc-cef-build.XXXXXX) && env GITHUB_ACTIONS=1 xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" GHODEX_CEF_ENABLED=1 GHODEX_CEF_ROOT=$(pwd)/macos/build/cef-runtime/current GHODEX_CEF_OTHER_LDFLAGS='' GHODEX_CEF_WRAPPER_LIB=$(pwd)/macos/build/cef-runtime/current/lib/Debug/libcef_dll_wrapper.a build`, and `zig build -Demit-macos-app=false`
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Features/Browser/BrowserControlIPCService.swift`, `macos/Sources/Features/Browser/BrowserPaths.swift`, `src/cli/browser_control.zig`, `CHANGELOG.md`
+
 ### feat(browser): expose console and lifecycle subscriptions
 
 - What changed: Added external browser event subscription payload types plus a `BrowserExternalEventBroker` that bridges typed Browser tab model events into buffered external envelopes, then wired `subscribeEvents`, `drainEvents`, and `unsubscribeEvents` into the `browser.tab.v1` AppleScript/CLI command protocol.

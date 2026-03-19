@@ -5,18 +5,27 @@ enum BrowserPaths {
     static let envProfilePath = "GHODEX_CEF_PROFILE_PATH"
     static let runtimeDefaultsKey = "BrowserCEFRuntimePath"
     static let profileDefaultsKey = "BrowserCEFProfilePath"
+    static let browserControlSocketName = "browser-control.sock"
     static let builtInHomePage = "https://www.google.com"
     static let managedRuntimeSlug = "cef_binary_145.0.28+g51162e8+chromium-145.0.7632.160_macosarm64_minimal"
     static let managedRuntimeDownloadURL = URL(string: "https://cef-builds.spotifycdn.com/cef_binary_145.0.28%2Bg51162e8%2Bchromium-145.0.7632.160_macosarm64_minimal.tar.bz2")!
     static let managedRuntimeSHA256 = "004c79437220489f363b615a28f05c607fc13b7feb5045bdc8c7073e180506ad"
 
-    static func defaultCEFRootDirectory() -> URL {
-        let base = FileManager.default.homeDirectoryForCurrentUser
+    static func defaultAppSupportRootDirectory() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library", isDirectory: true)
             .appendingPathComponent("Application Support", isDirectory: true)
             .appendingPathComponent("GhoDex", isDirectory: true)
+    }
+
+    static func defaultCEFRootDirectory() -> URL {
+        defaultAppSupportRootDirectory()
             .appendingPathComponent("CEF", isDirectory: true)
-        return base
+    }
+
+    static func browserControlSocketURL() -> URL {
+        defaultAppSupportRootDirectory()
+            .appendingPathComponent(browserControlSocketName, isDirectory: false)
     }
 
     static func defaultManagedCEFRuntimeRoot() -> URL {
