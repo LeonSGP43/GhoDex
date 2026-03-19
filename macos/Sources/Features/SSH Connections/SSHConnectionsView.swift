@@ -768,7 +768,11 @@ struct SSHConnectionsView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    if displayFavoriteHosts.isEmpty && displayRecentHosts.isEmpty && displaySavedHosts.isEmpty && displayImportedHosts.isEmpty {
+                    if displayFavoriteHosts.isEmpty &&
+                        displayRecentHosts.isEmpty &&
+                        displaySavedHosts.isEmpty &&
+                        displayImportedHosts.isEmpty &&
+                        displaySavedWorkspaceTemplates.isEmpty {
                         emptySidebarState
                     } else {
                         if !displayFavoriteHosts.isEmpty {
@@ -794,6 +798,10 @@ struct SSHConnectionsView: View {
                                 title: L10n.AITerminalManager.importedHosts,
                                 hosts: displayImportedHosts
                             )
+                        }
+
+                        if !displaySavedWorkspaceTemplates.isEmpty {
+                            savedWorkspacesSection
                         }
                     }
                 }
@@ -838,6 +846,18 @@ struct SSHConnectionsView: View {
             VStack(spacing: 8) {
                 ForEach(hosts) { host in
                     sidebarHostRow(host)
+                }
+            }
+        }
+    }
+
+    private var savedWorkspacesSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionHeader(L10n.AITerminalManager.savedWorkspacesSection)
+
+            VStack(spacing: 8) {
+                ForEach(displaySavedWorkspaceTemplates) { workspace in
+                    savedWorkspaceRow(workspace)
                 }
             }
         }
@@ -957,6 +977,53 @@ struct SSHConnectionsView: View {
         .onTapGesture(count: 2) {
             store.open(host: host)
         }
+    }
+
+    private func savedWorkspaceRow(_ workspace: AITerminalSavedWorkspaceTemplate) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(workspace.name)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                Text(savedWorkspaceSummary(for: workspace))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Text(workspace.updatedAt.formatted(date: .abbreviated, time: .shortened))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            Button {
+                store.open(savedWorkspaceTemplate: workspace)
+            } label: {
+                Image(systemName: "arrow.up.right.circle.fill")
+                    .font(.title3)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.accentColor)
+            .help(L10n.AITerminalManager.launch)
+
+            Button(role: .destructive) {
+                store.removeSavedWorkspaceTemplate(workspace)
+            } label: {
+                Image(systemName: "trash")
+                    .font(.body.weight(.semibold))
+            }
+            .buttonStyle(.plain)
+            .help(L10n.AITerminalManager.remove)
+        }
+        .padding(14)
+        .background(Color.white.opacity(colorScheme == .dark ? 0.035 : 0.55), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.18 : 0.1), lineWidth: 1)
+        )
     }
 
     @ViewBuilder
@@ -1691,6 +1758,10 @@ struct SSHConnectionsView: View {
         )
     }
 
+    private var displaySavedWorkspaceTemplates: [AITerminalSavedWorkspaceTemplate] {
+        filterSavedWorkspaceTemplates(store.savedWorkspaceTemplates)
+    }
+
     private var allConnectionHosts: [AITerminalHost] {
         store.availableHosts.filter { !$0.isLocal }
     }
@@ -1745,6 +1816,23 @@ struct SSHConnectionsView: View {
                 || (host.user?.localizedCaseInsensitiveContains(query) ?? false)
                 || host.startupCommands.contains(where: { $0.localizedCaseInsensitiveContains(query) })
         }
+    }
+
+    private func filterSavedWorkspaceTemplates(
+        _ templates: [AITerminalSavedWorkspaceTemplate]
+    ) -> [AITerminalSavedWorkspaceTemplate] {
+        let query = hostSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return templates }
+
+        return templates.filter { template in
+            template.name.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    private func savedWorkspaceSummary(for workspace: AITerminalSavedWorkspaceTemplate) -> String {
+        let paneLabel = workspace.paneCount == 1 ? "1 pane" : "\(workspace.paneCount) panes"
+        let tabLabel = workspace.tabCount == 1 ? "1 tab" : "\(workspace.tabCount) tabs"
+        return "\(paneLabel) · \(tabLabel)"
     }
 
     private func hostSourceLabel(for host: AITerminalHost) -> String {

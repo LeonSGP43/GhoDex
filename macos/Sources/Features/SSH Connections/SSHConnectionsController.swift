@@ -28,7 +28,7 @@ final class SSHConnectionsPresentationState: ObservableObject {
     @Published var selectedTab: SSHConnectionsPanelTab = .connections
 }
 
-final class SSHConnectionsController: NSWindowController, NSWindowDelegate {
+final class SSHConnectionsController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
     private let store: AITerminalManagerStore
     private let presentationState = SSHConnectionsPresentationState()
 
@@ -97,5 +97,35 @@ final class SSHConnectionsController: NSWindowController, NSWindowDelegate {
 
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @IBAction func newTab(_ sender: Any?) {
+        guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
+        appDelegate.showNewTabPicker(from: window)
+    }
+
+    @IBAction override func newWindowForTab(_ sender: Any?) {
+        newTab(sender)
+    }
+
+    @IBAction func close(_ sender: Any?) {
+        window?.close()
+    }
+
+    @IBAction func closeTab(_ sender: Any?) {
+        window?.close()
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(newTab(_:)),
+            #selector(newWindowForTab(_:)):
+            return window != nil
+        case #selector(close(_:)),
+            #selector(closeTab(_:)):
+            return window != nil
+        default:
+            return true
+        }
     }
 }

@@ -6978,6 +6978,11 @@ pub const Keybinds = struct {
                 .{ .key = .{ .unicode = 'i' }, .mods = .{ .alt = true, .super = true } },
                 .{ .inspector = .toggle },
             );
+            try self.set.put(
+                alloc,
+                .{ .key = .{ .unicode = 'i' }, .mods = .{ .super = true, .shift = true } },
+                .{ .prompt_tab_title = {} },
+            );
 
             // Alternate keybind, common to Mac programs
             try self.set.put(

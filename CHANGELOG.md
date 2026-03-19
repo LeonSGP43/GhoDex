@@ -22,6 +22,33 @@ All notable changes to this project are documented in this file.
 - Files: `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`, `CHANGELOG.md`
 - Decision trail: Keep the benchmark logic in-tree for performance investigation, but gate it the same way as the existing benchmark suite so default regression jobs only enforce correctness contracts.
 
+### fix(macos): let Settings Panel tabs create and close tabs normally
+
+- What changed: Taught the Settings Panel window controller to respond to `New Tab`, the native tab-bar plus button, `Close`, and `Close Tab`, so `Cmd+T` and `Cmd+W` work while the panel tab is focused inside a mixed tab group.
+- Why: Once the Settings Panel is tabbed together with terminal windows, it becomes part of the same native macOS tab strip, but it previously did not implement the standard tab/window responder actions.
+- Impact: Users can now open another top-level tab from the Settings Panel and close the focused Settings Panel tab directly without switching back to a terminal tab first.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS' SYMROOT=macos/build build`
+- Files: `macos/Sources/Features/SSH Connections/SSHConnectionsController.swift`, `CHANGELOG.md`
+- Decision trail: Keep the Settings Panel participating in the same native tab workflow as terminal windows instead of adding special-case shortcut interception in `AppDelegate`.
+
+### fix(workspaces): manage saved workspaces from Connection Center
+
+- What changed: Added a Saved Workspaces section to Connection Center with search participation, summary metadata, direct launch controls, and direct removal controls for saved workspace templates.
+- Why: Saved workspaces could be created and reopened from the new-tab picker, but there was no clear in-app management surface for reviewing or deleting them afterward.
+- Impact: Users can now find, launch, and delete saved workspace templates from the existing Settings Panel flow instead of manually editing config.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS' SYMROOT=macos/build build`
+- Files: `macos/Sources/Features/SSH Connections/SSHConnectionsView.swift`, `CHANGELOG.md`
+- Decision trail: Reuse Connection Center as the durable workspace-management surface so saved hosts and saved workspaces stay discoverable in one place.
+
+### fix(macos): separate top-tab and terminal title editing
+
+- What changed: Split the title-edit actions so `Change Tab Title...` always targets the top-level tab/window title, `Change Terminal Title...` always targets the focused terminal surface, and added the default macOS `Cmd+Shift+I` binding for exact top-tab renaming while preserving contextual `Cmd+I`.
+- Why: The previous contextual routing made it hard to rename the top-level tab precisely when working inside split panes or pane child tabs, because tab-title and terminal-title intent shared the same action path.
+- Impact: Users now have a precise top-tab rename shortcut and menu action, while terminal-title editing still works on the currently focused surface.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS' SYMROOT=macos/build build`
+- Files: `macos/Sources/App/macOS/MainMenu.xib`, `macos/Sources/Features/Terminal/TerminalController.swift`, `macos/Sources/Ghostty/Ghostty.App.swift`, `src/config/Config.zig`, `CHANGELOG.md`
+- Decision trail: Keep `Cmd+I` as the fast contextual edit path, but introduce a separate explicit top-tab action by reusing the existing `prompt_tab_title` Ghostty binding instead of inventing a parallel macOS-only shortcut system.
+
 ### test(ai-terminal-manager): stabilize heartbeat concurrency coverage
 
 - What changed: Removed the wall-clock speedup assertion from `storeRunsDueHeartbeatTasksWithBoundedConcurrencyUnderLoad()` and kept the test focused on completion plus bounded parallelism while leaving the dedicated heartbeat benchmark coverage in place for timing observations.
