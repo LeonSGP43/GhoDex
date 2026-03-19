@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(control): stream live subscription output through the CLI
+
+- What changed: Changed `ghodex +control events.subscribe` so the CLI opens the socket once, writes the request, then forwards response chunks to stdout as they arrive instead of buffering until EOF. The CLI now flushes stdout on each subscription chunk, keeps one-shot commands on the existing buffered path, and adds a Zig test that stands up a fake Unix socket server to verify the replay-empty/live-open subscription path emits the ack line before the later live event line.
+- Why: The previous CLI only parsed the first line as a subscription ack, but transport still used `readAllAlloc(...)`, so true live subscriptions did not print anything until the server closed the socket. That made replay-only subscriptions look fine while `live_stream_open=true` subscriptions appeared hung from the CLI.
+- Impact: `+control events.subscribe` now behaves like an actual streaming command: users and automation can read the ack immediately, keep the process open, and consume subsequent newline-delimited live events without waiting for the harness to terminate the connection first.
+- Verification: `zig build test -Dtest-filter=control`; `zig build -Demit-macos-app=false`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' -derivedDataPath /tmp/ghodex-control-harness-cli-stream -only-testing:GhosttyTests/ControlHarnessTests test`; fresh-launch CLI smoke on `/tmp/ghodex-control-harness-cli-stream/Build/Products/Debug/GhoDex.app/Contents/MacOS/GhoDex` showing `events.subscribe --since-sequence=<current>` returned an immediate ack with `live_stream_open=true` and then streamed a live `terminal.input.sent` event after `send-text`.
+- Files: `src/cli/control.zig`, `CHANGELOG.md`
+- Decision trail: Keep the protocol unchanged on the wire and isolate the fix to CLI transport behavior: subscriptions are the one command that must flush incrementally, while the rest of the control commands remain simple request/EOF response exchanges.
+
 ### fix(control): make event subscriptions real and stabilize read-after-write readiness
 
 - What changed: Routed `events.subscribe` through replay plus live socket streaming, taught the CLI to accept subscription streams, moved live subscription handling off the listener's serial queue so an open stream no longer starves later requests, added a dedicated read-after-write readiness store so `run-command` waits for a post-echo terminal update before reporting ready, switched `run-command` to inject terminal text and then send an explicit Enter key event instead of relying on pasted trailing newlines, and added macOS tests that cover replay/live subscription behavior, service responsiveness while a stream stays open, and the command execution path behind `run-command`.

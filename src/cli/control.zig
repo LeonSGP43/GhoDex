@@ -130,6 +130,18 @@ fn runArgs(
     const request_json = try std.fmt.allocPrint(alloc, "{f}", .{std.json.fmt(parsed.request, .{})});
     const socket_path = try resolveSocketPath(alloc, parsed.socket_path);
 
+    if (std.mem.eql(u8, parsed.request.command, "events.subscribe")) {
+        const status_ok = streamSubscriptionRequest(alloc, stdout, socket_path, request_json) catch |err| {
+            const message = switch (err) {
+                error.FileNotFound, error.ConnectionRefused, error.SocketNotConnected => "The GhoDex control harness is unavailable. Launch the GhoDex app and try again.",
+                else => @errorName(err),
+            };
+            try writeClientError(stdout, "control_unavailable", message);
+            return 1;
+        };
+        return if (status_ok) 0 else 1;
+    }
+
     const response = sendRequest(alloc, socket_path, request_json) catch |err| {
         const message = switch (err) {
             error.FileNotFound, error.ConnectionRefused, error.SocketNotConnected => "The GhoDex control harness is unavailable. Launch the GhoDex app and try again.",
@@ -359,12 +371,72 @@ fn fnv1a64(text: []const u8) u64 {
 }
 
 fn sendRequest(alloc: Allocator, socket_path: []const u8, request_json: []const u8) ![]u8 {
-    var stream = try std.net.connectUnixSocket(socket_path);
+    var stream = try openRequestStream(socket_path, request_json);
     defer stream.close();
+    return try readAllAlloc(alloc, stream.handle, 1024 * 1024);
+}
+
+fn streamSubscriptionRequest(
+    alloc: Allocator,
+    stdout: *std.Io.Writer,
+    socket_path: []const u8,
+    request_json: []const u8,
+) !bool {
+    var stream = try openRequestStream(socket_path, request_json);
+    defer stream.close();
+    return try streamSubscriptionResponse(alloc, stdout, stream.handle);
+}
+
+fn openRequestStream(socket_path: []const u8, request_json: []const u8) !std.net.Stream {
+    var stream = try std.net.connectUnixSocket(socket_path);
+    errdefer stream.close();
 
     try writeAll(stream.handle, request_json);
     try std.posix.shutdown(stream.handle, .send);
-    return try readAllAlloc(alloc, stream.handle, 1024 * 1024);
+    return stream;
+}
+
+fn streamSubscriptionResponse(
+    alloc: Allocator,
+    stdout: *std.Io.Writer,
+    fd: std.posix.fd_t,
+) !bool {
+    var first_line = std.ArrayList(u8).empty;
+    defer first_line.deinit(alloc);
+
+    var chunk: [4096]u8 = undefined;
+    var saw_response = false;
+    var first_line_complete = false;
+
+    while (true) {
+        const amount = try std.posix.read(fd, &chunk);
+        if (amount == 0) break;
+        saw_response = true;
+
+        const bytes = chunk[0..amount];
+        if (!first_line_complete) {
+            if (std.mem.indexOfScalar(u8, bytes, '\n')) |newline| {
+                try first_line.appendSlice(alloc, bytes[0..newline]);
+                first_line_complete = true;
+            } else {
+                try first_line.appendSlice(alloc, bytes);
+            }
+
+            if (first_line.items.len > 64 * 1024) return error.ResponseTooLarge;
+        }
+
+        try stdout.writeAll(bytes);
+        try stdout.flush();
+    }
+
+    if (!saw_response) return error.EmptyResponse;
+
+    const parsed_status = try std.json.parseFromSlice(ResponseStatus, alloc, firstResponseLine(first_line.items), .{
+        .ignore_unknown_fields = true,
+    });
+    defer parsed_status.deinit();
+
+    return std.mem.eql(u8, parsed_status.value.status, "ok");
 }
 
 fn writeAll(fd: std.posix.fd_t, bytes: []const u8) !void {
@@ -508,4 +580,165 @@ test "parse control read-terminal delta arguments" {
     try testing.expectEqual(@as(?u32, 4096), parsed.request.max_chars);
     try testing.expectEqualStrings("120", parsed.request.cursor.?);
     try testing.expectEqualStrings("seq_42", parsed.request.read_after_write_id.?);
+}
+
+const RecordingTestWriter = struct {
+    writer: std.Io.Writer = .{
+        .vtable = &vtable,
+        .buffer = &.{},
+    },
+    bytes: [4096]u8 = undefined,
+    len: usize = 0,
+    write_count: usize = 0,
+    saw_write: std.atomic.Value(bool) = .init(false),
+
+    const vtable: std.Io.Writer.VTable = .{
+        .drain = drain,
+    };
+
+    fn buffered(self: *const RecordingTestWriter) []const u8 {
+        return self.bytes[0..self.len];
+    }
+
+    fn drain(
+        writer: *std.Io.Writer,
+        data: []const []const u8,
+        splat: usize,
+    ) std.Io.Writer.Error!usize {
+        const self: *RecordingTestWriter = @fieldParentPtr("writer", writer);
+        self.write_count += 1;
+        self.saw_write.store(true, .seq_cst);
+
+        var written: usize = 0;
+        for (data, 0..) |chunk, index| {
+            const repeats: usize = if (index + 1 == data.len) splat else 1;
+            var repeat_index: usize = 0;
+            while (repeat_index < repeats) : (repeat_index += 1) {
+                if (self.len + chunk.len > self.bytes.len) return error.WriteFailed;
+                @memcpy(self.bytes[self.len..][0..chunk.len], chunk);
+                self.len += chunk.len;
+                written += chunk.len;
+            }
+        }
+
+        return written;
+    }
+};
+
+const LiveSubscriptionTestServer = struct {
+    socket_path: []const u8,
+    writer_seen: *std.atomic.Value(bool),
+    writer_seen_before_event: bool = false,
+    request_bytes: [512]u8 = undefined,
+    request_len: usize = 0,
+    failure: ?anyerror = null,
+
+    fn run(self: *LiveSubscriptionTestServer) void {
+        self.runInner() catch |err| {
+            self.failure = err;
+        };
+    }
+
+    fn runInner(self: *LiveSubscriptionTestServer) !void {
+        var address = try std.net.Address.initUnix(self.socket_path);
+        const listener = try std.posix.socket(
+            std.posix.AF.UNIX,
+            std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC,
+            0,
+        );
+        defer std.posix.close(listener);
+        defer std.fs.deleteFileAbsolute(self.socket_path) catch {};
+
+        try std.posix.bind(listener, &address.any, address.getOsSockLen());
+        try std.posix.listen(listener, 1);
+
+        const client = try std.posix.accept(listener, null, null, std.posix.SOCK.CLOEXEC);
+        defer std.posix.close(client);
+
+        self.request_len = try readIntoFixedBuffer(client, &self.request_bytes);
+
+        const ack =
+            "{\"request_id\":\"req-subscribe\",\"status\":\"ok\",\"result\":{\"subscribed\":true,\"replayed_event_count\":0,\"live_stream_open\":true}}\n";
+        try writeAll(client, ack);
+
+        var attempts: usize = 0;
+        while (attempts < 200 and !self.writer_seen.load(.seq_cst)) : (attempts += 1) {
+            std.Thread.sleep(5 * std.time.ns_per_ms);
+        }
+        self.writer_seen_before_event = self.writer_seen.load(.seq_cst);
+
+        const event =
+            "{\"stream_kind\":\"event\",\"sequence\":43,\"event\":{\"name\":\"terminal.input.sent\"}}\n";
+        try writeAll(client, event);
+    }
+};
+
+fn readIntoFixedBuffer(fd: std.posix.fd_t, buffer: []u8) !usize {
+    var used: usize = 0;
+    while (true) {
+        const amount = try std.posix.read(fd, buffer[used..]);
+        if (amount == 0) break;
+        used += amount;
+        if (used == buffer.len) return error.NoSpaceLeft;
+    }
+    return used;
+}
+
+test "events.subscribe streams ack before live event when replay is empty" {
+    const testing = std.testing;
+    var socket_suffix: [4]u8 = undefined;
+    std.crypto.random.bytes(&socket_suffix);
+    const socket_path = try std.fmt.allocPrint(
+        testing.allocator,
+        "/tmp/ghdx-control-{s}.sock",
+        .{std.fmt.bytesToHex(socket_suffix, .lower)},
+    );
+    defer testing.allocator.free(socket_path);
+    defer std.fs.deleteFileAbsolute(socket_path) catch {};
+
+    var stdout = RecordingTestWriter{};
+    var stderr = RecordingTestWriter{};
+    var server = LiveSubscriptionTestServer{
+        .socket_path = socket_path,
+        .writer_seen = &stdout.saw_write,
+    };
+
+    const thread = try std.Thread.spawn(.{}, LiveSubscriptionTestServer.run, .{&server});
+    defer thread.join();
+
+    var socket_ready = false;
+    var attempts: usize = 0;
+    while (attempts < 200) : (attempts += 1) {
+        if (std.fs.accessAbsolute(socket_path, .{})) |_| {
+            socket_ready = true;
+            break;
+        } else |_| {
+            std.Thread.sleep(5 * std.time.ns_per_ms);
+        }
+    }
+    try testing.expect(socket_ready);
+
+    const argv = [_][]const u8{
+        "events.subscribe",
+        "--socket",
+        socket_path,
+        "--since-sequence=42",
+        "--event-limit=2",
+    };
+    var iter = args.sliceIterator(&argv);
+    const exit_code = try runArgs(testing.allocator, &iter, &stdout.writer, &stderr.writer);
+
+    try testing.expectEqual(@as(u8, 0), exit_code);
+    try testing.expectEqual(@as(?anyerror, null), server.failure);
+    try testing.expect(server.writer_seen_before_event);
+    try testing.expect(server.request_len > 0);
+    try testing.expect(std.mem.indexOf(u8, server.request_bytes[0..server.request_len], "\"command\":\"events.subscribe\"") != null);
+    try testing.expect(std.mem.indexOf(u8, server.request_bytes[0..server.request_len], "\"since_sequence\":42") != null);
+    try testing.expect(std.mem.indexOf(u8, server.request_bytes[0..server.request_len], "\"event_limit\":2") != null);
+    try testing.expect(stdout.write_count >= 2);
+    try testing.expectEqualStrings(
+        "{\"request_id\":\"req-subscribe\",\"status\":\"ok\",\"result\":{\"subscribed\":true,\"replayed_event_count\":0,\"live_stream_open\":true}}\n{\"stream_kind\":\"event\",\"sequence\":43,\"event\":{\"name\":\"terminal.input.sent\"}}\n",
+        stdout.buffered(),
+    );
+    try testing.expectEqualStrings("", stderr.buffered());
 }
