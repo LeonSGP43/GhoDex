@@ -430,7 +430,6 @@ struct AITerminalManagerTests {
             maxConcurrentTasks: maxConcurrentTasks
         ))
 
-        let start = Date()
         for _ in 0..<taskCount {
             let id = store.enqueueHeartbeatTask(
                 command: "sleep \(taskSleepSeconds)"
@@ -449,9 +448,6 @@ struct AITerminalManagerTests {
             try? await Task.sleep(nanoseconds: 20_000_000)
         }
 
-        let elapsed = Date().timeIntervalSince(start)
-        let sequentialRuntime = Double(taskCount) * taskSleepSeconds
-
         #expect(
             store.heartbeatDoneCount == taskCount,
             "done=\(store.heartbeatDoneCount) running=\(store.heartbeatRunningCount) queued=\(store.heartbeatQueuedCount) failed=\(store.heartbeatFailedCount)"
@@ -460,8 +456,9 @@ struct AITerminalManagerTests {
         #expect(store.heartbeatQueuedCount == 0)
         #expect(store.heartbeatRunningCount == 0)
         #expect(peakRunningCount <= maxConcurrentTasks)
+        // The benchmark test below measures speedup separately; keep this test focused
+        // on correctness because full-suite load makes real-time thresholds noisy.
         #expect(peakRunningCount > 1)
-        #expect(elapsed < sequentialRuntime * 0.7)
     }
 
     @Test @MainActor func storeBenchmarksHeartbeatConcurrencyCurve() async throws {

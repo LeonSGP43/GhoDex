@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### test(ai-terminal-manager): stabilize heartbeat concurrency coverage
+
+- What changed: Removed the wall-clock speedup assertion from `storeRunsDueHeartbeatTasksWithBoundedConcurrencyUnderLoad()` and kept the test focused on completion plus bounded parallelism while leaving the dedicated heartbeat benchmark coverage in place for timing observations.
+- Why: Full-suite `xcodebuild test` runs can add enough process-launch and main-actor scheduling jitter that the fixed runtime threshold occasionally failed even when the queue completed correctly within the configured concurrency cap.
+- Impact: The heartbeat correctness test now validates the queue behavior we rely on in CI without intermittently failing on machine load, while the separate benchmark coverage still captures concurrency speedup trends.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' -derivedDataPath /tmp/ghodex-heartbeat-stable-targeted/run-1 -only-testing:'GhosttyTests/AITerminalManagerTests/storeRunsDueHeartbeatTasksWithBoundedConcurrencyUnderLoad' test`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' -derivedDataPath /tmp/ghodex-heartbeat-stable-targeted/run-2 -only-testing:'GhosttyTests/AITerminalManagerTests/storeRunsDueHeartbeatTasksWithBoundedConcurrencyUnderLoad' test`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' -derivedDataPath /tmp/ghodex-heartbeat-stable-targeted/run-3 -only-testing:'GhosttyTests/AITerminalManagerTests/storeRunsDueHeartbeatTasksWithBoundedConcurrencyUnderLoad' test`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' -derivedDataPath /tmp/ghodex-main-full-test-stable-retry test`; `cd macos && xcodebuild test -project GhoDex.xcodeproj -scheme GhoDex -skip-testing GhosttyUITests -arch arm64 -derivedDataPath /tmp/ghodex-zig-xcode-repro`
+- Files: `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`, `CHANGELOG.md`
+- Decision trail: Keep the correctness test deterministic by asserting the queue drains and respects the concurrency ceiling, and treat wall-clock speedup as observational benchmark data instead of a hard pass/fail contract.
+
+
 ### feat(settings): move Preferences into the Settings Panel
 
 - What changed: Added a dedicated Preferences tab to the existing Settings Panel window, embedded the language/restart settings content there, removed the standalone preferences-window launch path from `AppDelegate`, and removed the separate `Preferences…` app-menu item so this functionality only lives inside the Settings Panel.
