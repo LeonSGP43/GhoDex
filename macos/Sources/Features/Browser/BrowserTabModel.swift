@@ -244,6 +244,102 @@ struct BrowserDOMBatchResult: Hashable, Codable {
     let results: [BrowserDOMBatchCommandResult]
 }
 
+enum BrowserDOMBatchDecodedValue: Hashable {
+    case query(BrowserDOMQueryResult)
+    case click(BrowserDOMClickResult)
+    case typeText(BrowserDOMTypeTextResult)
+    case getText(BrowserDOMTextResult)
+    case getAttributes(BrowserDOMAttributesResult)
+    case getBoundingBox(BrowserDOMBoundingBoxResult)
+    case getDOMSnapshot(BrowserDOMSnapshotResult)
+}
+
+struct BrowserDOMDecodedBatchCommandResult: Hashable {
+    let id: UUID
+    let command: BrowserDOMBatchCommandKind
+    let value: BrowserDOMBatchDecodedValue?
+    let error: BrowserControlError?
+}
+
+struct BrowserDOMDecodedBatchResult: Hashable {
+    let results: [BrowserDOMDecodedBatchCommandResult]
+}
+
+extension BrowserDOMBatchResult {
+    func decoded() -> BrowserDOMDecodedBatchResult {
+        BrowserDOMDecodedBatchResult(results: results.map { $0.decoded() })
+    }
+}
+
+extension BrowserDOMBatchCommandResult {
+    func decoded() -> BrowserDOMDecodedBatchCommandResult {
+        if !ok {
+            return BrowserDOMDecodedBatchCommandResult(
+                id: id,
+                command: command,
+                value: nil,
+                error: .internalFailure(errorMessage ?? "The DOM batch command failed without an error message.")
+            )
+        }
+
+        do {
+            return BrowserDOMDecodedBatchCommandResult(
+                id: id,
+                command: command,
+                value: try decodedValue(),
+                error: nil
+            )
+        } catch let error as BrowserControlError {
+            return BrowserDOMDecodedBatchCommandResult(
+                id: id,
+                command: command,
+                value: nil,
+                error: error
+            )
+        } catch {
+            return BrowserDOMDecodedBatchCommandResult(
+                id: id,
+                command: command,
+                value: nil,
+                error: .internalFailure(error.localizedDescription)
+            )
+        }
+    }
+
+    private func decodedValue() throws -> BrowserDOMBatchDecodedValue {
+        switch command {
+        case .query:
+            return .query(try decodeValueJSON(as: BrowserDOMQueryResult.self))
+        case .click:
+            return .click(try decodeValueJSON(as: BrowserDOMClickResult.self))
+        case .typeText:
+            return .typeText(try decodeValueJSON(as: BrowserDOMTypeTextResult.self))
+        case .getText:
+            return .getText(try decodeValueJSON(as: BrowserDOMTextResult.self))
+        case .getAttributes:
+            return .getAttributes(try decodeValueJSON(as: BrowserDOMAttributesResult.self))
+        case .getBoundingBox:
+            return .getBoundingBox(try decodeValueJSON(as: BrowserDOMBoundingBoxResult.self))
+        case .getDOMSnapshot:
+            return .getDOMSnapshot(try decodeValueJSON(as: BrowserDOMSnapshotResult.self))
+        }
+    }
+
+    private func decodeValueJSON<T: Decodable>(as type: T.Type) throws -> T {
+        guard let valueJSON, let data = valueJSON.data(using: .utf8) else {
+            throw BrowserControlError.internalFailure("The DOM batch command returned no JSON payload.")
+        }
+
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            throw BrowserControlError.internalFailure(
+                "The DOM batch command returned an unexpected JSON payload: \(error.localizedDescription)"
+            )
+        }
+    }
+}
+
 struct BrowserControlEvent: Identifiable, Hashable, Codable {
     let id: UUID
     let target: BrowserControlTarget
@@ -515,6 +611,20 @@ final class BrowserPageState: ObservableObject, Identifiable {
 
         send(.batchDOMCommands, payload: ["commandsJSON": commandsJSON]) { response in
             completion(self.decodeResponse(response, as: BrowserDOMBatchResult.self))
+        }
+    }
+
+    func runDecodedDOMCommandBatch(
+        _ commands: [BrowserDOMBatchCommand],
+        completion: @escaping (Result<BrowserDOMDecodedBatchResult, BrowserControlError>) -> Void
+    ) {
+        runDOMCommandBatch(commands) { result in
+            switch result {
+            case let .success(batchResult):
+                completion(.success(batchResult.decoded()))
+            case let .failure(error):
+                completion(.failure(error))
+            }
         }
     }
 

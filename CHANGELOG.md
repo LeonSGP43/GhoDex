@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): add decoded batch result helpers
+
+- What changed: Added high-level decoded batch result models for DOM command batches, plus `runDecodedDOMCommandBatch` on `BrowserPageState` so callers can receive typed per-step values and errors instead of reading raw `valueJSON` strings from `BrowserDOMBatchCommandResult`.
+- Why: The first batch DOM command commit optimized bridge round-trips, but the Swift-side batch API still leaked transport-level JSON parsing to higher layers. Decoding batch results inside the model keeps the control plane ergonomic and makes later adapters safer to build.
+- Impact: Higher-level browser automation code can now treat DOM batches as typed command results with one model call, which is a better fit for future command/API adapters than passing raw JSON blobs around.
+- Verification: `swiftlint lint /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/Browser/BrowserTabModel.swift`, `tmp_dd=$(mktemp -d /tmp/ghodex-browser-batchdecode-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-batchdecode-build.XXXXXX) && xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" build`, and `tmp_dd=$(mktemp -d /tmp/ghodex-browser-batchdecode-cef-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-batchdecode-cef-build.XXXXXX) && env GITHUB_ACTIONS=1 xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" GHODEX_CEF_ENABLED=1 GHODEX_CEF_ROOT=$(pwd)/macos/build/cef-runtime/current GHODEX_CEF_OTHER_LDFLAGS='' GHODEX_CEF_WRAPPER_LIB=$(pwd)/macos/build/cef-runtime/current/lib/Debug/libcef_dll_wrapper.a build`
+- Files: `macos/Sources/Features/Browser/BrowserTabModel.swift`, `CHANGELOG.md`
+
 ### feat(browser): add typed DOM inspection helper APIs
 
 - What changed: Added typed Swift result models for `getText`, `getAttributes`, `getBoundingBox`, and `getDOMSnapshot`, then exposed matching page-scoped helper APIs on `BrowserPageState` so callers can invoke the inspection commands without assembling raw payloads or decoding JSON manually.
