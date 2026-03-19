@@ -316,11 +316,90 @@ extension ScriptBrowserTab {
             case let .failure(error):
                 return .failure(for: request, error: error.externalCommandError)
             }
-        case .subscribeEvents, .drainEvents, .unsubscribeEvents:
-            return .failure(
-                for: request,
-                error: .invalidRequest("The \(request.command.rawValue) command is not available until the event subscription adapter is enabled.")
-            )
+        case .subscribeEvents:
+            guard let browserTab = browserTab(for: request), let controller = browserTab.controller else {
+                return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
+            }
+
+            let requestedEventKinds: Set<BrowserExternalEventKind>
+            do {
+                requestedEventKinds = try parseEventKinds(from: request.payload["kindsJSON"])
+            } catch let error as BrowserExternalCommandError {
+                return .failure(for: request, error: error)
+            } catch {
+                return .failure(for: request, error: .invalidRequest("The event kinds payload is invalid."))
+            }
+
+            do {
+                let subscription = BrowserExternalEventBroker.shared.subscribe(to: controller, kinds: requestedEventKinds)
+                return .success(for: request, resultJSON: try jsonString(from: subscription))
+            } catch let error as BrowserExternalCommandError {
+                return .failure(for: request, error: error)
+            } catch {
+                return .failure(
+                    for: request,
+                    error: .internalFailure("The event subscription result could not be serialized as JSON.")
+                )
+            }
+        case .drainEvents:
+            let requestedSubscriptionID: UUID
+            do {
+                requestedSubscriptionID = try parseSubscriptionID(from: request)
+            } catch let error as BrowserExternalCommandError {
+                return .failure(for: request, error: error)
+            } catch {
+                return .failure(for: request, error: .invalidRequest("The event subscription identifier is invalid."))
+            }
+
+            let limit: Int?
+            do {
+                limit = try drainLimit(from: request.payload["limit"])
+            } catch let error as BrowserExternalCommandError {
+                return .failure(for: request, error: error)
+            } catch {
+                return .failure(for: request, error: .invalidRequest("The event drain limit is invalid."))
+            }
+
+            guard let result = BrowserExternalEventBroker.shared.drain(subscriptionID: requestedSubscriptionID, limit: limit) else {
+                return .failure(
+                    for: request,
+                    error: .invalidRequest("The subscriptionID does not resolve to a live browser event subscription.")
+                )
+            }
+
+            do {
+                return .success(for: request, resultJSON: try jsonString(from: result))
+            } catch {
+                return .failure(
+                    for: request,
+                    error: .internalFailure("The drained browser events could not be serialized as JSON.")
+                )
+            }
+        case .unsubscribeEvents:
+            let requestedSubscriptionID: UUID
+            do {
+                requestedSubscriptionID = try parseSubscriptionID(from: request)
+            } catch let error as BrowserExternalCommandError {
+                return .failure(for: request, error: error)
+            } catch {
+                return .failure(for: request, error: .invalidRequest("The event subscription identifier is invalid."))
+            }
+
+            guard BrowserExternalEventBroker.shared.unsubscribe(subscriptionID: requestedSubscriptionID) else {
+                return .failure(
+                    for: request,
+                    error: .invalidRequest("The subscriptionID does not resolve to a live browser event subscription.")
+                )
+            }
+
+            do {
+                return .success(for: request, resultJSON: try jsonString(from: BrowserExternalSubscriptionAck()))
+            } catch {
+                return .failure(
+                    for: request,
+                    error: .internalFailure("The event unsubscription acknowledgment could not be serialized as JSON.")
+                )
+            }
         }
     }
 
@@ -339,6 +418,51 @@ extension ScriptBrowserTab {
             throw BrowserExternalCommandError.internalFailure("The browser command protocol payload could not be serialized as UTF-8.")
         }
         return encoded
+    }
+
+    private static func parseEventKinds(from kindsJSON: String?) throws -> Set<BrowserExternalEventKind> {
+        guard let kindsJSON, !kindsJSON.isEmpty else {
+            return []
+        }
+
+        guard let data = kindsJSON.data(using: .utf8) else {
+            throw BrowserExternalCommandError.invalidRequest("The kindsJSON payload must be valid UTF-8 JSON.")
+        }
+
+        do {
+            let decoded = try JSONDecoder().decode([BrowserExternalEventKind].self, from: data)
+            return Set(decoded)
+        } catch {
+            throw BrowserExternalCommandError.invalidRequest(
+                "The kindsJSON payload must decode to a JSON array of browser event kinds."
+            )
+        }
+    }
+
+    private static func parseSubscriptionID(from request: BrowserExternalCommandRequest) throws -> UUID {
+        guard let rawSubscriptionID = request.payload["subscriptionID"], !rawSubscriptionID.isEmpty else {
+            throw BrowserExternalCommandError.invalidRequest(
+                "The \(request.command.rawValue) command requires a subscriptionID payload."
+            )
+        }
+
+        guard let subscriptionID = UUID(uuidString: rawSubscriptionID) else {
+            throw BrowserExternalCommandError.invalidRequest("The subscriptionID payload must be a UUID string.")
+        }
+
+        return subscriptionID
+    }
+
+    private static func drainLimit(from rawLimit: String?) throws -> Int? {
+        guard let rawLimit, !rawLimit.isEmpty else {
+            return nil
+        }
+
+        guard let limit = Int(rawLimit), limit >= 0 else {
+            throw BrowserExternalCommandError.invalidRequest("The limit payload must be a non-negative integer.")
+        }
+
+        return limit
     }
 }
 

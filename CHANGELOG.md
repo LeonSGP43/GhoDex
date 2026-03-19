@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): expose console and lifecycle subscriptions
+
+- What changed: Added external browser event subscription payload types plus a `BrowserExternalEventBroker` that bridges typed Browser tab model events into buffered external envelopes, then wired `subscribeEvents`, `drainEvents`, and `unsubscribeEvents` into the `browser.tab.v1` AppleScript/CLI command protocol.
+- Why: The browser control plane already had internal console and lifecycle events, but external automation still had no way to observe them. A pull-based broker keeps the first public event API small, versioned, and cheap to integrate with the existing AppleScript-backed CLI transport.
+- Impact: Local browser-control clients can now subscribe to console and lifecycle events for a Browser tab, drain buffered event envelopes with cursor/drop metadata, and unsubscribe cleanly without reaching into internal Swift models.
+- Verification: `swiftlint lint /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/Browser/BrowserCommandProtocol.swift /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/Browser/BrowserExternalEventBroker.swift /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `tmp_dd=$(mktemp -d /tmp/ghodex-browser-events-api-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-events-api-build.XXXXXX) && xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" build`, and `tmp_dd=$(mktemp -d /tmp/ghodex-browser-events-api-cef-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-events-api-cef-build.XXXXXX) && env GITHUB_ACTIONS=1 xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" GHODEX_CEF_ENABLED=1 GHODEX_CEF_ROOT=$(pwd)/macos/build/cef-runtime/current GHODEX_CEF_OTHER_LDFLAGS='' GHODEX_CEF_WRAPPER_LIB=$(pwd)/macos/build/cef-runtime/current/lib/Debug/libcef_dll_wrapper.a build`
+- Files: `macos/Sources/Features/Browser/BrowserCommandProtocol.swift`, `macos/Sources/Features/Browser/BrowserExternalEventBroker.swift`, `macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `CHANGELOG.md`
+
 ### feat(browser): add local CLI adapter for browser control
 
 - What changed: Added a generic `run browser command protocol` AppleScript command that accepts one `browser.tab.v1` JSON request and returns a versioned JSON response, then added the `ghodex +browser-control` CLI action to forward one request to the running macOS app through `osascript`.

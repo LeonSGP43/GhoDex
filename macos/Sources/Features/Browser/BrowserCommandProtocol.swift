@@ -145,3 +145,54 @@ struct BrowserExternalEventEnvelope: Identifiable, Hashable, Codable {
         self.createdAt = createdAt
     }
 }
+
+struct BrowserExternalEventSubscriptionResult: Hashable, Codable {
+    let version: String
+    let subscriptionID: UUID
+    let nextCursor: Int
+
+    init(
+        version: String = BrowserCommandProtocolVersion.v1,
+        subscriptionID: UUID,
+        nextCursor: Int = 0
+    ) {
+        self.version = version
+        self.subscriptionID = subscriptionID
+        self.nextCursor = nextCursor
+    }
+}
+
+struct BrowserExternalEventDrainResult: Hashable, Codable {
+    let version: String
+    let subscriptionID: UUID
+    let nextCursor: Int
+    let droppedCount: Int
+    let events: [BrowserExternalEventEnvelope]
+
+    init(
+        version: String = BrowserCommandProtocolVersion.v1,
+        subscriptionID: UUID,
+        nextCursor: Int,
+        droppedCount: Int,
+        events: [BrowserExternalEventEnvelope]
+    ) {
+        self.version = version
+        self.subscriptionID = subscriptionID
+        self.nextCursor = nextCursor
+        self.droppedCount = droppedCount
+        self.events = events
+    }
+}
+
+struct BrowserExternalSubscriptionAck: Hashable, Codable {
+    let version: String
+    let ok: Bool
+
+    init(
+        version: String = BrowserCommandProtocolVersion.v1,
+        ok: Bool = true
+    ) {
+        self.version = version
+        self.ok = ok
+    }
+}
