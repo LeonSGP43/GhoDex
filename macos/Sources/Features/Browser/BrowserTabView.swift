@@ -313,14 +313,78 @@ private struct BrowserCEFDeckView: NSViewRepresentable {
             view.delegate = delegate
             delegates[page.id] = delegate
             views[page.id] = view
-            model.bindBridge(
-                for: page.id,
-                loadURL: { [weak view] in view?.loadURLString($0) },
-                goBack: { [weak view] in view?.goBack() },
-                goForward: { [weak view] in view?.goForward() },
-                reload: { [weak view] in view?.reloadPage() }
-            )
+            model.bindBridge(for: page.id, bridge: makeControlBridge(for: page.id, view: view))
             return view
+        }
+
+        private func makeControlBridge(for pageID: UUID, view: GhoDexCEFView) -> BrowserPageControlBridge {
+            BrowserPageControlBridge(dispatch: { [weak view] request, completion in
+                guard let view else {
+                    completion(.failure(
+                        for: request,
+                        error: .bridgeUnavailable("The browser view for page \(pageID) is no longer available.")
+                    ))
+                    return
+                }
+
+                switch request.command {
+                case .loadURL:
+                    guard let url = request.payload["url"], !url.isEmpty else {
+                        completion(.failure(
+                            for: request,
+                            error: .invalidRequest("The loadURL command requires a non-empty url payload.")
+                        ))
+                        return
+                    }
+                    view.loadURLString(url)
+                    completion(.success(for: request))
+                case .goBack:
+                    view.goBack()
+                    completion(.success(for: request))
+                case .goForward:
+                    view.goForward()
+                    completion(.success(for: request))
+                case .reload:
+                    view.reloadPage()
+                    completion(.success(for: request))
+                case .executeJavaScript:
+                    guard let script = request.payload["script"], !script.isEmpty else {
+                        completion(.failure(
+                            for: request,
+                            error: .invalidRequest("The executeJavaScript command requires a script payload.")
+                        ))
+                        return
+                    }
+                    view.executeJavaScript(script)
+                    completion(.success(for: request))
+                case .evaluateJavaScript:
+                    guard let script = request.payload["script"], !script.isEmpty else {
+                        completion(.failure(
+                            for: request,
+                            error: .invalidRequest("The evaluateJavaScript command requires a script payload.")
+                        ))
+                        return
+                    }
+                    view.evaluateJavaScript(script) { resultJSON, error in
+                        if let error {
+                            completion(.failure(
+                                for: request,
+                                error: .internalFailure(error.localizedDescription)
+                            ))
+                            return
+                        }
+
+                        completion(.success(for: request, valueJSON: resultJSON))
+                    }
+                case .query, .click, .typeText, .waitForSelector:
+                    completion(.failure(
+                        for: request,
+                        error: .commandUnsupported(
+                            "The \(request.command.rawValue) command is reserved for the future page-agent transport."
+                        )
+                    ))
+                }
+            })
         }
     }
 }
@@ -336,15 +400,8 @@ private final class PageDelegate: NSObject, GhoDexCEFViewDelegate {
     }
 
     func cefView(_ view: GhoDexCEFView, didUpdateTitle title: String) {
-        let navigationState = model.pageNavigationState(for: pageID)
-        model.updatePageState(
-            for: pageID,
-            title: title,
-            url: nil,
-            canGoBack: navigationState.canGoBack,
-            canGoForward: navigationState.canGoForward,
-            isLoading: navigationState.isLoading
-        )
+        guard let target = model.controlTarget(for: pageID) else { return }
+        model.handle(.pageTitleChanged(target: target, title: title), from: pageID)
     }
 
     func cefView(
@@ -354,18 +411,22 @@ private final class PageDelegate: NSObject, GhoDexCEFViewDelegate {
         canGoForward: Bool,
         isLoading: Bool
     ) {
-        model.updatePageState(
-            for: pageID,
-            title: nil,
-            url: url,
-            canGoBack: canGoBack,
-            canGoForward: canGoForward,
-            isLoading: isLoading
+        guard let target = model.controlTarget(for: pageID) else { return }
+        model.handle(
+            .navigationStateChanged(
+                target: target,
+                url: url,
+                canGoBack: canGoBack,
+                canGoForward: canGoForward,
+                isLoading: isLoading
+            ),
+            from: pageID
         )
     }
 
     func cefView(_ view: GhoDexCEFView, requestOpenURLInNewTab urlString: String) {
-        model.openURLInNewTab(urlString)
+        guard let target = model.controlTarget(for: pageID) else { return }
+        model.handle(.openURLInNewTabRequested(target: target, url: urlString), from: pageID)
     }
 }
 

@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): add the first browser tab control-plane skeleton
+
+- What changed: Added typed browser control-plane request, response, event, and error types to `BrowserTabModel.swift`, switched per-page bridge binding from ad-hoc navigation closures to a page-scoped control dispatcher, routed browser-page delegate callbacks through typed control events, and extended `GhoDexCEFView` with `executeJavaScript` plus a placeholder `evaluateJavaScript` entry point so the Swift-side control plane now has a stable CEF seam for future renderer-agent work.
+- Why: The browser tab feature needs a durable control contract before deeper DOM inspection, console streaming, and future scripting adapters can be implemented safely. Keeping the first step focused on the typed routing skeleton prevents later API churn while still avoiding a premature commitment to CDP as the main product surface.
+- Impact: Browser tabs still behave the same for navigation today, but the feature worktree now has a real command-addressable control path that future commits can extend with structured JS results, selector-based commands, subscriptions, and adapter APIs without rewriting the tab routing layer again.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS' build`
+- Files: `macos/Sources/Features/Browser/BrowserTabModel.swift`, `macos/Sources/Features/Browser/BrowserTabView.swift`, `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.h`, `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `CHANGELOG.md`
+
 ### docs(browser): record browser tab control architecture
 
 - What changed: Added `browser-tab-control-architecture.md` to capture the long-term browser-tab control-plane design, including module boundaries, typed command protocol expectations, event families, error semantics, performance rules, phased implementation checklist, and the intended atomic commit sequence for building the control API.

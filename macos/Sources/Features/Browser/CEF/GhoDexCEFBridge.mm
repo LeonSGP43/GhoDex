@@ -1,5 +1,7 @@
 #import "GhoDexCEFBridge.h"
 
+NSString * const GhoDexCEFControlErrorDomain = @"com.leongong.ghodex.browser.cef.control";
+
 #if GHODEX_CEF_ENABLED
 
 #include <algorithm>
@@ -21,6 +23,12 @@ std::atomic<bool> g_cef_initialized{false};
 std::atomic<bool> g_cef_initializing{false};
 std::atomic<bool> g_cef_library_loaded{false};
 dispatch_source_t g_message_pump_timer = nullptr;
+
+NSError *MakeControlError(GhoDexCEFControlErrorCode code, NSString *description) {
+  return [NSError errorWithDomain:GhoDexCEFControlErrorDomain
+                             code:code
+                         userInfo:@{NSLocalizedDescriptionKey : description ?: @"Unknown browser control error."}];
+}
 
 class ScopedMainArgs {
 public:
@@ -168,6 +176,8 @@ public:
   void GoBack();
   void GoForward();
   void Reload();
+  void ExecuteJavaScript(const std::string &script);
+  void EvaluateJavaScript(const std::string &script, GhoDexCEFJavaScriptEvaluationCompletion completion);
   void WasResized();
   void CloseBrowser();
 
@@ -277,6 +287,23 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
   }
 }
 
+- (void)executeJavaScript:(NSString *)javaScript {
+  if (_client) {
+    _client->ExecuteJavaScript(std::string(javaScript.UTF8String ?: ""));
+  }
+}
+
+- (void)evaluateJavaScript:(NSString *)javaScript completion:(GhoDexCEFJavaScriptEvaluationCompletion)completion {
+  if (_client) {
+    _client->EvaluateJavaScript(std::string(javaScript.UTF8String ?: ""), [completion copy]);
+    return;
+  }
+
+  if (completion != nil) {
+    completion(nil, MakeControlError(GhoDexCEFControlErrorCodeBridgeUnavailable, @"The CEF browser bridge is unavailable."));
+  }
+}
+
 - (void)notifyTitle:(NSString *)title {
   [self.delegate cefView:self didUpdateTitle:title];
 }
@@ -369,6 +396,36 @@ void GhoDexCEFClient::Reload() {
   if (browser_) {
     browser_->Reload();
   }
+}
+
+void GhoDexCEFClient::ExecuteJavaScript(const std::string &script) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!browser_) {
+    return;
+  }
+
+  CefRefPtr<CefFrame> frame = browser_->GetMainFrame();
+  if (frame) {
+    frame->ExecuteJavaScript(script, frame->GetURL(), 0);
+  }
+}
+
+void GhoDexCEFClient::EvaluateJavaScript(const std::string &script,
+                                         GhoDexCEFJavaScriptEvaluationCompletion completion) {
+  CEF_REQUIRE_UI_THREAD();
+  if (completion == nil) {
+    return;
+  }
+
+  if (!browser_) {
+    completion(nil, MakeControlError(GhoDexCEFControlErrorCodeBridgeUnavailable, @"The CEF browser instance is not ready."));
+    return;
+  }
+
+  ExecuteJavaScript(script);
+  completion(nil,
+             MakeControlError(GhoDexCEFControlErrorCodeEvaluationUnavailable,
+                              @"Structured JavaScript evaluation is not wired yet."));
 }
 
 void GhoDexCEFClient::WasResized() {
@@ -814,6 +871,20 @@ BOOL GhoDexCEFIsInitialized(void) {
 }
 
 - (void)reloadPage {
+}
+
+- (void)executeJavaScript:(NSString *)javaScript {
+}
+
+- (void)evaluateJavaScript:(NSString *)javaScript completion:(GhoDexCEFJavaScriptEvaluationCompletion)completion {
+  if (completion != nil) {
+    NSError *error = [NSError errorWithDomain:GhoDexCEFControlErrorDomain
+                                         code:GhoDexCEFControlErrorCodeBridgeUnavailable
+                                     userInfo:@{
+                                       NSLocalizedDescriptionKey : @"CEF support is disabled in this build."
+                                     }];
+    completion(nil, error);
+  }
 }
 
 @end

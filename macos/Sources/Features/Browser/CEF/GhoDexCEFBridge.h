@@ -11,6 +11,14 @@ FOUNDATION_EXPORT BOOL GhoDexCEFBuildSupportsManagedRuntime(void);
 FOUNDATION_EXPORT BOOL GhoDexCEFBuildHasRuntime(void);
 FOUNDATION_EXPORT BOOL GhoDexCEFIsInitialized(void);
 FOUNDATION_EXPORT NSString * _Nullable GhoDexCEFConfiguredProfileDirectoryName(void);
+FOUNDATION_EXPORT NSString * const GhoDexCEFControlErrorDomain;
+
+typedef NS_ENUM(NSInteger, GhoDexCEFControlErrorCode) {
+    GhoDexCEFControlErrorCodeBridgeUnavailable = 1,
+    GhoDexCEFControlErrorCodeEvaluationUnavailable = 2,
+};
+
+typedef void (^GhoDexCEFJavaScriptEvaluationCompletion)(NSString * _Nullable resultJSON, NSError * _Nullable error);
 
 @interface GhoDexCEFView : NSView
 @property(nonatomic, weak, nullable) id<GhoDexCEFViewDelegate> delegate;
@@ -19,6 +27,8 @@ FOUNDATION_EXPORT NSString * _Nullable GhoDexCEFConfiguredProfileDirectoryName(v
 - (void)goBack;
 - (void)goForward;
 - (void)reloadPage;
+- (void)executeJavaScript:(NSString *)javaScript;
+- (void)evaluateJavaScript:(NSString *)javaScript completion:(GhoDexCEFJavaScriptEvaluationCompletion)completion;
 @end
 
 @protocol GhoDexCEFViewDelegate <NSObject>

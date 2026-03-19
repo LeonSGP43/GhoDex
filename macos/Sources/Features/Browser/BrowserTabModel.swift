@@ -1,6 +1,182 @@
 import AppKit
 import Foundation
 
+enum BrowserControlCommandKind: String, Codable, Hashable {
+    case loadURL
+    case goBack
+    case goForward
+    case reload
+    case executeJavaScript
+    case evaluateJavaScript
+    case query
+    case click
+    case typeText
+    case waitForSelector
+}
+
+enum BrowserControlEventKind: String, Codable, Hashable {
+    case pageTitleChanged
+    case navigationStateChanged
+    case openURLInNewTabRequested
+    case consoleMessage
+    case bridgeReady
+}
+
+enum BrowserControlErrorCode: String, Codable, Hashable {
+    case pageNotFound
+    case bridgeUnavailable
+    case browserNotReady
+    case invalidRequest
+    case commandUnsupported
+    case requestTimedOut
+    case pageClosed
+    case internalFailure
+}
+
+struct BrowserControlTarget: Hashable, Codable {
+    let pageID: UUID
+    let frameName: String?
+    let documentRevision: Int
+
+    init(pageID: UUID, frameName: String? = nil, documentRevision: Int) {
+        self.pageID = pageID
+        self.frameName = frameName
+        self.documentRevision = documentRevision
+    }
+}
+
+struct BrowserControlRequest: Identifiable, Hashable, Codable {
+    let id: UUID
+    let target: BrowserControlTarget
+    let command: BrowserControlCommandKind
+    let payload: [String: String]
+    let timeoutMS: Int?
+
+    init(
+        id: UUID = UUID(),
+        target: BrowserControlTarget,
+        command: BrowserControlCommandKind,
+        payload: [String: String] = [:],
+        timeoutMS: Int? = nil
+    ) {
+        self.id = id
+        self.target = target
+        self.command = command
+        self.payload = payload
+        self.timeoutMS = timeoutMS
+    }
+}
+
+struct BrowserControlError: Error, Hashable, Codable {
+    let code: BrowserControlErrorCode
+    let message: String
+    let isRetryable: Bool
+
+    static func bridgeUnavailable(_ message: String) -> BrowserControlError {
+        BrowserControlError(code: .bridgeUnavailable, message: message, isRetryable: true)
+    }
+
+    static func browserNotReady(_ message: String) -> BrowserControlError {
+        BrowserControlError(code: .browserNotReady, message: message, isRetryable: true)
+    }
+
+    static func invalidRequest(_ message: String) -> BrowserControlError {
+        BrowserControlError(code: .invalidRequest, message: message, isRetryable: false)
+    }
+
+    static func commandUnsupported(_ message: String) -> BrowserControlError {
+        BrowserControlError(code: .commandUnsupported, message: message, isRetryable: false)
+    }
+
+    static func pageNotFound(_ message: String) -> BrowserControlError {
+        BrowserControlError(code: .pageNotFound, message: message, isRetryable: false)
+    }
+
+    static func internalFailure(_ message: String) -> BrowserControlError {
+        BrowserControlError(code: .internalFailure, message: message, isRetryable: false)
+    }
+}
+
+struct BrowserControlResponse: Hashable, Codable {
+    let requestID: UUID
+    let target: BrowserControlTarget
+    let stateRevision: Int
+    let valueJSON: String?
+    let error: BrowserControlError?
+
+    static func success(for request: BrowserControlRequest, valueJSON: String? = nil) -> BrowserControlResponse {
+        BrowserControlResponse(
+            requestID: request.id,
+            target: request.target,
+            stateRevision: request.target.documentRevision,
+            valueJSON: valueJSON,
+            error: nil
+        )
+    }
+
+    static func failure(for request: BrowserControlRequest, error: BrowserControlError) -> BrowserControlResponse {
+        BrowserControlResponse(
+            requestID: request.id,
+            target: request.target,
+            stateRevision: request.target.documentRevision,
+            valueJSON: nil,
+            error: error
+        )
+    }
+}
+
+struct BrowserControlEvent: Identifiable, Hashable, Codable {
+    let id: UUID
+    let target: BrowserControlTarget
+    let kind: BrowserControlEventKind
+    let payload: [String: String]
+
+    init(
+        id: UUID = UUID(),
+        target: BrowserControlTarget,
+        kind: BrowserControlEventKind,
+        payload: [String: String] = [:]
+    ) {
+        self.id = id
+        self.target = target
+        self.kind = kind
+        self.payload = payload
+    }
+
+    static func pageTitleChanged(target: BrowserControlTarget, title: String) -> BrowserControlEvent {
+        BrowserControlEvent(target: target, kind: .pageTitleChanged, payload: ["title": title])
+    }
+
+    static func navigationStateChanged(
+        target: BrowserControlTarget,
+        url: String,
+        canGoBack: Bool,
+        canGoForward: Bool,
+        isLoading: Bool
+    ) -> BrowserControlEvent {
+        BrowserControlEvent(
+            target: target,
+            kind: .navigationStateChanged,
+            payload: [
+                "url": url,
+                "canGoBack": String(canGoBack),
+                "canGoForward": String(canGoForward),
+                "isLoading": String(isLoading),
+            ]
+        )
+    }
+
+    static func openURLInNewTabRequested(target: BrowserControlTarget, url: String) -> BrowserControlEvent {
+        BrowserControlEvent(target: target, kind: .openURLInNewTabRequested, payload: ["url": url])
+    }
+}
+
+typealias BrowserControlCompletion = (BrowserControlResponse) -> Void
+
+struct BrowserPageControlBridge {
+    let dispatch: (BrowserControlRequest, @escaping BrowserControlCompletion) -> Void
+}
+
 @MainActor
 final class BrowserPageState: ObservableObject, Identifiable {
     let id = UUID()
@@ -12,14 +188,12 @@ final class BrowserPageState: ObservableObject, Identifiable {
     @Published private(set) var canGoBack = false
     @Published private(set) var canGoForward = false
     @Published private(set) var isLoading = false
+    @Published private(set) var documentRevision = 0
 
     fileprivate var onStateChange: (() -> Void)?
     fileprivate var isAddressBarEditing = false
 
-    private var loadURLHandler: ((String) -> Void)?
-    private var goBackHandler: (() -> Void)?
-    private var goForwardHandler: (() -> Void)?
-    private var reloadHandler: (() -> Void)?
+    private var controlBridge: BrowserPageControlBridge?
 
     init(initialURL: URL) {
         self.initialURL = initialURL
@@ -44,7 +218,7 @@ final class BrowserPageState: ObservableObject, Identifiable {
         let normalized = normalize(addressText, initialURL.absoluteString)
         isAddressBarEditing = false
         addressText = normalized
-        loadURLHandler?(normalized)
+        send(.loadURL, payload: ["url": normalized]) { _ in }
         onStateChange?()
     }
 
@@ -58,34 +232,51 @@ final class BrowserPageState: ObservableObject, Identifiable {
     }
 
     func goBack() {
-        goBackHandler?()
+        send(.goBack) { _ in }
     }
 
     func goForward() {
-        goForwardHandler?()
+        send(.goForward) { _ in }
     }
 
     func reload() {
-        reloadHandler?()
+        send(.reload) { _ in }
     }
 
-    func bindBridge(
-        loadURL: @escaping (String) -> Void,
-        goBack: @escaping () -> Void,
-        goForward: @escaping () -> Void,
-        reload: @escaping () -> Void
+    var controlTarget: BrowserControlTarget {
+        BrowserControlTarget(pageID: id, documentRevision: documentRevision)
+    }
+
+    func bindControlBridge(_ bridge: BrowserPageControlBridge) {
+        controlBridge = bridge
+    }
+
+    func unbindControlBridge() {
+        controlBridge = nil
+    }
+
+    func route(_ request: BrowserControlRequest, completion: @escaping BrowserControlCompletion) {
+        guard let controlBridge else {
+            completion(.failure(for: request, error: .bridgeUnavailable("The browser page bridge is not bound.")))
+            return
+        }
+
+        controlBridge.dispatch(request, completion)
+    }
+
+    func send(
+        _ command: BrowserControlCommandKind,
+        payload: [String: String] = [:],
+        timeoutMS: Int? = nil,
+        completion: @escaping BrowserControlCompletion
     ) {
-        loadURLHandler = loadURL
-        goBackHandler = goBack
-        goForwardHandler = goForward
-        reloadHandler = reload
-    }
-
-    func unbindBridge() {
-        loadURLHandler = nil
-        goBackHandler = nil
-        goForwardHandler = nil
-        reloadHandler = nil
+        let request = BrowserControlRequest(
+            target: controlTarget,
+            command: command,
+            payload: payload,
+            timeoutMS: timeoutMS
+        )
+        route(request, completion: completion)
     }
 
     func updatePageState(
@@ -102,6 +293,9 @@ final class BrowserPageState: ObservableObject, Identifiable {
         }
 
         if let url, !url.isEmpty {
+            if displayedURL != url {
+                documentRevision += 1
+            }
             displayedURL = url
             if !isAddressBarEditing {
                 addressText = url
@@ -188,18 +382,15 @@ final class BrowserTabModel: ObservableObject {
 
     func bindBridge(
         for pageID: UUID,
-        loadURL: @escaping (String) -> Void,
-        goBack: @escaping () -> Void,
-        goForward: @escaping () -> Void,
-        reload: @escaping () -> Void
+        bridge: BrowserPageControlBridge
     ) {
         guard let page = pages.first(where: { $0.id == pageID }) else { return }
-        page.bindBridge(loadURL: loadURL, goBack: goBack, goForward: goForward, reload: reload)
+        page.bindControlBridge(bridge)
     }
 
     func unbindBridge(for pageID: UUID) {
         guard let page = pages.first(where: { $0.id == pageID }) else { return }
-        page.unbindBridge()
+        page.unbindControlBridge()
     }
 
     func submitAddress() {
@@ -232,6 +423,48 @@ final class BrowserTabModel: ObservableObject {
         activePage?.reload()
     }
 
+    func sendControlRequest(
+        _ request: BrowserControlRequest,
+        completion: @escaping BrowserControlCompletion
+    ) {
+        guard runtimeState == .ready else {
+            completion(.failure(
+                for: request,
+                error: .browserNotReady("The browser runtime is not ready to handle control commands.")
+            ))
+            return
+        }
+
+        guard let page = pages.first(where: { $0.id == request.target.pageID }) else {
+            completion(.failure(
+                for: request,
+                error: .pageNotFound("No browser page exists for \(request.target.pageID).")
+            ))
+            return
+        }
+
+        page.route(request, completion: completion)
+    }
+
+    func evaluateJavaScript(_ script: String, completion: @escaping BrowserControlCompletion) {
+        guard let activePage else {
+            let request = BrowserControlRequest(
+                target: BrowserControlTarget(pageID: selectedPageID, documentRevision: 0),
+                command: .evaluateJavaScript,
+                payload: ["script": script]
+            )
+            completion(.failure(for: request, error: .pageNotFound("No active browser page is available.")))
+            return
+        }
+
+        let request = BrowserControlRequest(
+            target: activePage.controlTarget,
+            command: .evaluateJavaScript,
+            payload: ["script": script]
+        )
+        sendControlRequest(request, completion: completion)
+    }
+
     func openInDefaultBrowser() {
         let candidate = normalizedURLString(addressText, fallback: defaultPageURL.absoluteString)
         guard let url = URL(string: candidate) else { return }
@@ -259,6 +492,39 @@ final class BrowserTabModel: ObservableObject {
             canGoBack: canGoBack,
             canGoForward: canGoForward,
             isLoading: isLoading)
+    }
+
+    func controlTarget(for pageID: UUID) -> BrowserControlTarget? {
+        pages.first(where: { $0.id == pageID })?.controlTarget
+    }
+
+    func handle(_ event: BrowserControlEvent, from pageID: UUID) {
+        switch event.kind {
+        case .pageTitleChanged:
+            updatePageState(
+                for: pageID,
+                title: event.payload["title"],
+                url: nil,
+                canGoBack: pageNavigationState(for: pageID).canGoBack,
+                canGoForward: pageNavigationState(for: pageID).canGoForward,
+                isLoading: pageNavigationState(for: pageID).isLoading
+            )
+        case .navigationStateChanged:
+            updatePageState(
+                for: pageID,
+                title: nil,
+                url: event.payload["url"],
+                canGoBack: event.payload["canGoBack"] == "true",
+                canGoForward: event.payload["canGoForward"] == "true",
+                isLoading: event.payload["isLoading"] == "true"
+            )
+        case .openURLInNewTabRequested:
+            if let url = event.payload["url"] {
+                openURLInNewTab(url)
+            }
+        case .consoleMessage, .bridgeReady:
+            break
+        }
     }
 
     func pageNavigationState(for pageID: UUID) -> (canGoBack: Bool, canGoForward: Bool, isLoading: Bool) {
