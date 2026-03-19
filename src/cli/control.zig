@@ -587,7 +587,7 @@ const RecordingTestWriter = struct {
         .vtable = &vtable,
         .buffer = &.{},
     },
-    bytes: [4096]u8 = undefined,
+    bytes: [128 * 1024]u8 = undefined,
     len: usize = 0,
     write_count: usize = 0,
     saw_write: std.atomic.Value(bool) = .init(false),
@@ -625,21 +625,23 @@ const RecordingTestWriter = struct {
     }
 };
 
-const LiveSubscriptionTestServer = struct {
+const StreamingSubscriptionTestServer = struct {
     socket_path: []const u8,
-    writer_seen: *std.atomic.Value(bool),
+    ack: []const u8,
+    event: ?[]const u8 = null,
+    writer_seen: ?*std.atomic.Value(bool) = null,
     writer_seen_before_event: bool = false,
     request_bytes: [512]u8 = undefined,
     request_len: usize = 0,
     failure: ?anyerror = null,
 
-    fn run(self: *LiveSubscriptionTestServer) void {
+    fn run(self: *StreamingSubscriptionTestServer) void {
         self.runInner() catch |err| {
             self.failure = err;
         };
     }
 
-    fn runInner(self: *LiveSubscriptionTestServer) !void {
+    fn runInner(self: *StreamingSubscriptionTestServer) !void {
         var address = try std.net.Address.initUnix(self.socket_path);
         const listener = try std.posix.socket(
             std.posix.AF.UNIX,
@@ -657,19 +659,21 @@ const LiveSubscriptionTestServer = struct {
 
         self.request_len = try readIntoFixedBuffer(client, &self.request_bytes);
 
-        const ack =
-            "{\"request_id\":\"req-subscribe\",\"status\":\"ok\",\"result\":{\"subscribed\":true,\"replayed_event_count\":0,\"live_stream_open\":true}}\n";
-        try writeAll(client, ack);
-
-        var attempts: usize = 0;
-        while (attempts < 200 and !self.writer_seen.load(.seq_cst)) : (attempts += 1) {
-            std.Thread.sleep(5 * std.time.ns_per_ms);
+        if (self.ack.len > 0) {
+            try writeAll(client, self.ack);
         }
-        self.writer_seen_before_event = self.writer_seen.load(.seq_cst);
 
-        const event =
-            "{\"stream_kind\":\"event\",\"sequence\":43,\"event\":{\"name\":\"terminal.input.sent\"}}\n";
-        try writeAll(client, event);
+        if (self.event) |event| {
+            if (self.writer_seen) |writer_seen| {
+                var attempts: usize = 0;
+                while (attempts < 200 and !writer_seen.load(.seq_cst)) : (attempts += 1) {
+                    std.Thread.sleep(5 * std.time.ns_per_ms);
+                }
+                self.writer_seen_before_event = writer_seen.load(.seq_cst);
+            }
+
+            try writeAll(client, event);
+        }
     }
 };
 
@@ -684,39 +688,47 @@ fn readIntoFixedBuffer(fd: std.posix.fd_t, buffer: []u8) !usize {
     return used;
 }
 
-test "events.subscribe streams ack before live event when replay is empty" {
-    const testing = std.testing;
+fn makeTestSocketPath(alloc: Allocator) ![]const u8 {
     var socket_suffix: [4]u8 = undefined;
     std.crypto.random.bytes(&socket_suffix);
-    const socket_path = try std.fmt.allocPrint(
-        testing.allocator,
+    return std.fmt.allocPrint(
+        alloc,
         "/tmp/ghdx-control-{s}.sock",
         .{std.fmt.bytesToHex(socket_suffix, .lower)},
     );
+}
+
+fn waitForSocketReady(socket_path: []const u8) !bool {
+    var attempts: usize = 0;
+    while (attempts < 200) : (attempts += 1) {
+        if (std.fs.accessAbsolute(socket_path, .{})) |_| {
+            return true;
+        } else |_| {
+            std.Thread.sleep(5 * std.time.ns_per_ms);
+        }
+    }
+    return false;
+}
+
+test "events.subscribe streams ack before live event when replay is empty" {
+    const testing = std.testing;
+    const socket_path = try makeTestSocketPath(testing.allocator);
     defer testing.allocator.free(socket_path);
     defer std.fs.deleteFileAbsolute(socket_path) catch {};
 
     var stdout = RecordingTestWriter{};
     var stderr = RecordingTestWriter{};
-    var server = LiveSubscriptionTestServer{
+    var server = StreamingSubscriptionTestServer{
         .socket_path = socket_path,
+        .ack = "{\"request_id\":\"req-subscribe\",\"status\":\"ok\",\"result\":{\"subscribed\":true,\"replayed_event_count\":0,\"live_stream_open\":true}}\n",
+        .event = "{\"stream_kind\":\"event\",\"sequence\":43,\"event\":{\"name\":\"terminal.input.sent\"}}\n",
         .writer_seen = &stdout.saw_write,
     };
 
-    const thread = try std.Thread.spawn(.{}, LiveSubscriptionTestServer.run, .{&server});
+    const thread = try std.Thread.spawn(.{}, StreamingSubscriptionTestServer.run, .{&server});
     defer thread.join();
 
-    var socket_ready = false;
-    var attempts: usize = 0;
-    while (attempts < 200) : (attempts += 1) {
-        if (std.fs.accessAbsolute(socket_path, .{})) |_| {
-            socket_ready = true;
-            break;
-        } else |_| {
-            std.Thread.sleep(5 * std.time.ns_per_ms);
-        }
-    }
-    try testing.expect(socket_ready);
+    try testing.expect(try waitForSocketReady(socket_path));
 
     const argv = [_][]const u8{
         "events.subscribe",
@@ -738,6 +750,178 @@ test "events.subscribe streams ack before live event when replay is empty" {
     try testing.expect(stdout.write_count >= 2);
     try testing.expectEqualStrings(
         "{\"request_id\":\"req-subscribe\",\"status\":\"ok\",\"result\":{\"subscribed\":true,\"replayed_event_count\":0,\"live_stream_open\":true}}\n{\"stream_kind\":\"event\",\"sequence\":43,\"event\":{\"name\":\"terminal.input.sent\"}}\n",
+        stdout.buffered(),
+    );
+    try testing.expectEqualStrings("", stderr.buffered());
+}
+
+test "events.subscribe streams a live event when event_limit is one" {
+    const testing = std.testing;
+    const socket_path = try makeTestSocketPath(testing.allocator);
+    defer testing.allocator.free(socket_path);
+    defer std.fs.deleteFileAbsolute(socket_path) catch {};
+
+    var stdout = RecordingTestWriter{};
+    var stderr = RecordingTestWriter{};
+    var server = StreamingSubscriptionTestServer{
+        .socket_path = socket_path,
+        .ack = "{\"request_id\":\"req-limit-one\",\"status\":\"ok\",\"result\":{\"subscribed\":true,\"replayed_event_count\":0,\"live_stream_open\":true,\"event_limit\":1}}\n",
+        .event = "{\"stream_kind\":\"event\",\"sequence\":44,\"event\":{\"name\":\"terminal.input.sent\"}}\n",
+        .writer_seen = &stdout.saw_write,
+    };
+
+    const thread = try std.Thread.spawn(.{}, StreamingSubscriptionTestServer.run, .{&server});
+    defer thread.join();
+    try testing.expect(try waitForSocketReady(socket_path));
+
+    const argv = [_][]const u8{
+        "events.subscribe",
+        "--socket",
+        socket_path,
+        "--since-sequence=99",
+        "--event-limit=1",
+    };
+    var iter = args.sliceIterator(&argv);
+    const exit_code = try runArgs(testing.allocator, &iter, &stdout.writer, &stderr.writer);
+
+    try testing.expectEqual(@as(u8, 0), exit_code);
+    try testing.expectEqual(@as(?anyerror, null), server.failure);
+    try testing.expect(server.writer_seen_before_event);
+    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "\"event_limit\":1") != null);
+    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "\"sequence\":44") != null);
+    try testing.expectEqualStrings("", stderr.buffered());
+}
+
+test "events.subscribe reports an empty response as a client error" {
+    const testing = std.testing;
+    const socket_path = try makeTestSocketPath(testing.allocator);
+    defer testing.allocator.free(socket_path);
+    defer std.fs.deleteFileAbsolute(socket_path) catch {};
+
+    var stdout = RecordingTestWriter{};
+    var stderr = RecordingTestWriter{};
+    var server = StreamingSubscriptionTestServer{
+        .socket_path = socket_path,
+        .ack = "",
+    };
+
+    const thread = try std.Thread.spawn(.{}, StreamingSubscriptionTestServer.run, .{&server});
+    defer thread.join();
+    try testing.expect(try waitForSocketReady(socket_path));
+
+    const argv = [_][]const u8{
+        "events.subscribe",
+        "--socket",
+        socket_path,
+    };
+    var iter = args.sliceIterator(&argv);
+    const exit_code = try runArgs(testing.allocator, &iter, &stdout.writer, &stderr.writer);
+
+    try testing.expectEqual(@as(u8, 1), exit_code);
+    try testing.expectEqual(@as(?anyerror, null), server.failure);
+    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "\"control_unavailable\"") != null);
+    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "EmptyResponse") != null);
+    try testing.expectEqualStrings("", stderr.buffered());
+}
+
+test "events.subscribe reports a truncated ack as a client error" {
+    const testing = std.testing;
+    const socket_path = try makeTestSocketPath(testing.allocator);
+    defer testing.allocator.free(socket_path);
+    defer std.fs.deleteFileAbsolute(socket_path) catch {};
+
+    var stdout = RecordingTestWriter{};
+    var stderr = RecordingTestWriter{};
+    var server = StreamingSubscriptionTestServer{
+        .socket_path = socket_path,
+        .ack = "{\"request_id\":\"req-truncated\",\"status\":\"ok\"",
+    };
+
+    const thread = try std.Thread.spawn(.{}, StreamingSubscriptionTestServer.run, .{&server});
+    defer thread.join();
+    try testing.expect(try waitForSocketReady(socket_path));
+
+    const argv = [_][]const u8{
+        "events.subscribe",
+        "--socket",
+        socket_path,
+    };
+    var iter = args.sliceIterator(&argv);
+    const exit_code = try runArgs(testing.allocator, &iter, &stdout.writer, &stderr.writer);
+
+    try testing.expectEqual(@as(u8, 1), exit_code);
+    try testing.expectEqual(@as(?anyerror, null), server.failure);
+    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "\"control_unavailable\"") != null);
+    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "req-truncated") != null);
+    try testing.expectEqualStrings("", stderr.buffered());
+}
+
+test "events.subscribe reports an oversized ack line as a client error" {
+    const testing = std.testing;
+    const socket_path = try makeTestSocketPath(testing.allocator);
+    defer testing.allocator.free(socket_path);
+    defer std.fs.deleteFileAbsolute(socket_path) catch {};
+
+    const oversized_ack = try testing.allocator.alloc(u8, 70 * 1024);
+    defer testing.allocator.free(oversized_ack);
+    @memset(oversized_ack, 'a');
+
+    var stdout = RecordingTestWriter{};
+    var stderr = RecordingTestWriter{};
+    var server = StreamingSubscriptionTestServer{
+        .socket_path = socket_path,
+        .ack = oversized_ack,
+    };
+
+    const thread = try std.Thread.spawn(.{}, StreamingSubscriptionTestServer.run, .{&server});
+    defer thread.join();
+    try testing.expect(try waitForSocketReady(socket_path));
+
+    const argv = [_][]const u8{
+        "events.subscribe",
+        "--socket",
+        socket_path,
+    };
+    var iter = args.sliceIterator(&argv);
+    const exit_code = try runArgs(testing.allocator, &iter, &stdout.writer, &stderr.writer);
+
+    try testing.expectEqual(@as(u8, 1), exit_code);
+    try testing.expectEqual(@as(?anyerror, null), server.failure);
+    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "\"control_unavailable\"") != null);
+    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "ResponseTooLarge") != null);
+    try testing.expectEqualStrings("", stderr.buffered());
+}
+
+test "events.subscribe succeeds when the socket closes after the ack" {
+    const testing = std.testing;
+    const socket_path = try makeTestSocketPath(testing.allocator);
+    defer testing.allocator.free(socket_path);
+    defer std.fs.deleteFileAbsolute(socket_path) catch {};
+
+    var stdout = RecordingTestWriter{};
+    var stderr = RecordingTestWriter{};
+    var server = StreamingSubscriptionTestServer{
+        .socket_path = socket_path,
+        .ack = "{\"request_id\":\"req-ack-only\",\"status\":\"ok\",\"result\":{\"subscribed\":true,\"replayed_event_count\":0,\"live_stream_open\":true}}\n",
+    };
+
+    const thread = try std.Thread.spawn(.{}, StreamingSubscriptionTestServer.run, .{&server});
+    defer thread.join();
+    try testing.expect(try waitForSocketReady(socket_path));
+
+    const argv = [_][]const u8{
+        "events.subscribe",
+        "--socket",
+        socket_path,
+        "--since-sequence=7",
+    };
+    var iter = args.sliceIterator(&argv);
+    const exit_code = try runArgs(testing.allocator, &iter, &stdout.writer, &stderr.writer);
+
+    try testing.expectEqual(@as(u8, 0), exit_code);
+    try testing.expectEqual(@as(?anyerror, null), server.failure);
+    try testing.expectEqualStrings(
+        "{\"request_id\":\"req-ack-only\",\"status\":\"ok\",\"result\":{\"subscribed\":true,\"replayed_event_count\":0,\"live_stream_open\":true}}\n",
         stdout.buffered(),
     );
     try testing.expectEqualStrings("", stderr.buffered());
