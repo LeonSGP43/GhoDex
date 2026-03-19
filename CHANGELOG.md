@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(control): distinguish CLI transport failures from invalid harness responses
+
+- What changed: Refined CLI-side control error classification so transport/connectivity failures still surface as `control_unavailable`, but empty socket closes now return `control_empty_response`, oversized payloads return `control_response_too_large`, and malformed harness responses return `control_invalid_response`.
+- Why: After `events.subscribe` became truly streaming, several failure modes that were previously lumped into `control_unavailable` were no longer network availability problems. That made CLI automation harder to diagnose because a dead socket, a truncated JSON frame, and an oversized response all looked identical.
+- Impact: Existing callers that rely on `control_unavailable` for real reachability problems keep working, while newer clients can distinguish transient availability failures from protocol/response defects without changing the success path or exit-code contract.
+- Verification: `zig build test -Dtest-filter=control`; `zig build -Demit-macos-app=false`
+- Files: `src/cli/control.zig`, `CHANGELOG.md`
+- Decision trail: Preserve the existing code for true “app is not reachable” cases, and only split out the newly observable response-path failures so compatibility-sensitive automation does not lose the old availability signal.
+
 ### fix(control): stream live subscription output through the CLI
 
 - What changed: Changed `ghodex +control events.subscribe` so the CLI opens the socket once, writes the request, then forwards response chunks to stdout as they arrive instead of buffering until EOF. The CLI now flushes stdout on each subscription chunk, keeps one-shot commands on the existing buffered path, and adds a Zig test that stands up a fake Unix socket server to verify the replay-empty/live-open subscription path emits the ack line before the later live event line.

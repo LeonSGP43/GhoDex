@@ -132,22 +132,16 @@ fn runArgs(
 
     if (std.mem.eql(u8, parsed.request.command, "events.subscribe")) {
         const status_ok = streamSubscriptionRequest(alloc, stdout, socket_path, request_json) catch |err| {
-            const message = switch (err) {
-                error.FileNotFound, error.ConnectionRefused, error.SocketNotConnected => "The GhoDex control harness is unavailable. Launch the GhoDex app and try again.",
-                else => @errorName(err),
-            };
-            try writeClientError(stdout, "control_unavailable", message);
+            const client_error = clientErrorForControlFailure(err);
+            try writeClientError(stdout, client_error.code, client_error.message);
             return 1;
         };
         return if (status_ok) 0 else 1;
     }
 
     const response = sendRequest(alloc, socket_path, request_json) catch |err| {
-        const message = switch (err) {
-            error.FileNotFound, error.ConnectionRefused, error.SocketNotConnected => "The GhoDex control harness is unavailable. Launch the GhoDex app and try again.",
-            else => @errorName(err),
-        };
-        try writeClientError(stdout, "control_unavailable", message);
+        const client_error = clientErrorForControlFailure(err);
+        try writeClientError(stdout, client_error.code, client_error.message);
         return 1;
     };
 
@@ -466,6 +460,30 @@ fn makeRequestId(alloc: Allocator) ![]const u8 {
     var bytes: [8]u8 = undefined;
     std.crypto.random.bytes(&bytes);
     return try std.fmt.allocPrint(alloc, "req_{s}", .{std.fmt.bytesToHex(bytes, .lower)});
+}
+
+fn clientErrorForControlFailure(err: anyerror) struct {
+    code: []const u8,
+    message: []const u8,
+} {
+    return switch (err) {
+        error.FileNotFound, error.ConnectionRefused, error.SocketNotConnected => .{
+            .code = "control_unavailable",
+            .message = "The GhoDex control harness is unavailable. Launch the GhoDex app and try again.",
+        },
+        error.EmptyResponse => .{
+            .code = "control_empty_response",
+            .message = "The GhoDex control harness closed the connection without returning a response.",
+        },
+        error.ResponseTooLarge => .{
+            .code = "control_response_too_large",
+            .message = "The GhoDex control harness response exceeded the CLI safety limit.",
+        },
+        else => .{
+            .code = "control_invalid_response",
+            .message = @errorName(err),
+        },
+    };
 }
 
 fn writeClientError(stdout: *std.Io.Writer, code: []const u8, message: []const u8) !void {
