@@ -764,6 +764,7 @@
 				INFOPLIST_KEY_NSLocationTemporaryUsageDescriptionDictionary = "A program running within GhoDex would like to use your location temporarily.";
 				INFOPLIST_KEY_NSLocationUsageDescription = "A program running within GhoDex would like to access your location information.";
 				INFOPLIST_KEY_NSMainNibFile = MainMenu;
+				INFOPLIST_KEY_NSPrincipalClass = GhoDexApplication;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "A program running within GhoDex would like to use your microphone.";
 				INFOPLIST_KEY_NSMotionUsageDescription = "A program running within GhoDex would like to access motion data.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "A program running within GhoDex would like to access your Photo Library.";
@@ -771,13 +772,27 @@
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "A program running within GhoDex would like to use speech recognition.";
 				INFOPLIST_KEY_NSSystemAdministrationUsageDescription = "A program running within GhoDex requires elevated privileges.";
 				INFOPLIST_PREPROCESS = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(GHODEX_CEF_ROOT)/Frameworks",
+				);
+				GHODEX_CEF_ENABLED = 0;
+				GHODEX_CEF_OTHER_LDFLAGS = "";
+				GHODEX_CEF_ROOT = "$(HOME)/Library/Application\ Support/GhoDex/CEF/current";
+				GHODEX_CEF_WRAPPER_LIB = "";
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(GHODEX_CEF_ROOT)",
+					"$(GHODEX_CEF_ROOT)/include",
+				);
+				OTHER_CPLUSPLUSFLAGS = "$(inherited) -DGHODEX_CEF_ENABLED=$(GHODEX_CEF_ENABLED)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.1;
-				"OTHER_LDFLAGS[arch=*]" = "-lstdc++";
+				"OTHER_LDFLAGS[arch=*]" = "-lstdc++ $(GHODEX_CEF_OTHER_LDFLAGS) $(GHODEX_CEF_WRAPPER_LIB)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.leongong.ghodex;
 				PRODUCT_NAME = GhoDex;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -1161,6 +1176,7 @@
 				INFOPLIST_KEY_NSLocationTemporaryUsageDescriptionDictionary = "A program running within GhoDex would like to use your location temporarily.";
 				INFOPLIST_KEY_NSLocationUsageDescription = "A program running within GhoDex would like to access your location information.";
 				INFOPLIST_KEY_NSMainNibFile = MainMenu;
+				INFOPLIST_KEY_NSPrincipalClass = GhoDexApplication;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "A program running within GhoDex would like to use your microphone.";
 				INFOPLIST_KEY_NSMotionUsageDescription = "A program running within GhoDex would like to access motion data.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "A program running within GhoDex would like to access your Photo Library.";
@@ -1168,13 +1184,27 @@
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "A program running within GhoDex would like to use speech recognition.";
 				INFOPLIST_KEY_NSSystemAdministrationUsageDescription = "A program running within GhoDex requires elevated privileges.";
 				INFOPLIST_PREPROCESS = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(GHODEX_CEF_ROOT)/Frameworks",
+				);
+				GHODEX_CEF_ENABLED = 0;
+				GHODEX_CEF_OTHER_LDFLAGS = "";
+				GHODEX_CEF_ROOT = "$(HOME)/Library/Application\ Support/GhoDex/CEF/current";
+				GHODEX_CEF_WRAPPER_LIB = "";
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(GHODEX_CEF_ROOT)",
+					"$(GHODEX_CEF_ROOT)/include",
+				);
+				OTHER_CPLUSPLUSFLAGS = "$(inherited) -DGHODEX_CEF_ENABLED=$(GHODEX_CEF_ENABLED)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.1;
-				"OTHER_LDFLAGS[arch=*]" = "-lstdc++";
+				"OTHER_LDFLAGS[arch=*]" = "-lstdc++ $(GHODEX_CEF_OTHER_LDFLAGS) $(GHODEX_CEF_WRAPPER_LIB)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.leongong.ghodex.debug;
 				PRODUCT_NAME = GhoDex;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -1216,6 +1246,7 @@
 				INFOPLIST_KEY_NSLocationTemporaryUsageDescriptionDictionary = "A program running within GhoDex would like to use your location temporarily.";
 				INFOPLIST_KEY_NSLocationUsageDescription = "A program running within GhoDex would like to access your location information.";
 				INFOPLIST_KEY_NSMainNibFile = MainMenu;
+				INFOPLIST_KEY_NSPrincipalClass = GhoDexApplication;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "A program running within GhoDex would like to use your microphone.";
 				INFOPLIST_KEY_NSMotionUsageDescription = "A program running within GhoDex would like to access motion data.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "A program running within GhoDex would like to access your Photo Library.";
@@ -1223,13 +1254,27 @@
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "A program running within GhoDex would like to use speech recognition.";
 				INFOPLIST_KEY_NSSystemAdministrationUsageDescription = "A program running within GhoDex requires elevated privileges.";
 				INFOPLIST_PREPROCESS = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(GHODEX_CEF_ROOT)/Frameworks",
+				);
+				GHODEX_CEF_ENABLED = 0;
+				GHODEX_CEF_OTHER_LDFLAGS = "";
+				GHODEX_CEF_ROOT = "$(HOME)/Library/Application\ Support/GhoDex/CEF/current";
+				GHODEX_CEF_WRAPPER_LIB = "";
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(GHODEX_CEF_ROOT)",
+					"$(GHODEX_CEF_ROOT)/include",
+				);
+				OTHER_CPLUSPLUSFLAGS = "$(inherited) -DGHODEX_CEF_ENABLED=$(GHODEX_CEF_ENABLED)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.1;
-				"OTHER_LDFLAGS[arch=*]" = "-lstdc++";
+				"OTHER_LDFLAGS[arch=*]" = "-lstdc++ $(GHODEX_CEF_OTHER_LDFLAGS) $(GHODEX_CEF_WRAPPER_LIB)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.leongong.ghodex;
 				PRODUCT_NAME = GhoDex;
 				SWIFT_EMIT_LOC_STRINGS = YES;
