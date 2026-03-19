@@ -695,6 +695,40 @@ const StreamingSubscriptionTestServer = struct {
     }
 };
 
+const OneShotResponseTestServer = struct {
+    socket_path: []const u8,
+    response: []const u8,
+    request_bytes: [1024]u8 = undefined,
+    request_len: usize = 0,
+    failure: ?anyerror = null,
+
+    fn run(self: *OneShotResponseTestServer) void {
+        self.runInner() catch |err| {
+            self.failure = err;
+        };
+    }
+
+    fn runInner(self: *OneShotResponseTestServer) !void {
+        var address = try std.net.Address.initUnix(self.socket_path);
+        const listener = try std.posix.socket(
+            std.posix.AF.UNIX,
+            std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC,
+            0,
+        );
+        defer std.posix.close(listener);
+        defer std.fs.deleteFileAbsolute(self.socket_path) catch {};
+
+        try std.posix.bind(listener, &address.any, address.getOsSockLen());
+        try std.posix.listen(listener, 1);
+
+        const client = try std.posix.accept(listener, null, null, std.posix.SOCK.CLOEXEC);
+        defer std.posix.close(client);
+
+        self.request_len = try readIntoFixedBuffer(client, &self.request_bytes);
+        try writeAll(client, self.response);
+    }
+};
+
 fn readIntoFixedBuffer(fd: std.posix.fd_t, buffer: []u8) !usize {
     var used: usize = 0;
     while (true) {
@@ -837,8 +871,8 @@ test "events.subscribe reports an empty response as a client error" {
 
     try testing.expectEqual(@as(u8, 1), exit_code);
     try testing.expectEqual(@as(?anyerror, null), server.failure);
-    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "\"control_unavailable\"") != null);
-    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "EmptyResponse") != null);
+    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "\"control_empty_response\"") != null);
+    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "closed the connection without returning a response") != null);
     try testing.expectEqualStrings("", stderr.buffered());
 }
 
@@ -869,7 +903,7 @@ test "events.subscribe reports a truncated ack as a client error" {
 
     try testing.expectEqual(@as(u8, 1), exit_code);
     try testing.expectEqual(@as(?anyerror, null), server.failure);
-    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "\"control_unavailable\"") != null);
+    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "\"control_invalid_response\"") != null);
     try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "req-truncated") != null);
     try testing.expectEqualStrings("", stderr.buffered());
 }
@@ -905,8 +939,8 @@ test "events.subscribe reports an oversized ack line as a client error" {
 
     try testing.expectEqual(@as(u8, 1), exit_code);
     try testing.expectEqual(@as(?anyerror, null), server.failure);
-    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "\"control_unavailable\"") != null);
-    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "ResponseTooLarge") != null);
+    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "\"control_response_too_large\"") != null);
+    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "exceeded the CLI safety limit") != null);
     try testing.expectEqualStrings("", stderr.buffered());
 }
 
@@ -942,5 +976,165 @@ test "events.subscribe succeeds when the socket closes after the ack" {
         "{\"request_id\":\"req-ack-only\",\"status\":\"ok\",\"result\":{\"subscribed\":true,\"replayed_event_count\":0,\"live_stream_open\":true}}\n",
         stdout.buffered(),
     );
+    try testing.expectEqualStrings("", stderr.buffered());
+}
+
+test "read-terminal forwards invalid read_after_write_id server errors" {
+    const testing = std.testing;
+    const socket_path = try makeTestSocketPath(testing.allocator);
+    defer testing.allocator.free(socket_path);
+    defer std.fs.deleteFileAbsolute(socket_path) catch {};
+
+    var stdout = RecordingTestWriter{};
+    var stderr = RecordingTestWriter{};
+    var server = OneShotResponseTestServer{
+        .socket_path = socket_path,
+        .response =
+            "{\"request_id\":\"req-read-invalid-write\",\"status\":\"error\",\"error_code\":\"invalid_argument\",\"error_message\":\"Invalid read_after_write_id: bad_write\"}\n",
+    };
+
+    const thread = try std.Thread.spawn(.{}, OneShotResponseTestServer.run, .{&server});
+    defer thread.join();
+    try testing.expect(try waitForSocketReady(socket_path));
+
+    const argv = [_][]const u8{
+        "read-terminal",
+        "--socket",
+        socket_path,
+        "--terminal-id=01234567-89AB-CDEF-0123-456789ABCDEF",
+        "--scope=screen",
+        "--mode=delta",
+        "--read-after-write-id=bad_write",
+    };
+    var iter = args.sliceIterator(&argv);
+    const exit_code = try runArgs(testing.allocator, &iter, &stdout.writer, &stderr.writer);
+
+    try testing.expectEqual(@as(u8, 1), exit_code);
+    try testing.expectEqual(@as(?anyerror, null), server.failure);
+    try testing.expect(std.mem.indexOf(u8, server.request_bytes[0..server.request_len], "\"read_after_write_id\":\"bad_write\"") != null);
+    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "\"invalid_argument\"") != null);
+    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "Invalid read_after_write_id: bad_write") != null);
+    try testing.expectEqualStrings("", stderr.buffered());
+}
+
+test "read-terminal forwards cursor and since-frame validation errors" {
+    const testing = std.testing;
+    const socket_path = try makeTestSocketPath(testing.allocator);
+    defer testing.allocator.free(socket_path);
+    defer std.fs.deleteFileAbsolute(socket_path) catch {};
+
+    var stdout = RecordingTestWriter{};
+    var stderr = RecordingTestWriter{};
+    var server = OneShotResponseTestServer{
+        .socket_path = socket_path,
+        .response =
+            "{\"request_id\":\"req-read-cursor-since\",\"status\":\"error\",\"error_code\":\"invalid_argument\",\"error_message\":\"cursor cannot be combined with since_frame_id in delta mode\"}\n",
+    };
+
+    const thread = try std.Thread.spawn(.{}, OneShotResponseTestServer.run, .{&server});
+    defer thread.join();
+    try testing.expect(try waitForSocketReady(socket_path));
+
+    const argv = [_][]const u8{
+        "read-terminal",
+        "--socket",
+        socket_path,
+        "--terminal-id=01234567-89AB-CDEF-0123-456789ABCDEF",
+        "--mode=delta",
+        "--since-frame-id=frm_7",
+        "--cursor=120",
+    };
+    var iter = args.sliceIterator(&argv);
+    const exit_code = try runArgs(testing.allocator, &iter, &stdout.writer, &stderr.writer);
+
+    try testing.expectEqual(@as(u8, 1), exit_code);
+    try testing.expectEqual(@as(?anyerror, null), server.failure);
+    try testing.expect(std.mem.indexOf(u8, server.request_bytes[0..server.request_len], "\"since_frame_id\":\"frm_7\"") != null);
+    try testing.expect(std.mem.indexOf(u8, server.request_bytes[0..server.request_len], "\"cursor\":\"120\"") != null);
+    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "\"invalid_argument\"") != null);
+    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "cursor cannot be combined with since_frame_id in delta mode") != null);
+    try testing.expectEqualStrings("", stderr.buffered());
+}
+
+test "read-terminal reports oversized delta responses with a client error code" {
+    const testing = std.testing;
+    const socket_path = try makeTestSocketPath(testing.allocator);
+    defer testing.allocator.free(socket_path);
+    defer std.fs.deleteFileAbsolute(socket_path) catch {};
+
+    const huge_content = try testing.allocator.alloc(u8, 1024 * 1024);
+    defer testing.allocator.free(huge_content);
+    @memset(huge_content, 'x');
+
+    var response_writer = std.Io.Writer.Allocating.init(testing.allocator);
+    defer response_writer.deinit();
+    try response_writer.writer.print(
+        "{{\"request_id\":\"req-large-delta\",\"status\":\"ok\",\"result\":{{\"terminal_id\":\"01234567-89AB-CDEF-0123-456789ABCDEF\",\"scope\":\"screen\",\"mode\":\"delta\",\"frame_id\":\"frm_99\",\"content\":\"{s}\"}}}}\n",
+        .{huge_content},
+    );
+
+    var stdout = RecordingTestWriter{};
+    var stderr = RecordingTestWriter{};
+    var server = OneShotResponseTestServer{
+        .socket_path = socket_path,
+        .response = response_writer.writer.buffered(),
+    };
+
+    const thread = try std.Thread.spawn(.{}, OneShotResponseTestServer.run, .{&server});
+    defer thread.join();
+    try testing.expect(try waitForSocketReady(socket_path));
+
+    const argv = [_][]const u8{
+        "read-terminal",
+        "--socket",
+        socket_path,
+        "--terminal-id=01234567-89AB-CDEF-0123-456789ABCDEF",
+        "--mode=delta",
+        "--since-frame-id=frm_7",
+    };
+    var iter = args.sliceIterator(&argv);
+    const exit_code = try runArgs(testing.allocator, &iter, &stdout.writer, &stderr.writer);
+
+    try testing.expectEqual(@as(u8, 1), exit_code);
+    try testing.expectEqual(@as(?anyerror, null), server.failure);
+    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "\"control_response_too_large\"") != null);
+    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "exceeded the CLI safety limit") != null);
+    try testing.expectEqualStrings("", stderr.buffered());
+}
+
+test "run-command forwards terminal not found errors" {
+    const testing = std.testing;
+    const socket_path = try makeTestSocketPath(testing.allocator);
+    defer testing.allocator.free(socket_path);
+    defer std.fs.deleteFileAbsolute(socket_path) catch {};
+
+    var stdout = RecordingTestWriter{};
+    var stderr = RecordingTestWriter{};
+    var server = OneShotResponseTestServer{
+        .socket_path = socket_path,
+        .response =
+            "{\"request_id\":\"req-run-missing-terminal\",\"status\":\"error\",\"error_code\":\"terminal_not_found\",\"error_message\":\"No terminal exists for terminal_id=01234567-89AB-CDEF-0123-456789ABCDEF\"}\n",
+    };
+
+    const thread = try std.Thread.spawn(.{}, OneShotResponseTestServer.run, .{&server});
+    defer thread.join();
+    try testing.expect(try waitForSocketReady(socket_path));
+
+    const argv = [_][]const u8{
+        "run-command",
+        "--socket",
+        socket_path,
+        "--terminal-id=01234567-89AB-CDEF-0123-456789ABCDEF",
+        "--command=echo hello",
+    };
+    var iter = args.sliceIterator(&argv);
+    const exit_code = try runArgs(testing.allocator, &iter, &stdout.writer, &stderr.writer);
+
+    try testing.expectEqual(@as(u8, 1), exit_code);
+    try testing.expectEqual(@as(?anyerror, null), server.failure);
+    try testing.expect(std.mem.indexOf(u8, server.request_bytes[0..server.request_len], "\"command\":\"run-command\"") != null);
+    try testing.expect(std.mem.indexOf(u8, server.request_bytes[0..server.request_len], "\"command_text\":\"echo hello\"") != null);
+    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "\"terminal_not_found\"") != null);
+    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "No terminal exists for terminal_id=01234567-89AB-CDEF-0123-456789ABCDEF") != null);
     try testing.expectEqualStrings("", stderr.buffered());
 }
