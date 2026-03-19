@@ -3,6 +3,7 @@ import SwiftUI
 
 final class SSHConnectionsController: NSWindowController, NSWindowDelegate {
     private let store: AITerminalManagerStore
+    private unowned let appDelegate: AppDelegate
 
     static func windowsAreInSameTabGroup(_ lhs: NSWindow?, _ rhs: NSWindow?) -> Bool {
         guard
@@ -13,8 +14,9 @@ final class SSHConnectionsController: NSWindowController, NSWindowDelegate {
         return lhsGroup === rhsGroup
     }
 
-    init(store: AITerminalManagerStore) {
+    init(store: AITerminalManagerStore, appDelegate: AppDelegate) {
         self.store = store
+        self.appDelegate = appDelegate
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1400, height: 860),
@@ -33,6 +35,7 @@ final class SSHConnectionsController: NSWindowController, NSWindowDelegate {
         window.contentView = NSHostingView(
             rootView: SSHConnectionsView()
                 .environmentObject(store)
+                .environmentObject(appDelegate)
         )
 
         super.init(window: window)

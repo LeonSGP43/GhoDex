@@ -2,6 +2,64 @@ import AppKit
 import Cocoa
 import GhoDexKit
 
+private let browserProfileConfigKey = "ghodex-browser-profile-path"
+private let browserRuntimeConfigKey = "ghodex-browser-runtime-path"
+
+private func browserSettingValue(for key: String, in text: String) -> String? {
+    var result: String?
+
+    for line in text.components(separatedBy: .newlines) {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("\(key) ="), let separatorIndex = trimmed.firstIndex(of: "=") else {
+            continue
+        }
+
+        let rawValue = trimmed[trimmed.index(after: separatorIndex)...].trimmingCharacters(in: .whitespaces)
+        guard
+            let data = "[\(rawValue)]".data(using: .utf8),
+            let decoded = try? JSONSerialization.jsonObject(with: data) as? [String],
+            let value = decoded.first
+        else {
+            continue
+        }
+
+        result = value
+    }
+
+    return result
+}
+
+private func seedBrowserCEFDefaultsFromConfigFile() {
+    guard let configPath = ProcessInfo.processInfo.environment["GHOSTTY_CONFIG_PATH"], !configPath.isEmpty else {
+        return
+    }
+    guard let text = try? String(contentsOfFile: configPath, encoding: .utf8) else {
+        return
+    }
+
+    let defaults = UserDefaults.standard
+    if let profilePath = browserSettingValue(for: browserProfileConfigKey, in: text), !profilePath.isEmpty {
+        defaults.set(profilePath, forKey: BrowserPaths.profileDefaultsKey)
+    } else {
+        defaults.removeObject(forKey: BrowserPaths.profileDefaultsKey)
+    }
+
+    if let runtimePath = browserSettingValue(for: browserRuntimeConfigKey, in: text), !runtimePath.isEmpty {
+        defaults.set(runtimePath, forKey: BrowserPaths.runtimeDefaultsKey)
+    } else {
+        defaults.removeObject(forKey: BrowserPaths.runtimeDefaultsKey)
+    }
+
+    defaults.synchronize()
+}
+
+seedBrowserCEFDefaultsFromConfigFile()
+
+let cefExitCode = GhoDexCEFExecuteProcessIfNeeded()
+if cefExitCode >= 0 {
+    exit(cefExitCode)
+}
+
 // Initialize Ghostty global state. We do this once right away because the
 // CLI APIs require it and it lets us ensure it is done immediately for the
 // rest of the app.

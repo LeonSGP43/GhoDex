@@ -7,6 +7,7 @@ struct SSHConnectionsView: View {
         case connections
         case learning
         case taskQueue
+        case browser
 
         var id: String { rawValue }
 
@@ -18,6 +19,8 @@ struct SSHConnectionsView: View {
                 return L10n.SSHConnections.tabLearning
             case .taskQueue:
                 return "Task Queue"
+            case .browser:
+                return L10n.Settings.browserTabTitle
             }
         }
     }
@@ -80,6 +83,7 @@ struct SSHConnectionsView: View {
     }
 
     @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var appDelegate: AppDelegate
     @EnvironmentObject private var store: AITerminalManagerStore
 
     @State private var hostEditorType: ConnectionEditorType = .ssh
@@ -113,6 +117,12 @@ struct SSHConnectionsView: View {
     @State private var queueScheduleEnabled = false
     @State private var queueExecuteAt = Date().addingTimeInterval(60)
     @State private var queueStatusMessage: String?
+    @State private var browserUsesManagedProfile = true
+    @State private var browserProfilePathText = ""
+    @State private var browserUsesManagedRuntime = true
+    @State private var browserRuntimePathText = ""
+    @State private var browserSaveMessage: String?
+    @State private var browserErrorMessage: String?
 
     var body: some View {
         ZStack {
@@ -141,6 +151,9 @@ struct SSHConnectionsView: View {
 
                 case .taskQueue:
                     taskQueueTabContent
+
+                case .browser:
+                    browserTabContent
                 }
             }
         }
@@ -152,6 +165,7 @@ struct SSHConnectionsView: View {
             syncSelection()
             syncLearningSettings()
             syncTaskQueueSettings()
+            syncBrowserSettingsFromConfig()
         }
         .onChange(of: allConnectionHosts.map(\.id)) { _ in
             syncSelection()
@@ -160,13 +174,22 @@ struct SSHConnectionsView: View {
             syncSelection()
             syncLearningSettings()
             syncTaskQueueSettings()
+            syncBrowserSettingsFromConfig()
         }
         .onChange(of: selectedTab) { _ in
             if selectedTab == .learning {
                 syncLearningSettings()
             } else if selectedTab == .taskQueue {
                 syncTaskQueueSettings()
+            } else if selectedTab == .browser {
+                syncBrowserSettingsFromConfig()
             }
+        }
+        .onReceive(appDelegate.$browserProfilePathOverride) { _ in
+            syncBrowserSettingsFromConfig()
+        }
+        .onReceive(appDelegate.$browserRuntimePathOverride) { _ in
+            syncBrowserSettingsFromConfig()
         }
         .alert(L10n.SSHConnections.learningInitializeConfirmTitle, isPresented: $showingInitializeConfirmation) {
             Button(L10n.SSHConnections.learningInitializeConfirmAction) {
@@ -186,7 +209,7 @@ struct SSHConnectionsView: View {
             }
         }
         .pickerStyle(.segmented)
-        .frame(maxWidth: 320)
+        .frame(maxWidth: 520)
     }
 
     private var connectionsTabContent: some View {
@@ -311,6 +334,187 @@ struct SSHConnectionsView: View {
         .panelSurface()
         .padding(.horizontal, 20)
         .padding(.bottom, 20)
+    }
+
+    private var normalizedBrowserProfilePath: String? {
+        let trimmed = browserProfilePathText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return (trimmed as NSString).standardizingPath
+    }
+
+    private var effectiveBrowserProfilePath: String? {
+        appDelegate.browserProfilePathOverride
+    }
+
+    private var normalizedBrowserRuntimePath: String? {
+        let trimmed = browserRuntimePathText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return (trimmed as NSString).standardizingPath
+    }
+
+    private var effectiveBrowserRuntimePath: String? {
+        appDelegate.browserRuntimePathOverride
+    }
+
+    private var browserSettingsDirty: Bool {
+        (browserUsesManagedProfile ? nil : normalizedBrowserProfilePath) != effectiveBrowserProfilePath ||
+            (browserUsesManagedRuntime ? nil : normalizedBrowserRuntimePath) != effectiveBrowserRuntimePath
+    }
+
+    private var browserTabContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(L10n.Settings.browserTitle)
+                        .font(.title2.weight(.semibold))
+
+                    Text(L10n.Settings.browserDescription)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                browserProfileSection
+
+                Divider()
+
+                browserRuntimeSection
+
+                HStack(alignment: .top, spacing: 12) {
+                    Group {
+                        if let browserErrorMessage, !browserErrorMessage.isEmpty {
+                            Text(browserErrorMessage)
+                                .foregroundStyle(.red)
+                        } else if let browserSaveMessage, !browserSaveMessage.isEmpty {
+                            Text(browserSaveMessage)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text(" ")
+                                .foregroundStyle(.clear)
+                        }
+                    }
+                    .font(.caption)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Button(L10n.Settings.browserSaveButton) {
+                        persistBrowserSettings()
+                    }
+                    .disabled(!browserSettingsDirty)
+                }
+
+                Text(L10n.Settings.browserRestartRequired)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 20)
+        }
+    }
+
+    private var browserProfileSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(L10n.Settings.browserProfileSectionTitle)
+                .font(.headline)
+
+            Toggle(L10n.Settings.browserUseManagedProfile, isOn: $browserUsesManagedProfile)
+                .onChange(of: browserUsesManagedProfile) { _ in
+                    browserSaveMessage = nil
+                    browserErrorMessage = nil
+                }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(browserUsesManagedProfile ? L10n.Settings.browserManagedPath : L10n.Settings.browserCustomPath)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if browserUsesManagedProfile {
+                    Text(appDelegate.managedBrowserProfilePath)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(nsColor: .textBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                } else {
+                    HStack(spacing: 10) {
+                        TextField(
+                            L10n.Settings.browserCustomPlaceholder,
+                            text: $browserProfilePathText
+                        )
+                        .textFieldStyle(.roundedBorder)
+
+                        Button(L10n.Settings.browserBrowseButton) {
+                            if let path = appDelegate.chooseBrowserProfilePath(currentPath: browserProfilePathText) {
+                                browserProfilePathText = path
+                                browserSaveMessage = nil
+                                browserErrorMessage = nil
+                            }
+                        }
+                    }
+
+                    Text(L10n.Settings.browserCustomHint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private var browserRuntimeSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(L10n.Settings.browserRuntimeSectionTitle)
+                .font(.headline)
+
+            Text(L10n.Settings.browserRuntimeDescription)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Toggle(L10n.Settings.browserUseManagedRuntime, isOn: $browserUsesManagedRuntime)
+                .onChange(of: browserUsesManagedRuntime) { _ in
+                    browserSaveMessage = nil
+                    browserErrorMessage = nil
+                }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(browserUsesManagedRuntime ? L10n.Settings.browserManagedRuntimePath : L10n.Settings.browserCustomRuntimePath)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if browserUsesManagedRuntime {
+                    Text(appDelegate.managedBrowserRuntimePath)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(nsColor: .textBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                } else {
+                    HStack(spacing: 10) {
+                        TextField(
+                            L10n.Settings.browserCustomRuntimePlaceholder,
+                            text: $browserRuntimePathText
+                        )
+                        .textFieldStyle(.roundedBorder)
+
+                        Button(L10n.Settings.browserBrowseButton) {
+                            if let path = appDelegate.chooseBrowserRuntimePath(currentPath: browserRuntimePathText) {
+                                browserRuntimePathText = path
+                                browserSaveMessage = nil
+                                browserErrorMessage = nil
+                            }
+                        }
+                    }
+
+                    Text(L10n.Settings.browserCustomRuntimeHint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
     }
 
     private var taskQueueTabContent: some View {
@@ -1474,6 +1678,17 @@ struct SSHConnectionsView: View {
         queueStatusMessage = nil
     }
 
+    private func syncBrowserSettingsFromConfig() {
+        let currentProfilePath = appDelegate.browserProfilePathOverride ?? ""
+        browserUsesManagedProfile = currentProfilePath.isEmpty
+        browserProfilePathText = currentProfilePath
+        let currentRuntimePath = appDelegate.browserRuntimePathOverride ?? ""
+        browserUsesManagedRuntime = currentRuntimePath.isEmpty
+        browserRuntimePathText = currentRuntimePath
+        browserSaveMessage = nil
+        browserErrorMessage = nil
+    }
+
     private func persistTaskQueueSettings() {
         let trimmedInterval = heartbeatIntervalSecondsText.trimmingCharacters(in: .whitespacesAndNewlines)
         let parsedInterval = Double(trimmedInterval) ?? store.heartbeatQueueSettings.heartbeatIntervalSeconds
@@ -1484,6 +1699,22 @@ struct SSHConnectionsView: View {
         ))
         syncTaskQueueSettings()
         queueStatusMessage = store.lastError ?? "Queue settings saved."
+    }
+
+    private func persistBrowserSettings() {
+        do {
+            let profileValueToSave = browserUsesManagedProfile ? "" : browserProfilePathText
+            let runtimeValueToSave = browserUsesManagedRuntime ? "" : browserRuntimePathText
+            try appDelegate.saveBrowserSettings(
+                profilePath: profileValueToSave,
+                runtimePath: runtimeValueToSave)
+            browserSaveMessage = L10n.Settings.browserSaved
+            browserErrorMessage = nil
+            syncBrowserSettingsFromConfig()
+        } catch {
+            browserErrorMessage = error.localizedDescription
+            browserSaveMessage = nil
+        }
     }
 
     private func taskQueueStatusLabel(_ status: AITerminalHeartbeatTaskStatus) -> String {

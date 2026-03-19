@@ -143,7 +143,8 @@ class AppDelegate: NSObject,
     )
 
     @MainActor lazy var sshConnectionsController = SSHConnectionsController(
-        store: aiTerminalManagerStore
+        store: aiTerminalManagerStore,
+        appDelegate: self
     )
 
     @MainActor lazy var newTabPickerController = NewTabPickerController(
@@ -168,6 +169,8 @@ class AppDelegate: NSObject,
 
     /// The custom app icon image that is currently in use.
     @Published private(set) var appIcon: NSImage?
+    @Published private(set) var browserProfilePathOverride: String?
+    @Published private(set) var browserRuntimePathOverride: String?
 
     override init() {
 #if DEBUG
@@ -439,6 +442,7 @@ class AppDelegate: NSObject,
         // so remove them all now. In the future we may want to be
         // more selective and only remove surface-targeted notifications.
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        GhoDexCEFShutdownGlobal()
     }
 
     @MainActor
@@ -971,6 +975,9 @@ class AppDelegate: NSObject,
     private func ghosttyConfigDidChange(config: Ghostty.Config) {
         // Update the config we need to store
         self.derivedConfig = DerivedConfig(config)
+        syncBrowserProfileConfig(config)
+        syncBrowserRuntimeConfig(config)
+        initializeBrowserCEFIfPossible()
 
         // Depending on the "window-save-state" setting we have to set the NSQuitAlwaysKeepsWindows
         // configuration. This is the only way to carefully control whether macOS invokes the
@@ -1069,6 +1076,159 @@ class AppDelegate: NSObject,
             UserDefaults.standard.appIcon = AppIcon(config: config)
             DistributedNotificationCenter.default()
                 .postNotificationName(.ghosttyIconDidChange, object: nil, userInfo: nil, deliverImmediately: true)
+        }
+    }
+
+    var managedBrowserProfilePath: String {
+        BrowserPaths.defaultManagedProfileRoot().path
+    }
+
+    var managedBrowserRuntimePath: String {
+        BrowserPaths.defaultManagedCEFRuntimeRoot().path
+    }
+
+    @MainActor
+    func chooseBrowserProfilePath(currentPath: String?) -> String? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = L10n.Settings.browserBrowseButton
+        panel.message = L10n.Settings.browserPickerMessage
+
+        if let currentPath = Self.normalizedBrowserProfilePath(currentPath) {
+            panel.directoryURL = URL(fileURLWithPath: currentPath).deletingLastPathComponent()
+        } else {
+            panel.directoryURL = BrowserPaths.defaultManagedProfileRoot().deletingLastPathComponent()
+        }
+
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return url.path
+    }
+
+    @MainActor
+    func chooseBrowserRuntimePath(currentPath: String?) -> String? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = L10n.Settings.browserBrowseButton
+        panel.message = L10n.Settings.browserRuntimePickerMessage
+
+        if let currentPath = Self.normalizedBrowserRuntimePath(currentPath) {
+            panel.directoryURL = URL(fileURLWithPath: currentPath).deletingLastPathComponent()
+        } else {
+            panel.directoryURL = BrowserPaths.defaultManagedCEFRuntimeRoot().deletingLastPathComponent()
+        }
+
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return url.path
+    }
+
+    @MainActor
+    func saveBrowserProfilePathSetting(_ rawValue: String) throws {
+        let normalized = Self.normalizedBrowserProfilePath(rawValue)
+        if let normalized {
+            var isDirectory = ObjCBool(false)
+            guard FileManager.default.fileExists(atPath: normalized, isDirectory: &isDirectory),
+                  isDirectory.boolValue else {
+                throw NSError(
+                    domain: "GhoDexBrowserSettings",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: L10n.Settings.browserInvalidPath]
+                )
+            }
+        }
+
+        let configURL = Self.browserSettingsConfigURL()
+        try Self.saveBrowserSettingsConfig(profilePath: normalized, runtimePath: browserRuntimePathOverride, to: configURL)
+
+        applyBrowserProfileDefaults(path: normalized)
+        browserProfilePathOverride = normalized
+        ghostty.reloadConfig()
+    }
+
+    @MainActor
+    func saveBrowserSettings(profilePath rawProfileValue: String, runtimePath rawRuntimeValue: String) throws {
+        let normalizedProfile = Self.normalizedBrowserProfilePath(rawProfileValue)
+        if let normalizedProfile {
+            var isDirectory = ObjCBool(false)
+            guard FileManager.default.fileExists(atPath: normalizedProfile, isDirectory: &isDirectory),
+                  isDirectory.boolValue else {
+                throw NSError(
+                    domain: "GhoDexBrowserSettings",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: L10n.Settings.browserInvalidPath]
+                )
+            }
+        }
+
+        let normalizedRuntime = Self.normalizedBrowserRuntimePath(rawRuntimeValue)
+        if let normalizedRuntime {
+            do {
+                try FileManager.default.createDirectory(
+                    at: URL(fileURLWithPath: normalizedRuntime, isDirectory: true),
+                    withIntermediateDirectories: true
+                )
+            } catch {
+                throw NSError(
+                    domain: "GhoDexBrowserSettings",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: L10n.Settings.browserInvalidRuntimePath]
+                )
+            }
+        }
+
+        let configURL = Self.browserSettingsConfigURL()
+        try Self.saveBrowserSettingsConfig(profilePath: normalizedProfile, runtimePath: normalizedRuntime, to: configURL)
+
+        applyBrowserProfileDefaults(path: normalizedProfile)
+        applyBrowserRuntimeDefaults(path: normalizedRuntime)
+        browserProfilePathOverride = normalizedProfile
+        browserRuntimePathOverride = normalizedRuntime
+        ghostty.reloadConfig()
+    }
+
+    private func syncBrowserProfileConfig(_ config: Ghostty.Config) {
+        let fileOverrides = Self.loadBrowserSettingsConfig()
+        let normalized = Self.normalizedBrowserProfilePath(
+            fileOverrides.profilePath ?? config.ghodexBrowserProfilePath
+        )
+        browserProfilePathOverride = normalized
+        applyBrowserProfileDefaults(path: normalized)
+        UserDefaults.standard.synchronize()
+    }
+
+    private func syncBrowserRuntimeConfig(_ config: Ghostty.Config) {
+        let fileOverrides = Self.loadBrowserSettingsConfig()
+        let normalized = Self.normalizedBrowserRuntimePath(
+            fileOverrides.runtimePath ?? config.ghodexBrowserRuntimePath
+        )
+        browserRuntimePathOverride = normalized
+        applyBrowserRuntimeDefaults(path: normalized)
+        UserDefaults.standard.synchronize()
+    }
+
+    private func initializeBrowserCEFIfPossible() {
+        guard !GhoDexCEFIsInitialized(), GhoDexCEFBuildHasRuntime() else { return }
+        _ = GhoDexCEFInitializeGlobal()
+    }
+
+    private func applyBrowserProfileDefaults(path: String?) {
+        if let path {
+            UserDefaults.standard.set(path, forKey: BrowserPaths.profileDefaultsKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: BrowserPaths.profileDefaultsKey)
+        }
+    }
+
+    private func applyBrowserRuntimeDefaults(path: String?) {
+        if let path {
+            UserDefaults.standard.set(path, forKey: BrowserPaths.runtimeDefaultsKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: BrowserPaths.runtimeDefaultsKey)
         }
     }
 
@@ -1546,6 +1706,178 @@ extension AppDelegate: NSMenuItemValidation {
         default:
             return true
         }
+    }
+}
+
+extension AppDelegate {
+    private static let browserSettingsStartMarker = "# >>> GhoDex browser settings >>>"
+    private static let browserSettingsEndMarker = "# <<< GhoDex browser settings <<<"
+    private static let browserProfileConfigKey = "ghodex-browser-profile-path"
+    private static let browserRuntimeConfigKey = "ghodex-browser-runtime-path"
+
+    fileprivate static func normalizedBrowserProfilePath(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return (trimmed as NSString).standardizingPath
+    }
+
+    fileprivate static func normalizedBrowserRuntimePath(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return (trimmed as NSString).standardizingPath
+    }
+
+    fileprivate static func browserSettingsConfigURL() -> URL {
+        let fileManager = FileManager.default
+        if
+            let envPath = ProcessInfo.processInfo.environment["GHOSTTY_CONFIG_PATH"],
+            !envPath.isEmpty
+        {
+            let url = URL(fileURLWithPath: envPath, isDirectory: false)
+            try? fileManager.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            return url
+        }
+
+        if let path = Ghostty.App.configPath(), !path.isEmpty {
+            let url = URL(fileURLWithPath: path, isDirectory: false)
+            try? fileManager.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            return url
+        }
+
+        let appSupport = (try? fileManager.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )) ?? fileManager.homeDirectoryForCurrentUser
+
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.leongong.ghodex"
+        let directory = appSupport.appendingPathComponent(bundleID, isDirectory: true)
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("config.ghodex", isDirectory: false)
+    }
+
+    fileprivate static func saveBrowserSettingsConfig(profilePath: String?, runtimePath: String?, to url: URL) throws {
+        let fileManager = FileManager.default
+        try fileManager.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        let existingText: String
+        if fileManager.fileExists(atPath: url.path) {
+            existingText = try String(contentsOf: url, encoding: .utf8)
+        } else {
+            existingText = ""
+        }
+
+        let stripped = stripBrowserSettingsConfig(from: existingText)
+        let block = browserSettingsConfigBlock(profilePath: profilePath, runtimePath: runtimePath)
+        let normalized = stripped.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = normalized.isEmpty ? "\(block)\n" : "\(normalized)\n\n\(block)\n"
+        try text.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    fileprivate static func loadBrowserSettingsConfig() -> (profilePath: String?, runtimePath: String?) {
+        let url = browserSettingsConfigURL()
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+            return (nil, nil)
+        }
+
+        return (
+            profilePath: browserSettingValue(for: browserProfileConfigKey, in: text),
+            runtimePath: browserSettingValue(for: browserRuntimeConfigKey, in: text)
+        )
+    }
+
+    private static func browserSettingsConfigBlock(profilePath: String?, runtimePath: String?) -> String {
+        [
+            browserSettingsStartMarker,
+            "\(browserProfileConfigKey) = \(configStringLiteral(profilePath ?? ""))",
+            "\(browserRuntimeConfigKey) = \(configStringLiteral(runtimePath ?? ""))",
+            browserSettingsEndMarker,
+        ].joined(separator: "\n")
+    }
+
+    private static func stripBrowserSettingsConfig(from text: String) -> String {
+        let lines = text.components(separatedBy: .newlines)
+        var result: [String] = []
+        var insideManagedBlock = false
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            if trimmed == browserSettingsStartMarker {
+                insideManagedBlock = true
+                continue
+            }
+
+            if trimmed == browserSettingsEndMarker {
+                insideManagedBlock = false
+                continue
+            }
+
+            if insideManagedBlock {
+                continue
+            }
+
+            if trimmed.hasPrefix("\(browserProfileConfigKey) =") ||
+                trimmed == browserProfileConfigKey ||
+                trimmed.hasPrefix("\(browserRuntimeConfigKey) =") ||
+                trimmed == browserRuntimeConfigKey {
+                continue
+            }
+
+            result.append(line)
+        }
+
+        return result.joined(separator: "\n")
+    }
+
+    private static func configStringLiteral(_ value: String) -> String {
+        let data = try? JSONSerialization.data(withJSONObject: [value], options: [])
+        guard
+            let data,
+            let encoded = String(data: data, encoding: .utf8),
+            encoded.count >= 2
+        else {
+            return "\"\""
+        }
+
+        let start = encoded.index(after: encoded.startIndex)
+        let end = encoded.index(before: encoded.endIndex)
+        return String(encoded[start..<end])
+    }
+
+    private static func browserSettingValue(for key: String, in text: String) -> String? {
+        var result: String?
+
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("\(key) =") else { continue }
+
+            guard let separatorIndex = trimmed.firstIndex(of: "=") else { continue }
+            let rawValue = trimmed[trimmed.index(after: separatorIndex)...].trimmingCharacters(in: .whitespaces)
+            guard
+                let data = "[\(rawValue)]".data(using: .utf8),
+                let decoded = try? JSONSerialization.jsonObject(with: data) as? [String],
+                let value = decoded.first
+            else {
+                continue
+            }
+
+            result = value
+        }
+
+        return result
     }
 }
 

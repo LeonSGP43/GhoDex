@@ -292,6 +292,8 @@ enum AppLocalization {
         "about.github": "GitHub",
         "settings.title": "Settings",
         "settings.body": "Language can be configured here. For advanced terminal settings, edit $HOME/.config/ghodex/config.ghodex and restart GhoDex.",
+        "settings.tab.general": "General",
+        "settings.tab.browser": "Browser",
         "settings.language.title": "App Language",
         "AI Terminal Manager…": "AI Terminal Manager…",
         "Settings Panel…": "Settings Panel…",
@@ -302,6 +304,29 @@ enum AppLocalization {
         "settings.language.option.simplified_chinese": "简体中文",
         "settings.language.restart_required": "Restart GhoDex to apply the language change everywhere.",
         "settings.language.restart_now": "Restart Now",
+        "settings.browser.title": "Browser Profile",
+        "settings.browser.description": "Choose which Chromium profile GhoDex should use for Browser tabs. Leave it on the managed default to keep browser data isolated from Chrome.",
+        "settings.browser.profile_section": "Browser Profile",
+        "settings.browser.use_managed": "Use GhoDex managed browser profile",
+        "settings.browser.managed_path": "Managed profile path",
+        "settings.browser.custom_path": "Custom profile path",
+        "settings.browser.custom_placeholder": "/Users/you/Library/Application Support/Google/Chrome/Profile 1",
+        "settings.browser.custom_hint": "Point this at a dedicated Chromium/Chrome profile directory if you want to reuse cookies and local storage.",
+        "settings.browser.runtime_section": "CEF Runtime",
+        "settings.browser.runtime_description": "By default GhoDex downloads and manages its own Chromium runtime automatically. Switch to a custom runtime path only if you want to reuse an existing compatible CEF runtime directory.",
+        "settings.browser.use_managed_runtime": "Use GhoDex managed Chromium runtime",
+        "settings.browser.managed_runtime_path": "Managed runtime path",
+        "settings.browser.custom_runtime_path": "Custom runtime path",
+        "settings.browser.custom_runtime_placeholder": "/Users/you/Library/Application Support/GhoDex/CEF/current",
+        "settings.browser.custom_runtime_hint": "Point this at a compatible CEF runtime root directory that already contains Frameworks/Chromium Embedded Framework.framework.",
+        "settings.browser.browse": "Browse…",
+        "settings.browser.save": "Save Browser Settings",
+        "settings.browser.saved": "Browser settings saved to config.",
+        "settings.browser.restart_required": "Restart GhoDex after changing the browser profile path if Chromium has already been activated in this app session.",
+        "settings.browser.invalid_path": "Choose an existing profile directory before saving.",
+        "settings.browser.picker_message": "Choose the browser profile directory that Browser tabs should reuse.",
+        "settings.browser.invalid_runtime_path": "Choose an existing CEF runtime directory before saving.",
+        "settings.browser.runtime_picker_message": "Choose the CEF runtime directory that Browser tabs should use.",
         "app.allow_execute": "Allow GhoDex to execute \"%@\"?",
         "app.undo_action": "Undo %@",
         "app.redo_action": "Redo %@",
@@ -596,6 +621,8 @@ enum AppLocalization {
         "about.github": "GitHub",
         "settings.title": "设置",
         "settings.body": "这里目前可配置应用语言。若要修改高级终端配置，请编辑 $HOME/.config/ghodex/config.ghodex，然后重启 GhoDex。",
+        "settings.tab.general": "通用",
+        "settings.tab.browser": "浏览器",
         "settings.language.title": "应用语言",
         "AI Terminal Manager…": "AI 终端管理器…",
         "Settings Panel…": "设置面板…",
@@ -606,6 +633,29 @@ enum AppLocalization {
         "settings.language.option.simplified_chinese": "简体中文",
         "settings.language.restart_required": "需要重启 GhoDex，语言变更才会完整应用到所有界面。",
         "settings.language.restart_now": "立即重启",
+        "settings.browser.title": "浏览器 Profile",
+        "settings.browser.description": "选择 Browser tab 使用哪个 Chromium profile。保持为 GhoDex 管理的默认值时，浏览器数据会和 Chrome 隔离。",
+        "settings.browser.profile_section": "浏览器 Profile",
+        "settings.browser.use_managed": "使用 GhoDex 管理的浏览器 Profile",
+        "settings.browser.managed_path": "托管 Profile 路径",
+        "settings.browser.custom_path": "自定义 Profile 路径",
+        "settings.browser.custom_placeholder": "/Users/you/Library/Application Support/Google/Chrome/Profile 1",
+        "settings.browser.custom_hint": "如果你想复用 cookie 和本地存储，请指向一个专门给 GhoDex/CEF 使用的 Chromium/Chrome profile 目录。",
+        "settings.browser.runtime_section": "CEF 内核",
+        "settings.browser.runtime_description": "默认情况下 GhoDex 会自动下载并管理自己的 Chromium runtime。只有当你想复用一个现成的兼容 CEF runtime 目录时，才切换到自定义路径。",
+        "settings.browser.use_managed_runtime": "使用 GhoDex 管理的 Chromium runtime",
+        "settings.browser.managed_runtime_path": "托管 runtime 路径",
+        "settings.browser.custom_runtime_path": "自定义 runtime 路径",
+        "settings.browser.custom_runtime_placeholder": "/Users/you/Library/Application Support/GhoDex/CEF/current",
+        "settings.browser.custom_runtime_hint": "请指向一个已经包含 Frameworks/Chromium Embedded Framework.framework 的兼容 CEF runtime 根目录。",
+        "settings.browser.browse": "选择…",
+        "settings.browser.save": "保存浏览器设置",
+        "settings.browser.saved": "浏览器设置已写入配置文件。",
+        "settings.browser.restart_required": "如果本次会话里 Chromium 已经启动过，修改浏览器 Profile 路径后需要重启 GhoDex 才能完整生效。",
+        "settings.browser.invalid_path": "保存前请选择一个已存在的 Profile 目录。",
+        "settings.browser.picker_message": "选择 Browser tab 需要复用的浏览器 Profile 目录。",
+        "settings.browser.invalid_runtime_path": "保存前请选择一个已存在的 CEF runtime 目录。",
+        "settings.browser.runtime_picker_message": "选择 Browser tab 要使用的 CEF runtime 根目录。",
         "app.allow_execute": "允许 GhoDex 执行“%@”吗？",
         "app.undo_action": "撤销 %@",
         "app.redo_action": "重做 %@",
@@ -1129,6 +1179,8 @@ enum L10n {
     enum Settings {
         nonisolated static var title: String { AppLocalization.localizedString("settings.title") }
         nonisolated static var body: String { AppLocalization.localizedString("settings.body") }
+        nonisolated static var generalTabTitle: String { AppLocalization.localizedString("settings.tab.general") }
+        nonisolated static var browserTabTitle: String { AppLocalization.localizedString("settings.tab.browser") }
         nonisolated static var languageTitle: String { AppLocalization.localizedString("settings.language.title") }
         nonisolated static var languageDescription: String { AppLocalization.localizedString("settings.language.description") }
         nonisolated static var languageOptionSystem: String { AppLocalization.localizedString("settings.language.option.system") }
@@ -1136,6 +1188,29 @@ enum L10n {
         nonisolated static var languageOptionSimplifiedChinese: String { AppLocalization.localizedString("settings.language.option.simplified_chinese") }
         nonisolated static var languageRestartRequired: String { AppLocalization.localizedString("settings.language.restart_required") }
         nonisolated static var restartNow: String { AppLocalization.localizedString("settings.language.restart_now") }
+        nonisolated static var browserTitle: String { AppLocalization.localizedString("settings.browser.title") }
+        nonisolated static var browserDescription: String { AppLocalization.localizedString("settings.browser.description") }
+        nonisolated static var browserProfileSectionTitle: String { AppLocalization.localizedString("settings.browser.profile_section") }
+        nonisolated static var browserUseManagedProfile: String { AppLocalization.localizedString("settings.browser.use_managed") }
+        nonisolated static var browserManagedPath: String { AppLocalization.localizedString("settings.browser.managed_path") }
+        nonisolated static var browserCustomPath: String { AppLocalization.localizedString("settings.browser.custom_path") }
+        nonisolated static var browserCustomPlaceholder: String { AppLocalization.localizedString("settings.browser.custom_placeholder") }
+        nonisolated static var browserCustomHint: String { AppLocalization.localizedString("settings.browser.custom_hint") }
+        nonisolated static var browserRuntimeSectionTitle: String { AppLocalization.localizedString("settings.browser.runtime_section") }
+        nonisolated static var browserRuntimeDescription: String { AppLocalization.localizedString("settings.browser.runtime_description") }
+        nonisolated static var browserUseManagedRuntime: String { AppLocalization.localizedString("settings.browser.use_managed_runtime") }
+        nonisolated static var browserManagedRuntimePath: String { AppLocalization.localizedString("settings.browser.managed_runtime_path") }
+        nonisolated static var browserCustomRuntimePath: String { AppLocalization.localizedString("settings.browser.custom_runtime_path") }
+        nonisolated static var browserCustomRuntimePlaceholder: String { AppLocalization.localizedString("settings.browser.custom_runtime_placeholder") }
+        nonisolated static var browserCustomRuntimeHint: String { AppLocalization.localizedString("settings.browser.custom_runtime_hint") }
+        nonisolated static var browserBrowseButton: String { AppLocalization.localizedString("settings.browser.browse") }
+        nonisolated static var browserSaveButton: String { AppLocalization.localizedString("settings.browser.save") }
+        nonisolated static var browserSaved: String { AppLocalization.localizedString("settings.browser.saved") }
+        nonisolated static var browserRestartRequired: String { AppLocalization.localizedString("settings.browser.restart_required") }
+        nonisolated static var browserInvalidPath: String { AppLocalization.localizedString("settings.browser.invalid_path") }
+        nonisolated static var browserPickerMessage: String { AppLocalization.localizedString("settings.browser.picker_message") }
+        nonisolated static var browserInvalidRuntimePath: String { AppLocalization.localizedString("settings.browser.invalid_runtime_path") }
+        nonisolated static var browserRuntimePickerMessage: String { AppLocalization.localizedString("settings.browser.runtime_picker_message") }
     }
 
     enum App {
