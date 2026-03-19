@@ -180,26 +180,66 @@ private enum ControlHarnessSocketSupport {
 struct ControlHarnessTests {
     @MainActor
     private final class RecordingAppDelegate: AppDelegate {
+        var unavailableTerminals: Set<UUID> = []
+        var sentInputs: [(terminalID: UUID, text: String)] = []
         var executedCommands: [(terminalID: UUID, command: String)] = []
+        var closedTerminals: [UUID] = []
+
+        override func controlHarnessSendText(_ text: String, to terminalID: UUID) -> Bool {
+            guard !unavailableTerminals.contains(terminalID) else {
+                return false
+            }
+
+            sentInputs.append((terminalID, text))
+            return true
+        }
 
         override func controlHarnessRunCommand(_ command: String, to terminalID: UUID) -> Bool {
+            guard !unavailableTerminals.contains(terminalID) else {
+                return false
+            }
+
             executedCommands.append((terminalID, command))
             return true
         }
+
+        override func controlHarnessCloseTerminal(_ terminalID: UUID) -> Bool {
+            guard !unavailableTerminals.contains(terminalID) else {
+                return false
+            }
+
+            closedTerminals.append(terminalID)
+            return true
+        }
+    }
+
+    @MainActor
+    private func makeCore(
+        delegate: AppDelegate? = nil,
+        bundleID: String = "ghdx.tests.control-harness"
+    ) -> (
+        core: ControlHarnessCore,
+        eventHub: ControlHarnessEventHub,
+        generations: ControlHarnessGenerationTracker
+    ) {
+        let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+        let generations = ControlHarnessGenerationTracker()
+        let core = ControlHarnessCore(
+            appDelegate: delegate,
+            auditLogger: ControlHarnessAuditLogger(bundleID: bundleID),
+            eventHub: eventHub,
+            generations: generations,
+            idempotencyStore: ControlHarnessIdempotencyStore(),
+            readStore: ControlHarnessTerminalReadStore(),
+            readAfterWriteStore: ControlHarnessReadAfterWriteStore()
+        )
+        return (core, eventHub, generations)
     }
 
     @Test @MainActor func runCommandUsesDedicatedExecutionPath() {
         let delegate = RecordingAppDelegate()
         let bundleID = "ghdx.tests.run-command"
-        let core = ControlHarnessCore(
-            appDelegate: delegate,
-            auditLogger: ControlHarnessAuditLogger(bundleID: bundleID),
-            eventHub: ControlHarnessEventHub(bundleID: bundleID),
-            generations: ControlHarnessGenerationTracker(),
-            idempotencyStore: ControlHarnessIdempotencyStore(),
-            readStore: ControlHarnessTerminalReadStore(),
-            readAfterWriteStore: ControlHarnessReadAfterWriteStore()
-        )
+        let (core, _, _) = makeCore(delegate: delegate, bundleID: bundleID)
         let terminalID = UUID()
         let request = ControlHarnessRequest(
             requestID: "req-run-command",
@@ -234,6 +274,209 @@ struct ControlHarnessTests {
         #expect(delegate.executedCommands.count == 1)
         #expect(delegate.executedCommands[0].terminalID == terminalID)
         #expect(delegate.executedCommands[0].command == "printf '__COLD_START__\\n'")
+    }
+
+    @Test @MainActor func sendTextRejectsMissingTerminalWithoutEmittingEvents() {
+        let delegate = RecordingAppDelegate()
+        let terminalID = UUID()
+        delegate.unavailableTerminals = [terminalID]
+        let (core, eventHub, generations) = makeCore(delegate: delegate, bundleID: "ghdx.tests.send-text-missing")
+        let request = ControlHarnessRequest(
+            requestID: "req-send-text-missing",
+            protocolVersion: nil,
+            command: "send-text",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: terminalID.uuidString,
+            scope: nil,
+            text: "echo fail",
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil
+        )
+
+        let response = core.handle(request, socketPath: "/tmp/control-harness-test.sock")
+
+        #expect(response.status == "error")
+        #expect(response.errorCode == "terminal_not_found")
+        #expect(response.errorMessage?.contains(terminalID.uuidString) == true)
+        #expect(delegate.sentInputs.isEmpty)
+        #expect(eventHub.currentSequence() == 0)
+        #expect(generations.currentTerminalGeneration(for: terminalID.uuidString) == 1)
+    }
+
+    @Test @MainActor func runCommandRejectsNewlineOnlyPayloadWithoutEmittingEvents() {
+        let delegate = RecordingAppDelegate()
+        let terminalID = UUID()
+        let (core, eventHub, generations) = makeCore(delegate: delegate, bundleID: "ghdx.tests.run-command-newline")
+        let request = ControlHarnessRequest(
+            requestID: "req-run-command-newline",
+            protocolVersion: nil,
+            command: "run-command",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: terminalID.uuidString,
+            scope: nil,
+            text: nil,
+            commandText: "\n\r\n",
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil
+        )
+
+        let response = core.handle(request, socketPath: "/tmp/control-harness-test.sock")
+
+        #expect(response.status == "error")
+        #expect(response.errorCode == "invalid_argument")
+        #expect(response.errorMessage == "command_text must contain at least one non-newline character")
+        #expect(delegate.executedCommands.isEmpty)
+        #expect(eventHub.currentSequence() == 0)
+        #expect(generations.currentTerminalGeneration(for: terminalID.uuidString) == 1)
+    }
+
+    @Test @MainActor func closeTerminalRejectsMissingTerminalWithoutEmittingEvents() {
+        let delegate = RecordingAppDelegate()
+        let terminalID = UUID()
+        delegate.unavailableTerminals = [terminalID]
+        let (core, eventHub, generations) = makeCore(delegate: delegate, bundleID: "ghdx.tests.close-terminal-missing")
+        let request = ControlHarnessRequest(
+            requestID: "req-close-terminal-missing",
+            protocolVersion: nil,
+            command: "close-terminal",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: terminalID.uuidString,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil
+        )
+
+        let response = core.handle(request, socketPath: "/tmp/control-harness-test.sock")
+
+        #expect(response.status == "error")
+        #expect(response.errorCode == "terminal_not_found")
+        #expect(response.errorMessage?.contains(terminalID.uuidString) == true)
+        #expect(delegate.closedTerminals.isEmpty)
+        #expect(eventHub.currentSequence() == 0)
+        #expect(generations.currentTerminalGeneration(for: terminalID.uuidString) == 1)
+    }
+
+    @Test @MainActor func readTerminalRejectsInvalidCursorBeforeTouchingTheApp() {
+        let terminalID = UUID()
+        let (core, eventHub, generations) = makeCore(bundleID: "ghdx.tests.read-invalid-cursor")
+        let request = ControlHarnessRequest(
+            requestID: "req-read-invalid-cursor",
+            protocolVersion: nil,
+            command: "read-terminal",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: terminalID.uuidString,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: "snapshot",
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: "not-a-number",
+            readAfterWriteID: nil
+        )
+
+        let response = core.handle(request, socketPath: "/tmp/control-harness-test.sock")
+
+        #expect(response.status == "error")
+        #expect(response.errorCode == "invalid_argument")
+        #expect(response.errorMessage == "cursor must be a non-negative integer")
+        #expect(eventHub.currentSequence() == 0)
+        #expect(generations.currentTerminalGeneration(for: terminalID.uuidString) == 1)
+    }
+
+    @Test @MainActor func readTerminalRejectsCursorWithSinceFrameInDeltaMode() {
+        let terminalID = UUID()
+        let (core, eventHub, generations) = makeCore(bundleID: "ghdx.tests.read-cursor-since")
+        let request = ControlHarnessRequest(
+            requestID: "req-read-cursor-since",
+            protocolVersion: nil,
+            command: "read-terminal",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: terminalID.uuidString,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: "delta",
+            sinceFrameID: "frm_7",
+            maxChars: nil,
+            maxLines: nil,
+            cursor: "120",
+            readAfterWriteID: nil
+        )
+
+        let response = core.handle(request, socketPath: "/tmp/control-harness-test.sock")
+
+        #expect(response.status == "error")
+        #expect(response.errorCode == "invalid_argument")
+        #expect(response.errorMessage == "cursor cannot be combined with since_frame_id in delta mode")
+        #expect(eventHub.currentSequence() == 0)
+        #expect(generations.currentTerminalGeneration(for: terminalID.uuidString) == 1)
     }
 
     @Test @MainActor func readAfterWriteRequiresDistinctPostEchoFrameAndStaysReady() {
