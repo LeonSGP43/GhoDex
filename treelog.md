@@ -13,3 +13,4 @@ Examples:
 `wt-cef-browser-tab + macos cef browser tab integration`
 
 `GhoDex-wt-enhanced-input-mode + macos enhanced bottom input mode`
+`wt-macos-workspace-shortcuts + macos workspace/settings tab shortcut fixes`
