@@ -661,6 +661,68 @@ test "parse control read-terminal delta arguments" {
     try testing.expectEqualStrings("seq_42", parsed.request.read_after_write_id.?);
 }
 
+test "resolveSocketPath returns the single reachable bundle socket" {
+    const testing = std.testing;
+    const home = try makeTestHomePath(testing.allocator);
+    defer testing.allocator.free(home);
+    defer std.fs.deleteTreeAbsolute(home) catch {};
+
+    const debug_socket = try socketPathForBundleHome(testing.allocator, home, "com.leongong.ghodex.debug");
+    defer testing.allocator.free(debug_socket);
+
+    var fixture = try ListeningSocketFixture.bind(debug_socket);
+    defer fixture.deinit();
+
+    const resolved = try resolveSocketPathForHome(testing.allocator, home);
+    defer testing.allocator.free(resolved);
+    try testing.expectEqualStrings(debug_socket, resolved);
+}
+
+test "resolveSocketPath ignores stale files when only one bundle is reachable" {
+    const testing = std.testing;
+    const home = try makeTestHomePath(testing.allocator);
+    defer testing.allocator.free(home);
+    defer std.fs.deleteTreeAbsolute(home) catch {};
+
+    const debug_socket = try socketPathForBundleHome(testing.allocator, home, "com.leongong.ghodex.debug");
+    defer testing.allocator.free(debug_socket);
+    if (std.fs.path.dirname(debug_socket)) |directory| {
+        try std.fs.cwd().makePath(directory);
+    }
+    const stale_file = try std.fs.createFileAbsolute(debug_socket, .{});
+    defer stale_file.close();
+    try stale_file.writeAll("stale");
+
+    const release_socket = try socketPathForBundleHome(testing.allocator, home, "com.leongong.ghodex");
+    defer testing.allocator.free(release_socket);
+
+    var fixture = try ListeningSocketFixture.bind(release_socket);
+    defer fixture.deinit();
+
+    const resolved = try resolveSocketPathForHome(testing.allocator, home);
+    defer testing.allocator.free(resolved);
+    try testing.expectEqualStrings(release_socket, resolved);
+}
+
+test "resolveSocketPath rejects multiple reachable bundle sockets" {
+    const testing = std.testing;
+    const home = try makeTestHomePath(testing.allocator);
+    defer testing.allocator.free(home);
+    defer std.fs.deleteTreeAbsolute(home) catch {};
+
+    const debug_socket = try socketPathForBundleHome(testing.allocator, home, "com.leongong.ghodex.debug");
+    defer testing.allocator.free(debug_socket);
+    var debug_fixture = try ListeningSocketFixture.bind(debug_socket);
+    defer debug_fixture.deinit();
+
+    const release_socket = try socketPathForBundleHome(testing.allocator, home, "com.leongong.ghodex");
+    defer testing.allocator.free(release_socket);
+    var release_fixture = try ListeningSocketFixture.bind(release_socket);
+    defer release_fixture.deinit();
+
+    try testing.expectError(error.AmbiguousSocketPath, resolveSocketPathForHome(testing.allocator, home));
+}
+
 const RecordingTestWriter = struct {
     writer: std.Io.Writer = .{
         .vtable = &vtable,
@@ -810,6 +872,49 @@ fn makeTestSocketPath(alloc: Allocator) ![]const u8 {
         .{std.fmt.bytesToHex(socket_suffix, .lower)},
     );
 }
+
+fn makeTestHomePath(alloc: Allocator) ![]const u8 {
+    var suffix: [4]u8 = undefined;
+    std.crypto.random.bytes(&suffix);
+    return std.fmt.allocPrint(
+        alloc,
+        "/tmp/ghdx-home-{s}",
+        .{std.fmt.bytesToHex(suffix, .lower)},
+    );
+}
+
+const ListeningSocketFixture = struct {
+    fd: std.posix.fd_t,
+    socket_path: []const u8,
+
+    fn bind(socket_path: []const u8) !ListeningSocketFixture {
+        if (std.fs.path.dirname(socket_path)) |directory| {
+            try std.fs.cwd().makePath(directory);
+        }
+
+        var address = try std.net.Address.initUnix(socket_path);
+        const listener = try std.posix.socket(
+            std.posix.AF.UNIX,
+            std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC,
+            0,
+        );
+        errdefer std.posix.close(listener);
+        errdefer std.fs.deleteFileAbsolute(socket_path) catch {};
+
+        try std.posix.bind(listener, &address.any, address.getOsSockLen());
+        try std.posix.listen(listener, 1);
+
+        return .{
+            .fd = listener,
+            .socket_path = socket_path,
+        };
+    }
+
+    fn deinit(self: *ListeningSocketFixture) void {
+        std.posix.close(self.fd);
+        std.fs.deleteFileAbsolute(self.socket_path) catch {};
+    }
+};
 
 fn waitForSocketReady(socket_path: []const u8) !bool {
     var attempts: usize = 0;
