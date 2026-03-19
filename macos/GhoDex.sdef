@@ -25,6 +25,9 @@
       <responds-to command="new browser tab">
         <cocoa method="handleNewBrowserTabScriptCommand:"/>
       </responds-to>
+      <responds-to command="run browser command protocol">
+        <cocoa method="handleRunBrowserCommandProtocolScriptCommand:"/>
+      </responds-to>
       <responds-to command="new surface configuration">
         <cocoa method="handleNewSurfaceConfigurationScriptCommand:"/>
       </responds-to>
@@ -202,6 +205,11 @@
         <cocoa key="url"/>
       </parameter>
       <result type="browser tab" description="The newly created Browser tab."/>
+    </command>
+
+    <command name="run browser command protocol" code="GhBrPt" description="Run one `browser.tab.v1` JSON request against the Browser control adapter and return a versioned JSON response.">
+      <direct-parameter type="text" description="A JSON-encoded browser command request envelope."/>
+      <result type="text" description="A JSON-encoded browser command response envelope."/>
     </command>
 
     <command name="split" code="GhstSplt" description="Split a terminal in the given direction.">

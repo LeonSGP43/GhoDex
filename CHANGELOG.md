@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): add local CLI adapter for browser control
+
+- What changed: Added a generic `run browser command protocol` AppleScript command that accepts one `browser.tab.v1` JSON request and returns a versioned JSON response, then added the `ghodex +browser-control` CLI action to forward one request to the running macOS app through `osascript`.
+- Why: The Browser tab architecture needed a real machine-facing command entrypoint beyond ad hoc AppleScript verbs. Reusing the existing AppleScript transport keeps the first local adapter small while still exposing the new versioned protocol through a CLI surface.
+- Impact: Browser automation can now be driven from the local CLI with a single JSON request per invocation, which makes the Browser tab control plane scriptable from shells and other tools without touching the settings UI.
+- Verification: `swiftlint lint /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/AppleScript/AppDelegate+AppleScript.swift /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `tmp_dd=$(mktemp -d /tmp/ghodex-browser-cli-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-cli-build.XXXXXX) && xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" build`, and `tmp_dd=$(mktemp -d /tmp/ghodex-browser-cli-cef-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-cli-cef-build.XXXXXX) && env GITHUB_ACTIONS=1 xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" GHODEX_CEF_ENABLED=1 GHODEX_CEF_ROOT=$(pwd)/macos/build/cef-runtime/current GHODEX_CEF_OTHER_LDFLAGS='' GHODEX_CEF_WRAPPER_LIB=$(pwd)/macos/build/cef-runtime/current/lib/Debug/libcef_dll_wrapper.a build`
+- Files: `macos/GhoDex.sdef`, `macos/Sources/Features/AppleScript/AppDelegate+AppleScript.swift`, `macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `src/cli/browser_control.zig`, `src/cli/ghostty.zig`, `CHANGELOG.md`
+
 ### feat(browser): add versioned browser command protocol
 
 - What changed: Added `browser.tab.v1` protocol types for external browser control, including versioned request/response envelopes, tab summaries, external event envelopes, and command/event enums that cover tab listing, page control, DOM batches, and future event subscription flows.

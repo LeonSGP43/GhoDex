@@ -192,6 +192,172 @@ extension ScriptBrowserTab {
     static func stableID(controller: BrowserTabController) -> String {
         "browser-tab-\(ObjectIdentifier(controller).hexString)"
     }
+
+    var tabSummary: BrowserExternalTabSummary {
+        BrowserExternalTabSummary(id: stableID, title: title, url: url)
+    }
+
+    static func runExternalCommandProtocol(requestJSON: String) throws -> String {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        guard let requestData = requestJSON.data(using: .utf8) else {
+            throw BrowserExternalCommandError.invalidRequest("The browser command protocol request must be valid UTF-8 JSON.")
+        }
+
+        let request: BrowserExternalCommandRequest
+        do {
+            request = try decoder.decode(BrowserExternalCommandRequest.self, from: requestData)
+        } catch {
+            throw BrowserExternalCommandError.invalidRequest("The browser command protocol request could not be decoded.")
+        }
+
+        let response = routeExternalCommand(request)
+        return try response.jsonString()
+    }
+
+    static func routeExternalCommand(_ request: BrowserExternalCommandRequest) -> BrowserExternalCommandResponse {
+        if let versionError = request.validateVersion() {
+            return .failure(for: request, error: versionError)
+        }
+
+        switch request.command {
+        case .listTabs:
+            do {
+                return .success(
+                    for: request,
+                    resultJSON: try jsonString(from: NSApp.browserTabs.map(\.tabSummary))
+                )
+            } catch {
+                return .failure(
+                    for: request,
+                    error: .internalFailure("The browser tab list could not be serialized as JSON.")
+                )
+            }
+        case .newTab:
+            guard let appDelegate = NSApp.delegate as? AppDelegate else {
+                return .failure(for: request, error: .internalFailure("The GhoDex app delegate is unavailable."))
+            }
+
+            let initialURL: URL?
+            if let rawURL = request.payload["url"], !rawURL.isEmpty {
+                let normalizedURL = BrowserPaths.normalizedURLString(
+                    rawURL,
+                    fallback: BrowserTabController.defaultHomePageURL(for: appDelegate.ghostty).absoluteString
+                )
+                guard let url = URL(string: normalizedURL) else {
+                    return .failure(for: request, error: .invalidRequest("The Browser tab URL is invalid."))
+                }
+                initialURL = url
+            } else {
+                initialURL = nil
+            }
+
+            let controller = BrowserTabController.newWindow(appDelegate.ghostty, initialURL: initialURL)
+            let browserTab = ScriptBrowserTab(controller: controller)
+
+            do {
+                return .success(for: request, resultJSON: try jsonString(from: browserTab.tabSummary))
+            } catch {
+                return .failure(
+                    for: request,
+                    error: .internalFailure("The new Browser tab summary could not be serialized as JSON.")
+                )
+            }
+        case .loadURL:
+            guard let browserTab = browserTab(for: request) else {
+                return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
+            }
+            guard let rawURL = request.payload["url"], !rawURL.isEmpty else {
+                return .failure(for: request, error: .invalidRequest("The loadURL command requires a non-empty url payload."))
+            }
+
+            switch browserTab.load(url: rawURL) {
+            case let .success(result):
+                do {
+                    return .success(for: request, resultJSON: try jsonString(from: ["loaded": result]))
+                } catch {
+                    return .failure(for: request, error: .internalFailure("The loadURL result could not be serialized as JSON."))
+                }
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
+        case .evaluateJavaScript:
+            guard let browserTab = browserTab(for: request) else {
+                return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
+            }
+            guard let script = request.payload["script"], !script.isEmpty else {
+                return .failure(
+                    for: request,
+                    error: .invalidRequest("The evaluateJavaScript command requires a non-empty script payload.")
+                )
+            }
+
+            switch browserTab.evaluate(javaScript: script) {
+            case let .success(resultJSON):
+                return .success(for: request, resultJSON: resultJSON)
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
+        case .runDOMBatch:
+            guard let browserTab = browserTab(for: request) else {
+                return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
+            }
+            guard let commandsJSON = request.payload["commandsJSON"], !commandsJSON.isEmpty else {
+                return .failure(
+                    for: request,
+                    error: .invalidRequest("The runDOMBatch command requires a non-empty commandsJSON payload.")
+                )
+            }
+
+            switch browserTab.runDOMBatch(commandsJSON: commandsJSON) {
+            case let .success(resultJSON):
+                return .success(for: request, resultJSON: resultJSON)
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
+        case .subscribeEvents, .drainEvents, .unsubscribeEvents:
+            return .failure(
+                for: request,
+                error: .invalidRequest("The \(request.command.rawValue) command is not available until the event subscription adapter is enabled.")
+            )
+        }
+    }
+
+    static func browserTab(for request: BrowserExternalCommandRequest) -> ScriptBrowserTab? {
+        guard let browserTabID = request.browserTabID, !browserTabID.isEmpty else {
+            return nil
+        }
+        return NSApp.browserTabs.first(where: { $0.stableID == browserTabID })
+    }
+
+    private static func jsonString<T: Encodable>(from value: T) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(value)
+        guard let encoded = String(data: data, encoding: .utf8) else {
+            throw BrowserExternalCommandError.internalFailure("The browser command protocol payload could not be serialized as UTF-8.")
+        }
+        return encoded
+    }
+}
+
+private extension BrowserControlError {
+    var externalCommandError: BrowserExternalCommandError {
+        BrowserExternalCommandError(code: code.rawValue, message: message, isRetryable: isRetryable)
+    }
+}
+
+private extension BrowserExternalCommandResponse {
+    func jsonString() throws -> String {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(self)
+        guard let encoded = String(data: data, encoding: .utf8) else {
+            throw BrowserExternalCommandError.internalFailure("The browser command response could not be serialized as UTF-8.")
+        }
+        return encoded
+    }
 }
 
 @MainActor

@@ -341,6 +341,33 @@ extension NSApplication {
         let controller = BrowserTabController.newWindow(appDelegate.ghostty, initialURL: initialURL)
         return ScriptBrowserTab(controller: controller)
     }
+
+    /// Handler for the versioned `run browser command protocol` AppleScript command.
+    @objc(handleRunBrowserCommandProtocolScriptCommand:)
+    func handleRunBrowserCommandProtocolScriptCommand(_ command: NSScriptCommand) -> NSString? {
+        guard validateScript(command: command) else { return nil }
+
+        guard let requestJSON = command.directParameter as? String, !requestJSON.isEmpty else {
+            command.scriptErrorNumber = errAEParamMissed
+            command.scriptErrorString = "Missing browser command protocol JSON request."
+            return nil
+        }
+
+        let responseJSON: String
+        do {
+            responseJSON = try ScriptBrowserTab.runExternalCommandProtocol(requestJSON: requestJSON)
+        } catch let error as BrowserExternalCommandError {
+            command.scriptErrorNumber = errAEEventFailed
+            command.scriptErrorString = error.message
+            return nil
+        } catch {
+            command.scriptErrorNumber = errAEEventFailed
+            command.scriptErrorString = error.localizedDescription
+            return nil
+        }
+
+        return responseJSON as NSString
+    }
 }
 
 // MARK: - Private Helpers
