@@ -1671,16 +1671,14 @@ extension Ghostty {
                     guard let surfaceView = self.surfaceView(from: surface) else { return false }
                     if let controller = selectedBaseTerminalController(for: surfaceView.window) {
                         if let terminalController = controller as? TerminalController {
-                            terminalController.changeTitleContext(nil)
-                            return true
+                            return terminalController.promptSurfaceTitle()
                         }
                         controller.promptTabTitle()
                         return true
                     }
                     if let window = surfaceView.window,
                        let controller = window.windowController as? TerminalController {
-                        controller.changeTitleContext(nil)
-                        return true
+                        return controller.promptSurfaceTitle()
                     }
                     surfaceView.promptTitle()
                     return true
@@ -1697,7 +1695,7 @@ extension Ghostty {
                         ?? selectedBaseTerminalController(for: NSApp.mainWindow)
                     else { return false }
                     if let terminalController = controller as? TerminalController {
-                        terminalController.changeTitleContext(nil)
+                        terminalController.promptTabTitle()
                         return true
                     }
                     controller.promptTabTitle()
@@ -1710,7 +1708,7 @@ extension Ghostty {
                         ?? (surfaceView.window?.windowController as? BaseTerminalController)
                     else { return false }
                     if let terminalController = controller as? TerminalController {
-                        terminalController.changeTitleContext(nil)
+                        terminalController.promptTabTitle()
                         return true
                     }
                     controller.promptTabTitle()

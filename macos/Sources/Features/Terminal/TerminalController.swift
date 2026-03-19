@@ -1531,6 +1531,13 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         ghostty.newPaneTab(surface: surface)
     }
 
+    @discardableResult
+    func promptSurfaceTitle() -> Bool {
+        guard let surface = effectiveFocusedSurface() else { return false }
+        surface.promptTitle()
+        return true
+    }
+
     @IBAction func previousPaneTab(_ sender: Any?) {
         guard let focusedSurface = effectiveFocusedSurface() else { return }
         cyclePaneTab(from: focusedSurface, direction: .previous)
@@ -1579,6 +1586,10 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         } else {
             promptTabTitle()
         }
+    }
+
+    @IBAction func changeSurfaceTitle(_ sender: Any?) {
+        _ = promptSurfaceTitle()
     }
 
     @IBAction func closeTab(_ sender: Any?) {
@@ -1954,6 +1965,9 @@ extension TerminalController {
         case #selector(previousPaneTab(_:)),
             #selector(nextPaneTab(_:)):
             return hasMultiplePaneTabs(for: focusedSurface)
+
+        case #selector(changeSurfaceTitle(_:)):
+            return effectiveFocusedSurface() != nil
 
         case #selector(closeTabsOnTheRight):
             guard let window, let tabGroup = window.tabGroup else { return false }

@@ -374,13 +374,13 @@
                             <menuItem title="Change Tab Title..." id="iac-lh-Cl7">
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>
-                                    <action selector="changeTitleContext:" target="-1" id="Jhl-9P-bMj"/>
+                                    <action selector="changeTabTitle:" target="-1" id="Jhl-9P-bMj"/>
                                 </connections>
                             </menuItem>
                             <menuItem title="Change Terminal Title..." id="24I-xg-qIq">
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>
-                                    <action selector="changeTitleContext:" target="-1" id="XuL-QB-Q9l"/>
+                                    <action selector="changeSurfaceTitle:" target="-1" id="XuL-QB-Q9l"/>
                                 </connections>
                             </menuItem>
                             <menuItem title="Terminal Read-only" id="xpe-ia-Yjw">
