@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(control): refuse ambiguous default CLI socket selection
+
+- What changed: Changed the CLI's default control-socket discovery so it only auto-selects a single reachable app instance, ignores stale socket files that no longer accept connections, and returns a dedicated `control_socket_ambiguous` client error when both debug and release harnesses are reachable.
+- Why: Critical acceptance found that the CLI could silently connect to the debug harness whenever both debug and release apps were running, which made validation and automation target the wrong instance without any visible warning.
+- Impact: Users and automation now get deterministic behavior: a single reachable instance still works without extra flags, stale sockets no longer steal resolution, and true multi-instance situations require an explicit `--socket` or `GHODEX_CONTROL_SOCKET` choice instead of silently hitting the wrong app.
+- Verification: `zig build test -Dtest-filter=control`; `zig build -Demit-macos-app=false`
+- Files: `src/cli/control.zig`, `CHANGELOG.md`
+- Decision trail: Keep the existing explicit override paths untouched, but make the implicit discovery path conservative so the CLI only auto-targets a harness when there is exactly one live candidate.
 ### fix(control): distinguish CLI transport failures from invalid harness responses
 
 - What changed: Refined CLI-side control error classification so transport/connectivity failures still surface as `control_unavailable`, but empty socket closes now return `control_empty_response`, oversized payloads return `control_response_too_large`, and malformed harness responses return `control_invalid_response`.

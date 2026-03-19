@@ -128,7 +128,11 @@ fn runArgs(
     };
 
     const request_json = try std.fmt.allocPrint(alloc, "{f}", .{std.json.fmt(parsed.request, .{})});
-    const socket_path = try resolveSocketPath(alloc, parsed.socket_path);
+    const socket_path = resolveSocketPath(alloc, parsed.socket_path) catch |err| {
+        const client_error = clientErrorForControlFailure(err);
+        try writeClientError(stdout, client_error.code, client_error.message);
+        return 1;
+    };
 
     if (std.mem.eql(u8, parsed.request.command, "events.subscribe")) {
         const status_ok = streamSubscriptionRequest(alloc, stdout, socket_path, request_json) catch |err| {
@@ -308,39 +312,85 @@ fn resolveSocketPath(alloc: Allocator, override_path: ?[]const u8) ![]const u8 {
     if (override_path) |path| return path;
     if (std.process.getEnvVarOwned(alloc, "GHODEX_CONTROL_SOCKET")) |env_path| return env_path else |_| {}
 
-    const home = std.process.getEnvVarOwned(alloc, "HOME") catch ".";
+    const home = std.process.getEnvVarOwned(alloc, "HOME") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => try alloc.dupe(u8, "."),
+        else => return err,
+    };
+    defer alloc.free(home);
+    return try resolveSocketPathForHome(alloc, home);
+}
+
+fn resolveSocketPathForHome(alloc: Allocator, home: []const u8) ![]const u8 {
     const bundle_ids = [_][]const u8{
         "com.leongong.ghodex.debug",
         "com.leongong.ghodex",
     };
-    for (bundle_ids) |bundle_id| {
-        const namespace = try socketNamespace(alloc, bundle_id);
-        const socket_path = try std.fs.path.join(alloc, &.{
-            home,
-            "Library",
-            "Caches",
-            namespace,
-            "ControlHarness",
-            "harness.sock",
-        });
-        if (std.fs.accessAbsolute(socket_path, .{})) |_| {
-            return socket_path;
-        } else |_| {}
+    var candidates = std.ArrayList([]const u8).empty;
+    defer candidates.deinit(alloc);
 
-        const legacy_socket_path = try std.fs.path.join(alloc, &.{
-            home,
-            "Library",
-            "Caches",
-            bundle_id,
-            "ControlHarness",
-            "control-harness.sock",
-        });
-        if (std.fs.accessAbsolute(legacy_socket_path, .{})) |_| {
-            return legacy_socket_path;
-        } else |_| {}
+    for (bundle_ids) |bundle_id| {
+        if (try preferredReachableSocketPathForBundle(alloc, home, bundle_id)) |socket_path| {
+            try candidates.append(alloc, socket_path);
+        }
     }
 
-    const namespace = try socketNamespace(alloc, bundle_ids[0]);
+    if (candidates.items.len == 1) {
+        return candidates.items[0];
+    }
+    if (candidates.items.len > 1) {
+        for (candidates.items) |candidate| {
+            alloc.free(candidate);
+        }
+        return error.AmbiguousSocketPath;
+    }
+
+    return try socketPathForBundleHome(alloc, home, bundle_ids[0]);
+}
+
+fn preferredReachableSocketPathForBundle(
+    alloc: Allocator,
+    home: []const u8,
+    bundle_id: []const u8,
+) !?[]const u8 {
+    const socket_path = try socketPathForBundleHome(alloc, home, bundle_id);
+    errdefer alloc.free(socket_path);
+    if (try isReachableSocketPath(socket_path)) {
+        return socket_path;
+    }
+    alloc.free(socket_path);
+
+    const legacy_socket_path = try legacySocketPathForBundleHome(alloc, home, bundle_id);
+    errdefer alloc.free(legacy_socket_path);
+    if (try isReachableSocketPath(legacy_socket_path)) {
+        return legacy_socket_path;
+    }
+    alloc.free(legacy_socket_path);
+
+    return null;
+}
+
+fn isReachableSocketPath(socket_path: []const u8) !bool {
+    const parent = std.fs.path.dirname(socket_path) orelse return false;
+    var dir = std.fs.openDirAbsolute(parent, .{}) catch return false;
+    defer dir.close();
+
+    const stat = dir.statFile(std.fs.path.basename(socket_path)) catch return false;
+    if (stat.kind != .unix_domain_socket) {
+        return false;
+    }
+
+    var stream = std.net.connectUnixSocket(socket_path) catch return false;
+    stream.close();
+    return true;
+}
+
+fn socketNamespace(alloc: Allocator, bundle_id: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(alloc, "ghdx-{x:0>16}", .{fnv1a64(bundle_id)});
+}
+
+fn socketPathForBundleHome(alloc: Allocator, home: []const u8, bundle_id: []const u8) ![]const u8 {
+    const namespace = try socketNamespace(alloc, bundle_id);
+    defer alloc.free(namespace);
     return try std.fs.path.join(alloc, &.{
         home,
         "Library",
@@ -351,8 +401,15 @@ fn resolveSocketPath(alloc: Allocator, override_path: ?[]const u8) ![]const u8 {
     });
 }
 
-fn socketNamespace(alloc: Allocator, bundle_id: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(alloc, "ghdx-{x:0>16}", .{fnv1a64(bundle_id)});
+fn legacySocketPathForBundleHome(alloc: Allocator, home: []const u8, bundle_id: []const u8) ![]const u8 {
+    return try std.fs.path.join(alloc, &.{
+        home,
+        "Library",
+        "Caches",
+        bundle_id,
+        "ControlHarness",
+        "control-harness.sock",
+    });
 }
 
 fn fnv1a64(text: []const u8) u64 {
@@ -470,6 +527,10 @@ fn clientErrorForControlFailure(err: anyerror) struct {
         error.FileNotFound, error.ConnectionRefused, error.SocketNotConnected => .{
             .code = "control_unavailable",
             .message = "The GhoDex control harness is unavailable. Launch the GhoDex app and try again.",
+        },
+        error.AmbiguousSocketPath => .{
+            .code = "control_socket_ambiguous",
+            .message = "Multiple reachable GhoDex control harness sockets were found. Pass --socket or GHODEX_CONTROL_SOCKET to choose one instance.",
         },
         error.EmptyResponse => .{
             .code = "control_empty_response",
