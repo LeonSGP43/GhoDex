@@ -12,6 +12,10 @@ enum BrowserControlCommandKind: String, Codable, Hashable {
     case click
     case typeText
     case waitForSelector
+    case getDOMSnapshot
+    case getText
+    case getAttributes
+    case getBoundingBox
 }
 
 enum BrowserControlEventKind: String, Codable, Hashable {

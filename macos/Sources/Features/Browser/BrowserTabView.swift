@@ -376,7 +376,14 @@ private struct BrowserCEFDeckView: NSViewRepresentable {
 
                         completion(.success(for: request, valueJSON: resultJSON))
                     }
-                case .query, .click, .typeText, .waitForSelector:
+                case .query,
+                     .click,
+                     .typeText,
+                     .waitForSelector,
+                     .getDOMSnapshot,
+                     .getText,
+                     .getAttributes,
+                     .getBoundingBox:
                     self.routeDOMCommand(request, view: view, completion: completion)
                 }
             })

@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): add higher-level DOM inspection helpers
+
+- What changed: Extended the browser control command set with `getDOMSnapshot`, `getText`, `getAttributes`, and `getBoundingBox`, added matching inspection script generation in `BrowserControlScriptBuilder.swift`, and routed those inspection commands through the existing typed DOM command bridge in `BrowserTabView.swift`.
+- Why: The control plane already had action-oriented DOM commands, but it still lacked richer inspection primitives for reading structured page state. Landing these helpers now gives later typed APIs and batch commands a broader, inspection-focused foundation without forcing a new transport layer.
+- Impact: Browser control callers can now ask a tab for a shallow DOM snapshot, extracted text, element attributes, and layout bounds through the same request/response path that already powers query, click, type, and wait commands. This keeps inspection inside the embedded browser runtime and avoids ad-hoc JS snippets in higher-level callers.
+- Verification: `swiftlint lint /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/Browser/BrowserControlScriptBuilder.swift /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/Browser/BrowserTabModel.swift /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/Browser/BrowserTabView.swift`, `tmp_dd=$(mktemp -d /tmp/ghodex-browser-inspect-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-inspect-build.XXXXXX) && xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" build`, and `tmp_dd=$(mktemp -d /tmp/ghodex-browser-inspect-cef-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-inspect-cef-build.XXXXXX) && env GITHUB_ACTIONS=1 xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" GHODEX_CEF_ENABLED=1 GHODEX_CEF_ROOT=$(pwd)/macos/build/cef-runtime/current GHODEX_CEF_OTHER_LDFLAGS='' GHODEX_CEF_WRAPPER_LIB=$(pwd)/macos/build/cef-runtime/current/lib/Debug/libcef_dll_wrapper.a build`
+- Files: `macos/Sources/Features/Browser/BrowserTabModel.swift`, `macos/Sources/Features/Browser/BrowserControlScriptBuilder.swift`, `macos/Sources/Features/Browser/BrowserTabView.swift`, `CHANGELOG.md`
+
 ### feat(browser): add console and lifecycle event subscriptions
 
 - What changed: Added typed browser control-event subscription APIs to `BrowserTabModel.swift`, expanded `BrowserControlEvent` with `consoleMessage` and `bridgeReady` helpers, and wired `GhoDexCEFBridge` plus `BrowserTabView` to forward browser-ready and console callbacks into the existing typed event stream alongside the already-routed navigation lifecycle events.

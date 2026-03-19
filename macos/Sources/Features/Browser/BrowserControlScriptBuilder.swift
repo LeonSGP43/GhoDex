@@ -18,6 +18,18 @@ enum BrowserControlScriptBuilder {
                 state: waitState(from: request),
                 timeoutMS: max(0, request.timeoutMS ?? 5000)
             )
+        case .getDOMSnapshot:
+            return try domSnapshotScript(
+                selector: optionalValue("selector", from: request),
+                maxDepth: max(0, intValue("maxDepth", from: request) ?? 2),
+                includeText: boolValue("includeText", from: request) ?? true
+            )
+        case .getText:
+            return try textScript(selector: requiredValue("selector", from: request))
+        case .getAttributes:
+            return try attributesScript(selector: requiredValue("selector", from: request))
+        case .getBoundingBox:
+            return try boundingBoxScript(selector: requiredValue("selector", from: request))
         default:
             throw BrowserControlScriptBuilderError.unsupportedCommand(request.command)
         }
@@ -194,9 +206,136 @@ enum BrowserControlScriptBuilder {
         """
     }
 
+    private static func domSnapshotScript(
+        selector: String?,
+        maxDepth: Int,
+        includeText: Bool
+    ) throws -> String {
+        let selectorLiteral = try nullableJavaScriptStringLiteral(selector)
+        return """
+        (() => {
+          const selector = \(selectorLiteral);
+          const maxDepth = \(maxDepth);
+          const includeText = \(includeText ? "true" : "false");
+          const root = selector ? document.querySelector(selector) : document.documentElement;
+          if (!root) {
+            return { found: false, selector, maxDepth };
+          }
+
+          const snapshotNode = (node, depth) => {
+            if (depth > maxDepth) {
+              return null;
+            }
+
+            const children = [];
+            for (const child of Array.from(node.children ?? [])) {
+              const childSnapshot = snapshotNode(child, depth + 1);
+              if (childSnapshot) {
+                children.push(childSnapshot);
+              }
+            }
+
+            return {
+              tagName: node.tagName ?? null,
+              id: node.id || null,
+              className: node.className || null,
+              text: includeText ? (node.innerText ?? node.textContent ?? "") : null,
+              attributes: Object.fromEntries(Array.from(node.attributes ?? []).map((attribute) => [attribute.name, attribute.value])),
+              childCount: node.children?.length ?? 0,
+              children,
+            };
+          };
+
+          return {
+            found: true,
+            selector,
+            maxDepth,
+            includeText,
+            snapshot: snapshotNode(root, 0)
+          };
+        })()
+        """
+    }
+
+    private static func textScript(selector: String) throws -> String {
+        let selectorLiteral = try javaScriptStringLiteral(selector)
+        return """
+        (() => {
+          const selector = \(selectorLiteral);
+          const element = document.querySelector(selector);
+          if (!element) {
+            return { found: false, selector };
+          }
+
+          return {
+            found: true,
+            selector,
+            text: element.innerText ?? element.textContent ?? ""
+          };
+        })()
+        """
+    }
+
+    private static func attributesScript(selector: String) throws -> String {
+        let selectorLiteral = try javaScriptStringLiteral(selector)
+        return """
+        (() => {
+          const selector = \(selectorLiteral);
+          const element = document.querySelector(selector);
+          if (!element) {
+            return { found: false, selector };
+          }
+
+          return {
+            found: true,
+            selector,
+            attributes: Object.fromEntries(Array.from(element.attributes ?? []).map((attribute) => [attribute.name, attribute.value]))
+          };
+        })()
+        """
+    }
+
+    private static func boundingBoxScript(selector: String) throws -> String {
+        let selectorLiteral = try javaScriptStringLiteral(selector)
+        return """
+        (() => {
+          const selector = \(selectorLiteral);
+          const element = document.querySelector(selector);
+          if (!element) {
+            return { found: false, selector };
+          }
+
+          const rect = element.getBoundingClientRect();
+          return {
+            found: true,
+            selector,
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+            left: rect.left,
+            scrollX: window.scrollX,
+            scrollY: window.scrollY,
+            viewportWidth: window.innerWidth,
+            viewportHeight: window.innerHeight
+          };
+        })()
+        """
+    }
+
     private static func requiredValue(_ key: String, from request: BrowserControlRequest) throws -> String {
         guard let value = request.payload[key], !value.isEmpty else {
             throw BrowserControlScriptBuilderError.missingPayload(key)
+        }
+        return value
+    }
+
+    private static func optionalValue(_ key: String, from request: BrowserControlRequest) -> String? {
+        guard let value = request.payload[key], !value.isEmpty else {
+            return nil
         }
         return value
     }
@@ -213,6 +352,31 @@ enum BrowserControlScriptBuilder {
         throw BrowserControlScriptBuilderError.unsupportedWaitState(state)
     }
 
+    private static func intValue(_ key: String, from request: BrowserControlRequest) throws -> Int? {
+        guard let rawValue = optionalValue(key, from: request) else {
+            return nil
+        }
+        guard let value = Int(rawValue) else {
+            throw BrowserControlScriptBuilderError.invalidNumericPayload(key)
+        }
+        return value
+    }
+
+    private static func boolValue(_ key: String, from request: BrowserControlRequest) throws -> Bool? {
+        guard let rawValue = optionalValue(key, from: request) else {
+            return nil
+        }
+
+        switch rawValue.lowercased() {
+        case "true", "1", "yes":
+            return true
+        case "false", "0", "no":
+            return false
+        default:
+            throw BrowserControlScriptBuilderError.invalidBooleanPayload(key)
+        }
+    }
+
     private static func javaScriptStringLiteral(_ value: String) throws -> String {
         let data = try JSONSerialization.data(withJSONObject: [value], options: [])
         guard let encoded = String(bytes: data, encoding: .utf8) else {
@@ -220,12 +384,21 @@ enum BrowserControlScriptBuilder {
         }
         return String(encoded.dropFirst().dropLast())
     }
+
+    private static func nullableJavaScriptStringLiteral(_ value: String?) throws -> String {
+        guard let value else {
+            return "null"
+        }
+        return try javaScriptStringLiteral(value)
+    }
 }
 
 enum BrowserControlScriptBuilderError: LocalizedError {
     case missingPayload(String)
     case unsupportedCommand(BrowserControlCommandKind)
     case unsupportedWaitState(String)
+    case invalidNumericPayload(String)
+    case invalidBooleanPayload(String)
     case stringEncodingFailed
 
     var errorDescription: String? {
@@ -236,6 +409,10 @@ enum BrowserControlScriptBuilderError: LocalizedError {
             return "No DOM control script builder exists for the \(command.rawValue) command."
         case let .unsupportedWaitState(state):
             return "The waitForSelector command does not support the \(state) state yet."
+        case let .invalidNumericPayload(key):
+            return "The \(key) payload must be a valid integer."
+        case let .invalidBooleanPayload(key):
+            return "The \(key) payload must be a valid boolean."
         case .stringEncodingFailed:
             return "The browser control script could not be encoded as UTF-8 JavaScript."
         }
