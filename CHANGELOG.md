@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(browser): decouple IPC request execution from connection I/O
+
+- What changed: Reworked the Browser IPC socket service so each client connection now owns its own socket I/O queue and buffered write path, while request execution hops asynchronously back through the existing Browser command protocol instead of blocking the shared listener queue. Slow readers now accumulate response bytes on a connection-local send queue with a hard backpressure limit instead of stalling unrelated clients.
+- Why: The first Browser IPC implementation proved the protocol shape, but Opus acceptance review surfaced a real performance blocker: one slow request or one slow client could head-of-line block every other long-lived Browser control session because reads, request execution, and writes all happened synchronously on one queue.
+- Impact: Browser control sessions can now keep accepting requests while earlier ones are still executing on the main actor, and a single slow client no longer drags the whole IPC service behind it. This closes the main blocker against calling the Browser control plane a performant long-lived local API.
+- Verification: `swiftlint lint /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-cef-browser-tab/macos/Sources/Features/Browser/BrowserControlIPCService.swift`, `tmp_dd=$(mktemp -d /tmp/ghodex-browser-ipc-perf-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-ipc-perf-build.XXXXXX) && xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" build`, `tmp_dd=$(mktemp -d /tmp/ghodex-browser-ipc-perf-cef-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-ipc-perf-cef-build.XXXXXX) && env GITHUB_ACTIONS=1 xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" GHODEX_CEF_ENABLED=1 GHODEX_CEF_ROOT=$(pwd)/macos/build/cef-runtime/current GHODEX_CEF_OTHER_LDFLAGS='' GHODEX_CEF_WRAPPER_LIB=$(pwd)/macos/build/cef-runtime/current/lib/Debug/libcef_dll_wrapper.a build`, manual IPC acceptance against the direct app binary with concurrent Unix-socket clients confirmed `listTabs` stayed responsive under unread large `newTab` responses (`/tmp/ghodex-browser-ipc-acceptance.json`, `/tmp/ghodex-browser-ipc-acceptance-backpressure.json`)
+- Files: `macos/Sources/Features/Browser/BrowserControlIPCService.swift`, `CHANGELOG.md`
+
 ### docs(browser): add command protocol guide for external clients
 
 - What changed: Added `browser-tab-command-protocol.md` with the current `browser.tab.v1` request/response contract, transport notes, event-kind reference, CLI examples, and AppleScript examples, and linked the architecture plan back to that guide so the product-facing contract has a durable home.
