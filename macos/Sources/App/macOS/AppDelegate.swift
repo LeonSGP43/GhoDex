@@ -147,10 +147,83 @@ class AppDelegate: NSObject,
         bundleID: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex"
     )
 
+    lazy var controlHarnessAuth = ControlHarnessAuth(
+        storageURL: ControlHarnessCore
+            .baseDirectory(bundleID: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex")
+            .appendingPathComponent("gateway-auth.json", isDirectory: false)
+    )
+
+    @MainActor lazy var controlHarnessSampleStore = ControlHarnessSampleStore()
+
     @MainActor lazy var controlHarnessCore = ControlHarnessCore(
         appDelegate: self,
-        auditLogger: controlHarnessAuditLogger
+        auditLogger: controlHarnessAuditLogger,
+        sampleStore: controlHarnessSampleStore
     )
+
+    @MainActor
+    private func controlHarnessReply(
+        _ request: ControlHarnessRequest,
+        socketPath: String
+    ) -> ControlHarnessServiceReply {
+        if request.command == "events.subscribe" {
+            return .subscription(controlHarnessCore.handleSubscription(request, socketPath: socketPath))
+        }
+        return .single(controlHarnessCore.handle(request, socketPath: socketPath))
+    }
+
+    @MainActor
+    func controlHarnessManagedState(for terminalID: UUID) -> AITerminalManagedState? {
+        aiTerminalManagerStore.sessions
+            .first(where: { $0.id == terminalID })?
+            .managedState
+    }
+
+    @MainActor
+    func controlHarnessGatewayAccessDecision(
+        _ request: ControlHarnessRequest
+    ) -> ControlHarnessGateway.RequestAuthorization {
+        switch request.command {
+        case "handshake", "snapshot", "read-terminal", "events.subscribe":
+            return .allow
+
+        case "send-text", "run-command", "close-terminal":
+            guard let rawTerminalID = request.terminalID,
+                  let terminalID = UUID(uuidString: rawTerminalID) else {
+                let error = ControlHarnessCoreError.invalidArgument("terminal_id is required")
+                return .deny(
+                    errorCode: error.code,
+                    errorMessage: error.localizedDescription
+                )
+            }
+
+            let managedState = controlHarnessManagedState(for: terminalID) ?? .manual
+
+            switch managedState {
+            case .observed, .managedActive:
+                return .allow
+            case .managedWaitingApproval:
+                return .deny(
+                    errorCode: "approval_required",
+                    errorMessage: "Remote \(request.command) requires desktop approval for terminal_id=\(rawTerminalID)"
+                )
+            case .manual, .managedPaused, .managedCompleted, .managedFailed:
+                return .deny(
+                    errorCode: "remote_policy_blocked",
+                    errorMessage: "Remote \(request.command) is disabled for terminal state \(managedState.rawValue)"
+                )
+            }
+
+        case "new-tab", "close-tab":
+            return .deny(
+                errorCode: "remote_policy_blocked",
+                errorMessage: "Remote \(request.command) is not enabled through the gateway"
+            )
+
+        default:
+            return .allow
+        }
+    }
 
     lazy var controlHarnessService = ControlHarnessService(
         bundleID: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
@@ -164,10 +237,42 @@ class AppDelegate: NSObject,
                     errorMessage: ControlHarnessCoreError.appUnavailable.localizedDescription
                 ))
             }
-            if request.command == "events.subscribe" {
-                return .subscription(self.controlHarnessCore.handleSubscription(request, socketPath: socketPath))
+            return self.controlHarnessReply(request, socketPath: socketPath)
+        }
+    )
+
+    @MainActor lazy var controlHarnessReadSampler = ControlHarnessReadSampler(
+        bundleID: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
+        sampleStore: controlHarnessSampleStore,
+        inventoryProvider: { [weak self] in
+            self?.controlHarnessSamplingTargets() ?? []
+        }
+    )
+
+    lazy var controlHarnessGateway = ControlHarnessGateway(
+        bundleID: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
+        configuration: .environment(),
+        authManager: controlHarnessAuth,
+        requestHandler: { [weak self] request, socketPath in
+            guard let self else {
+                return .single(ControlHarnessResponse(
+                    requestID: request.requestID,
+                    status: "error",
+                    result: nil,
+                    errorCode: ControlHarnessCoreError.appUnavailable.code,
+                    errorMessage: ControlHarnessCoreError.appUnavailable.localizedDescription
+                ))
             }
-            return .single(self.controlHarnessCore.handle(request, socketPath: socketPath))
+            return self.controlHarnessReply(request, socketPath: socketPath)
+        },
+        requestAuthorizer: { [weak self] request in
+            guard let self else {
+                return .deny(
+                    errorCode: ControlHarnessCoreError.appUnavailable.code,
+                    errorMessage: ControlHarnessCoreError.appUnavailable.localizedDescription
+                )
+            }
+            return self.controlHarnessGatewayAccessDecision(request)
         }
     )
 
@@ -246,7 +351,9 @@ class AppDelegate: NSObject,
         // Initial config loading
         ghosttyConfigDidChange(config: ghostty.config)
 
+        controlHarnessReadSampler.start()
         controlHarnessService.startIfNeeded()
+        controlHarnessGateway.startIfNeeded()
 
         // Start our update checker.
         updateController.startUpdater()
@@ -466,7 +573,9 @@ class AppDelegate: NSObject,
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        controlHarnessReadSampler.stop()
         controlHarnessService.stop()
+        controlHarnessGateway.stop()
 
         // We have no notifications we want to persist after death,
         // so remove them all now. In the future we may want to be
@@ -1173,6 +1282,42 @@ class AppDelegate: NSObject,
         }
 
         return nil
+    }
+
+    @MainActor
+    func controlHarnessReadableSurface(for terminalID: UUID) -> (any ControlHarnessReadableSurface)? {
+        findSurface(forUUID: terminalID)
+    }
+
+    @MainActor
+    func controlHarnessSamplingTargets() -> [ControlHarnessSamplerTarget] {
+        let managedStates = Dictionary(uniqueKeysWithValues: aiTerminalManagerStore.sessions.map {
+            ($0.id, $0.managedState)
+        })
+
+        return TerminalController.all.flatMap { controller in
+            controller.allSurfaces.map { surface in
+                let isFocused = controller.focusedSurface?.id == surface.id
+                let isVisible = controller.visibleSurfaces.contains(where: { $0.id == surface.id })
+                let managedState = managedStates[surface.id] ?? .manual
+                return ControlHarnessSamplerTarget(
+                    terminalID: surface.id.uuidString,
+                    surface: surface,
+                    activityClass: .init(
+                        managedState: managedState,
+                        isFocused: isFocused,
+                        isVisible: isVisible
+                    )
+                )
+            }
+        }
+    }
+
+    @MainActor
+    func controlHarnessSamplingActivityClass(for terminalID: UUID) -> ControlHarnessSamplingActivityClass? {
+        controlHarnessSamplingTargets()
+            .first(where: { $0.terminalID == terminalID.uuidString })?
+            .activityClass
     }
 
     @MainActor

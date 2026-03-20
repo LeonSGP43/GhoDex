@@ -816,6 +816,25 @@ final class ControlHarnessEventSubscriptionSession {
         }
     }
 
+    func removeSubscriber(_ id: UUID?) {
+        guard let id else { return }
+
+        let finishHandler = queue.sync { () -> (@Sendable () -> Void)? in
+            guard !finished else { return nil }
+            finished = true
+            bufferingLiveEvents = false
+            bufferedLiveEvents.removeAll(keepingCapacity: false)
+            completionPending = false
+            eventHub.removeSubscriber(id)
+            let handler = self.finishHandler
+            deliverySink = nil
+            self.finishHandler = nil
+            return handler
+        }
+
+        finishHandler?()
+    }
+
     private func consumeLiveEvent(data: Data) -> Bool {
         queue.sync {
             guard !finished, remainingLiveEvents != 0 else {
