@@ -10,6 +10,7 @@ final class ControlHarnessGateway {
         case tokenInfo
         case tokenRotate
         case tokenRevoke
+        case metrics
     }
 
     struct Configuration: Sendable {
@@ -117,6 +118,7 @@ final class ControlHarnessGateway {
     private let requestAuthorizer: (@MainActor (ControlHarnessRequest) -> RequestAuthorization)?
     private let rateLimiter: ControlHarnessGatewayRateLimiter
     private let sessionRegistry: ControlHarnessGatewaySessionRegistry
+    private let performanceMonitor: ControlHarnessPerformanceMonitor?
     private let logger: Logger
     private let lifecycleQueue = DispatchQueue(
         label: "com.leongong.ghodex.control-harness.gateway.lifecycle",
@@ -154,7 +156,8 @@ final class ControlHarnessGateway {
         configuration: Configuration = .init(),
         authManager: ControlHarnessAuth? = nil,
         requestHandler: (@MainActor (ControlHarnessRequest, String) -> ControlHarnessServiceReply)? = nil,
-        requestAuthorizer: (@MainActor (ControlHarnessRequest) -> RequestAuthorization)? = nil
+        requestAuthorizer: (@MainActor (ControlHarnessRequest) -> RequestAuthorization)? = nil,
+        performanceMonitor: ControlHarnessPerformanceMonitor? = nil
     ) {
         self.bundleID = bundleID
         self.authManager = authManager
@@ -164,6 +167,7 @@ final class ControlHarnessGateway {
         self.sessionRegistry = ControlHarnessGatewaySessionRegistry(
             maxConcurrentSessionsPerIdentity: configuration.maxConcurrentSessionsPerIdentity
         )
+        self.performanceMonitor = performanceMonitor
         self.logger = Logger(subsystem: bundleID, category: "ControlHarnessGateway")
         self.configuration = configuration
     }
@@ -297,6 +301,9 @@ final class ControlHarnessGateway {
     private func handleClient(_ clientFD: Int32) {
         defer { Darwin.close(clientFD) }
         let peerDescription = Self.peerDescription(for: clientFD)
+        let started = DispatchTime.now()
+        var requestCommand = "unknown"
+        var requestRecorded = false
 
         do {
             if try Self.looksLikeWebSocketHandshake(clientFD) {
@@ -306,9 +313,22 @@ final class ControlHarnessGateway {
 
             let requestData = try Self.readAll(from: clientFD)
             let request = try JSONDecoder().decode(ControlHarnessRequest.self, from: requestData)
+            requestCommand = request.command
+
+            func recordRequestIfNeeded() {
+                guard !requestRecorded else { return }
+                requestRecorded = true
+                performanceMonitor?.recordGatewayRequest(
+                    command: requestCommand,
+                    transport: "tcp",
+                    durationMs: Self.elapsedMilliseconds(since: started)
+                )
+            }
+
             switch authorize(request, peerDescription: peerDescription) {
             case .deny(let response):
                 try Self.writeAll(try encodeResponse(response), to: clientFD)
+                recordRequestIfNeeded()
                 return
             case .allow(let sessionIdentity):
                 try withSessionReservation(
@@ -317,6 +337,7 @@ final class ControlHarnessGateway {
                     sessionIdentity: sessionIdentity,
                     responseWriter: { response in
                         try Self.writeAll(try encodeResponse(response), to: clientFD)
+                        recordRequestIfNeeded()
                     }
                 ) {
                     let reply = handleGatewayCommand(request).map(ControlHarnessServiceReply.single)
@@ -324,8 +345,14 @@ final class ControlHarnessGateway {
                     switch reply {
                     case .single(let response):
                         try Self.writeAll(try encodeResponse(response), to: clientFD)
+                        recordRequestIfNeeded()
                     case .subscription(let envelope):
-                        try streamSubscription(envelope, to: clientFD)
+                        try streamSubscription(
+                            envelope,
+                            to: clientFD,
+                            transport: "tcp",
+                            closeReason: "client_disconnect"
+                        )
                     }
                 }
             }
@@ -341,6 +368,13 @@ final class ControlHarnessGateway {
             if let data = try? encodeResponse(fallback) {
                 try? Self.writeAll(data, to: clientFD)
             }
+            if !requestRecorded {
+                performanceMonitor?.recordGatewayRequest(
+                    command: requestCommand,
+                    transport: "tcp",
+                    durationMs: Self.elapsedMilliseconds(since: started)
+                )
+            }
         }
     }
 
@@ -348,16 +382,29 @@ final class ControlHarnessGateway {
         _ clientFD: Int32,
         peerDescription: String
     ) throws {
+        let started = DispatchTime.now()
         let handshake = try Self.readHTTPHeaders(from: clientFD)
         let key = try Self.parseWebSocketKey(from: handshake)
         try Self.writeAll(Self.webSocketHandshakeResponse(for: key), to: clientFD)
 
         let requestData = try Self.readWebSocketFrame(from: clientFD)
         let request = try JSONDecoder().decode(ControlHarnessRequest.self, from: requestData)
+        var requestRecorded = false
+
+        func recordRequestIfNeeded() {
+            guard !requestRecorded else { return }
+            requestRecorded = true
+            performanceMonitor?.recordGatewayRequest(
+                command: request.command,
+                transport: "websocket",
+                durationMs: Self.elapsedMilliseconds(since: started)
+            )
+        }
 
         switch authorize(request, peerDescription: peerDescription) {
         case .deny(let response):
             try Self.writeAll(try encodeWebSocketResponse(response), to: clientFD)
+            recordRequestIfNeeded()
         case .allow(let sessionIdentity):
             try withSessionReservation(
                 request: request,
@@ -365,6 +412,7 @@ final class ControlHarnessGateway {
                 sessionIdentity: sessionIdentity,
                 responseWriter: { response in
                     try Self.writeAll(try encodeWebSocketResponse(response), to: clientFD)
+                    recordRequestIfNeeded()
                 }
             ) {
                 let reply = handleGatewayCommand(request).map(ControlHarnessServiceReply.single)
@@ -372,8 +420,14 @@ final class ControlHarnessGateway {
                 switch reply {
                 case .single(let response):
                     try Self.writeAll(try encodeWebSocketResponse(response), to: clientFD)
+                    recordRequestIfNeeded()
                 case .subscription(let envelope):
-                    try streamWebSocketSubscription(envelope, to: clientFD)
+                    try streamWebSocketSubscription(
+                        envelope,
+                        to: clientFD,
+                        transport: "websocket",
+                        closeReason: "client_disconnect"
+                    )
                 }
             }
         }
@@ -514,6 +568,18 @@ final class ControlHarnessGateway {
         case .pairingExchange:
             return .allow(sessionIdentity: nil)
 
+        case .metrics:
+            guard Self.isLoopbackPeer(peerDescription) else {
+                return .deny(ControlHarnessResponse(
+                    requestID: request.requestID,
+                    status: "error",
+                    result: nil,
+                    errorCode: "metrics_requires_local_origin",
+                    errorMessage: "Gateway metrics can only be requested from a local desktop client"
+                ))
+            }
+            return .allow(sessionIdentity: nil)
+
         case .tokenInfo, .tokenRotate, .tokenRevoke:
             guard let authManager else {
                 return .deny(ControlHarnessResponse(
@@ -541,6 +607,20 @@ final class ControlHarnessGateway {
 
     private func handleGatewayCommand(_ request: ControlHarnessRequest) -> ControlHarnessResponse? {
         guard let gatewayCommand = gatewayCommand(for: request) else { return nil }
+
+        if case .metrics = gatewayCommand {
+            return ControlHarnessResponse(
+                requestID: request.requestID,
+                status: "ok",
+                result: AnyEncodable(
+                    performanceMonitor?.snapshot()
+                        ?? ControlHarnessPerformanceSnapshot.empty()
+                ),
+                errorCode: nil,
+                errorMessage: nil
+            )
+        }
+
         guard let authManager else {
             return ControlHarnessResponse(
                 requestID: request.requestID,
@@ -581,6 +661,11 @@ final class ControlHarnessGateway {
                     throw ControlHarnessAuthError.invalidToken
                 }
                 return AnyEncodable(try await authManager.revoke(token: token))
+            case .metrics:
+                return AnyEncodable(
+                    performanceMonitor?.snapshot()
+                        ?? ControlHarnessPerformanceSnapshot.empty()
+                )
             }
         }
 
@@ -616,6 +701,8 @@ final class ControlHarnessGateway {
             return .tokenRotate
         case "gateway.token.revoke":
             return .tokenRevoke
+        case "gateway.metrics":
+            return .metrics
         default:
             return nil
         }
@@ -736,12 +823,21 @@ final class ControlHarnessGateway {
 
     private func streamSubscription(
         _ envelope: ControlHarnessSubscriptionEnvelope,
-        to clientFD: Int32
+        to clientFD: Int32,
+        transport: String,
+        closeReason: String
     ) throws {
+        let started = DispatchTime.now()
         let clientSession = makeClientSession()
         let attachment = attachSubscription(envelope, to: clientSession)
         let activeStreamID = registerActiveStream(clientSession: clientSession, clientFD: clientFD)
+        performanceMonitor?.recordGatewayStreamOpened(transport: transport)
         defer {
+            performanceMonitor?.recordGatewayStreamClosed(
+                transport: transport,
+                reason: closeReason,
+                durationMs: Self.elapsedMilliseconds(since: started)
+            )
             unregisterActiveStream(activeStreamID)
             attachment.close()
             clientSession.close()
@@ -770,12 +866,21 @@ final class ControlHarnessGateway {
 
     private func streamWebSocketSubscription(
         _ envelope: ControlHarnessSubscriptionEnvelope,
-        to clientFD: Int32
+        to clientFD: Int32,
+        transport: String,
+        closeReason: String
     ) throws {
+        let started = DispatchTime.now()
         let clientSession = makeClientSession()
         let attachment = attachSubscription(envelope, to: clientSession)
         let activeStreamID = registerActiveStream(clientSession: clientSession, clientFD: clientFD)
+        performanceMonitor?.recordGatewayStreamOpened(transport: transport)
         defer {
+            performanceMonitor?.recordGatewayStreamClosed(
+                transport: transport,
+                reason: closeReason,
+                durationMs: Self.elapsedMilliseconds(since: started)
+            )
             unregisterActiveStream(activeStreamID)
             attachment.close()
             clientSession.close()
@@ -853,6 +958,10 @@ final class ControlHarnessGateway {
 
     private func listenerPathDescription() -> String {
         "tcp://\(configuration.listenHost):\(listenerPort ?? configuration.listenPort)"
+    }
+
+    private static func elapsedMilliseconds(since started: DispatchTime) -> Double {
+        Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
     }
 
     private func encodeResponse(_ response: ControlHarnessResponse) throws -> Data {
@@ -1348,5 +1457,277 @@ enum ControlHarnessGatewayError: LocalizedError {
         case .unsupportedWebSocketFrame:
             return "The WebSocket frame is unsupported"
         }
+    }
+}
+
+struct ControlHarnessDurationMetricsSnapshot: Codable, Equatable {
+    let count: Int
+    let averageMs: Double
+    let p95Ms: Double
+    let maxMs: Double
+}
+
+struct ControlHarnessSamplerMetricsSnapshot: Codable, Equatable {
+    let tick: ControlHarnessDurationMetricsSnapshot
+    let capture: ControlHarnessDurationMetricsSnapshot
+    let lastTargetCount: Int
+    let lastRefreshedCount: Int
+    let lastTickAt: String?
+    let lastCaptureScope: String?
+    let lastCaptureActivityClass: String?
+    let lastCaptureAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case tick
+        case capture
+        case lastTargetCount = "last_target_count"
+        case lastRefreshedCount = "last_refreshed_count"
+        case lastTickAt = "last_tick_at"
+        case lastCaptureScope = "last_capture_scope"
+        case lastCaptureActivityClass = "last_capture_activity_class"
+        case lastCaptureAt = "last_capture_at"
+    }
+}
+
+struct ControlHarnessGatewayMetricsSnapshot: Codable, Equatable {
+    let request: ControlHarnessDurationMetricsSnapshot
+    let streamLifetime: ControlHarnessDurationMetricsSnapshot
+    let totalRequests: Int
+    let openStreams: Int
+    let totalStreamsStarted: Int
+    let totalStreamsClosed: Int
+    let requestCounts: [String: Int]
+    let requestTransportCounts: [String: Int]
+    let streamTransportCounts: [String: Int]
+    let streamCloseReasons: [String: Int]
+
+    enum CodingKeys: String, CodingKey {
+        case request
+        case streamLifetime = "stream_lifetime"
+        case totalRequests = "total_requests"
+        case openStreams = "open_streams"
+        case totalStreamsStarted = "total_streams_started"
+        case totalStreamsClosed = "total_streams_closed"
+        case requestCounts = "request_counts"
+        case requestTransportCounts = "request_transport_counts"
+        case streamTransportCounts = "stream_transport_counts"
+        case streamCloseReasons = "stream_close_reasons"
+    }
+}
+
+struct ControlHarnessPerformanceSnapshot: Codable, Equatable {
+    let generatedAt: String
+    let sampler: ControlHarnessSamplerMetricsSnapshot
+    let gateway: ControlHarnessGatewayMetricsSnapshot
+
+    enum CodingKeys: String, CodingKey {
+        case generatedAt = "generated_at"
+        case sampler
+        case gateway
+    }
+
+    static func empty(now: Date = Date()) -> Self {
+        let emptyDuration = ControlHarnessDurationMetricsSnapshot(
+            count: 0,
+            averageMs: 0,
+            p95Ms: 0,
+            maxMs: 0
+        )
+        return Self(
+            generatedAt: ControlHarnessPerformanceMonitor.timestamp(now),
+            sampler: .init(
+                tick: emptyDuration,
+                capture: emptyDuration,
+                lastTargetCount: 0,
+                lastRefreshedCount: 0,
+                lastTickAt: nil,
+                lastCaptureScope: nil,
+                lastCaptureActivityClass: nil,
+                lastCaptureAt: nil
+            ),
+            gateway: .init(
+                request: emptyDuration,
+                streamLifetime: emptyDuration,
+                totalRequests: 0,
+                openStreams: 0,
+                totalStreamsStarted: 0,
+                totalStreamsClosed: 0,
+                requestCounts: [:],
+                requestTransportCounts: [:],
+                streamTransportCounts: [:],
+                streamCloseReasons: [:]
+            )
+        )
+    }
+}
+
+final class ControlHarnessPerformanceMonitor {
+    private struct RollingDurationWindow {
+        let maxSamples: Int
+        var samples: [Double] = []
+
+        mutating func record(_ value: Double) {
+            guard value.isFinite else { return }
+            samples.append(value)
+            if samples.count > maxSamples {
+                samples.removeFirst(samples.count - maxSamples)
+            }
+        }
+
+        func snapshot() -> ControlHarnessDurationMetricsSnapshot {
+            guard !samples.isEmpty else {
+                return .init(count: 0, averageMs: 0, p95Ms: 0, maxMs: 0)
+            }
+
+            let sorted = samples.sorted()
+            let sum = samples.reduce(0, +)
+            let p95Index = min(
+                max(Int(ceil(Double(sorted.count) * 0.95)) - 1, 0),
+                sorted.count - 1
+            )
+
+            return .init(
+                count: sorted.count,
+                averageMs: sum / Double(sorted.count),
+                p95Ms: sorted[p95Index],
+                maxMs: sorted.last ?? 0
+            )
+        }
+    }
+
+    private let queue = DispatchQueue(
+        label: "com.leongong.ghodex.control-harness.performance-monitor",
+        qos: .utility
+    )
+    private let now: () -> Date
+
+    private var samplerTick = RollingDurationWindow(maxSamples: 64)
+    private var samplerCapture = RollingDurationWindow(maxSamples: 128)
+    private var gatewayRequest = RollingDurationWindow(maxSamples: 128)
+    private var gatewayStreamLifetime = RollingDurationWindow(maxSamples: 64)
+
+    private var lastSamplerTargetCount = 0
+    private var lastSamplerRefreshedCount = 0
+    private var lastSamplerTickAt: Date?
+    private var lastCaptureScope: String?
+    private var lastCaptureActivityClass: String?
+    private var lastCaptureAt: Date?
+
+    private var totalRequests = 0
+    private var openStreams = 0
+    private var totalStreamsStarted = 0
+    private var totalStreamsClosed = 0
+    private var requestCounts: [String: Int] = [:]
+    private var requestTransportCounts: [String: Int] = [:]
+    private var streamTransportCounts: [String: Int] = [:]
+    private var streamCloseReasons: [String: Int] = [:]
+
+    init(
+        windowSize: Int = 128,
+        now: @escaping () -> Date = Date.init
+    ) {
+        self.now = now
+        self.samplerTick = RollingDurationWindow(maxSamples: max(8, windowSize / 2))
+        self.samplerCapture = RollingDurationWindow(maxSamples: max(8, windowSize))
+        self.gatewayRequest = RollingDurationWindow(maxSamples: max(8, windowSize))
+        self.gatewayStreamLifetime = RollingDurationWindow(maxSamples: max(8, windowSize / 2))
+    }
+
+    func recordSamplerTick(
+        targetCount: Int,
+        refreshedCount: Int,
+        durationMs: Double,
+        at: Date = Date()
+    ) {
+        queue.sync {
+            samplerTick.record(durationMs)
+            lastSamplerTargetCount = targetCount
+            lastSamplerRefreshedCount = refreshedCount
+            lastSamplerTickAt = at
+        }
+    }
+
+    func recordSamplerCapture(
+        scope: String,
+        activityClass: ControlHarnessSamplingActivityClass,
+        durationMs: Double,
+        at: Date = Date()
+    ) {
+        queue.sync {
+            samplerCapture.record(durationMs)
+            lastCaptureScope = scope
+            lastCaptureActivityClass = activityClass.rawValue
+            lastCaptureAt = at
+        }
+    }
+
+    func recordGatewayRequest(
+        command: String,
+        transport: String,
+        durationMs: Double,
+        at _: Date = Date()
+    ) {
+        queue.sync {
+            gatewayRequest.record(durationMs)
+            totalRequests += 1
+            requestCounts[command, default: 0] += 1
+            requestTransportCounts[transport, default: 0] += 1
+        }
+    }
+
+    func recordGatewayStreamOpened(transport: String) {
+        queue.sync {
+            openStreams += 1
+            totalStreamsStarted += 1
+            streamTransportCounts[transport, default: 0] += 1
+        }
+    }
+
+    func recordGatewayStreamClosed(
+        transport _: String,
+        reason: String,
+        durationMs: Double,
+        at _: Date = Date()
+    ) {
+        queue.sync {
+            gatewayStreamLifetime.record(durationMs)
+            openStreams = max(0, openStreams - 1)
+            totalStreamsClosed += 1
+            streamCloseReasons[reason, default: 0] += 1
+        }
+    }
+
+    func snapshot(now: Date? = nil) -> ControlHarnessPerformanceSnapshot {
+        queue.sync {
+            ControlHarnessPerformanceSnapshot(
+                generatedAt: Self.timestamp(now ?? self.now()),
+                sampler: .init(
+                    tick: samplerTick.snapshot(),
+                    capture: samplerCapture.snapshot(),
+                    lastTargetCount: lastSamplerTargetCount,
+                    lastRefreshedCount: lastSamplerRefreshedCount,
+                    lastTickAt: lastSamplerTickAt.map(Self.timestamp),
+                    lastCaptureScope: lastCaptureScope,
+                    lastCaptureActivityClass: lastCaptureActivityClass,
+                    lastCaptureAt: lastCaptureAt.map(Self.timestamp)
+                ),
+                gateway: .init(
+                    request: gatewayRequest.snapshot(),
+                    streamLifetime: gatewayStreamLifetime.snapshot(),
+                    totalRequests: totalRequests,
+                    openStreams: openStreams,
+                    totalStreamsStarted: totalStreamsStarted,
+                    totalStreamsClosed: totalStreamsClosed,
+                    requestCounts: requestCounts,
+                    requestTransportCounts: requestTransportCounts,
+                    streamTransportCounts: streamTransportCounts,
+                    streamCloseReasons: streamCloseReasons
+                )
+            )
+        }
+    }
+
+    static func timestamp(_ date: Date) -> String {
+        ControlHarnessEvent.timestampFormatter.string(from: date)
     }
 }

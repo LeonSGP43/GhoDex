@@ -1713,6 +1713,86 @@ struct ControlHarnessTests {
         #expect(envelope.errorCode == "unauthorized")
     }
 
+    @Test func gatewayMetricsReturnsPerformanceSnapshot() async throws {
+        let bundleID = "ghdx.tests.gateway-metrics"
+        let performanceMonitor = ControlHarnessPerformanceMonitor()
+        performanceMonitor.recordSamplerTick(
+            targetCount: 3,
+            refreshedCount: 2,
+            durationMs: 4.5,
+            at: Date(timeIntervalSince1970: 1_710_000_000)
+        )
+        performanceMonitor.recordSamplerCapture(
+            scope: "visible",
+            activityClass: .observed,
+            durationMs: 1.25,
+            at: Date(timeIntervalSince1970: 1_710_000_010)
+        )
+        performanceMonitor.recordGatewayRequest(
+            command: "snapshot",
+            transport: "tcp",
+            durationMs: 2.75
+        )
+        performanceMonitor.recordGatewayStreamOpened(transport: "tcp")
+        performanceMonitor.recordGatewayStreamClosed(
+            transport: "tcp",
+            reason: "client_disconnect",
+            durationMs: 12.5
+        )
+
+        let gateway = await MainActor.run {
+            ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: 0,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096
+                ),
+                performanceMonitor: performanceMonitor
+            )
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+
+        let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+        defer { Darwin.close(clientFD) }
+
+        try ControlHarnessSocketSupport.writeAll(
+            Data(#"{"request_id":"req-gateway-metrics","command":"gateway.metrics"}"#.utf8),
+            to: clientFD
+        )
+        guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+
+        let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
+        let envelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessPerformanceSnapshot>.self,
+            from: responseData
+        )
+        #expect(envelope.status == "ok")
+
+        let snapshot = try #require(envelope.result)
+        #expect(snapshot.sampler.tick.count == 1)
+        #expect(snapshot.sampler.capture.count == 1)
+        #expect(snapshot.sampler.lastTargetCount == 3)
+        #expect(snapshot.sampler.lastRefreshedCount == 2)
+        #expect(snapshot.sampler.lastCaptureScope == "visible")
+        #expect(snapshot.sampler.lastCaptureActivityClass == "observed")
+        #expect(snapshot.gateway.totalRequests == 1)
+        #expect(snapshot.gateway.requestCounts["snapshot"] == 1)
+        #expect(snapshot.gateway.requestTransportCounts["tcp"] == 1)
+        #expect(snapshot.gateway.totalStreamsStarted == 1)
+        #expect(snapshot.gateway.totalStreamsClosed == 1)
+        #expect(snapshot.gateway.openStreams == 0)
+        #expect(snapshot.gateway.streamTransportCounts["tcp"] == 1)
+        #expect(snapshot.gateway.streamCloseReasons["client_disconnect"] == 1)
+    }
+
     @Test func gatewayPairingLifecycleIssuesRotatesAndRevokesTokens() async throws {
         let bundleID = "ghdx.tests.gateway-pairing-lifecycle"
         let tempDirectory = FileManager.default.temporaryDirectory

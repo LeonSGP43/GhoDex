@@ -52,6 +52,7 @@ final class ControlHarnessReadSampler {
     private let sampleStore: ControlHarnessSampleStore
     private let policy: ControlHarnessSamplingPolicy
     private let inventoryProvider: @MainActor () -> [ControlHarnessSamplerTarget]
+    private let performanceMonitor: ControlHarnessPerformanceMonitor?
     private let tickInterval: TimeInterval
     private let logger: Logger
 
@@ -62,11 +63,13 @@ final class ControlHarnessReadSampler {
         sampleStore: ControlHarnessSampleStore,
         policy: ControlHarnessSamplingPolicy = .default,
         tickInterval: TimeInterval = 0.125,
+        performanceMonitor: ControlHarnessPerformanceMonitor? = nil,
         inventoryProvider: @escaping @MainActor () -> [ControlHarnessSamplerTarget]
     ) {
         self.sampleStore = sampleStore
         self.policy = policy
         self.inventoryProvider = inventoryProvider
+        self.performanceMonitor = performanceMonitor
         self.tickInterval = tickInterval
         self.logger = Logger(subsystem: bundleID, category: "ControlHarnessReadSampler")
     }
@@ -92,10 +95,25 @@ final class ControlHarnessReadSampler {
     }
 
     func refreshAllNow(now: Date = Date()) {
-        for target in inventoryProvider() {
-            refreshIfDue(target: target, scope: "visible", now: now)
-            refreshIfDue(target: target, scope: "screen", now: now)
+        let started = DispatchTime.now()
+        let targets = inventoryProvider()
+        var refreshedCount = 0
+
+        for target in targets {
+            if refreshIfDue(target: target, scope: "visible", now: now) {
+                refreshedCount += 1
+            }
+            if refreshIfDue(target: target, scope: "screen", now: now) {
+                refreshedCount += 1
+            }
         }
+
+        performanceMonitor?.recordSamplerTick(
+            targetCount: targets.count,
+            refreshedCount: refreshedCount,
+            durationMs: Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000,
+            at: now
+        )
     }
 
     @discardableResult
@@ -106,6 +124,7 @@ final class ControlHarnessReadSampler {
         activityClass: ControlHarnessSamplingActivityClass,
         now: Date = Date()
     ) -> ControlHarnessTerminalSample {
+        let started = DispatchTime.now()
         let read: (content: String, cacheAgeMs: Int)
         switch scope {
         case "visible":
@@ -116,7 +135,7 @@ final class ControlHarnessReadSampler {
             read = ("", 0)
         }
 
-        return sampleStore.store(
+        let sample = sampleStore.store(
             terminalID: terminalID,
             scope: scope,
             content: read.content,
@@ -126,13 +145,22 @@ final class ControlHarnessReadSampler {
             activityClass: activityClass,
             forcedFresh: true
         )
+
+        performanceMonitor?.recordSamplerCapture(
+            scope: scope,
+            activityClass: activityClass,
+            durationMs: Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000,
+            at: now
+        )
+
+        return sample
     }
 
     private func refreshIfDue(
         target: ControlHarnessSamplerTarget,
         scope: String,
         now: Date
-    ) {
+    ) -> Bool {
         let interval = policy.interval(for: scope, activityClass: target.activityClass)
         guard sampleStore.isDue(
             terminalID: target.terminalID,
@@ -140,7 +168,7 @@ final class ControlHarnessReadSampler {
             interval: interval,
             now: now
         ) else {
-            return
+            return false
         }
 
         _ = captureFreshSample(
@@ -150,5 +178,7 @@ final class ControlHarnessReadSampler {
             activityClass: target.activityClass,
             now: now
         )
+
+        return true
     }
 }

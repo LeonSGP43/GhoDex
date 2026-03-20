@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(control): expose gateway performance snapshots
+
+- What changed: Added a lightweight `ControlHarnessPerformanceMonitor` that records rolling sampler tick/capture timings plus gateway request/stream timings and counters. `ControlHarnessReadSampler` now reports tick size, refreshed sample count, and fresh-capture durations; `ControlHarnessGateway` records per-transport request timings, active stream counts, stream lifetimes, and exposes the current snapshot through a local-only `gateway.metrics` command on both TCP and WebSocket transports. `AppDelegate` wires the shared monitor into the sampler and gateway, and the control-harness tests now verify that `gateway.metrics` returns structured sampler/gateway stats.
+- Why: The Android remote-control blueprint already defines hard acceptance targets for CPU, main-thread cost, and update latency, but the implementation still had no durable way to inspect sampler/gateway behavior without ad hoc logging or profiler sessions.
+- Impact: Acceptance and local diagnosis can now query a stable JSON snapshot of the remote-control hot path before adding more product surface, which makes it possible to baseline sampler cadence, request churn, and long-lived stream behavior without instrumenting the app by hand each time.
+- Verification: `git diff --check`; `zig build test -Demit-macos-app=false -Dtest-filter=gatewayStopClosesLiveTcpSubscription` still surfaces an unrelated repository failure in `terminal.search.Thread.test_0`, so the direct evidence for this change is the new `gatewayMetricsReturnsPerformanceSnapshot` regression plus local code-path review.
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessGateway.swift`, `macos/Sources/Features/Control Harness/ControlHarnessReadSampler.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Tests/ControlHarness/ControlHarnessTests.swift`, `CHANGELOG.md`
+- Decision trail: Start with an in-process rolling snapshot instead of heavier signpost-only or persistent-metrics infrastructure. The immediate need is a stable acceptance/debugging surface for the new remote gateway path, not a full telemetry backend.
+
 ### fix(control): route gateway auth commands through the gateway layer
 
 - What changed: Taught the TCP and WebSocket request paths in `ControlHarnessGateway` to resolve `gateway.*` commands through `handleGatewayCommand` before falling back to the shared control-core request handler.
