@@ -28,6 +28,9 @@ Preferred for long-lived local sessions.
 - CLI flag: `--transport=ipc`
 - CLI default: `--transport=auto` tries IPC first, then falls back to
   AppleScript
+- Response buffering is capped at 1 MiB per connection
+- A client that stops draining large responses can be disconnected without
+  affecting other active IPC sessions
 
 ### AppleScript Adapter
 
@@ -300,6 +303,9 @@ end tell
 - treat `resultJSON` as a nested JSON string, not as a pre-decoded object
 - subscribe once and drain incrementally instead of polling one-off inspection
   commands when you need passive page visibility
+- keep draining long-lived IPC sessions; once unread response bytes on one
+  connection exceed 1 MiB, GhoDex closes only that connection as backpressure
+  protection
 - prefer the IPC transport for long-lived local sessions; use AppleScript as a
   compatibility fallback
 - treat unknown event kinds and extra payload keys as forward-compatible data,

@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### docs(browser): document IPC backpressure limits
+
+- What changed: Added the Browser IPC per-connection backpressure contract to `browser-tab-command-protocol.md`, including the 1 MiB unread-response cap and the guarantee that only the overloaded connection is dropped when that cap is exceeded.
+- Why: Opus acceptance review cleared the IPC architecture blocker, but external clients still needed one durable protocol note explaining why a slow reader can be disconnected and how that limit behaves in long-lived sessions.
+- Impact: Future Browser control clients can now design their drain loops around an explicit response-buffer limit instead of discovering the behavior by trial and error.
+- Verification: `python3 - <<'PY'\nfrom pathlib import Path\ntext = Path('browser-tab-command-protocol.md').read_text()\nassert '1 MiB per connection' in text\nassert 'stops draining large responses' in text\nprint('DOC OK')\nPY`
+- Files: `browser-tab-command-protocol.md`, `CHANGELOG.md`
+
 ### fix(browser): decouple IPC request execution from connection I/O
 
 - What changed: Reworked the Browser IPC socket service so each client connection now owns its own socket I/O queue and buffered write path, while request execution hops asynchronously back through the existing Browser command protocol instead of blocking the shared listener queue. Slow readers now accumulate response bytes on a connection-local send queue with a hard backpressure limit instead of stalling unrelated clients.
