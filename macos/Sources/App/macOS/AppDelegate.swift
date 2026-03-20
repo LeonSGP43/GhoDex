@@ -170,6 +170,8 @@ class AppDelegate: NSObject,
 
     @MainActor lazy var controlHarnessSampleStore = ControlHarnessSampleStore()
 
+    lazy var controlHarnessPerformanceMonitor = ControlHarnessPerformanceMonitor()
+
     @MainActor lazy var controlHarnessCore = ControlHarnessCore(
         appDelegate: self,
         auditLogger: controlHarnessAuditLogger,
@@ -259,6 +261,7 @@ class AppDelegate: NSObject,
     @MainActor lazy var controlHarnessReadSampler = ControlHarnessReadSampler(
         bundleID: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
         sampleStore: controlHarnessSampleStore,
+        performanceMonitor: controlHarnessPerformanceMonitor,
         inventoryProvider: { [weak self] in
             self?.controlHarnessSamplingTargets() ?? []
         }
@@ -288,7 +291,8 @@ class AppDelegate: NSObject,
                 )
             }
             return self.controlHarnessGatewayAccessDecision(request)
-        }
+        },
+        performanceMonitor: controlHarnessPerformanceMonitor
     )
 
     @MainActor lazy var sshConnectionsController = SSHConnectionsController(
