@@ -107,6 +107,10 @@ final class ControlHarnessGateway {
         case deny(ControlHarnessResponse)
     }
 
+    private struct ActiveStream {
+        let close: @Sendable () -> Void
+    }
+
     private let bundleID: String
     private let authManager: ControlHarnessAuth?
     private let requestHandler: (@MainActor (ControlHarnessRequest, String) -> ControlHarnessServiceReply)?
@@ -114,6 +118,10 @@ final class ControlHarnessGateway {
     private let rateLimiter: ControlHarnessGatewayRateLimiter
     private let sessionRegistry: ControlHarnessGatewaySessionRegistry
     private let logger: Logger
+    private let lifecycleQueue = DispatchQueue(
+        label: "com.leongong.ghodex.control-harness.gateway.lifecycle",
+        qos: .utility
+    )
     private let acceptQueue = DispatchQueue(
         label: "com.leongong.ghodex.control-harness.gateway.accept",
         qos: .userInitiated
@@ -139,6 +147,7 @@ final class ControlHarnessGateway {
 
     private var listenerFD: Int32 = -1
     private var acceptSource: DispatchSourceRead?
+    private var activeStreams: [UUID: ActiveStream] = [:]
 
     init(
         bundleID: String,
@@ -235,6 +244,15 @@ final class ControlHarnessGateway {
     }
 
     func stop() {
+        let activeStreams = lifecycleQueue.sync {
+            let streams = Array(self.activeStreams.values)
+            self.activeStreams.removeAll()
+            return streams
+        }
+        for stream in activeStreams {
+            stream.close()
+        }
+
         if let acceptSource {
             self.acceptSource = nil
             acceptSource.cancel()
@@ -682,6 +700,28 @@ final class ControlHarnessGateway {
         try operation()
     }
 
+    private func registerActiveStream(
+        clientSession: ControlHarnessGatewayClientSession,
+        clientFD: Int32
+    ) -> UUID {
+        let streamID = UUID()
+        lifecycleQueue.sync {
+            activeStreams[streamID] = ActiveStream(
+                close: {
+                    clientSession.close()
+                    _ = Darwin.shutdown(clientFD, SHUT_RDWR)
+                }
+            )
+        }
+        return streamID
+    }
+
+    private func unregisterActiveStream(_ streamID: UUID) {
+        lifecycleQueue.sync {
+            activeStreams.removeValue(forKey: streamID)
+        }
+    }
+
     private func rateLimitIdentity(
         for request: ControlHarnessRequest,
         peerDescription: String
@@ -698,7 +738,9 @@ final class ControlHarnessGateway {
     ) throws {
         let clientSession = makeClientSession()
         let attachment = attachSubscription(envelope, to: clientSession)
+        let activeStreamID = registerActiveStream(clientSession: clientSession, clientFD: clientFD)
         defer {
+            unregisterActiveStream(activeStreamID)
             attachment.close()
             clientSession.close()
         }
@@ -730,7 +772,9 @@ final class ControlHarnessGateway {
     ) throws {
         let clientSession = makeClientSession()
         let attachment = attachSubscription(envelope, to: clientSession)
+        let activeStreamID = registerActiveStream(clientSession: clientSession, clientFD: clientFD)
         defer {
+            unregisterActiveStream(activeStreamID)
             attachment.close()
             clientSession.close()
         }

@@ -2444,6 +2444,62 @@ struct ControlHarnessTests {
         #expect(live.requestID == "req-ws-live")
     }
 
+    @Test func gatewayStopClosesLiveTcpSubscription() async throws {
+        let bundleID = "ghdx.tests.gateway-stop-stream"
+        let (eventHub, gateway) = await MainActor.run {
+            let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
+            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let core = ControlHarnessCore(
+                appDelegate: nil,
+                auditLogger: auditLogger,
+                eventHub: eventHub,
+                generations: ControlHarnessGenerationTracker(),
+                idempotencyStore: ControlHarnessIdempotencyStore(),
+                readStore: ControlHarnessTerminalReadStore(),
+                readAfterWriteStore: ControlHarnessReadAfterWriteStore(),
+                sampleStore: ControlHarnessSampleStore()
+            )
+            let gateway = ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(isEnabled: true, listenHost: "127.0.0.1", listenPort: 0, maxBufferedEvents: 16, maxBufferedBytes: 4096),
+                requestHandler: { request, socketPath in
+                    if request.command == "events.subscribe" {
+                        return .subscription(core.handleSubscription(request, socketPath: socketPath))
+                    }
+                    return .single(core.handle(request, socketPath: socketPath))
+                }
+            )
+            return (eventHub, gateway)
+        }
+
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+        let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+        defer { Darwin.close(clientFD) }
+
+        let request = Data(#"{"request_id":"req-stop-subscribe","command":"events.subscribe","since_sequence":0,"event_limit":2}"#.utf8)
+        try ControlHarnessSocketSupport.writeAll(request, to: clientFD)
+        guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+
+        let decoder = JSONDecoder()
+        let ackLine = try ControlHarnessSocketSupport.readLine(from: clientFD)
+        let ack = try decoder.decode(ControlHarnessSubscriptionAckEnvelope.self, from: ackLine)
+        #expect(ack.status == "ok")
+
+        gateway.stop()
+        _ = eventHub.emit(
+            event: "terminal.input.sent",
+            requestID: "req-stop-release",
+            resource: .init(type: "terminal", id: "terminal-1", generation: 1),
+            payload: AnyEncodable(["text_length": 1])
+        )
+
+        let postStopRead = try ControlHarnessSocketSupport.readLine(from: clientFD)
+        #expect(postStopRead.isEmpty)
+    }
+
     @Test func eventsSubscribeStreamsReplayAndLiveEvents() async throws {
         let suffix = UUID().uuidString
             .replacingOccurrences(of: "-", with: "")
