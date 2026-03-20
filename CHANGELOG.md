@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(control): route gateway auth commands through the gateway layer
+
+- What changed: Taught the TCP and WebSocket request paths in `ControlHarnessGateway` to resolve `gateway.*` commands through `handleGatewayCommand` before falling back to the shared control-core request handler.
+- Why: The pairing/token lifecycle implementation already existed in the gateway, but the main request path was still dispatching every authorized request into `requestHandler`. That meant `gateway.pairing.*` and `gateway.token.*` commands could bypass their intended transport-local implementation and depend on unrelated downstream handlers.
+- Impact: Pairing begin/exchange and token info/rotate/revoke now execute at the correct boundary on both transports, and gateway-only auth flows no longer depend on the desktop control-core handler being able to understand gateway management commands.
+- Verification: `git diff --check`; the existing `gatewayPairingLifecycleIssuesRotatesAndRevokesTokens` regression already asserts these commands do not increment the downstream request-handler call count, while current `zig build test` is still blocked by an unrelated repo failure in `terminal.search.Thread.test_0`.
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessGateway.swift`, `CHANGELOG.md`
+- Decision trail: Keep gateway management commands transport-local. They are part of network/session management, not terminal control, so the gateway should intercept them before any core request dispatch occurs.
+
 ### fix(control): close live gateway streams on stop
 
 - What changed: Added explicit active-stream tracking inside `ControlHarnessGateway` so every live TCP/WebSocket subscription registers a close hook, `stop()` snapshots and closes those hooks before tearing down the listener, and long-lived stream handlers unregister themselves on exit. Added a regression test that starts a live TCP `events.subscribe` stream, stops the gateway, and asserts the client observes EOF instead of waiting forever.

@@ -319,7 +319,8 @@ final class ControlHarnessGateway {
                         try Self.writeAll(try encodeResponse(response), to: clientFD)
                     }
                 ) {
-                    let reply = callRequestHandler(request)
+                    let reply = handleGatewayCommand(request).map(ControlHarnessServiceReply.single)
+                        ?? callRequestHandler(request)
                     switch reply {
                     case .single(let response):
                         try Self.writeAll(try encodeResponse(response), to: clientFD)
@@ -366,7 +367,8 @@ final class ControlHarnessGateway {
                     try Self.writeAll(try encodeWebSocketResponse(response), to: clientFD)
                 }
             ) {
-                let reply = callRequestHandler(request)
+                let reply = handleGatewayCommand(request).map(ControlHarnessServiceReply.single)
+                    ?? callRequestHandler(request)
                 switch reply {
                 case .single(let response):
                     try Self.writeAll(try encodeWebSocketResponse(response), to: clientFD)
