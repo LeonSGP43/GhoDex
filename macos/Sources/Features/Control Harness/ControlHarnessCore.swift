@@ -18,6 +18,7 @@ struct AnyEncodable: Encodable {
 struct ControlHarnessRequest: Codable {
     let requestID: String
     let protocolVersion: String?
+    let authToken: String?
     let command: String
     let date: String?
     let tabID: String?
@@ -46,10 +47,13 @@ struct ControlHarnessRequest: Codable {
     let maxLines: Int?
     let cursor: String?
     let readAfterWriteID: String?
+    let pairingCode: String? = nil
+    let requestedScopes: [String]? = nil
 
     enum CodingKeys: String, CodingKey {
         case requestID = "request_id"
         case protocolVersion = "protocol_version"
+        case authToken = "auth_token"
         case command
         case date
         case tabID = "tab_id"
@@ -78,6 +82,8 @@ struct ControlHarnessRequest: Codable {
         case maxLines = "max_lines"
         case cursor
         case readAfterWriteID = "read_after_write_id"
+        case pairingCode = "pairing_code"
+        case requestedScopes = "requested_scopes"
     }
 }
 
@@ -532,6 +538,10 @@ final class ControlHarnessCore {
     private let idempotencyStore: ControlHarnessIdempotencyStore
     private let readStore: ControlHarnessTerminalReadStore
     private let readAfterWriteStore: ControlHarnessReadAfterWriteStore
+    private let sampleStore: ControlHarnessSampleStore
+    private let surfaceResolver: @MainActor (UUID) -> (any ControlHarnessReadableSurface)?
+    private let samplingActivityResolver: @MainActor (UUID) -> ControlHarnessSamplingActivityClass?
+    private let now: @MainActor () -> Date
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
         category: "ControlHarnessCore"
@@ -539,7 +549,8 @@ final class ControlHarnessCore {
 
     convenience init(
         appDelegate: AppDelegate?,
-        auditLogger: ControlHarnessAuditLogger
+        auditLogger: ControlHarnessAuditLogger,
+        sampleStore: ControlHarnessSampleStore = ControlHarnessSampleStore()
     ) {
         let bundleID = Bundle.main.bundleIdentifier ?? "com.leongong.ghodex"
         self.init(
@@ -549,7 +560,8 @@ final class ControlHarnessCore {
             generations: ControlHarnessGenerationTracker(),
             idempotencyStore: ControlHarnessIdempotencyStore(),
             readStore: ControlHarnessTerminalReadStore(),
-            readAfterWriteStore: ControlHarnessReadAfterWriteStore()
+            readAfterWriteStore: ControlHarnessReadAfterWriteStore(),
+            sampleStore: sampleStore
         )
     }
 
@@ -560,7 +572,11 @@ final class ControlHarnessCore {
         generations: ControlHarnessGenerationTracker,
         idempotencyStore: ControlHarnessIdempotencyStore,
         readStore: ControlHarnessTerminalReadStore,
-        readAfterWriteStore: ControlHarnessReadAfterWriteStore
+        readAfterWriteStore: ControlHarnessReadAfterWriteStore,
+        sampleStore: ControlHarnessSampleStore,
+        surfaceResolver: (@MainActor (UUID) -> (any ControlHarnessReadableSurface)?)? = nil,
+        samplingActivityResolver: (@MainActor (UUID) -> ControlHarnessSamplingActivityClass?)? = nil,
+        now: @escaping @MainActor () -> Date = Date.init
     ) {
         self.appDelegate = appDelegate
         self.auditLogger = auditLogger
@@ -569,6 +585,14 @@ final class ControlHarnessCore {
         self.idempotencyStore = idempotencyStore
         self.readStore = readStore
         self.readAfterWriteStore = readAfterWriteStore
+        self.sampleStore = sampleStore
+        self.surfaceResolver = surfaceResolver ?? { [weak appDelegate] terminalID in
+            appDelegate?.controlHarnessReadableSurface(for: terminalID)
+        }
+        self.samplingActivityResolver = samplingActivityResolver ?? { [weak appDelegate] terminalID in
+            appDelegate?.controlHarnessSamplingActivityClass(for: terminalID)
+        }
+        self.now = now
     }
 
     func handleSubscription(
@@ -1084,6 +1108,7 @@ final class ControlHarnessCore {
             resource: .init(type: "terminal", id: terminalIDString, generation: generation),
             payload: AnyEncodable(["text_length": text.count])
         )
+        sampleStore.removeTerminal(terminalIDString)
         let writeID = Self.writeID(forSequence: sequence)
         readAfterWriteStore.recordTextWrite(
             terminalID: terminalIDString,
@@ -1128,6 +1153,7 @@ final class ControlHarnessCore {
             resource: .init(type: "terminal", id: terminalIDString, generation: generation),
             payload: AnyEncodable(["command_length": commandText.count])
         )
+        sampleStore.removeTerminal(terminalIDString)
         let writeID = Self.writeID(forSequence: sequence)
         readAfterWriteStore.recordCommandWrite(
             terminalID: terminalIDString,
@@ -1157,30 +1183,30 @@ final class ControlHarnessCore {
             resourceID: terminalIDString,
             currentGeneration: generation
         )
-        guard let appDelegate else {
-            throw ControlHarnessCoreError.appUnavailable
-        }
-        guard let surface = appDelegate.findSurface(forUUID: terminalID) else {
+        guard let surface = surfaceResolver(terminalID) else {
+            if appDelegate == nil {
+                throw ControlHarnessCoreError.appUnavailable
+            }
             throw ControlHarnessCoreError.terminalNotFound(terminalID.uuidString)
         }
 
         let scope = request.scope ?? "visible"
         let mode = request.mode ?? "snapshot"
-        let refresh = request.readAfterWriteID != nil
-        let content: String
-        let consistency: String
-        let cacheAgeMs: Int
+        let observedWriteID = request.readAfterWriteID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let read = try resolveTerminalRead(
+            terminalUUID: terminalID,
+            terminalID: terminalIDString,
+            scope: scope,
+            surface: surface,
+            forceFresh: observedWriteID?.isEmpty == false
+        )
+        let content = read.content
+        let consistency = read.consistency
+        let cacheAgeMs = read.cacheAgeMs
+
         switch scope {
-        case "visible":
-            let read = surface.aiManagerVisibleText(refresh: refresh)
-            content = read.content
-            cacheAgeMs = read.cacheAgeMs
-            consistency = refresh ? "fresh_visible" : "cached_visible"
-        case "screen":
-            let read = surface.aiManagerScreenText(refresh: refresh)
-            content = read.content
-            cacheAgeMs = read.cacheAgeMs
-            consistency = refresh ? "fresh_screen" : "cached_screen"
+        case "visible", "screen":
+            break
         default:
             throw ControlHarnessCoreError.invalidArgument("Unsupported read scope: \(scope)")
         }
@@ -1218,7 +1244,6 @@ final class ControlHarnessCore {
             contentKind = "snapshot"
         }
 
-        let observedWriteID = request.readAfterWriteID?.trimmingCharacters(in: .whitespacesAndNewlines)
         let readAfterReady: Bool?
         if let observedWriteID, !observedWriteID.isEmpty {
             let targetSequence = try Self.parseWriteID(observedWriteID)
@@ -1242,7 +1267,7 @@ final class ControlHarnessCore {
             mode: mode,
             contentKind: contentKind,
             consistency: consistency,
-            capturedAt: Self.iso8601(Date()),
+            capturedAt: Self.iso8601(read.capturedAt),
             cacheAgeMs: cacheAgeMs,
             lastSequence: eventHub.currentSequence(),
             frameID: frame.frameID,
@@ -1277,6 +1302,7 @@ final class ControlHarnessCore {
         guard appDelegate.controlHarnessCloseTerminal(terminalID) else {
             throw ControlHarnessCoreError.terminalNotFound(terminalID.uuidString)
         }
+        sampleStore.removeTerminal(terminalIDString)
         let generation = generations.advanceTerminalGeneration(for: terminalIDString)
         let sequence = eventHub.emit(
             event: "terminal.closed",
@@ -1291,6 +1317,57 @@ final class ControlHarnessCore {
             operation: "close-terminal",
             acknowledged: true,
             writeID: nil
+        )
+    }
+
+    private func resolveTerminalRead(
+        terminalUUID: UUID,
+        terminalID: String,
+        scope: String,
+        surface: any ControlHarnessReadableSurface,
+        forceFresh: Bool
+    ) throws -> (content: String, consistency: String, cacheAgeMs: Int, capturedAt: Date) {
+        let currentTime = now()
+        let activityClass = samplingActivityResolver(terminalUUID)
+            ?? sampleStore.sample(for: terminalID, scope: scope)?.activityClass
+            ?? .observed
+
+        if !forceFresh,
+           let sample = sampleStore.sample(for: terminalID, scope: scope),
+           sampleStore.isFresh(sample, activityClass: activityClass, now: currentTime) {
+            return (
+                content: sample.content,
+                consistency: sample.consistency,
+                cacheAgeMs: sample.cacheAgeMs,
+                capturedAt: sample.capturedAt
+            )
+        }
+
+        let read: (content: String, cacheAgeMs: Int)
+        switch scope {
+        case "visible":
+            read = surface.controlHarnessReadVisibleText(refresh: true)
+        case "screen":
+            read = surface.controlHarnessReadScreenText(refresh: true)
+        default:
+            throw ControlHarnessCoreError.invalidArgument("Unsupported read scope: \(scope)")
+        }
+
+        let sample = sampleStore.store(
+            terminalID: terminalID,
+            scope: scope,
+            content: read.content,
+            consistency: "fresh_\(scope)",
+            cacheAgeMs: read.cacheAgeMs,
+            capturedAt: currentTime,
+            activityClass: activityClass,
+            forcedFresh: true
+        )
+        return (
+            content: sample.content,
+            consistency: sample.consistency,
+            cacheAgeMs: sample.cacheAgeMs,
+            capturedAt: sample.capturedAt
         )
     }
 
