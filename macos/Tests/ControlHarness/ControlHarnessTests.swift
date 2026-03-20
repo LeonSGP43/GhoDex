@@ -453,6 +453,7 @@ struct ControlHarnessTests {
         #expect(configuration.maxBufferedEvents == 256)
         #expect(configuration.maxBufferedBytes == 1_048_576)
         #expect(configuration.authToken == nil)
+        #expect(configuration.maxConcurrentSessionsPerIdentity == 2)
         #expect(configuration.maxGlobalRequestsPerMinute == 240)
         #expect(configuration.maxCommandsPerMinute == 60)
         #expect(configuration.maxSnapshotRequestsPerMinute == 30)
@@ -467,6 +468,7 @@ struct ControlHarnessTests {
             "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_BUFFERED_EVENTS": "64",
             "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_BUFFERED_BYTES": "8192",
             "GHODEX_CONTROL_HARNESS_GATEWAY_AUTH_TOKEN": "test-secret",
+            "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_CONCURRENT_SESSIONS_PER_IDENTITY": "3",
             "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_GLOBAL_REQUESTS_PER_MINUTE": "120",
             "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_COMMANDS_PER_MINUTE": "40",
             "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_SNAPSHOT_REQUESTS_PER_MINUTE": "20",
@@ -479,6 +481,7 @@ struct ControlHarnessTests {
         #expect(configuration.maxBufferedEvents == 64)
         #expect(configuration.maxBufferedBytes == 8192)
         #expect(configuration.authToken == "test-secret")
+        #expect(configuration.maxConcurrentSessionsPerIdentity == 3)
         #expect(configuration.maxGlobalRequestsPerMinute == 120)
         #expect(configuration.maxCommandsPerMinute == 40)
         #expect(configuration.maxSnapshotRequestsPerMinute == 20)
@@ -492,6 +495,7 @@ struct ControlHarnessTests {
             "GHODEX_CONTROL_HARNESS_GATEWAY_PORT": "70000",
             "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_BUFFERED_EVENTS": "0",
             "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_BUFFERED_BYTES": "-1",
+            "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_CONCURRENT_SESSIONS_PER_IDENTITY": "0",
             "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_GLOBAL_REQUESTS_PER_MINUTE": "0",
             "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_COMMANDS_PER_MINUTE": "-1",
             "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_SNAPSHOT_REQUESTS_PER_MINUTE": "0",
@@ -503,6 +507,7 @@ struct ControlHarnessTests {
         #expect(configuration.listenPort == 0)
         #expect(configuration.maxBufferedEvents == 1)
         #expect(configuration.maxBufferedBytes == 1)
+        #expect(configuration.maxConcurrentSessionsPerIdentity == 1)
         #expect(configuration.maxGlobalRequestsPerMinute == 1)
         #expect(configuration.maxCommandsPerMinute == 1)
         #expect(configuration.maxSnapshotRequestsPerMinute == 1)
@@ -1842,6 +1847,109 @@ struct ControlHarnessTests {
         #expect(revokedSnapshot.status == "error")
         #expect(revokedSnapshot.errorCode == "unauthorized")
         #expect(callCount.value() == 2)
+    }
+
+    @Test func gatewayRejectsConcurrentSessionsForSamePairedIdentity() async throws {
+        let bundleID = "ghdx.tests.gateway-session-cap"
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
+        let (eventHub, gateway) = await MainActor.run {
+            let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
+            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let core = ControlHarnessCore(
+                appDelegate: nil,
+                auditLogger: auditLogger,
+                eventHub: eventHub,
+                generations: ControlHarnessGenerationTracker(),
+                idempotencyStore: ControlHarnessIdempotencyStore(),
+                readStore: ControlHarnessTerminalReadStore(),
+                readAfterWriteStore: ControlHarnessReadAfterWriteStore(),
+                sampleStore: ControlHarnessSampleStore()
+            )
+            return ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: 0,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096,
+                    authToken: nil,
+                    maxConcurrentSessionsPerIdentity: 1
+                ),
+                authManager: ControlHarnessAuth(
+                    storageURL: storageURL,
+                    configuration: .init(pairingCodeTTLSeconds: 60, tokenTTLSeconds: 300)
+                ),
+                requestHandler: { request, socketPath in
+                    if request.command == "events.subscribe" {
+                        return .subscription(core.handleSubscription(request, socketPath: socketPath))
+                    }
+                    return .single(core.handle(request, socketPath: socketPath))
+                }
+            )
+            return (eventHub, gateway)
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+        let decoder = JSONDecoder()
+
+        func request(_ payload: String) throws -> Data {
+            let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+            defer { Darwin.close(clientFD) }
+            try ControlHarnessSocketSupport.writeAll(Data(payload.utf8), to: clientFD)
+            guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            return try ControlHarnessSocketSupport.readAll(from: clientFD)
+        }
+
+        let beginData = try request(
+            #"{"request_id":"req-cap-begin","command":"gateway.pairing.begin","client":"android-cap","requested_scopes":["observe"]}"#
+        )
+        let begin = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessPairingBeginPayload>.self,
+            from: beginData
+        )
+        let pairingCode = try #require(begin.result?.pairingCode)
+        let exchangeData = try request(
+            #"{"request_id":"req-cap-exchange","command":"gateway.pairing.exchange","pairing_code":"\#(pairingCode)"}"#
+        )
+        let exchange = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessTokenIssuePayload>.self,
+            from: exchangeData
+        )
+        let token = try #require(exchange.result?.token)
+
+        let firstClientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+        let subscribePayload = Data(
+            #"{"request_id":"req-cap-subscribe-1","command":"events.subscribe","auth_token":"\#(token)","since_sequence":0,"event_limit":2}"#.utf8
+        )
+        try ControlHarnessSocketSupport.writeAll(subscribePayload, to: firstClientFD)
+        guard Darwin.shutdown(firstClientFD, SHUT_WR) == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+        let firstAckLine = try ControlHarnessSocketSupport.readLine(from: firstClientFD)
+        let firstAck = try decoder.decode(ControlHarnessSubscriptionAckEnvelope.self, from: firstAckLine)
+        #expect(firstAck.status == "ok")
+
+        let secondResponseData = try request(
+            #"{"request_id":"req-cap-subscribe-2","command":"snapshot","auth_token":"\#(token)"}"#
+        )
+        let secondResponse = try decoder.decode(ControlHarnessResponseEnvelope.self, from: secondResponseData)
+        #expect(secondResponse.status == "error")
+        #expect(secondResponse.errorCode == "session_limit_exceeded")
+
+        Darwin.close(firstClientFD)
+        _ = eventHub.emit(
+            event: "terminal.input.sent",
+            requestID: "req-cap-release",
+            resource: .init(type: "terminal", id: "terminal-1", generation: 2),
+            payload: AnyEncodable(["text_length": 1])
+        )
     }
 
     @Test func gatewayTcpRateLimitsSnapshotRequests() async throws {

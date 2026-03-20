@@ -82,6 +82,7 @@ actor ControlHarnessAuth {
     }
 
     struct Grant: Sendable {
+        let subjectID: String
         let tokenID: String
         let client: String
         let scopes: Set<ControlHarnessAuthScope>
@@ -95,6 +96,7 @@ actor ControlHarnessAuth {
     }
 
     private struct PairingRecord: Sendable {
+        let subjectID: String
         let pairingCode: String
         let client: String
         let scopes: Set<ControlHarnessAuthScope>
@@ -107,6 +109,7 @@ actor ControlHarnessAuth {
     }
 
     private struct StoredToken: Codable, Sendable {
+        var subjectID: String
         var token: String
         var tokenID: String
         var client: String
@@ -141,11 +144,13 @@ actor ControlHarnessAuth {
         pruneExpiredState(referenceDate: now())
 
         let pairingCode = Self.makeTokenString()
+        let subjectID = UUID().uuidString.lowercased()
         let normalizedClient = Self.normalizedClientName(client)
         let scopes = try Self.normalizeScopes(requestedScopes)
         let createdAt = now()
         let expiresAt = createdAt.addingTimeInterval(configuration.pairingCodeTTLSeconds)
         pairingRecords[pairingCode] = PairingRecord(
+            subjectID: subjectID,
             pairingCode: pairingCode,
             client: normalizedClient,
             scopes: scopes,
@@ -173,6 +178,7 @@ actor ControlHarnessAuth {
         }
 
         let issued = try issueToken(
+            subjectID: record.subjectID,
             client: record.client,
             scopes: record.scopes,
             issuedAt: currentTime
@@ -218,6 +224,7 @@ actor ControlHarnessAuth {
         }
 
         return .allow(Grant(
+            subjectID: stored.subjectID,
             tokenID: stored.tokenID,
             client: stored.client,
             scopes: scopes,
@@ -243,6 +250,7 @@ actor ControlHarnessAuth {
         revoked.revokedAt = currentTime
         tokensByValue[token] = revoked
         let issued = try issueToken(
+            subjectID: stored.subjectID,
             client: stored.client,
             scopes: Set(stored.scopes),
             issuedAt: currentTime
@@ -286,6 +294,7 @@ actor ControlHarnessAuth {
     }
 
     private func issueToken(
+        subjectID: String,
         client: String,
         scopes: Set<ControlHarnessAuthScope>,
         issuedAt: Date
@@ -294,6 +303,7 @@ actor ControlHarnessAuth {
         let tokenID = UUID().uuidString.lowercased()
         let expiresAt = issuedAt.addingTimeInterval(configuration.tokenTTLSeconds)
         let stored = StoredToken(
+            subjectID: subjectID,
             token: token,
             tokenID: tokenID,
             client: client,
