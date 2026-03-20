@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### test(browser): add large-payload IPC acceptance harness
+
+- What changed: Added `scripts/browser_ipc_large_payload_acceptance.py`, a runnable local acceptance harness that keeps one Browser IPC connection intentionally unread while a burst of fast `listTabs` clients runs in parallel, then records latency and slow-reader status in JSON artifacts.
+- Why: The IPC queue rewrite proved the architecture, but we still needed a durable regression test that future agents can rerun when touching Browser IPC buffering or event payload paths.
+- Impact: Future Browser IPC changes now have one focused harness for re-checking that large unread responses do not drag down unrelated fast control requests.
+- Verification: `python3 scripts/browser_ipc_large_payload_acceptance.py --help`, `python3 scripts/browser_ipc_large_payload_acceptance.py --output /tmp/ghodex-browser-ipc-large-payload-acceptance.json`
+- Files: `scripts/browser_ipc_large_payload_acceptance.py`, `CHANGELOG.md`
+
 ### docs(browser): document IPC backpressure limits
 
 - What changed: Added the Browser IPC per-connection backpressure contract to `browser-tab-command-protocol.md`, including the 1 MiB unread-response cap and the guarantee that only the overloaded connection is dropped when that cap is exceeded.
