@@ -114,11 +114,20 @@ extension NSApplication {
 
 @MainActor
 extension NSApplication {
+    /// Live Browser tabs for the external command protocol.
+    ///
+    /// This path is intentionally independent of `macos-applescript` so the
+    /// local Browser IPC/CLI control plane keeps working even when AppleScript
+    /// automation is disabled in user config.
+    var browserTabsForExternalControl: [ScriptBrowserTab] {
+        BrowserTabController.all.map { ScriptBrowserTab(controller: $0) }
+    }
+
     /// Backing collection for `application.browser tabs`.
     @objc(browserTabs)
     var browserTabs: [ScriptBrowserTab] {
         guard isAppleScriptEnabled else { return [] }
-        return BrowserTabController.all.map { ScriptBrowserTab(controller: $0) }
+        return browserTabsForExternalControl
     }
 
     /// Enables AppleScript unique-ID lookup for browser tab references.

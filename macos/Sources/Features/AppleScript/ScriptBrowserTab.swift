@@ -190,11 +190,15 @@ final class ScriptBrowserTab: NSObject {
 
 extension ScriptBrowserTab {
     static func stableID(controller: BrowserTabController) -> String {
-        "browser-tab-\(ObjectIdentifier(controller).hexString)"
+        controller.externalID
     }
 
     var tabSummary: BrowserExternalTabSummary {
-        BrowserExternalTabSummary(id: stableID, title: title, url: url)
+        BrowserExternalTabSummary(
+            id: stableID,
+            title: controller?.model.pageTitle ?? "",
+            url: controller?.model.displayedURL ?? ""
+        )
     }
 
     static func runExternalCommandProtocol(requestJSON: String) throws -> String {
@@ -226,7 +230,7 @@ extension ScriptBrowserTab {
             do {
                 return .success(
                     for: request,
-                    resultJSON: try jsonString(from: NSApp.browserTabs.map(\.tabSummary))
+                    resultJSON: try jsonString(from: NSApp.browserTabsForExternalControl.map(\.tabSummary))
                 )
             } catch {
                 return .failure(
@@ -407,7 +411,7 @@ extension ScriptBrowserTab {
         guard let browserTabID = request.browserTabID, !browserTabID.isEmpty else {
             return nil
         }
-        return NSApp.browserTabs.first(where: { $0.stableID == browserTabID })
+        return NSApp.browserTabsForExternalControl.first(where: { $0.stableID == browserTabID })
     }
 
     private static func jsonString<T: Encodable>(from value: T) throws -> String {

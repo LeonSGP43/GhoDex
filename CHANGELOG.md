@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(browser): keep external browser tab routing live without AppleScript
+
+- What changed: Added a live Browser tab registry inside `BrowserTabController`, switched external Browser command routing to enumerate that registry instead of the AppleScript-gated `NSApp.browserTabs` path, and made external tab summaries/stable IDs come directly from the live controller state so `newTab`, `listTabs`, and `browserTabID`-targeted commands keep resolving the same live tab even when `macos-applescript` is disabled.
+- Why: The Browser IPC/CLI control plane reused AppleScript wrapper types, but two hidden AppleScript assumptions leaked into external routing: browser tab enumeration returned an empty list whenever `macos-applescript` was false, and fresh tabs only became visible after AppKit finished window registration. That broke the exact long-lived control flow we need before adding true event-drain payload stress tests.
+- Impact: External Browser control sessions can now rely on `browserTabID` remaining routable immediately after `newTab`, and the IPC/CLI protocol no longer silently depends on the AppleScript config gate just to find live Browser tabs.
+- Verification: `python3 - <<'PY'\nimport json, pathlib\ntext = pathlib.Path('browser-tab-command-protocol.md').read_text()\nassert 'does not require' in text and 'macos-applescript = true' in text\nprint('DOC OK')\nPY`, plus a manual IPC probe against a direct app launch with `macos-applescript = false` confirmed `newTab` returned a Browser tab id, `listTabs` included that live tab, `subscribeEvents` created a live subscription for the same `browserTabID`, and a follow-up `loadURL` request advanced past tab lookup to a later `bridgeUnavailable` error instead of the old `browserTabID does not resolve to a live Browser tab` failure.
+- Files: `macos/Sources/Features/Browser/BrowserTabController.swift`, `macos/Sources/Features/AppleScript/AppDelegate+AppleScript.swift`, `macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `browser-tab-command-protocol.md`, `CHANGELOG.md`
+
 ### test(browser): add large-payload IPC acceptance harness
 
 - What changed: Added `scripts/browser_ipc_large_payload_acceptance.py`, a runnable local acceptance harness that keeps one Browser IPC connection intentionally unread while a burst of fast `listTabs` clients runs in parallel, then records latency and slow-reader status in JSON artifacts.

@@ -28,6 +28,9 @@ Preferred for long-lived local sessions.
 - CLI flag: `--transport=ipc`
 - CLI default: `--transport=auto` tries IPC first, then falls back to
   AppleScript
+- The IPC and CLI Browser control path does not require
+  `macos-applescript = true`; that config gate only applies to the AppleScript
+  adapter itself
 - Response buffering is capped at 1 MiB per connection
 - A client that stops draining large responses can be disconnected without
   affecting other active IPC sessions

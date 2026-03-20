@@ -4,12 +4,14 @@ import Combine
 import GhoDexKit
 
 final class BrowserTabController: NSWindowController, NSWindowDelegate, TopLevelTabController {
+    private static var liveControllersByID: [String: BrowserTabController] = [:]
+    private static var liveControllerOrder: [String] = []
+
     static var all: [BrowserTabController] {
-        NSApplication.shared.windows.compactMap {
-            $0.windowController as? BrowserTabController
-        }
+        liveControllerOrder.compactMap { liveControllersByID[$0] }
     }
 
+    let externalID = "browser-tab-\(UUID().uuidString.lowercased())"
     let ghostty: Ghostty.App
     let model: BrowserTabModel
 
@@ -58,6 +60,7 @@ final class BrowserTabController: NSWindowController, NSWindowDelegate, TopLevel
         self.ghostty = ghostty
         self.model = BrowserTabModel(initialURL: initialURL ?? Self.defaultHomePageURL(for: ghostty))
         super.init(window: nil)
+        Self.registerLiveController(self)
     }
 
     @available(*, unavailable)
@@ -69,6 +72,7 @@ final class BrowserTabController: NSWindowController, NSWindowDelegate, TopLevel
         super.windowDidLoad()
         guard let window else { return }
 
+        window.delegate = self
         window.isRestorable = true
         window.restorationClass = BrowserWindowRestoration.self
         window.identifier = .init(String(describing: BrowserWindowRestoration.self))
@@ -129,6 +133,10 @@ final class BrowserTabController: NSWindowController, NSWindowDelegate, TopLevel
 
     func window(_ window: NSWindow, willEncodeRestorableState state: NSCoder) {
         BrowserRestorableState(from: self).encode(with: state)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        Self.unregisterLiveController(self)
     }
 
     private func applyWindowTitle() {
@@ -206,5 +214,19 @@ final class BrowserTabController: NSWindowController, NSWindowDelegate, TopLevel
         let configured = ghostty.config.ghodexBrowserHomepage ?? BrowserPaths.builtInHomePage
         let normalized = BrowserPaths.normalizedURLString(configured)
         return URL(string: normalized) ?? URL(string: BrowserPaths.builtInHomePage)!
+    }
+
+    private static func registerLiveController(_ controller: BrowserTabController) {
+        let id = controller.externalID
+        liveControllersByID[id] = controller
+        if !liveControllerOrder.contains(id) {
+            liveControllerOrder.append(id)
+        }
+    }
+
+    private static func unregisterLiveController(_ controller: BrowserTabController) {
+        let id = controller.externalID
+        liveControllersByID.removeValue(forKey: id)
+        liveControllerOrder.removeAll { $0 == id }
     }
 }
