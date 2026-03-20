@@ -188,7 +188,7 @@ final class BrowserControlIPCService {
         Task { @MainActor in
             let responseJSON: String
             do {
-                responseJSON = try ScriptBrowserTab.runExternalCommandProtocol(requestJSON: requestJSON)
+                responseJSON = try await ScriptBrowserTab.runExternalCommandProtocol(requestJSON: requestJSON)
             } catch let error as BrowserExternalCommandError {
                 responseJSON = encodeFailureResponse(error)
             } catch {

@@ -51,75 +51,149 @@ final class ScriptBrowserTab: NSObject {
     }
 
     fileprivate func load(url rawURL: String) -> Result<Bool, BrowserControlError> {
-        awaitControlResult { completion in
-            guard let controller, let activePage = controller.model.activePage else {
-                completion(.failure(.pageNotFound("No active browser page is available.")))
-                return
-            }
+        awaitControlResultSynchronously { completion in
+            issueLoad(url: rawURL, completion: completion)
+        }
+    }
 
-            let normalizedURL = BrowserPaths.normalizedURLString(rawURL, fallback: controller.model.displayedURL)
-            activePage.send(.loadURL, payload: ["url": normalizedURL]) { response in
-                if let error = response.error {
-                    completion(.failure(error))
-                    return
-                }
-
-                completion(.success(true))
-            }
+    fileprivate func loadAsync(url rawURL: String) async -> Result<Bool, BrowserControlError> {
+        await awaitControlResult { completion in
+            issueLoad(url: rawURL, completion: completion)
         }
     }
 
     fileprivate func evaluate(javaScript script: String) -> Result<String, BrowserControlError> {
-        awaitControlResult { completion in
-            guard let controller, let activePage = controller.model.activePage else {
-                completion(.failure(.pageNotFound("No active browser page is available.")))
-                return
-            }
+        awaitControlResultSynchronously { completion in
+            issueEvaluation(javaScript: script, completion: completion)
+        }
+    }
 
-            activePage.send(.evaluateJavaScript, payload: ["script": script]) { response in
-                if let error = response.error {
-                    completion(.failure(error))
-                    return
-                }
-
-                completion(.success(response.valueJSON ?? "null"))
-            }
+    fileprivate func evaluateAsync(javaScript script: String) async -> Result<String, BrowserControlError> {
+        await awaitControlResult { completion in
+            issueEvaluation(javaScript: script, completion: completion)
         }
     }
 
     fileprivate func runDOMBatch(commandsJSON: String) -> Result<String, BrowserControlError> {
-        let commands: [BrowserDOMBatchCommand]
+        switch decodeDOMBatchCommands(commandsJSON: commandsJSON) {
+        case let .success(commands):
+            return awaitControlResultSynchronously { completion in
+                issueDOMBatch(commands: commands, completion: completion)
+            }
+        case let .failure(error):
+            return .failure(error)
+        }
+    }
+
+    fileprivate func runDOMBatchAsync(commandsJSON: String) async -> Result<String, BrowserControlError> {
+        switch decodeDOMBatchCommands(commandsJSON: commandsJSON) {
+        case let .success(commands):
+            return await awaitControlResult { completion in
+                issueDOMBatch(commands: commands, completion: completion)
+            }
+        case let .failure(error):
+            return .failure(error)
+        }
+    }
+
+    private func decodeDOMBatchCommands(commandsJSON: String) -> Result<[BrowserDOMBatchCommand], BrowserControlError> {
         do {
             guard let data = commandsJSON.data(using: .utf8) else {
                 return .failure(.invalidRequest("The DOM batch JSON must be valid UTF-8 text."))
             }
-            commands = try JSONDecoder().decode([BrowserDOMBatchCommand].self, from: data)
+            return .success(try JSONDecoder().decode([BrowserDOMBatchCommand].self, from: data))
         } catch {
             return .failure(.invalidRequest("The DOM batch JSON must decode to an array of browser DOM batch commands."))
         }
+    }
 
-        return awaitControlResult { completion in
-            guard let controller, let activePage = controller.model.activePage else {
-                completion(.failure(.pageNotFound("No active browser page is available.")))
+    private func issueLoad(
+        url rawURL: String,
+        completion: @escaping (Result<Bool, BrowserControlError>) -> Void
+    ) {
+        guard let controller, let activePage = controller.model.activePage else {
+            completion(.failure(.pageNotFound("No active browser page is available.")))
+            return
+        }
+
+        let normalizedURL = BrowserPaths.normalizedURLString(rawURL, fallback: controller.model.displayedURL)
+        activePage.send(.loadURL, payload: ["url": normalizedURL]) { response in
+            if let error = response.error {
+                completion(.failure(error))
                 return
             }
 
-            activePage.runDecodedDOMCommandBatch(commands) { result in
-                switch result {
-                case let .success(decodedResult):
-                    do {
-                        completion(.success(try Self.jsonString(from: decodedResult)))
-                    } catch {
-                        completion(.failure(.internalFailure("The decoded DOM batch result could not be encoded as JSON.")))
-                    }
-                case let .failure(error):
-                    completion(.failure(error))
+            completion(.success(true))
+        }
+    }
+
+    private func issueEvaluation(
+        javaScript script: String,
+        completion: @escaping (Result<String, BrowserControlError>) -> Void
+    ) {
+        guard let controller, let activePage = controller.model.activePage else {
+            completion(.failure(.pageNotFound("No active browser page is available.")))
+            return
+        }
+
+        activePage.send(.evaluateJavaScript, payload: ["script": script]) { response in
+            if let error = response.error {
+                completion(.failure(error))
+                return
+            }
+
+            completion(.success(response.valueJSON ?? "null"))
+        }
+    }
+
+    private func issueDOMBatch(
+        commands: [BrowserDOMBatchCommand],
+        completion: @escaping (Result<String, BrowserControlError>) -> Void
+    ) {
+        guard let controller, let activePage = controller.model.activePage else {
+            completion(.failure(.pageNotFound("No active browser page is available.")))
+            return
+        }
+
+        activePage.runDecodedDOMCommandBatch(commands) { result in
+            switch result {
+            case let .success(decodedResult):
+                do {
+                    completion(.success(try Self.jsonString(from: decodedResult)))
+                } catch {
+                    completion(.failure(.internalFailure("The decoded DOM batch result could not be encoded as JSON.")))
                 }
+            case let .failure(error):
+                completion(.failure(error))
             }
         }
     }
 
     private func awaitControlResult<T>(
+        timeout: TimeInterval = 5.0,
+        _ operation: (@escaping (Result<T, BrowserControlError>) -> Void) -> Void
+    ) async -> Result<T, BrowserControlError> {
+        let gate = BrowserControlAwaitGate()
+        let timeoutError = BrowserControlError(
+            code: .requestTimedOut,
+            message: "Timed out while waiting for the browser scripting command to finish.",
+            isRetryable: true
+        )
+
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
+                guard gate.tryFinish() else { return }
+                continuation.resume(returning: .failure(timeoutError))
+            }
+
+            operation { result in
+                guard gate.tryFinish() else { return }
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
+    private func awaitControlResultSynchronously<T>(
         timeout: TimeInterval = 5.0,
         _ operation: (@escaping (Result<T, BrowserControlError>) -> Void) -> Void
     ) -> Result<T, BrowserControlError> {
@@ -188,6 +262,19 @@ final class ScriptBrowserTab: NSObject {
     }
 }
 
+private final class BrowserControlAwaitGate {
+    private let lock = NSLock()
+    private var finished = false
+
+    func tryFinish() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !finished else { return false }
+        finished = true
+        return true
+    }
+}
+
 extension ScriptBrowserTab {
     static func stableID(controller: BrowserTabController) -> String {
         controller.externalID
@@ -201,7 +288,19 @@ extension ScriptBrowserTab {
         )
     }
 
-    static func runExternalCommandProtocol(requestJSON: String) throws -> String {
+    static func runExternalCommandProtocol(requestJSON: String) async throws -> String {
+        let request = try decodeExternalCommandRequest(requestJSON)
+        let response = await routeExternalCommandAsync(request)
+        return try response.jsonString()
+    }
+
+    static func runExternalCommandProtocolSynchronously(requestJSON: String) throws -> String {
+        let request = try decodeExternalCommandRequest(requestJSON)
+        let response = routeExternalCommand(request)
+        return try response.jsonString()
+    }
+
+    private static func decodeExternalCommandRequest(_ requestJSON: String) throws -> BrowserExternalCommandRequest {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
@@ -209,15 +308,74 @@ extension ScriptBrowserTab {
             throw BrowserExternalCommandError.invalidRequest("The browser command protocol request must be valid UTF-8 JSON.")
         }
 
-        let request: BrowserExternalCommandRequest
         do {
-            request = try decoder.decode(BrowserExternalCommandRequest.self, from: requestData)
+            return try decoder.decode(BrowserExternalCommandRequest.self, from: requestData)
         } catch {
             throw BrowserExternalCommandError.invalidRequest("The browser command protocol request could not be decoded.")
         }
+    }
 
-        let response = routeExternalCommand(request)
-        return try response.jsonString()
+    static func routeExternalCommandAsync(_ request: BrowserExternalCommandRequest) async -> BrowserExternalCommandResponse {
+        if let versionError = request.validateVersion() {
+            return .failure(for: request, error: versionError)
+        }
+
+        switch request.command {
+        case .loadURL:
+            guard let browserTab = browserTab(for: request) else {
+                return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
+            }
+            guard let rawURL = request.payload["url"], !rawURL.isEmpty else {
+                return .failure(for: request, error: .invalidRequest("The loadURL command requires a non-empty url payload."))
+            }
+
+            switch await browserTab.loadAsync(url: rawURL) {
+            case let .success(result):
+                do {
+                    return .success(for: request, resultJSON: try jsonString(from: ["loaded": result]))
+                } catch {
+                    return .failure(for: request, error: .internalFailure("The loadURL result could not be serialized as JSON."))
+                }
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
+        case .evaluateJavaScript:
+            guard let browserTab = browserTab(for: request) else {
+                return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
+            }
+            guard let script = request.payload["script"], !script.isEmpty else {
+                return .failure(
+                    for: request,
+                    error: .invalidRequest("The evaluateJavaScript command requires a non-empty script payload.")
+                )
+            }
+
+            switch await browserTab.evaluateAsync(javaScript: script) {
+            case let .success(resultJSON):
+                return .success(for: request, resultJSON: resultJSON)
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
+        case .runDOMBatch:
+            guard let browserTab = browserTab(for: request) else {
+                return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
+            }
+            guard let commandsJSON = request.payload["commandsJSON"], !commandsJSON.isEmpty else {
+                return .failure(
+                    for: request,
+                    error: .invalidRequest("The runDOMBatch command requires a non-empty commandsJSON payload.")
+                )
+            }
+
+            switch await browserTab.runDOMBatchAsync(commandsJSON: commandsJSON) {
+            case let .success(resultJSON):
+                return .success(for: request, resultJSON: resultJSON)
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
+        default:
+            return routeExternalCommand(request)
+        }
     }
 
     static func routeExternalCommand(_ request: BrowserExternalCommandRequest) -> BrowserExternalCommandResponse {

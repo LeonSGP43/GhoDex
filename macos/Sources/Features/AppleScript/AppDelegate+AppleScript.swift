@@ -364,7 +364,7 @@ extension NSApplication {
 
         let responseJSON: String
         do {
-            responseJSON = try ScriptBrowserTab.runExternalCommandProtocol(requestJSON: requestJSON)
+            responseJSON = try ScriptBrowserTab.runExternalCommandProtocolSynchronously(requestJSON: requestJSON)
         } catch let error as BrowserExternalCommandError {
             command.scriptErrorNumber = errAEEventFailed
             command.scriptErrorString = error.message
