@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### test(browser): add true event-drain large-payload acceptance harness
+
+- What changed: Added `scripts/browser_ipc_event_drain_large_payload_acceptance.py`, a focused Browser IPC acceptance harness that hosts a local large HTML page, waits for a real successful `pageInspectionSnapshot`, then queues unread `drainEvents` responses from multiple subscriptions before measuring whether concurrent fast `listTabs` requests stay responsive.
+- Why: The earlier large-payload IPC harness only used big `newTab` results as a proxy. After fixing live `browserTabID` routing, we can now exercise the real Browser event-drain path with actual `pageInspectionSnapshot` payloads, which is the exact next pressure point for long-lived external control sessions.
+- Impact: Future Browser control changes now have one durable way to re-check that unread inspection-event drains do not starve unrelated fast requests, using the same `browser.tab.v1` subscriptions and buffered event responses that external clients rely on.
+- Verification: `python3 scripts/browser_ipc_event_drain_large_payload_acceptance.py --help`, plus a manual CEF-enabled direct-app launch with `GHODEX_CEF_ROOT=$(pwd)/macos/build/cef-runtime/current` confirmed the harness can observe `bridgeReady`, load a large local page, detect a successful `pageInspectionSnapshot` with a non-empty `snapshotJSON`, and record a JSON artifact under `/tmp/ghodex-browser-ipc-event-drain-large-payload-acceptance.json`.
+- Files: `scripts/browser_ipc_event_drain_large_payload_acceptance.py`, `CHANGELOG.md`
+
 ### fix(browser): keep external browser tab routing live without AppleScript
 
 - What changed: Added a live Browser tab registry inside `BrowserTabController`, switched external Browser command routing to enumerate that registry instead of the AppleScript-gated `NSApp.browserTabs` path, and made external tab summaries/stable IDs come directly from the live controller state so `newTab`, `listTabs`, and `browserTabID`-targeted commands keep resolving the same live tab even when `macos-applescript` is disabled.
