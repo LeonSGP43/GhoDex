@@ -19,6 +19,7 @@ final class ControlHarnessGateway {
         var maxBufferedEvents = 256
         var maxBufferedBytes = 1_048_576
         var authToken: String?
+        var maxConcurrentSessionsPerIdentity = 2
         var maxGlobalRequestsPerMinute = 240
         var maxCommandsPerMinute = 60
         var maxSnapshotRequestsPerMinute = 30
@@ -46,6 +47,9 @@ final class ControlHarnessGateway {
             }
             if let value = parseString(environment["GHODEX_CONTROL_HARNESS_GATEWAY_AUTH_TOKEN"]) {
                 configuration.authToken = value
+            }
+            if let value = parseInt(environment["GHODEX_CONTROL_HARNESS_GATEWAY_MAX_CONCURRENT_SESSIONS_PER_IDENTITY"]) {
+                configuration.maxConcurrentSessionsPerIdentity = max(1, value)
             }
             if let value = parseInt(environment["GHODEX_CONTROL_HARNESS_GATEWAY_MAX_GLOBAL_REQUESTS_PER_MINUTE"]) {
                 configuration.maxGlobalRequestsPerMinute = max(1, value)
@@ -98,11 +102,17 @@ final class ControlHarnessGateway {
         case deny(errorCode: String, errorMessage: String)
     }
 
+    private enum AuthorizationResult {
+        case allow(sessionIdentity: String?)
+        case deny(ControlHarnessResponse)
+    }
+
     private let bundleID: String
     private let authManager: ControlHarnessAuth?
     private let requestHandler: (@MainActor (ControlHarnessRequest, String) -> ControlHarnessServiceReply)?
     private let requestAuthorizer: (@MainActor (ControlHarnessRequest) -> RequestAuthorization)?
     private let rateLimiter: ControlHarnessGatewayRateLimiter
+    private let sessionRegistry: ControlHarnessGatewaySessionRegistry
     private let logger: Logger
     private let acceptQueue = DispatchQueue(
         label: "com.leongong.ghodex.control-harness.gateway.accept",
@@ -142,6 +152,9 @@ final class ControlHarnessGateway {
         self.requestHandler = requestHandler
         self.requestAuthorizer = requestAuthorizer
         self.rateLimiter = ControlHarnessGatewayRateLimiter(configuration: configuration)
+        self.sessionRegistry = ControlHarnessGatewaySessionRegistry(
+            maxConcurrentSessionsPerIdentity: configuration.maxConcurrentSessionsPerIdentity
+        )
         self.logger = Logger(subsystem: bundleID, category: "ControlHarnessGateway")
         self.configuration = configuration
     }
@@ -275,24 +288,27 @@ final class ControlHarnessGateway {
 
             let requestData = try Self.readAll(from: clientFD)
             let request = try JSONDecoder().decode(ControlHarnessRequest.self, from: requestData)
-            if let unauthorized = authorize(request, peerDescription: peerDescription) {
-                try Self.writeAll(try encodeResponse(unauthorized), to: clientFD)
-                return
-            }
-            if let rateLimited = rateLimit(request, peerDescription: peerDescription) {
-                try Self.writeAll(try encodeResponse(rateLimited), to: clientFD)
-                return
-            }
-            if let gatewayResponse = handleGatewayCommand(request) {
-                try Self.writeAll(try encodeResponse(gatewayResponse), to: clientFD)
-                return
-            }
-            let reply = callRequestHandler(request)
-            switch reply {
-            case .single(let response):
+            switch authorize(request, peerDescription: peerDescription) {
+            case .deny(let response):
                 try Self.writeAll(try encodeResponse(response), to: clientFD)
-            case .subscription(let envelope):
-                try streamSubscription(envelope, to: clientFD)
+                return
+            case .allow(let sessionIdentity):
+                try withSessionReservation(
+                    request: request,
+                    peerDescription: peerDescription,
+                    sessionIdentity: sessionIdentity,
+                    responseWriter: { response in
+                        try Self.writeAll(try encodeResponse(response), to: clientFD)
+                    }
+                ) {
+                    let reply = callRequestHandler(request)
+                    switch reply {
+                    case .single(let response):
+                        try Self.writeAll(try encodeResponse(response), to: clientFD)
+                    case .subscription(let envelope):
+                        try streamSubscription(envelope, to: clientFD)
+                    }
+                }
             }
         } catch {
             logger.error("failed to process control harness gateway client: \(error.localizedDescription, privacy: .public)")
@@ -320,25 +336,26 @@ final class ControlHarnessGateway {
         let requestData = try Self.readWebSocketFrame(from: clientFD)
         let request = try JSONDecoder().decode(ControlHarnessRequest.self, from: requestData)
 
-        if let unauthorized = authorize(request, peerDescription: peerDescription) {
-            try Self.writeAll(try encodeWebSocketResponse(unauthorized), to: clientFD)
-            return
-        }
-        if let rateLimited = rateLimit(request, peerDescription: peerDescription) {
-            try Self.writeAll(try encodeWebSocketResponse(rateLimited), to: clientFD)
-            return
-        }
-        if let gatewayResponse = handleGatewayCommand(request) {
-            try Self.writeAll(try encodeWebSocketResponse(gatewayResponse), to: clientFD)
-            return
-        }
-
-        let reply = callRequestHandler(request)
-        switch reply {
-        case .single(let response):
+        switch authorize(request, peerDescription: peerDescription) {
+        case .deny(let response):
             try Self.writeAll(try encodeWebSocketResponse(response), to: clientFD)
-        case .subscription(let envelope):
-            try streamWebSocketSubscription(envelope, to: clientFD)
+        case .allow(let sessionIdentity):
+            try withSessionReservation(
+                request: request,
+                peerDescription: peerDescription,
+                sessionIdentity: sessionIdentity,
+                responseWriter: { response in
+                    try Self.writeAll(try encodeWebSocketResponse(response), to: clientFD)
+                }
+            ) {
+                let reply = callRequestHandler(request)
+                switch reply {
+                case .single(let response):
+                    try Self.writeAll(try encodeWebSocketResponse(response), to: clientFD)
+                case .subscription(let envelope):
+                    try streamWebSocketSubscription(envelope, to: clientFD)
+                }
+            }
         }
     }
 
@@ -368,7 +385,7 @@ final class ControlHarnessGateway {
     private func authorize(
         _ request: ControlHarnessRequest,
         peerDescription: String
-    ) -> ControlHarnessResponse? {
+    ) -> AuthorizationResult {
         if let gatewayCommand = gatewayCommand(for: request) {
             return authorizeGatewayCommand(
                 gatewayCommand,
@@ -378,22 +395,22 @@ final class ControlHarnessGateway {
         }
 
         if request.command == "handshake" {
-            return nil
+            return .allow(sessionIdentity: nil)
         }
 
         if let authToken = configuration.authToken, request.authToken == authToken {
-            return nil
+            return .allow(sessionIdentity: "static:\(authToken)")
         }
 
         if let requiredScope = requiredScope(for: request) {
             guard let authManager else {
-                return ControlHarnessResponse(
+                return .deny(ControlHarnessResponse(
                     requestID: request.requestID,
                     status: "error",
                     result: nil,
                     errorCode: "unauthorized",
                     errorMessage: "A valid gateway auth token is required"
-                )
+                ))
             }
 
             switch validateToken(
@@ -401,20 +418,36 @@ final class ControlHarnessGateway {
                 requiredScope: requiredScope,
                 authManager: authManager
             ) {
-            case .allow:
-                break
+            case .allow(let grant):
+                return continueAuthorization(
+                    request: request,
+                    requestAuthorizer: requestAuthorizer,
+                    sessionIdentity: "paired:\(grant.subjectID)"
+                )
             case .deny(let errorCode, let errorMessage):
-                return ControlHarnessResponse(
+                return .deny(ControlHarnessResponse(
                     requestID: request.requestID,
                     status: "error",
                     result: nil,
                     errorCode: errorCode,
                     errorMessage: errorMessage
-                )
+                ))
             }
         }
 
-        guard let requestAuthorizer else { return nil }
+        return continueAuthorization(
+            request: request,
+            requestAuthorizer: requestAuthorizer,
+            sessionIdentity: nil
+        )
+    }
+
+    private func continueAuthorization(
+        request: ControlHarnessRequest,
+        requestAuthorizer: (@MainActor (ControlHarnessRequest) -> RequestAuthorization)?,
+        sessionIdentity: String?
+    ) -> AuthorizationResult {
+        guard let requestAuthorizer else { return .allow(sessionIdentity: sessionIdentity) }
 
         let semaphore = DispatchSemaphore(value: 0)
         var authorization: RequestAuthorization?
@@ -428,15 +461,15 @@ final class ControlHarnessGateway {
 
         switch authorization ?? .allow {
         case .allow:
-            return nil
+            return .allow(sessionIdentity: sessionIdentity)
         case .deny(let errorCode, let errorMessage):
-            return ControlHarnessResponse(
+            return .deny(ControlHarnessResponse(
                 requestID: request.requestID,
                 status: "error",
                 result: nil,
                 errorCode: errorCode,
                 errorMessage: errorMessage
-            )
+            ))
         }
     }
 
@@ -444,44 +477,44 @@ final class ControlHarnessGateway {
         _ gatewayCommand: GatewayCommand,
         request: ControlHarnessRequest,
         peerDescription: String
-    ) -> ControlHarnessResponse? {
+    ) -> AuthorizationResult {
         switch gatewayCommand {
         case .pairingBegin:
             guard Self.isLoopbackPeer(peerDescription) else {
-                return ControlHarnessResponse(
+                return .deny(ControlHarnessResponse(
                     requestID: request.requestID,
                     status: "error",
                     result: nil,
                     errorCode: "pairing_requires_local_origin",
                     errorMessage: "Pairing can only be started from a local desktop client"
-                )
+                ))
             }
-            return nil
+            return .allow(sessionIdentity: nil)
 
         case .pairingExchange:
-            return nil
+            return .allow(sessionIdentity: nil)
 
         case .tokenInfo, .tokenRotate, .tokenRevoke:
             guard let authManager else {
-                return ControlHarnessResponse(
+                return .deny(ControlHarnessResponse(
                     requestID: request.requestID,
                     status: "error",
                     result: nil,
                     errorCode: "unauthorized",
                     errorMessage: "A valid gateway auth token is required"
-                )
+                ))
             }
             switch validateToken(request.authToken, requiredScope: nil, authManager: authManager) {
-            case .allow:
-                return nil
+            case .allow(let grant):
+                return .allow(sessionIdentity: "paired:\(grant.subjectID)")
             case .deny(let errorCode, let errorMessage):
-                return ControlHarnessResponse(
+                return .deny(ControlHarnessResponse(
                     requestID: request.requestID,
                     status: "error",
                     result: nil,
                     errorCode: errorCode,
                     errorMessage: errorMessage
-                )
+                ))
             }
         }
     }
@@ -613,6 +646,40 @@ final class ControlHarnessGateway {
 
         semaphore.wait()
         return result ?? .failure(ControlHarnessAuthError.invalidToken)
+    }
+
+    private func withSessionReservation(
+        request: ControlHarnessRequest,
+        peerDescription: String,
+        sessionIdentity: String?,
+        responseWriter: (ControlHarnessResponse) throws -> Void,
+        operation: () throws -> Void
+    ) throws {
+        if let rateLimited = rateLimit(request, peerDescription: peerDescription) {
+            try responseWriter(rateLimited)
+            return
+        }
+
+        guard let sessionIdentity else {
+            try operation()
+            return
+        }
+        guard sessionRegistry.acquire(identity: sessionIdentity) else {
+            try responseWriter(ControlHarnessResponse(
+                requestID: request.requestID,
+                status: "error",
+                result: nil,
+                errorCode: "session_limit_exceeded",
+                errorMessage: "Gateway concurrent session limit exceeded"
+            ))
+            return
+        }
+
+        defer {
+            sessionRegistry.release(identity: sessionIdentity)
+        }
+
+        try operation()
     }
 
     private func rateLimitIdentity(
@@ -1182,6 +1249,41 @@ private final class ControlHarnessGatewayRateLimiter {
             return .resync
         default:
             return nil
+        }
+    }
+}
+
+private final class ControlHarnessGatewaySessionRegistry {
+    private let maxConcurrentSessionsPerIdentity: Int
+    private let queue = DispatchQueue(
+        label: "com.leongong.ghodex.control-harness.gateway.session-registry",
+        qos: .utility
+    )
+    private var activeSessions: [String: Int] = [:]
+
+    init(maxConcurrentSessionsPerIdentity: Int) {
+        self.maxConcurrentSessionsPerIdentity = maxConcurrentSessionsPerIdentity
+    }
+
+    func acquire(identity: String) -> Bool {
+        queue.sync {
+            let current = activeSessions[identity] ?? 0
+            guard current < maxConcurrentSessionsPerIdentity else {
+                return false
+            }
+            activeSessions[identity] = current + 1
+            return true
+        }
+    }
+
+    func release(identity: String) {
+        queue.sync {
+            let current = activeSessions[identity] ?? 0
+            if current <= 1 {
+                activeSessions.removeValue(forKey: identity)
+            } else {
+                activeSessions[identity] = current - 1
+            }
         }
     }
 }
