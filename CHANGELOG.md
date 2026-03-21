@@ -33,12 +33,12 @@ All notable changes to this project are documented in this file.
 
 ### feat(android): add transport-backed client state machine foundation
 
-- What changed: Expanded the pure-Java Android foundation with transport and envelope abstractions, a session store, a terminal index store, and a `GhoDexGatewayClientStateMachine` that drives pairing, snapshot, subscribe, read, and mutation flows. The Java self-test now covers state persistence and live event/resync handling with a fake transport.
-- Why: The previous Android slice stopped at request builders and resume state, which still left Milestone 4 without a real client orchestration layer. The next blocker was turning raw gateway payload builders into something that can own session lifecycle and terminal indexing.
-- Impact: Milestone 4 now has a real, host-verifiable client runtime core that future Android UI or network code can plug into instead of re-deriving pairing/subscription semantics from scratch.
-- Verification: `tmpdir=\"$(mktemp -d)\"; javac -d \"$tmpdir\" android/*.java && java -ea -cp \"$tmpdir\" GhoDexGatewayContractSelfTest`
-- Files: `android/GhoDexGatewayRequest.java`, `android/GhoDexGatewayResumeState.java`, `android/GhoDexGatewayEnvelope.java`, `android/GhoDexGatewayTransport.java`, `android/GhoDexGatewaySessionStore.java`, `android/GhoDexTerminalIndexStore.java`, `android/GhoDexGatewayClientStateMachine.java`, `android/GhoDexGatewayContractSelfTest.java`, `android/README.md`, `CHANGELOG.md`
-- Decision trail: Keep Milestone 4 pure Java until a verified Android toolchain exists in this repo. The critical missing piece was state-machine ownership, not UI scaffolding or premature Gradle wiring.
+- What changed: Expanded the pure-Java Android foundation with a real TCP transport, a JSON envelope codec, UI-facing snapshot materialization, and state-machine listener hooks on top of the existing session store, terminal index store, and request builders. The Java self-test now covers a live socket round trip through a fake gateway server, including pairing, snapshot, live subscription delivery, overflow-resync, and UI snapshot projection.
+- Why: The previous Android slice stopped at request builders and resume state, which still left Milestone 4 without a real client runtime capable of talking to the desktop gateway or surfacing state to a future UI. The next blocker was turning the contract foundation into something transport-backed and observable.
+- Impact: Milestone 4 now has a host-verifiable client runtime core that already speaks the desktop TCP protocol and exposes a stable UI snapshot layer, which lowers the remaining work to Android framework bindings and presentation rather than protocol rediscovery.
+- Verification: `tmpdir=\"$(mktemp -d)\"; javac -d \"$tmpdir\" android/*.java && java -ea -cp \"$tmpdir\" GhoDexGatewayContractSelfTest`; `git diff --check`
+- Files: `android/GhoDexGatewayRequest.java`, `android/GhoDexGatewayResumeState.java`, `android/GhoDexGatewayEnvelope.java`, `android/GhoDexGatewayTransport.java`, `android/GhoDexGatewayTcpTransport.java`, `android/GhoDexGatewayJsonCodec.java`, `android/GhoDexGatewaySessionStore.java`, `android/GhoDexTerminalIndexStore.java`, `android/GhoDexGatewayUiSnapshot.java`, `android/GhoDexGatewayUiStore.java`, `android/GhoDexGatewayClientStateMachine.java`, `android/GhoDexGatewayContractSelfTest.java`, `android/README.md`, `CHANGELOG.md`
+- Decision trail: Keep the Android client toolchain-light and protocol-faithful first. A plain-Java transport/UI core can be compiled and regression-tested locally now, while leaving the eventual Android WebSocket and app-module bindings as a thinner outer layer.
 
 ### fix(control): use the audit logger support root for gateway auth storage
 

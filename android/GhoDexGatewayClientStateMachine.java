@@ -1,11 +1,16 @@
 import java.util.List;
-import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.Objects;
 
 public final class GhoDexGatewayClientStateMachine {
+    public interface StateListener {
+        void onStateChanged(GhoDexGatewaySessionStore sessionStore, GhoDexTerminalIndexStore terminalIndexStore);
+    }
+
     private final GhoDexGatewayTransport transport;
     private final GhoDexGatewaySessionStore sessionStore;
     private final GhoDexTerminalIndexStore terminalIndexStore;
+    private final CopyOnWriteArrayList<StateListener> stateListeners = new CopyOnWriteArrayList<>();
     private GhoDexGatewayTransport.Subscription subscription;
 
     public GhoDexGatewayClientStateMachine(
@@ -25,6 +30,7 @@ public final class GhoDexGatewayClientStateMachine {
         requireOk(envelope, "pairing begin");
         String pairingCode = requireString(envelope, "pairing_code");
         sessionStore.recordPairingCode(pairingCode);
+        notifyStateChanged();
         return pairingCode;
     }
 
@@ -39,6 +45,7 @@ public final class GhoDexGatewayClientStateMachine {
             requireString(envelope, "token_id"),
             envelope.resultStringList("scopes")
         );
+        notifyStateChanged();
         return authToken;
     }
 
@@ -53,6 +60,7 @@ public final class GhoDexGatewayClientStateMachine {
         }
         sessionStore.clearSnapshotResyncRequirement();
         terminalIndexStore.resetForSnapshot();
+        notifyStateChanged();
     }
 
     public void openSubscription(String requestId, int eventLimit) {
@@ -62,10 +70,12 @@ public final class GhoDexGatewayClientStateMachine {
             this::handleEnvelope
         );
         sessionStore.setSubscriptionOpen(true);
+        notifyStateChanged();
     }
 
     public void observeTerminal(String terminalId) {
         sessionStore.resumeState().observeTerminal(terminalId);
+        notifyStateChanged();
     }
 
     public GhoDexGatewayEnvelope readTerminalSnapshot(
@@ -111,6 +121,7 @@ public final class GhoDexGatewayClientStateMachine {
             subscription = null;
         }
         sessionStore.setSubscriptionOpen(false);
+        notifyStateChanged();
     }
 
     public GhoDexGatewaySessionStore sessionStore() {
@@ -119,6 +130,11 @@ public final class GhoDexGatewayClientStateMachine {
 
     public GhoDexTerminalIndexStore terminalIndexStore() {
         return terminalIndexStore;
+    }
+
+    public void addStateListener(StateListener listener) {
+        stateListeners.add(Objects.requireNonNull(listener, "listener"));
+        listener.onStateChanged(sessionStore, terminalIndexStore);
     }
 
     private void handleEnvelope(GhoDexGatewayEnvelope envelope) {
@@ -132,6 +148,13 @@ public final class GhoDexGatewayClientStateMachine {
             if (envelope.requiresSnapshotResync()) {
                 sessionStore.requireSnapshotResync();
             }
+        }
+        notifyStateChanged();
+    }
+
+    private void notifyStateChanged() {
+        for (StateListener listener : stateListeners) {
+            listener.onStateChanged(sessionStore, terminalIndexStore);
         }
     }
 
