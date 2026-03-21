@@ -148,7 +148,7 @@ class AppDelegate: NSObject,
     )
 
     lazy var controlHarnessAuth = ControlHarnessAuth(
-        storageURL: ControlHarnessCore
+        storageURL: ControlHarnessAuditLogger
             .baseDirectory(bundleID: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex")
             .appendingPathComponent("gateway-auth.json", isDirectory: false)
     )

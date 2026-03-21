@@ -4,6 +4,33 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(control): restore app-hosted control test compatibility
+
+- What changed: Added an explicit `ControlHarnessRequest` initializer with a default `authToken`, marked `ControlHarnessCore.protocolVersion` as `nonisolated`, fixed the remaining app-hosted `ControlHarnessTests` helper drift, and repaired the gateway acceptance test closures so the Xcode/macOS test target can compile and execute against the current control API shape.
+- Why: The branch had already moved to token-aware gateway requests and stricter global-actor semantics, but several test helpers still depended on old memberwise-init and tuple layouts. That blocked real app-hosted acceptance runs even though the production path was close.
+- Impact: Targeted macOS `xcodebuild test` runs now pass for the control-harness acceptance path instead of stopping at compile time inside `GhosttyTests`.
+- Verification: `xcodebuild test -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS,arch=arm64' -only-testing:GhosttyTests/ControlHarnessTests/gatewayMetricsResetClearsRollingWindow -skip-testing:GhosttyUITests`
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `macos/Tests/ControlHarness/ControlHarnessTests.swift`, `CHANGELOG.md`
+- Decision trail: Make the request/test surface explicit rather than relying on fragile memberwise initializer behavior. The acceptance path needs stable API boundaries that survive both feature growth and Xcode's stricter compile rules.
+
+### fix(control): use the audit logger support root for gateway auth storage
+
+- What changed: Fixed `AppDelegate` to derive the gateway auth storage path from `ControlHarnessAuditLogger.baseDirectory(...)` instead of referencing `ControlHarnessCore.baseDirectory(...)`, which does not exist.
+- Why: The desktop gateway/auth work compiled under the Zig test path, but the app-hosted Xcode build still failed before acceptance runs because the auth storage root was wired to the wrong type.
+- Impact: App-hosted macOS builds can now progress past this gateway auth storage compile failure, which unblocks real `xcodebuild test` acceptance work for the control gateway slice.
+- Verification: `git diff --check`; app-hosted `xcodebuild test` moved past the previous missing-member compile error after this fix.
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `CHANGELOG.md`
+- Decision trail: Reuse the existing audit logger support-root helper instead of inventing a second storage-root resolver. The auth store and audit log belong under the same Control Harness application-support subtree.
+
+### fix(control): align gateway sources with Xcode compile rules
+
+- What changed: Fixed several app-hosted Swift compile issues that Zig-targeted tests did not surface: the `ControlHarnessCore` convenience initializer is now explicitly `@MainActor` and no longer hides a main-actor default `sampleStore`, gateway closures use explicit `self` where Xcode requires it, `validateToken` now passes an explicit awaited actor operation into `withAuthManager`, and the performance monitor now uses its own ISO-8601 formatter plus explicit `return` in `snapshot(...)`.
+- Why: Once the missing xcframework and auth storage root blockers were cleared, app-hosted `xcodebuild test` still failed on Swift compile differences between the Zig path and Xcode's stricter actor/capture checking.
+- Impact: The control-harness slice is now materially closer to passing real macOS app-hosted tests, which is required before the acceptance metrics can be closed with representative desktop evidence.
+- Verification: `git diff --check`; targeted app-hosted `xcodebuild test` is being used as the regression path for this fix chain.
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `macos/Sources/Features/Control Harness/ControlHarnessGateway.swift`, `CHANGELOG.md`
+- Decision trail: Fix the Xcode-facing source semantics directly instead of weakening the acceptance path. The branch needs app-hosted validation, so the code should satisfy both Zig and Xcode compilers.
+
 ### feat(android): add client contract foundation
 
 - What changed: Added a new top-level `android/` workspace with `creator.md`, a local README, a pure Java `GhoDexGatewayRequest` request-builder layer, a `GhoDexGatewayResumeState` helper for reconnect/replay state, and a `GhoDexGatewayContractSelfTest` entrypoint that can be compiled and run with the host JDK. The blueprint now marks Milestone 4 as `in_progress` instead of `pending`.

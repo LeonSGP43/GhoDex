@@ -240,7 +240,7 @@ final class ControlHarnessGateway {
             source.resume()
             acceptSource = source
             logger.notice(
-                "control harness gateway listening at \(configuration.listenHost, privacy: .public):\(listener.port)"
+                "control harness gateway listening at \(self.configuration.listenHost, privacy: .public):\(listener.port)"
             )
         } catch {
             logger.error("failed to start control harness gateway: \(error.localizedDescription, privacy: .public)")
@@ -646,7 +646,7 @@ final class ControlHarnessGateway {
             )
         }
 
-        let result: Result<AnyEncodable, Error> = withAuthManager(authManager) {
+        let result: Result<AnyEncodable, Error> = withAuthManager(authManager) { [self] in
             switch gatewayCommand {
             case .pairingBegin:
                 let pairing = try await authManager.beginPairing(
@@ -678,12 +678,12 @@ final class ControlHarnessGateway {
                 return AnyEncodable(try await authManager.revoke(token: token))
             case .metrics:
                 return AnyEncodable(
-                    performanceMonitor?.snapshot()
+                    self.performanceMonitor?.snapshot()
                         ?? ControlHarnessPerformanceSnapshot.empty()
                 )
             case .metricsReset:
                 return AnyEncodable(
-                    performanceMonitor?.reset()
+                    self.performanceMonitor?.reset()
                         ?? ControlHarnessPerformanceSnapshot.empty()
                 )
             }
@@ -746,7 +746,9 @@ final class ControlHarnessGateway {
         requiredScope: ControlHarnessAuthScope?,
         authManager: ControlHarnessAuth
     ) -> ControlHarnessAuth.Validation {
-        switch withAuthManager(authManager) {
+        switch withAuthManager(authManager, operation: {
+            await authManager.validate(token: token, requiredScope: requiredScope)
+        }) {
         case .success(let validation):
             return validation
         case .failure:
@@ -1590,6 +1592,12 @@ struct ControlHarnessPerformanceSnapshot: Codable, Equatable {
 }
 
 final class ControlHarnessPerformanceMonitor {
+    private static let iso8601Formatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
     private struct RollingDurationWindow {
         let maxSamples: Int
         var samples: [Double] = []
@@ -1730,7 +1738,7 @@ final class ControlHarnessPerformanceMonitor {
     func snapshot(now: Date? = nil) -> ControlHarnessPerformanceSnapshot {
         queue.sync {
             let referenceNow = now ?? self.now()
-            ControlHarnessPerformanceSnapshot(
+            return ControlHarnessPerformanceSnapshot(
                 generatedAt: Self.timestamp(referenceNow),
                 windowStartedAt: Self.timestamp(windowStartedAt),
                 windowAgeMs: max(0, Int(referenceNow.timeIntervalSince(windowStartedAt) * 1_000)),
@@ -1787,6 +1795,6 @@ final class ControlHarnessPerformanceMonitor {
     }
 
     static func timestamp(_ date: Date) -> String {
-        ControlHarnessEvent.timestampFormatter.string(from: date)
+        iso8601Formatter.string(from: date)
     }
 }
