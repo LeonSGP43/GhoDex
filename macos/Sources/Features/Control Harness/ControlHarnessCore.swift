@@ -47,8 +47,8 @@ struct ControlHarnessRequest: Codable {
     let maxLines: Int?
     let cursor: String?
     let readAfterWriteID: String?
-    let pairingCode: String? = nil
-    let requestedScopes: [String]? = nil
+    let pairingCode: String?
+    let requestedScopes: [String]?
 
     enum CodingKeys: String, CodingKey {
         case requestID = "request_id"
@@ -84,6 +84,64 @@ struct ControlHarnessRequest: Codable {
         case readAfterWriteID = "read_after_write_id"
         case pairingCode = "pairing_code"
         case requestedScopes = "requested_scopes"
+    }
+
+    init(
+        requestID: String,
+        protocolVersion: String?,
+        authToken: String? = nil,
+        command: String,
+        tabID: String?,
+        parentTabID: String?,
+        terminalID: String?,
+        scope: String?,
+        text: String?,
+        commandText: String?,
+        workingDirectory: String?,
+        title: String?,
+        environment: [String: String]?,
+        force: Bool?,
+        client: String?,
+        idempotencyKey: String?,
+        expectedGeneration: Int?,
+        sinceSequence: Int64?,
+        eventLimit: Int?,
+        mode: String?,
+        sinceFrameID: String?,
+        maxChars: Int?,
+        maxLines: Int?,
+        cursor: String?,
+        readAfterWriteID: String?,
+        pairingCode: String? = nil,
+        requestedScopes: [String]? = nil
+    ) {
+        self.requestID = requestID
+        self.protocolVersion = protocolVersion
+        self.authToken = authToken
+        self.command = command
+        self.tabID = tabID
+        self.parentTabID = parentTabID
+        self.terminalID = terminalID
+        self.scope = scope
+        self.text = text
+        self.commandText = commandText
+        self.workingDirectory = workingDirectory
+        self.title = title
+        self.environment = environment
+        self.force = force
+        self.client = client
+        self.idempotencyKey = idempotencyKey
+        self.expectedGeneration = expectedGeneration
+        self.sinceSequence = sinceSequence
+        self.eventLimit = eventLimit
+        self.mode = mode
+        self.sinceFrameID = sinceFrameID
+        self.maxChars = maxChars
+        self.maxLines = maxLines
+        self.cursor = cursor
+        self.readAfterWriteID = readAfterWriteID
+        self.pairingCode = pairingCode
+        self.requestedScopes = requestedScopes
     }
 }
 
@@ -512,7 +570,7 @@ final class ControlHarnessAuditLogger {
 
 @MainActor
 final class ControlHarnessCore {
-    static let protocolVersion = "1.0"
+    nonisolated static let protocolVersion = "1.0"
     static let supportedCommands = [
         "handshake",
         "snapshot",
@@ -547,10 +605,11 @@ final class ControlHarnessCore {
         category: "ControlHarnessCore"
     )
 
+    @MainActor
     convenience init(
         appDelegate: AppDelegate?,
         auditLogger: ControlHarnessAuditLogger,
-        sampleStore: ControlHarnessSampleStore = ControlHarnessSampleStore()
+        sampleStore: ControlHarnessSampleStore
     ) {
         let bundleID = Bundle.main.bundleIdentifier ?? "com.leongong.ghodex"
         self.init(
