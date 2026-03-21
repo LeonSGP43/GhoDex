@@ -3,7 +3,7 @@
 ## Summary
 
 - Goal: add a manual-first todo workflow to GhoDex, expose it quickly from anywhere in-app, surface per-tab task progress, and improve New Tab picker information density.
-- Principle: reuse the existing Settings Panel shell, but keep todo state ownership independent from learning and task queue.
+- Principle: keep the Settings Panel as the durable configuration/editor shell, but use an in-window side panel for fast task review/update.
 - Priority: deterministic local UX first, AI later only as a draft helper.
 
 ## Product Goals
@@ -30,6 +30,8 @@
   - enable toggle,
   - todo workspace root path,
   - derived selected day file path,
+  - side-panel left/right placement,
+  - in-tab quick-look visibility and placement,
   - initialization button,
   - selected date switcher with quick `Today`,
   - today completion summary,
@@ -39,8 +41,9 @@
 
 ### Quick Access
 
-- Add an app-wide menu action and in-app shortcut that opens the Settings Panel directly to the `Todo` tab.
-- When launched from a terminal tab, the panel should focus that tab as the current workspace target.
+- Add an app-wide menu action and in-app shortcut that toggles an in-window Todo side panel for the current terminal tab.
+- Keep the Settings Panel `Todo` tab available for full settings management and bootstrap actions.
+- When launched from a terminal tab, the side panel should focus that tab as the current workspace target.
 
 ### Workspace Assignment
 
@@ -50,7 +53,7 @@
   - a titlebar progress summary when they have assigned tasks,
   - an in-tab quick-look card with today's assigned items,
   - direct complete/reset toggles for those assigned items,
-  - a path back into the full `Todo` workspace view.
+  - a path back into the in-window Todo panel or full `Todo` settings page.
 
 ### Picker
 
@@ -67,6 +70,9 @@
 - `workspaceRootPath: String`
 - `showCompletedItems: Bool`
 - `selectedDateAnchor: String`
+- `sidebarEdge: leading | trailing`
+- `workspaceOverlayVisible: Bool`
+- `workspaceOverlayCorner: top-leading | top-trailing | bottom-leading | bottom-trailing`
 
 ### Daily Todo File
 
@@ -108,16 +114,17 @@
 
 ## Implementation Notes
 
-- Extend `AITerminalManagerConfiguration` with a new todo settings block.
+- Extend `AITerminalManagerConfiguration` with a new todo settings block and presentation preferences.
 - Add dedicated todo store logic to `AITerminalManagerStore`.
 - Use the stable top-level tab/workspace UUID as the assignment key.
 - Keep todo file IO deterministic and synchronous-at-boundary, with async only where UI responsiveness needs it.
-- Reuse the existing Settings Panel tab switching model.
+- Reuse the existing Settings Panel tab switching model for durable settings and use an in-window side panel for rapid task work.
 - Do not overload heartbeat queue or learning logs for todo state.
 
 ## Validation
 
 - Config reload must repopulate the Todo tab correctly.
+- Config reload must repopulate the side-panel side and quick-look placement/visibility correctly.
 - Creating the todo workspace must be idempotent.
 - Empty selected day should render a stable empty state.
 - Completion rate must match `completed / total` for today.

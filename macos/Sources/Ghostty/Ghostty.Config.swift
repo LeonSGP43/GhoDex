@@ -810,6 +810,18 @@ extension Ghostty {
             optionalString(for: "ghodex-todo-selected-date-anchor")
         }
 
+        var ghodexTodoSidebarEdge: String? {
+            optionalString(for: "ghodex-todo-sidebar-edge")
+        }
+
+        var ghodexTodoWorkspaceOverlayVisible: Bool {
+            bool(for: "ghodex-todo-workspace-overlay-visible", default: true)
+        }
+
+        var ghodexTodoWorkspaceOverlayCorner: String? {
+            optionalString(for: "ghodex-todo-workspace-overlay-corner")
+        }
+
         var ghodexHeartbeatEnabled: Bool {
             bool(for: "ghodex-heartbeat-enabled", default: true)
         }

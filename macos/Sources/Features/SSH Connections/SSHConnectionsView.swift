@@ -91,6 +91,9 @@ struct SSHConnectionsView: View {
     @State private var todoWorkspaceRootPath = ""
     @State private var todoShowCompletedItems = true
     @State private var todoSelectedDate = Date.now
+    @State private var todoSidebarEdge: AITerminalTodoSidebarEdge = .leading
+    @State private var todoWorkspaceOverlayVisible = true
+    @State private var todoWorkspaceOverlayCorner: AITerminalTodoOverlayCorner = .topLeading
     @State private var todoDocument = AITerminalTodoDayDocument()
     @State private var todoDraftTitle = ""
     @State private var todoDraftNotes = ""
@@ -385,6 +388,8 @@ struct SSHConnectionsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
+                todoPresentationCard
+
                 HStack(alignment: .center, spacing: 12) {
                     Button(L10n.SSHConnections.todoDateYesterday) {
                         todoSelectedDate = Calendar.current.date(byAdding: .day, value: -1, to: todoSelectedDate) ?? todoSelectedDate
@@ -636,6 +641,63 @@ struct SSHConnectionsView: View {
             Text(L10n.SSHConnections.todoSelectedDay(AITerminalTodoSettings.dayString(from: todoSelectedDate)))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.primary.opacity(0.04))
+        )
+    }
+
+    private var todoPresentationCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(L10n.SSHConnections.todoPresentationTitle)
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(L10n.SSHConnections.todoSidebarPlacement)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Picker("", selection: $todoSidebarEdge) {
+                    Text(L10n.SSHConnections.todoSidebarPlacementLeft)
+                        .tag(AITerminalTodoSidebarEdge.leading)
+                    Text(L10n.SSHConnections.todoSidebarPlacementRight)
+                        .tag(AITerminalTodoSidebarEdge.trailing)
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: todoSidebarEdge) { _ in
+                    persistTodoSettings(showSavedMessage: false)
+                }
+            }
+
+            Toggle(L10n.SSHConnections.todoWorkspaceOverlayVisible, isOn: $todoWorkspaceOverlayVisible)
+                .onChange(of: todoWorkspaceOverlayVisible) { _ in
+                    persistTodoSettings(showSavedMessage: false)
+                }
+
+            if todoWorkspaceOverlayVisible {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(L10n.SSHConnections.todoWorkspaceOverlayPlacement)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Picker("", selection: $todoWorkspaceOverlayCorner) {
+                        Text(L10n.SSHConnections.todoOverlayTopLeft)
+                            .tag(AITerminalTodoOverlayCorner.topLeading)
+                        Text(L10n.SSHConnections.todoOverlayTopRight)
+                            .tag(AITerminalTodoOverlayCorner.topTrailing)
+                        Text(L10n.SSHConnections.todoOverlayBottomLeft)
+                            .tag(AITerminalTodoOverlayCorner.bottomLeading)
+                        Text(L10n.SSHConnections.todoOverlayBottomRight)
+                            .tag(AITerminalTodoOverlayCorner.bottomTrailing)
+                    }
+                    .pickerStyle(.menu)
+                    .onChange(of: todoWorkspaceOverlayCorner) { _ in
+                        persistTodoSettings(showSavedMessage: false)
+                    }
+                }
+            }
         }
         .padding(14)
         .background(
@@ -1902,6 +1964,9 @@ struct SSHConnectionsView: View {
         todoWorkspaceRootPath = settings.workspaceRootPath
         todoShowCompletedItems = settings.showCompletedItems
         todoSelectedDate = AITerminalTodoSettings.date(fromDayString: settings.selectedDateAnchor) ?? .now
+        todoSidebarEdge = settings.sidebarEdge
+        todoWorkspaceOverlayVisible = settings.workspaceOverlayVisible
+        todoWorkspaceOverlayCorner = settings.workspaceOverlayCorner
         refreshTodoDocument()
         if todoStatusMessage == L10n.SSHConnections.todoSaved {
             todoStatusMessage = nil
@@ -1928,7 +1993,10 @@ struct SSHConnectionsView: View {
             enabled: todoEnabled,
             workspaceRootPath: trimmedRootPath,
             showCompletedItems: todoShowCompletedItems,
-            selectedDateAnchor: AITerminalTodoSettings.dayString(from: todoSelectedDate)
+            selectedDateAnchor: AITerminalTodoSettings.dayString(from: todoSelectedDate),
+            sidebarEdge: todoSidebarEdge,
+            workspaceOverlayVisible: todoWorkspaceOverlayVisible,
+            workspaceOverlayCorner: todoWorkspaceOverlayCorner
         ))
 
         if store.lastError == nil {
@@ -2172,7 +2240,10 @@ struct SSHConnectionsView: View {
             enabled: todoEnabled,
             workspaceRootPath: trimmedRootPath,
             showCompletedItems: todoShowCompletedItems,
-            selectedDateAnchor: AITerminalTodoSettings.dayString(from: todoSelectedDate)
+            selectedDateAnchor: AITerminalTodoSettings.dayString(from: todoSelectedDate),
+            sidebarEdge: todoSidebarEdge,
+            workspaceOverlayVisible: todoWorkspaceOverlayVisible,
+            workspaceOverlayCorner: todoWorkspaceOverlayCorner
         ).dayFilePath(for: todoSelectedDate)
     }
 

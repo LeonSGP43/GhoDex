@@ -638,7 +638,7 @@ class AppDelegate: NSObject,
     /// to track our runtime language selection.
     private func setupMenuLocalization() {
         installTodoWorkspaceMenuItemIfNeeded()
-        menuTodoWorkspace?.title = L10n.SSHConnections.todoTitle
+        menuTodoWorkspace?.title = L10n.SSHConnections.todoPanelTitle
         menuSaveWorkspace?.title = L10n.AITerminalManager.saveWorkspaceAction
     }
 
@@ -785,7 +785,7 @@ class AppDelegate: NSObject,
               let menu = settingsItem.menu else { return }
 
         let item = NSMenuItem(
-            title: L10n.SSHConnections.todoTitle,
+            title: L10n.SSHConnections.todoPanelTitle,
             action: #selector(showTodoWorkspace(_:)),
             keyEquivalent: "m"
         )

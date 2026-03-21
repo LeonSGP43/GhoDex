@@ -51,6 +51,9 @@ class BaseTerminalController: NSWindowController,
     /// Set if the terminal view should show the update overlay.
     @Published var updateOverlayIsVisible: Bool = false
 
+    /// Whether the in-window Todo sidebar is presented for this workspace.
+    @Published var todoSidebarIsPresented: Bool = false
+
     /// True when any surface in this controller currently has an active bell.
     @Published private(set) var bell: Bool = false
 

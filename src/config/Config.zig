@@ -3779,6 +3779,9 @@ term: []const u8 = "xterm-ghostty",
 @"ghodex-todo-workspace-root-path": ?[:0]const u8 = null,
 @"ghodex-todo-show-completed-items": bool = true,
 @"ghodex-todo-selected-date-anchor": ?[:0]const u8 = null,
+@"ghodex-todo-sidebar-edge": ?[:0]const u8 = null,
+@"ghodex-todo-workspace-overlay-visible": bool = true,
+@"ghodex-todo-workspace-overlay-corner": ?[:0]const u8 = null,
 
 /// GhoDex-managed learning settings persisted in the main config file.
 @"ghodex-learning-enabled": bool = true,

@@ -442,11 +442,46 @@ struct AITerminalHeartbeatQueueSettings: Codable, Hashable, Sendable {
     }
 }
 
+enum AITerminalTodoSidebarEdge: String, CaseIterable, Codable, Hashable, Identifiable, Sendable {
+    case leading
+    case trailing
+
+    var id: String { rawValue }
+
+    static func normalized(_ value: String?) -> Self {
+        guard let rawValue = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let edge = Self(rawValue: rawValue) else {
+            return .leading
+        }
+        return edge
+    }
+}
+
+enum AITerminalTodoOverlayCorner: String, CaseIterable, Codable, Hashable, Identifiable, Sendable {
+    case topLeading = "top-leading"
+    case topTrailing = "top-trailing"
+    case bottomLeading = "bottom-leading"
+    case bottomTrailing = "bottom-trailing"
+
+    var id: String { rawValue }
+
+    static func normalized(_ value: String?) -> Self {
+        guard let rawValue = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let corner = Self(rawValue: rawValue) else {
+            return .topLeading
+        }
+        return corner
+    }
+}
+
 struct AITerminalTodoSettings: Codable, Hashable, Sendable {
     var enabled: Bool
     var workspaceRootPath: String
     var showCompletedItems: Bool
     var selectedDateAnchor: String
+    var sidebarEdge: AITerminalTodoSidebarEdge
+    var workspaceOverlayVisible: Bool
+    var workspaceOverlayCorner: AITerminalTodoOverlayCorner
 
     static let workspaceDirectoryName = "gho_todolist_workspace"
     static var defaultWorkspaceRootPath: String {
@@ -464,12 +499,18 @@ struct AITerminalTodoSettings: Codable, Hashable, Sendable {
         enabled: Bool = true,
         workspaceRootPath: String = AITerminalTodoSettings.defaultWorkspaceRootPath,
         showCompletedItems: Bool = true,
-        selectedDateAnchor: String = AITerminalTodoSettings.defaultSelectedDateAnchor
+        selectedDateAnchor: String = AITerminalTodoSettings.defaultSelectedDateAnchor,
+        sidebarEdge: AITerminalTodoSidebarEdge = .leading,
+        workspaceOverlayVisible: Bool = true,
+        workspaceOverlayCorner: AITerminalTodoOverlayCorner = .topLeading
     ) {
         self.enabled = enabled
         self.workspaceRootPath = workspaceRootPath.trimmingCharacters(in: .whitespacesAndNewlines)
         self.showCompletedItems = showCompletedItems
         self.selectedDateAnchor = Self.normalizedDateAnchor(selectedDateAnchor)
+        self.sidebarEdge = sidebarEdge
+        self.workspaceOverlayVisible = workspaceOverlayVisible
+        self.workspaceOverlayCorner = workspaceOverlayCorner
     }
 
     enum CodingKeys: String, CodingKey {
@@ -477,6 +518,9 @@ struct AITerminalTodoSettings: Codable, Hashable, Sendable {
         case workspaceRootPath
         case showCompletedItems
         case selectedDateAnchor
+        case sidebarEdge
+        case workspaceOverlayVisible
+        case workspaceOverlayCorner
     }
 
     init(from decoder: Decoder) throws {
@@ -490,6 +534,18 @@ struct AITerminalTodoSettings: Codable, Hashable, Sendable {
             try container.decodeIfPresent(String.self, forKey: .selectedDateAnchor)
             ?? Self.defaultSelectedDateAnchor
         )
+        sidebarEdge = try container.decodeIfPresent(
+            AITerminalTodoSidebarEdge.self,
+            forKey: .sidebarEdge
+        ) ?? .leading
+        workspaceOverlayVisible = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .workspaceOverlayVisible
+        ) ?? true
+        workspaceOverlayCorner = try container.decodeIfPresent(
+            AITerminalTodoOverlayCorner.self,
+            forKey: .workspaceOverlayCorner
+        ) ?? .topLeading
     }
 
     func encode(to encoder: Encoder) throws {
@@ -498,6 +554,9 @@ struct AITerminalTodoSettings: Codable, Hashable, Sendable {
         try container.encode(workspaceRootPath, forKey: .workspaceRootPath)
         try container.encode(showCompletedItems, forKey: .showCompletedItems)
         try container.encode(selectedDateAnchor, forKey: .selectedDateAnchor)
+        try container.encode(sidebarEdge, forKey: .sidebarEdge)
+        try container.encode(workspaceOverlayVisible, forKey: .workspaceOverlayVisible)
+        try container.encode(workspaceOverlayCorner, forKey: .workspaceOverlayCorner)
     }
 
     static func normalizedDateAnchor(_ value: String) -> String {

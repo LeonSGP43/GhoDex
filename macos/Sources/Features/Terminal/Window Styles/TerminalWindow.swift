@@ -495,7 +495,7 @@ class TerminalWindow: NSWindow {
             openManager: { [weak self] in
                 self?.todoQuickLookPopover.performClose(nil)
                 guard let self else { return }
-                appDelegate.showTodoWorkspace(
+                _ = appDelegate.toggleTodoSidebar(
                     focusedWorkspaceID: workspaceID,
                     from: self
                 )
@@ -515,7 +515,7 @@ class TerminalWindow: NSWindow {
 
     @objc private func openTodoWorkspaceFromTabAccessory(_ sender: Any?) {
         guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
-        appDelegate.showTodoWorkspace(
+        _ = appDelegate.toggleTodoSidebar(
             focusedWorkspaceID: terminalController?.workspaceID,
             from: self
         )

@@ -94,6 +94,9 @@ struct AITerminalManagerTests {
         #expect(configuration.todoSettings.enabled)
         #expect(configuration.todoSettings.workspaceRootPath == AITerminalTodoSettings.defaultWorkspaceRootPath)
         #expect(configuration.todoSettings.showCompletedItems)
+        #expect(configuration.todoSettings.sidebarEdge == .leading)
+        #expect(configuration.todoSettings.workspaceOverlayVisible)
+        #expect(configuration.todoSettings.workspaceOverlayCorner == .topLeading)
         #expect(configuration.learningSettings.enabled)
         #expect(configuration.learningSettings.preferTabWorkingDirectory)
         #expect(configuration.learningSettings.notesRelativePath == AITerminalLearningSettings.defaultNotesRelativePath)
@@ -513,7 +516,10 @@ struct AITerminalManagerTests {
             enabled: true,
             workspaceRootPath: "/tmp/ghodex-todo-tests",
             showCompletedItems: false,
-            selectedDateAnchor: "2026-03-20"
+            selectedDateAnchor: "2026-03-20",
+            sidebarEdge: .trailing,
+            workspaceOverlayVisible: false,
+            workspaceOverlayCorner: .bottomTrailing
         ))
 
         let configuration = try AITerminalManagerStore.loadConfiguration(at: tempURL)
@@ -521,6 +527,9 @@ struct AITerminalManagerTests {
         #expect(configuration.todoSettings.workspaceRootPath == "/tmp/ghodex-todo-tests")
         #expect(configuration.todoSettings.showCompletedItems == false)
         #expect(configuration.todoSettings.selectedDateAnchor == "2026-03-20")
+        #expect(configuration.todoSettings.sidebarEdge == .trailing)
+        #expect(configuration.todoSettings.workspaceOverlayVisible == false)
+        #expect(configuration.todoSettings.workspaceOverlayCorner == .bottomTrailing)
     }
 
     @Test @MainActor func storeClearsTodoErrorsWhenSavingSettings() {
@@ -540,7 +549,10 @@ struct AITerminalManagerTests {
             enabled: true,
             workspaceRootPath: "/tmp/ghodex-todo-tests",
             showCompletedItems: true,
-            selectedDateAnchor: "2026-03-21"
+            selectedDateAnchor: "2026-03-21",
+            sidebarEdge: .leading,
+            workspaceOverlayVisible: true,
+            workspaceOverlayCorner: .topLeading
         ))
 
         #expect(store.lastError == nil)
@@ -809,6 +821,9 @@ struct AITerminalManagerTests {
         ghodex-todo-workspace-root-path = \(try AITerminalManagerTestSupport.encodedConfigStringLiteral("/tmp/refreshed-todo-root"))
         ghodex-todo-show-completed-items = false
         ghodex-todo-selected-date-anchor = \(try AITerminalManagerTestSupport.encodedConfigStringLiteral("2026-03-19"))
+        ghodex-todo-sidebar-edge = \(try AITerminalManagerTestSupport.encodedConfigStringLiteral("trailing"))
+        ghodex-todo-workspace-overlay-visible = false
+        ghodex-todo-workspace-overlay-corner = \(try AITerminalManagerTestSupport.encodedConfigStringLiteral("bottom-trailing"))
         \(AITerminalManagerTestSupport.managedConfigEndMarker)
         """
         try text.write(to: tempURL, atomically: true, encoding: .utf8)
@@ -819,6 +834,9 @@ struct AITerminalManagerTests {
         #expect(store.todoSettings.workspaceRootPath == "/tmp/refreshed-todo-root")
         #expect(store.todoSettings.showCompletedItems == false)
         #expect(store.todoSettings.selectedDateAnchor == "2026-03-19")
+        #expect(store.todoSettings.sidebarEdge == .trailing)
+        #expect(store.todoSettings.workspaceOverlayVisible == false)
+        #expect(store.todoSettings.workspaceOverlayCorner == .bottomTrailing)
     }
 
     @Test @MainActor func storeUsesConfigDirectoryForHeartbeatInbox() {

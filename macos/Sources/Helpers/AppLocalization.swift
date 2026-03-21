@@ -248,6 +248,16 @@ enum AppLocalization {
         "ssh.connections.todo.workspace_required": "Todo workspace root path is required.",
         "ssh.connections.todo.day_file_path": "Selected day file path",
         "ssh.connections.todo.show_completed_items": "Show completed items",
+        "ssh.connections.todo.presentation_title": "Presentation",
+        "ssh.connections.todo.sidebar_placement": "Cmd+Shift+M panel side",
+        "ssh.connections.todo.sidebar_placement_left": "Left",
+        "ssh.connections.todo.sidebar_placement_right": "Right",
+        "ssh.connections.todo.workspace_overlay_visible": "Show tab quick-look card",
+        "ssh.connections.todo.workspace_overlay_placement": "Tab quick-look position",
+        "ssh.connections.todo.overlay_top_left": "Top Left",
+        "ssh.connections.todo.overlay_top_right": "Top Right",
+        "ssh.connections.todo.overlay_bottom_left": "Bottom Left",
+        "ssh.connections.todo.overlay_bottom_right": "Bottom Right",
         "ssh.connections.todo.initialize_workspace": "Initialize Todo Workspace",
         "ssh.connections.todo.initialize_workspace_hint": "Create the todo workspace root, creator note, README, and days directory.",
         "ssh.connections.todo.saved": "Todo settings saved.",
@@ -266,11 +276,15 @@ enum AppLocalization {
         "ssh.connections.todo.focused_workspace_hint": "This summary tracks tasks assigned to the tab that opened the todo panel.",
         "ssh.connections.todo.quick_look_title": "Tab Tasks",
         "ssh.connections.todo.quick_look_empty": "No tasks are assigned to this tab for today.",
-        "ssh.connections.todo.quick_look_manage": "Open Todo Workspace",
+        "ssh.connections.todo.quick_look_manage": "Open Todo Panel",
         "ssh.connections.todo.quick_look_summary": "%d / %d complete · %d remaining",
         "ssh.connections.todo.quick_look_more": "%d more task(s)",
         "ssh.connections.todo.timeline_title": "Timeline",
         "ssh.connections.todo.save_settings": "Save Todo Settings",
+        "ssh.connections.todo.panel_title": "Todo Panel",
+        "ssh.connections.todo.panel_subtitle": "Manage today's tasks without leaving the current tab.",
+        "ssh.connections.todo.panel_open_settings": "Open Todo Settings",
+        "ssh.connections.todo.panel_close": "Close",
         "ssh.connections.todo.action_save": "Save",
         "ssh.connections.todo.action_edit": "Edit",
         "ssh.connections.todo.action_reset": "Reset",
@@ -602,6 +616,16 @@ enum AppLocalization {
         "ssh.connections.todo.workspace_required": "必须先填写 Todo 根目录。",
         "ssh.connections.todo.day_file_path": "当前日期文件路径",
         "ssh.connections.todo.show_completed_items": "显示已完成任务",
+        "ssh.connections.todo.presentation_title": "展示方式",
+        "ssh.connections.todo.sidebar_placement": "Cmd+Shift+M 面板位置",
+        "ssh.connections.todo.sidebar_placement_left": "左侧",
+        "ssh.connections.todo.sidebar_placement_right": "右侧",
+        "ssh.connections.todo.workspace_overlay_visible": "显示 Tab 快速卡片",
+        "ssh.connections.todo.workspace_overlay_placement": "Tab 快速卡片位置",
+        "ssh.connections.todo.overlay_top_left": "左上角",
+        "ssh.connections.todo.overlay_top_right": "右上角",
+        "ssh.connections.todo.overlay_bottom_left": "左下角",
+        "ssh.connections.todo.overlay_bottom_right": "右下角",
         "ssh.connections.todo.initialize_workspace": "初始化 Todo 工作区",
         "ssh.connections.todo.initialize_workspace_hint": "创建 todo 根目录、creator 说明、README 和 days 目录。",
         "ssh.connections.todo.saved": "Todo 设置已保存。",
@@ -620,11 +644,15 @@ enum AppLocalization {
         "ssh.connections.todo.focused_workspace_hint": "这里显示唤起当前 Todo 面板的 tab 所分配任务的完成情况。",
         "ssh.connections.todo.quick_look_title": "Tab 任务",
         "ssh.connections.todo.quick_look_empty": "这个 Tab 今天还没有分配任务。",
-        "ssh.connections.todo.quick_look_manage": "打开 Todo 工作区",
+        "ssh.connections.todo.quick_look_manage": "打开 Todo 面板",
         "ssh.connections.todo.quick_look_summary": "已完成 %d / %d · 剩余 %d",
         "ssh.connections.todo.quick_look_more": "还有 %d 个任务",
         "ssh.connections.todo.timeline_title": "时间轴",
         "ssh.connections.todo.save_settings": "保存 Todo 设置",
+        "ssh.connections.todo.panel_title": "Todo 面板",
+        "ssh.connections.todo.panel_subtitle": "不离开当前 tab 就能查看和管理今日任务。",
+        "ssh.connections.todo.panel_open_settings": "打开 Todo 设置",
+        "ssh.connections.todo.panel_close": "关闭",
         "ssh.connections.todo.action_save": "保存",
         "ssh.connections.todo.action_edit": "编辑",
         "ssh.connections.todo.action_reset": "重置",
@@ -1331,6 +1359,16 @@ enum L10n {
         nonisolated static var todoWorkspaceRequired: String { AppLocalization.localizedString("ssh.connections.todo.workspace_required") }
         nonisolated static var todoDayFilePath: String { AppLocalization.localizedString("ssh.connections.todo.day_file_path") }
         nonisolated static var todoShowCompletedItems: String { AppLocalization.localizedString("ssh.connections.todo.show_completed_items") }
+        nonisolated static var todoPresentationTitle: String { AppLocalization.localizedString("ssh.connections.todo.presentation_title") }
+        nonisolated static var todoSidebarPlacement: String { AppLocalization.localizedString("ssh.connections.todo.sidebar_placement") }
+        nonisolated static var todoSidebarPlacementLeft: String { AppLocalization.localizedString("ssh.connections.todo.sidebar_placement_left") }
+        nonisolated static var todoSidebarPlacementRight: String { AppLocalization.localizedString("ssh.connections.todo.sidebar_placement_right") }
+        nonisolated static var todoWorkspaceOverlayVisible: String { AppLocalization.localizedString("ssh.connections.todo.workspace_overlay_visible") }
+        nonisolated static var todoWorkspaceOverlayPlacement: String { AppLocalization.localizedString("ssh.connections.todo.workspace_overlay_placement") }
+        nonisolated static var todoOverlayTopLeft: String { AppLocalization.localizedString("ssh.connections.todo.overlay_top_left") }
+        nonisolated static var todoOverlayTopRight: String { AppLocalization.localizedString("ssh.connections.todo.overlay_top_right") }
+        nonisolated static var todoOverlayBottomLeft: String { AppLocalization.localizedString("ssh.connections.todo.overlay_bottom_left") }
+        nonisolated static var todoOverlayBottomRight: String { AppLocalization.localizedString("ssh.connections.todo.overlay_bottom_right") }
         nonisolated static var todoInitializeWorkspace: String { AppLocalization.localizedString("ssh.connections.todo.initialize_workspace") }
         nonisolated static var todoInitializeWorkspaceHint: String { AppLocalization.localizedString("ssh.connections.todo.initialize_workspace_hint") }
         nonisolated static var todoSaved: String { AppLocalization.localizedString("ssh.connections.todo.saved") }
@@ -1362,6 +1400,10 @@ enum L10n {
         }
         nonisolated static var todoTimelineTitle: String { AppLocalization.localizedString("ssh.connections.todo.timeline_title") }
         nonisolated static var todoSaveSettings: String { AppLocalization.localizedString("ssh.connections.todo.save_settings") }
+        nonisolated static var todoPanelTitle: String { AppLocalization.localizedString("ssh.connections.todo.panel_title") }
+        nonisolated static var todoPanelSubtitle: String { AppLocalization.localizedString("ssh.connections.todo.panel_subtitle") }
+        nonisolated static var todoPanelOpenSettings: String { AppLocalization.localizedString("ssh.connections.todo.panel_open_settings") }
+        nonisolated static var todoPanelClose: String { AppLocalization.localizedString("ssh.connections.todo.panel_close") }
         nonisolated static var todoActionSave: String { AppLocalization.localizedString("ssh.connections.todo.action_save") }
         nonisolated static var todoActionEdit: String { AppLocalization.localizedString("ssh.connections.todo.action_edit") }
         nonisolated static var todoActionReset: String { AppLocalization.localizedString("ssh.connections.todo.action_reset") }

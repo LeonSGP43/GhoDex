@@ -418,7 +418,10 @@ final class AITerminalManagerStore: ObservableObject {
             enabled: settings.enabled,
             workspaceRootPath: settings.workspaceRootPath,
             showCompletedItems: settings.showCompletedItems,
-            selectedDateAnchor: settings.selectedDateAnchor
+            selectedDateAnchor: settings.selectedDateAnchor,
+            sidebarEdge: settings.sidebarEdge,
+            workspaceOverlayVisible: settings.workspaceOverlayVisible,
+            workspaceOverlayCorner: settings.workspaceOverlayCorner
         )
         lastError = nil
         persistConfiguration()
@@ -3338,7 +3341,10 @@ final class AITerminalManagerStore: ObservableObject {
                 ? AITerminalTodoSettings.defaultWorkspaceRootPath
                 : next.todoSettings.workspaceRootPath,
             showCompletedItems: next.todoSettings.showCompletedItems,
-            selectedDateAnchor: next.todoSettings.selectedDateAnchor
+            selectedDateAnchor: next.todoSettings.selectedDateAnchor,
+            sidebarEdge: next.todoSettings.sidebarEdge,
+            workspaceOverlayVisible: next.todoSettings.workspaceOverlayVisible,
+            workspaceOverlayCorner: next.todoSettings.workspaceOverlayCorner
         )
         if next.learningLogs.count > Self.maxLearningLogEntries {
             next.learningLogs = Array(next.learningLogs.suffix(Self.maxLearningLogEntries))
@@ -3485,7 +3491,14 @@ final class AITerminalManagerStore: ObservableObject {
                 enabled: config.ghodexTodoEnabled,
                 workspaceRootPath: decodedStringValue(config.ghodexTodoWorkspaceRootPath) ?? AITerminalTodoSettings.defaultWorkspaceRootPath,
                 showCompletedItems: config.ghodexTodoShowCompletedItems,
-                selectedDateAnchor: decodedStringValue(config.ghodexTodoSelectedDateAnchor) ?? AITerminalTodoSettings.defaultSelectedDateAnchor
+                selectedDateAnchor: decodedStringValue(config.ghodexTodoSelectedDateAnchor) ?? AITerminalTodoSettings.defaultSelectedDateAnchor,
+                sidebarEdge: AITerminalTodoSidebarEdge.normalized(
+                    decodedStringValue(config.ghodexTodoSidebarEdge)
+                ),
+                workspaceOverlayVisible: config.ghodexTodoWorkspaceOverlayVisible,
+                workspaceOverlayCorner: AITerminalTodoOverlayCorner.normalized(
+                    decodedStringValue(config.ghodexTodoWorkspaceOverlayCorner)
+                )
             ),
             learningSettings: .init(
                 enabled: config.ghodexLearningEnabled,
@@ -3537,6 +3550,9 @@ final class AITerminalManagerStore: ObservableObject {
         lines.append("ghodex-todo-workspace-root-path = \(configStringLiteral(encodeStringValue(configuration.todoSettings.workspaceRootPath)))")
         lines.append("ghodex-todo-show-completed-items = \(configuration.todoSettings.showCompletedItems ? "true" : "false")")
         lines.append("ghodex-todo-selected-date-anchor = \(configStringLiteral(encodeStringValue(configuration.todoSettings.selectedDateAnchor)))")
+        lines.append("ghodex-todo-sidebar-edge = \(configStringLiteral(encodeStringValue(configuration.todoSettings.sidebarEdge.rawValue)))")
+        lines.append("ghodex-todo-workspace-overlay-visible = \(configuration.todoSettings.workspaceOverlayVisible ? "true" : "false")")
+        lines.append("ghodex-todo-workspace-overlay-corner = \(configStringLiteral(encodeStringValue(configuration.todoSettings.workspaceOverlayCorner.rawValue)))")
         lines.append("ghodex-learning-enabled = \(configuration.learningSettings.enabled ? "true" : "false")")
         lines.append("ghodex-learning-prefer-tab-working-directory = \(configuration.learningSettings.preferTabWorkingDirectory ? "true" : "false")")
         lines.append("ghodex-learning-default-project-path = \(configStringLiteral(encodeStringValue(configuration.learningSettings.defaultProjectPath)))")
