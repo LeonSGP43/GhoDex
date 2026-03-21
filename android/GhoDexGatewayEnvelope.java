@@ -1,3 +1,5 @@
+package com.leongong.ghodex.remote;
+
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -157,6 +159,23 @@ public final class GhoDexGatewayEnvelope {
             return (List<String>) value;
         }
         return List.of();
+    }
+
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> resultObjectList(String key) {
+        Object value = result.get(key);
+        if (value instanceof List<?>) {
+            return (List<Map<String, Object>>) value;
+        }
+        return List.of();
+    }
+
+    public Long resultLong(String key) {
+        Object value = result.get(key);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        return null;
     }
 
     private static Map<String, Object> immutableCopy(Map<String, Object> map) {

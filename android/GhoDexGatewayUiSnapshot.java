@@ -1,3 +1,5 @@
+package com.leongong.ghodex.remote;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -74,11 +76,27 @@ public final class GhoDexGatewayUiSnapshot {
     public static final class TerminalRow {
         private final String terminalId;
         private final int generation;
+        private final String title;
+        private final String workingDirectory;
+        private final boolean focused;
+        private final boolean visible;
         private final String lastEvent;
 
-        public TerminalRow(String terminalId, int generation, String lastEvent) {
+        public TerminalRow(
+            String terminalId,
+            int generation,
+            String title,
+            String workingDirectory,
+            boolean focused,
+            boolean visible,
+            String lastEvent
+        ) {
             this.terminalId = terminalId;
             this.generation = generation;
+            this.title = title;
+            this.workingDirectory = workingDirectory;
+            this.focused = focused;
+            this.visible = visible;
             this.lastEvent = lastEvent;
         }
 
@@ -88,6 +106,22 @@ public final class GhoDexGatewayUiSnapshot {
 
         public int getGeneration() {
             return generation;
+        }
+
+        public String getTitle() {
+            return title;
+        }
+
+        public String getWorkingDirectory() {
+            return workingDirectory;
+        }
+
+        public boolean isFocused() {
+            return focused;
+        }
+
+        public boolean isVisible() {
+            return visible;
         }
 
         public String getLastEvent() {

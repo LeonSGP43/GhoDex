@@ -1,3 +1,5 @@
+package com.leongong.ghodex.remote;
+
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;

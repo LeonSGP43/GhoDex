@@ -1,3 +1,5 @@
+package com.leongong.ghodex.remote;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -22,6 +24,10 @@ public final class GhoDexGatewayUiStore implements GhoDexGatewayClientStateMachi
                 new GhoDexGatewayUiSnapshot.TerminalRow(
                     terminal.getTerminalId(),
                     terminal.getGeneration(),
+                    terminal.getTitle(),
+                    terminal.getWorkingDirectory(),
+                    terminal.isFocused(),
+                    terminal.isVisible(),
                     terminal.getLastEvent()
                 )
             );

@@ -433,7 +433,7 @@ Must prove:
 
 Current gap:
 
-- A compileable Android client contract foundation now exists, but there is still no Android transport adapter, terminal/session store, or UI implementation in this repo/worktree yet.
+- A compileable Android client contract foundation and a minimal `android/app` transport UI shell now exist in this worktree, but the module still needs SDK-backed device/emulator verification, WebSocket parity, and a richer approval-oriented mobile UX.
 
 ### Milestone 5: Shannon Integration
 

@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(android): add app module transport shell
+
+- What changed: Packaged the Java gateway foundation under `com.leongong.ghodex.remote`, fixed pairing exchange to accept the real desktop `token` payload, taught the terminal index store to project snapshot inventory into UI rows, and added a real `android/app` Gradle module with a plain-Android `MainActivity` plus `SharedPreferences` persistence for host, token, pairing code, and observed terminal state.
+- Why: The branch already had a transport-backed Java state machine, but Milestone 4 was still blocked on a real app-module landing zone. Without an Android module and UI shell, the client runtime could not be exercised as an application, and the snapshot path still failed to materialize terminal inventory for presentation.
+- Impact: Milestone 4 is no longer “pure Java only”. The repo now contains an Android app shell that can drive TCP pairing, snapshot, observe, subscribe, and send-text flows once an SDK-backed build is available, and the foundation package is structured so both the self-test and the app module use the same transport/state code.
+- Verification: `tmpdir=\"$(mktemp -d)\"; javac -d \"$tmpdir\" android/*.java && java -ea -cp \"$tmpdir\" com.leongong.ghodex.remote.GhoDexGatewayContractSelfTest`; `git diff --check`
+- Files: `android/GhoDexGatewayRequest.java`, `android/GhoDexGatewayResumeState.java`, `android/GhoDexGatewayEnvelope.java`, `android/GhoDexGatewayTransport.java`, `android/GhoDexGatewayTcpTransport.java`, `android/GhoDexGatewayJsonCodec.java`, `android/GhoDexGatewaySessionStore.java`, `android/GhoDexTerminalIndexStore.java`, `android/GhoDexGatewayUiSnapshot.java`, `android/GhoDexGatewayUiStore.java`, `android/GhoDexGatewayClientStateMachine.java`, `android/GhoDexGatewayContractSelfTest.java`, `android/README.md`, `android/settings.gradle.kts`, `android/build.gradle.kts`, `android/gradle.properties`, `android/app/build.gradle.kts`, `android/app/src/main/AndroidManifest.xml`, `android/app/src/main/java/com/leongong/ghodex/androidapp/MainActivity.java`, `android/app/src/main/java/com/leongong/ghodex/androidapp/GatewayPreferencesStore.java`, `android-remote-control-blueprint.md`, `CHANGELOG.md`
+- Decision trail: Reuse the already-verified Java transport/state code instead of rewriting the client in a new stack first. The correct next step was to package that foundation cleanly and hang the thinnest possible Android app shell off it, leaving emulator/device verification as a separate environment-dependent step.
+
 ### test(control): record live desktop probe evidence
 
 - What changed: Updated `android-remote-control-acceptance.md` with a real loopback desktop run launched from the branch-built Debug app, including the launch command, local pairing flow, live `events.subscribe` confirmation, scripted foreground input steps, and the archived coarse `%CPU` plus `gateway.metrics` snapshot captured by `control_gateway_acceptance_probe.py`.

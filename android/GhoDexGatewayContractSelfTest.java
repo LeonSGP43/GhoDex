@@ -1,3 +1,5 @@
+package com.leongong.ghodex.remote;
+
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -152,6 +154,11 @@ public final class GhoDexGatewayContractSelfTest {
 
             stateMachine.refreshSnapshot("req-live-snapshot");
             assertEquals("1.0", uiStore.snapshot().getProtocolVersion());
+            assertEquals("terminal-live", uiStore.snapshot().getTerminals().get(0).getTerminalId());
+            assertEquals("Live Terminal", uiStore.snapshot().getTerminals().get(0).getTitle());
+            assertEquals("/tmp/live", uiStore.snapshot().getTerminals().get(0).getWorkingDirectory());
+            assertTrue(uiStore.snapshot().getTerminals().get(0).isFocused(), "snapshot terminal should be focused");
+            assertTrue(uiStore.snapshot().getTerminals().get(0).isVisible(), "snapshot terminal should be visible");
 
             stateMachine.observeTerminal("terminal-live");
             stateMachine.openSubscription("req-live-subscribe", 32);
@@ -311,13 +318,13 @@ public final class GhoDexGatewayContractSelfTest {
                     case "gateway.pairing.exchange" -> {
                         writeLine(
                             outputStream,
-                            "{\"request_id\":\"" + requestId + "\",\"status\":\"ok\",\"result\":{\"auth_token\":\"token-live\",\"token_id\":\"tok-live\",\"scopes\":[\"observe\"]}}"
+                            "{\"request_id\":\"" + requestId + "\",\"status\":\"ok\",\"result\":{\"token\":\"token-live\",\"token_id\":\"tok-live\",\"scopes\":[\"observe\"]}}"
                         );
                     }
                     case "snapshot" -> {
                         writeLine(
                             outputStream,
-                            "{\"request_id\":\"" + requestId + "\",\"status\":\"ok\",\"result\":{\"protocol_version\":\"1.0\"}}"
+                            "{\"request_id\":\"" + requestId + "\",\"status\":\"ok\",\"result\":{\"protocol_version\":\"1.0\",\"last_sequence\":6,\"tabs\":[{\"tab_id\":\"tab-live\",\"generation\":2,\"is_focused\":true,\"terminals\":[{\"terminal_id\":\"terminal-live\",\"generation\":2,\"is_focused\":true,\"is_visible\":true,\"title\":\"Live Terminal\",\"working_directory\":\"/tmp/live\"}]}]}}"
                         );
                     }
                     case "events.subscribe" -> {

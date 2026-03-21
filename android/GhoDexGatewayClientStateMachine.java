@@ -1,3 +1,5 @@
+package com.leongong.ghodex.remote;
+
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.Objects;
@@ -39,7 +41,7 @@ public final class GhoDexGatewayClientStateMachine {
             GhoDexGatewayRequest.pairingExchange(requestId, pairingCode)
         );
         requireOk(envelope, "pairing exchange");
-        String authToken = requireString(envelope, "auth_token");
+        String authToken = firstRequiredString(envelope, "token", "auth_token");
         sessionStore.activateToken(
             authToken,
             requireString(envelope, "token_id"),
@@ -59,7 +61,7 @@ public final class GhoDexGatewayClientStateMachine {
             sessionStore.setProtocolVersion(protocolVersion);
         }
         sessionStore.clearSnapshotResyncRequirement();
-        terminalIndexStore.resetForSnapshot();
+        terminalIndexStore.applySnapshotEnvelope(envelope);
         notifyStateChanged();
     }
 
@@ -172,5 +174,17 @@ public final class GhoDexGatewayClientStateMachine {
             throw new IllegalStateException("Missing " + key + " in " + envelope.getResult());
         }
         return value;
+    }
+
+    private static String firstRequiredString(
+        GhoDexGatewayEnvelope envelope,
+        String primaryKey,
+        String fallbackKey
+    ) {
+        String primary = envelope.resultString(primaryKey);
+        if (primary != null && !primary.isBlank()) {
+            return primary;
+        }
+        return requireString(envelope, fallbackKey);
     }
 }
