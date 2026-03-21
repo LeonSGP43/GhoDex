@@ -13,6 +13,24 @@ All notable changes to this project are documented in this file.
 - Files: `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `macos/Tests/ControlHarness/ControlHarnessTests.swift`, `CHANGELOG.md`
 - Decision trail: Make the request/test surface explicit rather than relying on fragile memberwise initializer behavior. The acceptance path needs stable API boundaries that survive both feature growth and Xcode's stricter compile rules.
 
+### test(control): archive desktop acceptance smoke scenarios
+
+- What changed: Added three app-hosted acceptance smoke scenarios to `ControlHarnessTests` covering one active observed terminal, five observed terminals with background churn, and slow-client overflow/resync. Updated `android-remote-control-acceptance.md` with the exact verification command, representative `gateway.metrics` snapshots, and an explicit note that CPU / live typing-lag evidence is still pending.
+- Why: The branch already had resettable metrics windows, but the acceptance document still had no concrete recorded run. Without at least automated desktop smoke evidence, `Acceptance Metrics` stayed stuck at a vague `in_progress`.
+- Impact: The worktree now has durable desktop-side evidence for sampler/gateway behavior under three representative scenarios, while still honestly leaving the manual CPU gate open.
+- Verification: `xcodebuild test -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS,arch=arm64' -only-testing:GhosttyTests/ControlHarnessTests/gatewayMetricsResetClearsRollingWindow -only-testing:GhosttyTests/ControlHarnessTests/acceptanceScenarioAActiveObservedTerminalArchivesMetrics -only-testing:GhosttyTests/ControlHarnessTests/acceptanceScenarioBFiveObservedTerminalsArchivesMetrics -only-testing:GhosttyTests/ControlHarnessTests/acceptanceScenarioCSlowClientOverflowArchivesMetrics -skip-testing:GhosttyUITests`
+- Files: `macos/Tests/ControlHarness/ControlHarnessTests.swift`, `android-remote-control-acceptance.md`, `CHANGELOG.md`
+- Decision trail: Use deterministic app-hosted smoke scenarios instead of pretending the full manual acceptance gate is already closed. This captures reproducible desktop evidence now and keeps the remaining manual CPU observations clearly separated.
+
+### feat(android): add transport-backed client state machine foundation
+
+- What changed: Expanded the pure-Java Android foundation with transport and envelope abstractions, a session store, a terminal index store, and a `GhoDexGatewayClientStateMachine` that drives pairing, snapshot, subscribe, read, and mutation flows. The Java self-test now covers state persistence and live event/resync handling with a fake transport.
+- Why: The previous Android slice stopped at request builders and resume state, which still left Milestone 4 without a real client orchestration layer. The next blocker was turning raw gateway payload builders into something that can own session lifecycle and terminal indexing.
+- Impact: Milestone 4 now has a real, host-verifiable client runtime core that future Android UI or network code can plug into instead of re-deriving pairing/subscription semantics from scratch.
+- Verification: `tmpdir=\"$(mktemp -d)\"; javac -d \"$tmpdir\" android/*.java && java -ea -cp \"$tmpdir\" GhoDexGatewayContractSelfTest`
+- Files: `android/GhoDexGatewayRequest.java`, `android/GhoDexGatewayEnvelope.java`, `android/GhoDexGatewayTransport.java`, `android/GhoDexGatewaySessionStore.java`, `android/GhoDexTerminalIndexStore.java`, `android/GhoDexGatewayClientStateMachine.java`, `android/GhoDexGatewayContractSelfTest.java`, `android/README.md`, `CHANGELOG.md`
+- Decision trail: Keep Milestone 4 pure Java until a verified Android toolchain exists in this repo. The critical missing piece was state-machine ownership, not UI scaffolding or premature Gradle wiring.
+
 ### fix(control): use the audit logger support root for gateway auth storage
 
 - What changed: Fixed `AppDelegate` to derive the gateway auth storage path from `ControlHarnessAuditLogger.baseDirectory(...)` instead of referencing `ControlHarnessCore.baseDirectory(...)`, which does not exist.

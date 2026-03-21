@@ -15,7 +15,8 @@ Status date: `2026-03-21`
 
 - Desktop feature slice through Milestone 3: implemented
 - Acceptance instrumentation: available
-- Representative macOS acceptance run: not yet recorded in this worktree
+- Representative macOS acceptance smoke run: recorded below
+- Manual CPU / local typing-lag observation on a live desktop session: still pending
 
 ## Required Commands
 
@@ -98,30 +99,44 @@ Important fields:
 
 ### Run 2026-03-21
 
-- Status: pending
-- Reason: instrumentation exists, but no representative desktop benchmark capture has been archived in this worktree yet
-- Next step: run Scenarios A through C on a representative macOS build and paste the captured JSON snapshots plus CPU notes below
+- Status: in progress
+- Scope: app-hosted automated smoke scenarios for `gateway.metrics.reset`, one active observed terminal, five observed terminals with background churn, and slow-client overflow/resync
+- Verification:
+  - `xcodebuild test -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS,arch=arm64' -only-testing:GhosttyTests/ControlHarnessTests/gatewayMetricsResetClearsRollingWindow -only-testing:GhosttyTests/ControlHarnessTests/acceptanceScenarioAActiveObservedTerminalArchivesMetrics -only-testing:GhosttyTests/ControlHarnessTests/acceptanceScenarioBFiveObservedTerminalsArchivesMetrics -only-testing:GhosttyTests/ControlHarnessTests/acceptanceScenarioCSlowClientOverflowArchivesMetrics -skip-testing:GhosttyUITests`
+- Remaining gate: capture Activity Monitor or Instruments CPU data plus perceptible typing-lag notes from a live desktop session before closing Acceptance Metrics completely
 
 ## Evidence Log Template
 
 ### Scenario A
 
-- Duration:
-- CPU:
-- Typing lag observed:
+- Duration: automated smoke snapshot window (`window_age_ms = 0`) after a resettable metrics window
+- CPU: not captured in this automated run
+- Typing lag observed: not applicable in headless app-hosted smoke
 - Metrics snapshot:
+
+```json
+{"generated_at":"2024-03-11T23:33:20.000Z","window_started_at":"2024-03-11T23:33:20.000Z","window_age_ms":0,"sampler":{"tick":{"count":1,"averageMs":3.4,"p95Ms":3.4,"maxMs":3.4},"capture":{"count":1,"averageMs":1.1,"p95Ms":1.1,"maxMs":1.1},"last_target_count":1,"last_refreshed_count":1,"last_tick_at":"2024-03-11T23:33:25.000Z","last_capture_scope":"visible","last_capture_activity_class":"observed","last_capture_at":"2024-03-11T23:33:26.000Z"},"gateway":{"request":{"count":2,"averageMs":3.4,"p95Ms":4.8,"maxMs":4.8},"stream_lifetime":{"count":0,"averageMs":0,"p95Ms":0,"maxMs":0},"total_requests":2,"open_streams":1,"total_streams_started":1,"total_streams_closed":0,"request_counts":{"events.subscribe":1,"read-terminal":1},"request_transport_counts":{"tcp":2},"stream_transport_counts":{"tcp":1},"stream_close_reasons":{}}}
+```
 
 ### Scenario B
 
-- Duration:
-- CPU:
-- Render hitching observed:
+- Duration: automated smoke snapshot window (`window_age_ms = 0`) after a resettable metrics window
+- CPU: not captured in this automated run
+- Render hitching observed: not applicable in headless app-hosted smoke
 - Metrics snapshot:
+
+```json
+{"generated_at":"2024-03-11T23:35:00.000Z","window_started_at":"2024-03-11T23:35:00.000Z","window_age_ms":0,"sampler":{"tick":{"count":1,"averageMs":6.2,"p95Ms":6.2,"maxMs":6.2},"capture":{"count":2,"averageMs":1.2,"p95Ms":1.5,"maxMs":1.5},"last_target_count":5,"last_refreshed_count":2,"last_tick_at":"2024-03-11T23:35:05.000Z","last_capture_scope":"screen","last_capture_activity_class":"background","last_capture_at":"2024-03-11T23:35:08.000Z"},"gateway":{"request":{"count":3,"averageMs":2.8333333333333335,"p95Ms":3.2,"maxMs":3.2},"stream_lifetime":{"count":0,"averageMs":0,"p95Ms":0,"maxMs":0},"total_requests":3,"open_streams":1,"total_streams_started":1,"total_streams_closed":0,"request_counts":{"events.subscribe":1,"read-terminal":2},"request_transport_counts":{"tcp":3},"stream_transport_counts":{"tcp":1},"stream_close_reasons":{}}}
+```
 
 ### Scenario C
 
-- Duration:
-- Network constraint:
-- Local responsiveness preserved:
-- Overflow/resync observed:
+- Duration: automated smoke snapshot window (`window_age_ms = 0`) after a resettable metrics window
+- Network constraint: simulated slow client with a tiny per-client buffer (`maxBufferedEvents = 2`, `maxBufferedBytes = 64`)
+- Local responsiveness preserved: yes, verified by isolated overflow on the slow session while the gateway metrics surface remained queryable
+- Overflow/resync observed: yes, `ControlHarnessGatewayClientSession.drain()` reported `requiresSnapshotResync = true` and the metrics stream-close reasons recorded `overflow_resync = 1`
 - Metrics snapshot:
+
+```json
+{"generated_at":"2024-03-11T23:36:40.000Z","window_started_at":"2024-03-11T23:36:40.000Z","window_age_ms":0,"sampler":{"tick":{"count":1,"averageMs":3.9,"p95Ms":3.9,"maxMs":3.9},"capture":{"count":0,"averageMs":0,"p95Ms":0,"maxMs":0},"last_target_count":1,"last_refreshed_count":1,"last_tick_at":"2024-03-11T23:36:45.000Z","last_capture_scope":null,"last_capture_activity_class":null,"last_capture_at":null},"gateway":{"request":{"count":1,"averageMs":2.1,"p95Ms":2.1,"maxMs":2.1},"stream_lifetime":{"count":1,"averageMs":42.0,"p95Ms":42.0,"maxMs":42.0},"total_requests":1,"open_streams":0,"total_streams_started":1,"total_streams_closed":1,"request_counts":{"events.subscribe":1},"request_transport_counts":{"tcp":1},"stream_transport_counts":{"tcp":1},"stream_close_reasons":{"overflow_resync":1}}}
+```

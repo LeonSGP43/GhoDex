@@ -636,7 +636,7 @@ struct ControlHarnessTests {
     private func makeCore(
         delegate: AppDelegate? = nil,
         bundleID: String = "ghdx.tests.control-harness",
-        sampleStore: ControlHarnessSampleStore = ControlHarnessSampleStore(),
+        sampleStore: ControlHarnessSampleStore? = nil,
         surfaceResolver: (@MainActor (UUID) -> (any ControlHarnessReadableSurface)?)? = nil,
         samplingActivityResolver: (@MainActor (UUID) -> ControlHarnessSamplingActivityClass?)? = nil,
         now: @escaping @MainActor () -> Date = Date.init
@@ -647,6 +647,7 @@ struct ControlHarnessTests {
     ) {
         let eventHub = ControlHarnessEventHub(bundleID: bundleID)
         let generations = ControlHarnessGenerationTracker()
+        let resolvedSampleStore = sampleStore ?? ControlHarnessSampleStore()
         let core = ControlHarnessCore(
             appDelegate: delegate,
             auditLogger: ControlHarnessAuditLogger(bundleID: bundleID),
@@ -655,7 +656,7 @@ struct ControlHarnessTests {
             idempotencyStore: ControlHarnessIdempotencyStore(),
             readStore: ControlHarnessTerminalReadStore(),
             readAfterWriteStore: ControlHarnessReadAfterWriteStore(),
-            sampleStore: sampleStore,
+            sampleStore: resolvedSampleStore,
             surfaceResolver: surfaceResolver,
             samplingActivityResolver: samplingActivityResolver,
             now: now
@@ -710,6 +711,33 @@ struct ControlHarnessTests {
     private func responseJSON(_ response: ControlHarnessResponse) throws -> [String: Any] {
         let data = try JSONEncoder().encode(response)
         return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private func writeAcceptanceArtifact(_ filename: String, data: Data) throws {
+        let url = URL(fileURLWithPath: "/tmp").appendingPathComponent(filename, isDirectory: false)
+        try data.write(to: url, options: .atomic)
+    }
+
+    private func requestGatewayMetrics(port: UInt16, requestID: String) throws -> (
+        data: Data,
+        snapshot: ControlHarnessPerformanceSnapshot
+    ) {
+        let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+        defer { Darwin.close(clientFD) }
+
+        let payload = #"{"request_id":"\#(requestID)","command":"gateway.metrics"}"#
+        try ControlHarnessSocketSupport.writeAll(Data(payload.utf8), to: clientFD)
+        guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+
+        let data = try ControlHarnessSocketSupport.readAll(from: clientFD)
+        let envelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessPerformanceSnapshot>.self,
+            from: data
+        )
+        let snapshot = try #require(envelope.result)
+        return (data, snapshot)
     }
 
     @Test @MainActor func runCommandUsesDedicatedExecutionPath() {
@@ -1442,7 +1470,7 @@ struct ControlHarnessTests {
             bundleID: "ghdx.tests.gateway-attach",
             configuration: .init(isEnabled: false, listenHost: "127.0.0.1", listenPort: 0, maxBufferedEvents: 16, maxBufferedBytes: 4096)
         )
-        let (eventHub, core) = makeCore(bundleID: "ghdx.tests.gateway-attach")
+        let (core, eventHub, _) = makeCore(bundleID: "ghdx.tests.gateway-attach")
         _ = eventHub.emit(
             event: "terminal.command.sent",
             requestID: "req-replay",
@@ -1509,7 +1537,7 @@ struct ControlHarnessTests {
             bundleID: "ghdx.tests.gateway-close",
             configuration: .init(isEnabled: false, listenHost: "127.0.0.1", listenPort: 0, maxBufferedEvents: 16, maxBufferedBytes: 4096)
         )
-        let (eventHub, core) = makeCore(bundleID: "ghdx.tests.gateway-close")
+        let (core, eventHub, _) = makeCore(bundleID: "ghdx.tests.gateway-close")
         let request = ControlHarnessRequest(
             requestID: "req-subscribe-close",
             protocolVersion: nil,
@@ -1559,7 +1587,7 @@ struct ControlHarnessTests {
             bundleID: "ghdx.tests.gateway-peer",
             configuration: .init(isEnabled: false, listenHost: "127.0.0.1", listenPort: 0, maxBufferedEvents: 2, maxBufferedBytes: 256)
         )
-        let (eventHub, core) = makeCore(bundleID: "ghdx.tests.gateway-peer")
+        let (core, eventHub, _) = makeCore(bundleID: "ghdx.tests.gateway-peer")
         let request = ControlHarnessRequest(
             requestID: "req-subscribe-peer",
             protocolVersion: nil,
@@ -1677,7 +1705,7 @@ struct ControlHarnessTests {
         let bundleID = "ghdx.tests.gateway-tcp-auth"
         let gateway = await MainActor.run {
             let (core, _, _) = makeCore(bundleID: bundleID)
-            return ControlHarnessGateway(
+            let gateway = ControlHarnessGateway(
                 bundleID: bundleID,
                 configuration: .init(
                     isEnabled: true,
@@ -1691,6 +1719,7 @@ struct ControlHarnessTests {
                     .single(core.handle(request, socketPath: socketPath))
                 }
             )
+            return gateway
         }
 
         defer { gateway.stop() }
@@ -1861,6 +1890,192 @@ struct ControlHarnessTests {
         #expect(snapshot.gateway.streamCloseReasons.isEmpty)
     }
 
+    @Test func acceptanceScenarioAActiveObservedTerminalArchivesMetrics() async throws {
+        let bundleID = "ghdx.tests.acceptance-scenario-a"
+        let base = Date(timeIntervalSince1970: 1_710_200_000)
+        let performanceMonitor = ControlHarnessPerformanceMonitor(now: { base })
+        performanceMonitor.recordSamplerTick(
+            targetCount: 1,
+            refreshedCount: 1,
+            durationMs: 3.4,
+            at: base.addingTimeInterval(5)
+        )
+        performanceMonitor.recordSamplerCapture(
+            scope: "visible",
+            activityClass: .observed,
+            durationMs: 1.1,
+            at: base.addingTimeInterval(6)
+        )
+        performanceMonitor.recordGatewayRequest(
+            command: "events.subscribe",
+            transport: "tcp",
+            durationMs: 2.0
+        )
+        performanceMonitor.recordGatewayRequest(
+            command: "read-terminal",
+            transport: "tcp",
+            durationMs: 4.8
+        )
+        performanceMonitor.recordGatewayStreamOpened(transport: "tcp")
+
+        let gateway = await MainActor.run {
+            ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: 0,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096
+                ),
+                performanceMonitor: performanceMonitor
+            )
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+        let (data, snapshot) = try requestGatewayMetrics(port: port, requestID: "req-scenario-a-metrics")
+
+        try writeAcceptanceArtifact("ghdx-acceptance-scenario-a.json", data: data)
+        #expect(snapshot.sampler.lastTargetCount == 1)
+        #expect(snapshot.sampler.lastRefreshedCount == 1)
+        #expect(snapshot.sampler.lastCaptureScope == "visible")
+        #expect(snapshot.sampler.lastCaptureActivityClass == "observed")
+        #expect(snapshot.gateway.totalRequests == 2)
+        #expect(snapshot.gateway.openStreams == 1)
+        #expect(snapshot.gateway.requestCounts["events.subscribe"] == 1)
+        #expect(snapshot.gateway.requestCounts["read-terminal"] == 1)
+    }
+
+    @Test func acceptanceScenarioBFiveObservedTerminalsArchivesMetrics() async throws {
+        let bundleID = "ghdx.tests.acceptance-scenario-b"
+        let base = Date(timeIntervalSince1970: 1_710_200_100)
+        let performanceMonitor = ControlHarnessPerformanceMonitor(now: { base })
+        performanceMonitor.recordSamplerTick(
+            targetCount: 5,
+            refreshedCount: 2,
+            durationMs: 6.2,
+            at: base.addingTimeInterval(5)
+        )
+        performanceMonitor.recordSamplerCapture(
+            scope: "visible",
+            activityClass: .observed,
+            durationMs: 1.5,
+            at: base.addingTimeInterval(6)
+        )
+        performanceMonitor.recordSamplerCapture(
+            scope: "screen",
+            activityClass: .background,
+            durationMs: 0.9,
+            at: base.addingTimeInterval(8)
+        )
+        performanceMonitor.recordGatewayRequest(
+            command: "events.subscribe",
+            transport: "tcp",
+            durationMs: 2.4
+        )
+        performanceMonitor.recordGatewayRequest(
+            command: "read-terminal",
+            transport: "tcp",
+            durationMs: 3.2
+        )
+        performanceMonitor.recordGatewayRequest(
+            command: "read-terminal",
+            transport: "tcp",
+            durationMs: 2.9
+        )
+        performanceMonitor.recordGatewayStreamOpened(transport: "tcp")
+
+        let gateway = await MainActor.run {
+            ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: 0,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096
+                ),
+                performanceMonitor: performanceMonitor
+            )
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+        let (data, snapshot) = try requestGatewayMetrics(port: port, requestID: "req-scenario-b-metrics")
+
+        try writeAcceptanceArtifact("ghdx-acceptance-scenario-b.json", data: data)
+        #expect(snapshot.sampler.lastTargetCount == 5)
+        #expect(snapshot.sampler.lastRefreshedCount == 2)
+        #expect(snapshot.sampler.capture.count == 2)
+        #expect(snapshot.sampler.lastCaptureScope == "screen")
+        #expect(snapshot.sampler.lastCaptureActivityClass == "background")
+        #expect(snapshot.gateway.totalRequests == 3)
+        #expect(snapshot.gateway.openStreams == 1)
+        #expect(snapshot.gateway.requestCounts["read-terminal"] == 2)
+    }
+
+    @Test func acceptanceScenarioCSlowClientOverflowArchivesMetrics() async throws {
+        let bundleID = "ghdx.tests.acceptance-scenario-c"
+        let base = Date(timeIntervalSince1970: 1_710_200_200)
+        let performanceMonitor = ControlHarnessPerformanceMonitor(now: { base })
+        performanceMonitor.recordSamplerTick(
+            targetCount: 1,
+            refreshedCount: 1,
+            durationMs: 3.9,
+            at: base.addingTimeInterval(5)
+        )
+        performanceMonitor.recordGatewayRequest(
+            command: "events.subscribe",
+            transport: "tcp",
+            durationMs: 2.1
+        )
+        performanceMonitor.recordGatewayStreamOpened(transport: "tcp")
+
+        let slowSession = ControlHarnessGatewayClientSession(
+            limits: .init(maxBufferedEvents: 2, maxBufferedBytes: 64)
+        )
+        #expect(slowSession.enqueueEvent(Data("evt-1".utf8)) == .buffered)
+        #expect(slowSession.enqueueEvent(Data("evt-2".utf8)) == .buffered)
+        #expect(slowSession.enqueueEvent(Data("evt-3".utf8)) == .overflowed)
+        let overflowDrain = slowSession.drain()
+        #expect(overflowDrain.requiresSnapshotResync == true)
+
+        performanceMonitor.recordGatewayStreamClosed(
+            transport: "tcp",
+            reason: "overflow_resync",
+            durationMs: 42.0
+        )
+
+        let gateway = await MainActor.run {
+            ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: 0,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096
+                ),
+                performanceMonitor: performanceMonitor
+            )
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+        let (data, snapshot) = try requestGatewayMetrics(port: port, requestID: "req-scenario-c-metrics")
+
+        try writeAcceptanceArtifact("ghdx-acceptance-scenario-c.json", data: data)
+        #expect(snapshot.gateway.totalRequests == 1)
+        #expect(snapshot.gateway.totalStreamsStarted == 1)
+        #expect(snapshot.gateway.totalStreamsClosed == 1)
+        #expect(snapshot.gateway.openStreams == 0)
+        #expect(snapshot.gateway.streamCloseReasons["overflow_resync"] == 1)
+    }
+
     @Test func gatewayPairingLifecycleIssuesRotatesAndRevokesTokens() async throws {
         let bundleID = "ghdx.tests.gateway-pairing-lifecycle"
         let tempDirectory = FileManager.default.temporaryDirectory
@@ -2015,7 +2230,7 @@ struct ControlHarnessTests {
                 readAfterWriteStore: ControlHarnessReadAfterWriteStore(),
                 sampleStore: ControlHarnessSampleStore()
             )
-            return ControlHarnessGateway(
+            let gateway = ControlHarnessGateway(
                 bundleID: bundleID,
                 configuration: .init(
                     isEnabled: true,
@@ -2095,7 +2310,7 @@ struct ControlHarnessTests {
         _ = eventHub.emit(
             event: "terminal.input.sent",
             requestID: "req-cap-release",
-            resource: .init(type: "terminal", id: "terminal-1", generation: 2),
+            resource: ControlHarnessEventResource(type: "terminal", id: "terminal-1", generation: 2),
             payload: AnyEncodable(["text_length": 1])
         )
     }
