@@ -91,6 +91,9 @@ Field notes:
 
 - `listTabs`
 - `newTab`
+- `listPages`
+- `getActivePage`
+- `activatePage`
 
 `listTabs` returns a JSON array of tab summaries:
 
@@ -105,6 +108,33 @@ Field notes:
 ```
 
 `newTab` returns a single tab summary for the created tab.
+
+`listPages` returns a JSON array of page summaries for one Browser tab:
+
+```json
+[
+  {
+    "id": "E5F4C926-7F1C-466E-A6D9-3A6F6A2F6D4E",
+    "title": "Example Domain",
+    "url": "https://example.com",
+    "isActive": true,
+    "documentRevision": 4
+  }
+]
+```
+
+`getActivePage` returns one page summary for the currently selected internal
+page.
+
+`activatePage` payload:
+
+```json
+{
+  "pageID": "E5F4C926-7F1C-466E-A6D9-3A6F6A2F6D4E"
+}
+```
+
+`activatePage` returns the activated page summary.
 
 ### Navigation and Runtime
 
@@ -382,22 +412,46 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 4. Inspect the current debug-lane status
+### 4. Discover the internal pages inside that Browser tab
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
   "id":"44444444-4444-4444-4444-444444444444",
+  "version":"browser.tab.v1",
+  "command":"listPages",
+  "browserTabID":"browser-tab-1",
+  "payload":{}
+}'
+```
+
+### 5. Activate one internal page inside that Browser tab
+
+```bash
+ghodex +browser-control --transport=ipc --request '{
+  "id":"55555555-5555-5555-5555-555555555555",
+  "version":"browser.tab.v1",
+  "command":"activatePage",
+  "browserTabID":"browser-tab-1",
+  "payload":{"pageID":"E5F4C926-7F1C-466E-A6D9-3A6F6A2F6D4E"}
+}'
+```
+
+### 6. Inspect the current debug-lane status
+
+```bash
+ghodex +browser-control --transport=ipc --request '{
+  "id":"66666666-6666-6666-6666-666666666666",
   "version":"browser.tab.v1",
   "command":"getDebugStatus",
   "payload":{}
 }'
 ```
 
-### 5. Run a DOM batch
+### 7. Run a DOM batch
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
-  "id":"55555555-5555-5555-5555-555555555555",
+  "id":"77777777-7777-7777-7777-777777777777",
   "version":"browser.tab.v1",
   "command":"runDOMBatch",
   "browserTabID":"browser-tab-1",
@@ -407,11 +461,11 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 6. Inspect page-visible cookies in that tab
+### 8. Inspect page-visible cookies in that tab
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
-  "id":"66666666-6666-6666-6666-666666666666",
+  "id":"88888888-8888-8888-8888-888888888888",
   "version":"browser.tab.v1",
   "command":"getCookies",
   "browserTabID":"browser-tab-1",
@@ -421,11 +475,11 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 7. Subscribe to passive events
+### 9. Subscribe to passive events
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
-  "id":"77777777-7777-7777-7777-777777777777",
+  "id":"99999999-9999-9999-9999-999999999999",
   "version":"browser.tab.v1",
   "command":"subscribeEvents",
   "browserTabID":"browser-tab-1",
@@ -435,11 +489,11 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 8. Set a page-visible cookie in that tab
+### 10. Set a page-visible cookie in that tab
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
-  "id":"88888888-8888-8888-8888-888888888888",
+  "id":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
   "version":"browser.tab.v1",
   "command":"setCookie",
   "browserTabID":"browser-tab-1",
@@ -452,11 +506,11 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 9. Clear page-visible cookies in that tab
+### 11. Clear page-visible cookies in that tab
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
-  "id":"88888888-8888-8888-8888-888888888888",
+  "id":"BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB",
   "version":"browser.tab.v1",
   "command":"clearCookies",
   "browserTabID":"browser-tab-1",

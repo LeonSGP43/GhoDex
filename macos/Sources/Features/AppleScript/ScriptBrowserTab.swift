@@ -360,6 +360,44 @@ extension ScriptBrowserTab {
         )
     }
 
+    var pageSummaries: [BrowserExternalPageSummary] {
+        guard let controller else { return [] }
+        return controller.model.pages.map { page in
+            BrowserExternalPageSummary(
+                id: page.id.uuidString,
+                title: page.pageTitle,
+                url: page.displayedURL,
+                isActive: page.id == controller.model.selectedPageID,
+                documentRevision: page.documentRevision
+            )
+        }
+    }
+
+    var activePageSummary: BrowserExternalPageSummary? {
+        pageSummaries.first(where: \.isActive)
+    }
+
+    func activatePage(pageID rawPageID: String) -> Result<BrowserExternalPageSummary, BrowserControlError> {
+        guard let controller else {
+            return .failure(.pageNotFound("No Browser tab is available for page activation."))
+        }
+
+        guard let pageID = UUID(uuidString: rawPageID) else {
+            return .failure(.invalidRequest("The pageID payload must be a UUID string."))
+        }
+
+        guard controller.model.pages.contains(where: { $0.id == pageID }) else {
+            return .failure(.pageNotFound("No browser page exists for \(rawPageID)."))
+        }
+
+        controller.model.selectPage(pageID)
+        guard let summary = activePageSummary else {
+            return .failure(.internalFailure("The Browser tab active page could not be resolved after activation."))
+        }
+
+        return .success(summary)
+    }
+
     static func runExternalCommandProtocol(requestJSON: String) async throws -> String {
         let request = try decodeExternalCommandRequest(requestJSON)
         let response = await routeExternalCommandAsync(request)
@@ -393,6 +431,8 @@ extension ScriptBrowserTab {
         }
 
         switch request.command {
+        case .listPages, .getActivePage, .activatePage:
+            return routeExternalCommand(request)
         case .loadURL:
             guard let browserTab = browserTab(for: request) else {
                 return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
@@ -511,6 +551,56 @@ extension ScriptBrowserTab {
                     for: request,
                     error: .internalFailure("The browser tab list could not be serialized as JSON.")
                 )
+            }
+        case .listPages:
+            guard let browserTab = browserTab(for: request) else {
+                return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
+            }
+
+            do {
+                return .success(for: request, resultJSON: try jsonString(from: browserTab.pageSummaries))
+            } catch {
+                return .failure(
+                    for: request,
+                    error: .internalFailure("The browser page list could not be serialized as JSON.")
+                )
+            }
+        case .getActivePage:
+            guard let browserTab = browserTab(for: request) else {
+                return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
+            }
+            guard let summary = browserTab.activePageSummary else {
+                return .failure(for: request, error: .internalFailure("No active browser page is available."))
+            }
+
+            do {
+                return .success(for: request, resultJSON: try jsonString(from: summary))
+            } catch {
+                return .failure(
+                    for: request,
+                    error: .internalFailure("The active browser page summary could not be serialized as JSON.")
+                )
+            }
+        case .activatePage:
+            guard let browserTab = browserTab(for: request) else {
+                return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
+            }
+            guard let rawPageID = request.payload["pageID"], !rawPageID.isEmpty else {
+                return .failure(for: request, error: .invalidRequest("The activatePage command requires a non-empty pageID payload."))
+            }
+
+            switch browserTab.activatePage(pageID: rawPageID) {
+            case let .success(summary):
+                do {
+                    return .success(for: request, resultJSON: try jsonString(from: summary))
+                } catch {
+                    return .failure(
+                        for: request,
+                        error: .internalFailure("The activated browser page summary could not be serialized as JSON.")
+                    )
+                }
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
             }
         case .getDebugStatus:
             do {

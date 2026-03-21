@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): add external page discovery commands
+
+- What changed: Added `listPages`, `getActivePage`, and `activatePage` to `browser.tab.v1`, defined a typed `BrowserExternalPageSummary`, and routed the new commands through `ScriptBrowserTab` so external clients can enumerate the internal Browser pages inside one Browser tab, inspect the currently selected page, and switch the selected page by `pageID`.
+- Why: The full-pass roadmap still had an obvious gap between Browser-tab discovery and true page-aware automation. External callers could open a Browser tab and control only its currently active page, but they had no durable way to discover internal page IDs or intentionally switch which page subsequent commands should target.
+- Impact: External clients now have a first page-discovery seam they can use before the next page-aware routing commits land. This keeps the current command protocol backward compatible while giving follow-on work a stable `pageID` surface for per-page control instead of hard-coding everything to the active page.
+- Verification: `swiftlint lint macos/Sources/Features/Browser/BrowserCommandProtocol.swift macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `tmp_dd=$(mktemp -d /tmp/ghodex-browser-pages-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-pages-build.XXXXXX) && xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" build`
+- Files: `macos/Sources/Features/Browser/BrowserCommandProtocol.swift`, `macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `browser-tab-command-protocol.md`, `CHANGELOG.md`
+
 ### docs(debug): document diagnostics-only browser debug lane
 
 - What changed: Expanded `browser-tab-command-protocol.md` to document the diagnostics-only CEF remote debugging lane, added the isolated app-support-root socket note for test sessions, and updated `browser-tab-control-architecture.md` so Phase 5 now reflects the landed config-gated remote-debugging work.
