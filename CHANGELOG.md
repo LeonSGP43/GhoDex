@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### test(browser): add cookie persistence acceptance harness
+
+- What changed: Added `scripts/browser_cookie_persistence_acceptance.py`, a restart-based Browser acceptance harness that launches a CEF-enabled GhoDex app, writes a unique cookie through `browser.tab.v1`, restarts the app, and verifies that the same cookie is still readable when the same profile is reused. The harness covers both managed-profile mode and config-driven external-profile mode, records the observed CEF profile metadata from the app launch log, and clears the test cookie before finishing each scenario.
+- Why: Full-pass acceptance still lacked a durable cookie proof. We had CEF session-cookie persistence enabled in code, but no black-box regression harness showing that Browser-controlled pages actually round-trip cookie state across app restarts in either managed or external profile mode.
+- Impact: Future Browser work now has one focused acceptance artifact for the cookie lifecycle track, with explicit safety guards so the harness refuses to run against an already-live GhoDex session unless the caller intentionally opts into sharing the live defaults/socket environment.
+- Verification: `python3 -m py_compile scripts/browser_cookie_persistence_acceptance.py`, `python3 scripts/browser_cookie_persistence_acceptance.py --help`
+- Files: `scripts/browser_cookie_persistence_acceptance.py`, `CHANGELOG.md`
+
 ### fix(browser): validate config-driven browser overrides before mirroring defaults
 
 - What changed: Browser profile/runtime config sync now resolves config-backed overrides through a shared "existing directory" validation step before writing them into `UserDefaults`, and the early `main.swift` bootstrap path now rejects invalid Browser runtime/profile entries from `GHOSTTY_CONFIG_PATH` instead of mirroring them blindly into the first CEF process. Invalid config-driven overrides are cleared from the mirrored defaults and logged with their source so the fallback is observable.
