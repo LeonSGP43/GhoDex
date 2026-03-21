@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### test(control): record live desktop probe evidence
+
+- What changed: Updated `android-remote-control-acceptance.md` with a real loopback desktop run launched from the branch-built Debug app, including the launch command, local pairing flow, live `events.subscribe` confirmation, scripted foreground input steps, and the archived coarse `%CPU` plus `gateway.metrics` snapshot captured by `control_gateway_acceptance_probe.py`.
+- Why: The acceptance doc already had app-hosted smoke archives, but it still lacked any live desktop evidence. The remaining gap was a durable record of one real gateway-enabled session showing bounded CPU and observed sampler state under foreground activity.
+- Impact: `Acceptance Metrics` is no longer backed only by synthetic smoke data. The branch now carries one recorded live desktop probe with explicit numbers and an honest note about the remaining human-perceptual lag caveat.
+- Verification: `python3 control_gateway_acceptance_probe.py --pid 89723 --port 45777 --duration 8 --interval 1 --label scenario-a-live-clean --skip-reset --output /tmp/ghdx-scenario-a-live-clean.json`
+- Files: `android-remote-control-acceptance.md`, `CHANGELOG.md`
+- Decision trail: Record the live run inside the durable acceptance document rather than leaving the evidence in `/tmp` or chat history. The coarse probe is sufficient to close the “no live data at all” gap while still clearly separating itself from a stricter production sign-off pass.
+
 ### test(control): add live cpu acceptance probe
 
 - What changed: Added a stdlib-only `control_gateway_acceptance_probe.py` helper that resets `gateway.metrics`, samples the live desktop process `%CPU` via `ps`, captures the final `gateway.metrics` envelope, and writes one JSON artifact per acceptance run. Updated `android-remote-control-acceptance.md` to include the exact live-smoke command and to document that the helper is a coarse probe rather than a replacement for Activity Monitor or Instruments.

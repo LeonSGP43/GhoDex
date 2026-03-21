@@ -16,7 +16,8 @@ Status date: `2026-03-21`
 - Desktop feature slice through Milestone 3: implemented
 - Acceptance instrumentation: available
 - Representative macOS acceptance smoke run: recorded below
-- Manual CPU / local typing-lag observation on a live desktop session: still pending
+- Coarse live desktop CPU and scripted foreground-input evidence: recorded below
+- Human-perceptual typing-lag sign-off: still advisable before declaring final production acceptance closed
 
 ## Required Commands
 
@@ -117,7 +118,32 @@ Important fields:
 - Scope: app-hosted automated smoke scenarios for `gateway.metrics.reset`, one active observed terminal, five observed terminals with background churn, and slow-client overflow/resync
 - Verification:
   - `xcodebuild test -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS,arch=arm64' -only-testing:GhosttyTests/ControlHarnessTests/gatewayMetricsResetClearsRollingWindow -only-testing:GhosttyTests/ControlHarnessTests/acceptanceScenarioAActiveObservedTerminalArchivesMetrics -only-testing:GhosttyTests/ControlHarnessTests/acceptanceScenarioBFiveObservedTerminalsArchivesMetrics -only-testing:GhosttyTests/ControlHarnessTests/acceptanceScenarioCSlowClientOverflowArchivesMetrics -skip-testing:GhosttyUITests`
-- Remaining gate: capture Activity Monitor or Instruments CPU data plus perceptible typing-lag notes from a live desktop session before closing Acceptance Metrics completely
+- Remaining gate: keep a final human-perceptual lag pass or higher-fidelity Activity Monitor / Instruments capture available if production sign-off requires more than the coarse live probe below
+
+### Run 2026-03-21 Live Desktop Probe
+
+- Status: recorded
+- Scope: live loopback gateway session launched from the branch-built Debug app with one foreground terminal, one paired TCP observer, and scripted local `input text` bursts against the front terminal
+- Launch:
+  - `env GHODEX_CONTROL_HARNESS_GATEWAY_ENABLED=1 GHODEX_CONTROL_HARNESS_GATEWAY_HOST=127.0.0.1 GHODEX_CONTROL_HARNESS_GATEWAY_PORT=45777 open -na /Users/leongong/Library/Developer/Xcode/DerivedData/GhoDex-clyksqbzyplphdhlghaqkzxycgny/Build/Products/Debug/GhoDex.app`
+- Verification:
+  - paired locally via `gateway.pairing.begin` and `gateway.pairing.exchange`
+  - opened one `events.subscribe` stream from `since_sequence = 60` and confirmed `live_stream_open = true`
+  - injected 10 foreground `input text "echo live-input-N\n"` commands via AppleScript against the built app
+  - captured `/tmp/ghdx-scenario-a-live-clean.json` via `python3 control_gateway_acceptance_probe.py --pid 89723 --port 45777 --duration 8 --interval 1 --label scenario-a-live-clean --skip-reset --output /tmp/ghdx-scenario-a-live-clean.json`
+- Live CPU summary:
+  - `%CPU` samples: `[1.4, 0.6, 0.6, 1.3, 12.1, 0.6, 0.3, 0.3, 0.5]`
+  - `%CPU` min / avg / max: `0.3 / 1.97 / 12.1`
+- Metrics summary:
+  - `sampler.last_capture_activity_class = observed`
+  - `sampler.last_target_count = 1`
+  - `sampler.tick.p95Ms = 1.754375`
+  - `sampler.capture.p95Ms = 1.429583`
+  - `gateway.open_streams = 1`
+  - `gateway.total_streams_started = 1`
+- Foreground responsiveness note:
+  - the scripted foreground input loop completed without AppleScript failure while the live probe window was open
+  - this is a coarse responsiveness check, not a substitute for a human visual lag judgement
 
 ## Evidence Log Template
 
@@ -130,6 +156,24 @@ Important fields:
 
 ```json
 {"generated_at":"2024-03-11T23:33:20.000Z","window_started_at":"2024-03-11T23:33:20.000Z","window_age_ms":0,"sampler":{"tick":{"count":1,"averageMs":3.4,"p95Ms":3.4,"maxMs":3.4},"capture":{"count":1,"averageMs":1.1,"p95Ms":1.1,"maxMs":1.1},"last_target_count":1,"last_refreshed_count":1,"last_tick_at":"2024-03-11T23:33:25.000Z","last_capture_scope":"visible","last_capture_activity_class":"observed","last_capture_at":"2024-03-11T23:33:26.000Z"},"gateway":{"request":{"count":2,"averageMs":3.4,"p95Ms":4.8,"maxMs":4.8},"stream_lifetime":{"count":0,"averageMs":0,"p95Ms":0,"maxMs":0},"total_requests":2,"open_streams":1,"total_streams_started":1,"total_streams_closed":0,"request_counts":{"events.subscribe":1,"read-terminal":1},"request_transport_counts":{"tcp":2},"stream_transport_counts":{"tcp":1},"stream_close_reasons":{}}}
+```
+
+### Scenario A Live Desktop Probe
+
+- Duration: 8 second live desktop window against the branch-built Debug app
+- CPU: `%CPU` min / avg / max = `0.3 / 1.97 / 12.1`
+- Foreground input check: 10 scripted `input text` injections completed successfully while the probe and one paired observer were active
+- Typing lag observed: no scripted-input stall or AppleScript failure was observed, but this remains a coarse proxy instead of a human-perceived lag judgement
+- Subscription check:
+
+```json
+{"request_id":"req-live-subscribe-clean","result":{"event_limit":64,"last_sequence":60,"live_stream_open":true,"protocol_version":"1.0","replayed_event_count":0,"since_sequence":60,"subscribed":true},"status":"ok"}
+```
+
+- Metrics snapshot:
+
+```json
+{"label":"scenario-a-live-clean","pid":89723,"host":"127.0.0.1","port":45777,"duration_s":8.0,"interval_s":1.0,"cpu_samples_percent":[1.4,0.6,0.6,1.3,12.1,0.6,0.3,0.3,0.5],"cpu_min_percent":0.3,"cpu_max_percent":12.1,"cpu_avg_percent":1.9666666666666666,"metrics_envelope":{"request_id":"req-metrics","result":{"gateway":{"open_streams":1,"request":{"averageMs":1.316,"count":1,"maxMs":1.316,"p95Ms":1.316},"request_counts":{"gateway.metrics.reset":1},"request_transport_counts":{"tcp":1},"stream_close_reasons":{},"stream_lifetime":{"averageMs":0,"count":0,"maxMs":0,"p95Ms":0},"stream_transport_counts":{"tcp":1},"total_requests":1,"total_streams_closed":0,"total_streams_started":1},"generated_at":"2026-03-21T06:09:36.200Z","sampler":{"capture":{"averageMs":1.0535973203124993,"count":128,"maxMs":42.225084,"p95Ms":1.429583},"last_capture_activity_class":"observed","last_capture_at":"2026-03-21T06:09:36.065Z","last_capture_scope":"visible","last_refreshed_count":0,"last_target_count":1,"last_tick_at":"2026-03-21T06:09:36.191Z","tick":{"averageMs":1.1651627656249997,"count":64,"maxMs":43.012125,"p95Ms":1.754375}},"window_age_ms":53948,"window_started_at":"2026-03-21T06:08:42.252Z"},"status":"ok"}}
 ```
 
 ### Scenario B
