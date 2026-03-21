@@ -260,9 +260,9 @@ Error requirements:
 
 ### Phase 5: Optional Debug Lane
 
-- [ ] add config-gated remote debugging
-- [ ] keep CDP off by default
-- [ ] document CDP as diagnostics, not as the product API contract
+- [x] add config-gated remote debugging
+- [x] keep CDP off by default
+- [x] document CDP as diagnostics, not as the product API contract
 
 ## Atomic Commit Roadmap
 

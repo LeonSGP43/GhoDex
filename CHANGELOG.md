@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### docs(debug): document diagnostics-only browser debug lane
+
+- What changed: Expanded `browser-tab-command-protocol.md` to document the diagnostics-only CEF remote debugging lane, added the isolated app-support-root socket note for test sessions, and updated `browser-tab-control-architecture.md` so Phase 5 now reflects the landed config-gated remote-debugging work.
+- Why: The codebase now has a config-gated remote debugging port and a first-class `getDebugStatus` command, but the durable docs still left the debug lane half-described. That made it too easy for future agents or external clients to mistake CDP for the main Browser control contract or miss how isolated acceptance runs relocate the Browser IPC socket.
+- Impact: Browser automation docs now make the intended boundary explicit: `browser.tab.v1` remains the primary product API, while remote debugging is an opt-in diagnostics surface that stays off by default. The architecture roadmap also now matches the code that already landed, which reduces future confusion during acceptance or follow-on work.
+- Verification: `rg -n "Diagnostics Lane|getDebugStatus|ghodex-browser-remote-debug-port|Phase 5" browser-tab-command-protocol.md browser-tab-control-architecture.md`
+- Files: `browser-tab-command-protocol.md`, `browser-tab-control-architecture.md`, `CHANGELOG.md`
+
 ### feat(debug): expose browser debug status through browser.tab.v1
 
 - What changed: Added a first-class `getDebugStatus` command to `browser.tab.v1`, defined a typed `BrowserExternalDebugStatusResult`, and routed the command through `ScriptBrowserTab` so external clients can query whether the config-gated CEF remote debugging lane is enabled, which port it uses, and whether CEF/runtime activation is currently live in the app session.

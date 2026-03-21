@@ -25,6 +25,8 @@ Two local transports currently speak the same request envelope.
 Preferred for long-lived local sessions.
 
 - Path: `~/Library/Application Support/GhoDex/browser-control.sock`
+- When `GHODEX_BROWSER_APP_SUPPORT_ROOT` is set for an isolated test session,
+  the socket lives under that alternate app-support root instead
 - CLI flag: `--transport=ipc`
 - CLI default: `--transport=auto` tries IPC first, then falls back to
   AppleScript
@@ -128,6 +130,25 @@ Field notes:
 - `source`: currently `config` or `disabled`
 - `cefInitialized`: whether global CEF initialization has completed in this app session
 - `runtimeAvailable`: whether this app session can see a usable CEF runtime root
+
+## Diagnostics Lane
+
+The optional CEF remote debugging lane is a diagnostics surface, not the
+product contract for Browser automation.
+
+- `browser.tab.v1` remains the primary control API for Browser tabs
+- Chromium remote debugging stays disabled by default
+- enable it only by setting `ghodex-browser-remote-debug-port` to a positive
+  local port in config
+- use `getDebugStatus` to confirm whether the current app session actually has
+  the diagnostics lane enabled before trying any DevTools/CDP workflow
+- if the config key is missing or set to `0`, the diagnostics lane is disabled
+
+Example config:
+
+```toml
+ghodex-browser-remote-debug-port = 9222
+```
 
 `loadURL` payload:
 
