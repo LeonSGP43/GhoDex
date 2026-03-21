@@ -25,10 +25,24 @@ Use a local desktop session and the loopback-only gateway.
 Recommended flow:
 
 1. Enable the gateway with loopback defaults and a known auth token.
-2. Issue `gateway.metrics.reset` from a local client before each scenario.
+2. Issue `gateway.metrics.reset` from a local client before each scenario, or use the bundled `control_gateway_acceptance_probe.py` helper.
 3. Run one scenario at a time for a fixed observation window.
 4. Issue `gateway.metrics` from a local client and archive the JSON payload.
 5. Record any Activity Monitor or Instruments readings next to the JSON capture.
+
+Live smoke helper:
+
+```bash
+python3 control_gateway_acceptance_probe.py \
+  --pid <ghodex_pid> \
+  --port <gateway_port> \
+  --duration 10 \
+  --interval 1 \
+  --label scenario-a \
+  --output /tmp/ghdx-scenario-a-live.json
+```
+
+The helper is intentionally coarse: it samples `%CPU` via `ps` and captures the current `gateway.metrics` envelope after the observation window. Use Activity Monitor or Instruments for the final sign-off when you need higher-fidelity CPU or responsiveness evidence.
 
 ## Scenario Checklist
 

@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### test(control): add live cpu acceptance probe
+
+- What changed: Added a stdlib-only `control_gateway_acceptance_probe.py` helper that resets `gateway.metrics`, samples the live desktop process `%CPU` via `ps`, captures the final `gateway.metrics` envelope, and writes one JSON artifact per acceptance run. Updated `android-remote-control-acceptance.md` to include the exact live-smoke command and to document that the helper is a coarse probe rather than a replacement for Activity Monitor or Instruments.
+- Why: The branch had automated desktop smoke archives, but the acceptance plan still required a repeatable way to collect live CPU evidence from a real running desktop session. Without a bundled probe, that last gate stayed manual in an underspecified way.
+- Impact: Operators now have a single command that archives a live CPU window plus sampler/gateway metrics for Scenario A/B/C runs, which moves `Acceptance Metrics` closer to closeout while keeping the final high-fidelity CPU/lag sign-off explicit.
+- Verification: `python3 control_gateway_acceptance_probe.py --help`; `git diff --check`
+- Files: `control_gateway_acceptance_probe.py`, `android-remote-control-acceptance.md`, `CHANGELOG.md`
+- Decision trail: Keep the live acceptance helper outside the app and stdlib-only so it can run against any local desktop process without adding another runtime dependency or altering the control gateway itself.
+
 ### fix(control): restore app-hosted control test compatibility
 
 - What changed: Added an explicit `ControlHarnessRequest` initializer with a default `authToken`, marked `ControlHarnessCore.protocolVersion` as `nonisolated`, fixed the remaining app-hosted `ControlHarnessTests` helper drift, and repaired the gateway acceptance test closures so the Xcode/macOS test target can compile and execute against the current control API shape.
