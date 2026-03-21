@@ -12,12 +12,12 @@ Current scope:
 - a UI-facing snapshot store driven by the client state machine
 - a local client state machine that drives pairing, snapshot, subscribe, and mutation calls
 - a minimal `android/app` Gradle module with a plain-Android transport UI and `SharedPreferences` persistence
+- a checked-in Gradle wrapper so the app can be built on this machine without a global `gradle` install
 - a local self-test that still compiles and runs with `javac` and `java`
 
 Why Java first:
 
-- this worktree currently has no Gradle wrapper
-- this machine currently has `javac`, but not `gradle` or `kotlinc`
+- this machine had `javac`, but not a global `gradle` or `kotlinc`
 - a JDK-compiled contract layer was safer to verify first, and the app module now layers on top of that same package instead of replacing it
 
 Current files:
@@ -36,6 +36,10 @@ Current files:
   - `GhoDexGatewayClientStateMachine.java`
   - `GhoDexGatewayContractSelfTest.java`
 - Android app shell:
+  - `gradlew`
+  - `gradlew.bat`
+  - `gradle/wrapper/gradle-wrapper.jar`
+  - `gradle/wrapper/gradle-wrapper.properties`
   - `app/build.gradle.kts`
   - `app/src/main/AndroidManifest.xml`
   - `app/src/main/java/com/leongong/ghodex/androidapp/MainActivity.java`
@@ -49,8 +53,23 @@ javac -d "$tmpdir" android/*.java
 java -ea -cp "$tmpdir" com.leongong.ghodex.remote.GhoDexGatewayContractSelfTest
 ```
 
+Build and install verification on this machine:
+
+```bash
+cd android
+ANDROID_SDK_ROOT="$HOME/Library/Android/sdk" ./gradlew :app:assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n com.leongong.ghodex.androidapp/.MainActivity
+```
+
+Observed local environment:
+
+- SDK root: `~/Library/Android/sdk`
+- verified AVD: `Medium_Phone_API_35`
+- verified package: `com.leongong.ghodex.androidapp`
+
 Next Milestone 4 steps:
 
 - bind the same abstractions onto Android WebSocket transport when the desktop side opens that path
-- run the `android/app` module on a device or emulator once a verified Android SDK + Gradle wrapper is available
+- replace the current form-style control surface with a richer terminal index / active-terminal UI
 - polish the app shell into a richer terminal index / session detail UI instead of the current single-screen text surface

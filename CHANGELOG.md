@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(android): add gradle wrapper and verified emulator install path
+
+- What changed: Added a checked-in Gradle wrapper under `android/`, suppressed the known AGP 8.5.2 compileSdk 35 warning in `gradle.properties`, and updated the Android README/blueprint to record the verified local build, install, and launch flow against the existing `Medium_Phone_API_35` emulator.
+- Why: The previous app-shell commit created a real Android module, but the machine still had no global `gradle` and no durable proof that the module could actually be assembled and installed. The missing piece was a repo-local build entrypoint plus one verified emulator execution path.
+- Impact: `android/app` is now not just source code. The repo contains a self-contained wrapper-based build path, and the current machine has a recorded end-to-end flow from `./gradlew :app:assembleDebug` to `adb install` and `am start`.
+- Verification: `ANDROID_SDK_ROOT=\"$HOME/Library/Android/sdk\" ./android/gradlew :app:assembleDebug`; `adb install -r android/app/build/outputs/apk/debug/app-debug.apk`; `adb shell am start -n com.leongong.ghodex.androidapp/.MainActivity`; `adb shell pidof com.leongong.ghodex.androidapp`
+- Files: `android/gradlew`, `android/gradlew.bat`, `android/gradle/wrapper/gradle-wrapper.jar`, `android/gradle/wrapper/gradle-wrapper.properties`, `android/gradle.properties`, `android/README.md`, `android-remote-control-blueprint.md`, `CHANGELOG.md`
+- Decision trail: Prefer a checked-in wrapper and one proven emulator path over relying on a machine-global Gradle install. That keeps the Android module buildable from the repo itself and turns “can probably build” into an observable, repeatable local fact.
+
 ### feat(android): add app module transport shell
 
 - What changed: Packaged the Java gateway foundation under `com.leongong.ghodex.remote`, fixed pairing exchange to accept the real desktop `token` payload, taught the terminal index store to project snapshot inventory into UI rows, and added a real `android/app` Gradle module with a plain-Android `MainActivity` plus `SharedPreferences` persistence for host, token, pairing code, and observed terminal state.
