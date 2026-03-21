@@ -92,6 +92,60 @@ final class ScriptBrowserTab: NSObject {
         }
     }
 
+    fileprivate func setCookie(payload: [String: String]) -> Result<String, BrowserControlError> {
+        switch Self.cookieMutationScript(operation: .set, payload: payload) {
+        case let .success(script):
+            return evaluate(javaScript: script)
+        case let .failure(error):
+            return .failure(error)
+        }
+    }
+
+    fileprivate func setCookieAsync(payload: [String: String]) async -> Result<String, BrowserControlError> {
+        switch Self.cookieMutationScript(operation: .set, payload: payload) {
+        case let .success(script):
+            return await evaluateAsync(javaScript: script)
+        case let .failure(error):
+            return .failure(error)
+        }
+    }
+
+    fileprivate func deleteCookie(payload: [String: String]) -> Result<String, BrowserControlError> {
+        switch Self.cookieMutationScript(operation: .delete, payload: payload) {
+        case let .success(script):
+            return evaluate(javaScript: script)
+        case let .failure(error):
+            return .failure(error)
+        }
+    }
+
+    fileprivate func deleteCookieAsync(payload: [String: String]) async -> Result<String, BrowserControlError> {
+        switch Self.cookieMutationScript(operation: .delete, payload: payload) {
+        case let .success(script):
+            return await evaluateAsync(javaScript: script)
+        case let .failure(error):
+            return .failure(error)
+        }
+    }
+
+    fileprivate func clearCookies(payload: [String: String]) -> Result<String, BrowserControlError> {
+        switch Self.cookieMutationScript(operation: .clear, payload: payload) {
+        case let .success(script):
+            return evaluate(javaScript: script)
+        case let .failure(error):
+            return .failure(error)
+        }
+    }
+
+    fileprivate func clearCookiesAsync(payload: [String: String]) async -> Result<String, BrowserControlError> {
+        switch Self.cookieMutationScript(operation: .clear, payload: payload) {
+        case let .success(script):
+            return await evaluateAsync(javaScript: script)
+        case let .failure(error):
+            return .failure(error)
+        }
+    }
+
     fileprivate func runDOMBatch(commandsJSON: String) -> Result<String, BrowserControlError> {
         switch decodeDOMBatchCommands(commandsJSON: commandsJSON) {
         case let .success(commands):
@@ -368,6 +422,39 @@ extension ScriptBrowserTab {
             case let .failure(error):
                 return .failure(for: request, error: error.externalCommandError)
             }
+        case .setCookie:
+            guard let browserTab = browserTab(for: request) else {
+                return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
+            }
+
+            switch await browserTab.setCookieAsync(payload: request.payload) {
+            case let .success(resultJSON):
+                return .success(for: request, resultJSON: resultJSON)
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
+        case .deleteCookie:
+            guard let browserTab = browserTab(for: request) else {
+                return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
+            }
+
+            switch await browserTab.deleteCookieAsync(payload: request.payload) {
+            case let .success(resultJSON):
+                return .success(for: request, resultJSON: resultJSON)
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
+        case .clearCookies:
+            guard let browserTab = browserTab(for: request) else {
+                return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
+            }
+
+            switch await browserTab.clearCookiesAsync(payload: request.payload) {
+            case let .success(resultJSON):
+                return .success(for: request, resultJSON: resultJSON)
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
         case .evaluateJavaScript:
             guard let browserTab = browserTab(for: request) else {
                 return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
@@ -479,6 +566,39 @@ extension ScriptBrowserTab {
             }
 
             switch browserTab.getCookies(payload: request.payload) {
+            case let .success(resultJSON):
+                return .success(for: request, resultJSON: resultJSON)
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
+        case .setCookie:
+            guard let browserTab = browserTab(for: request) else {
+                return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
+            }
+
+            switch browserTab.setCookie(payload: request.payload) {
+            case let .success(resultJSON):
+                return .success(for: request, resultJSON: resultJSON)
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
+        case .deleteCookie:
+            guard let browserTab = browserTab(for: request) else {
+                return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
+            }
+
+            switch browserTab.deleteCookie(payload: request.payload) {
+            case let .success(resultJSON):
+                return .success(for: request, resultJSON: resultJSON)
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
+        case .clearCookies:
+            guard let browserTab = browserTab(for: request) else {
+                return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
+            }
+
+            switch browserTab.clearCookies(payload: request.payload) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -731,6 +851,215 @@ extension ScriptBrowserTab {
         } catch {
             return .failure(.internalFailure("The Browser cookie inspection payload could not be serialized."))
         }
+    }
+
+    private enum CookieMutationOperation: String {
+        case set
+        case delete
+        case clear
+    }
+
+    private static func cookieMutationScript(
+        operation: CookieMutationOperation,
+        payload: [String: String]
+    ) -> Result<String, BrowserControlError> {
+        let normalizedPayload: [String: String]
+        switch normalizedCookieMutationPayload(operation: operation, payload: payload) {
+        case let .success(result):
+            normalizedPayload = result
+        case let .failure(error):
+            return .failure(error)
+        }
+
+        do {
+            let payloadJSON = try jsonString(from: normalizedPayload)
+            let operationJSON = try jsonStringLiteral(operation.rawValue)
+            let script = """
+(() => {
+  const input = \(payloadJSON);
+  const operation = \(operationJSON);
+  const href = String(location.href ?? "");
+  const hostname = String(location.hostname ?? "");
+  const currentPath = String(location.pathname ?? "/");
+  const currentDirectory = (() => {
+    if (!currentPath || currentPath === "/") return "/";
+    const lastSlash = currentPath.lastIndexOf("/");
+    if (lastSlash <= 0) return "/";
+    return currentPath.slice(0, lastSlash + 1);
+  })();
+  const cookieEntries = () => {
+    const header = String(document.cookie ?? "");
+    const cookies = header
+      ? header.split(";").map((part) => {
+          const trimmed = part.trim();
+          const equalsIndex = trimmed.indexOf("=");
+          if (equalsIndex === -1) {
+            return { name: trimmed, value: "" };
+          }
+          return {
+            name: trimmed.slice(0, equalsIndex),
+            value: trimmed.slice(equalsIndex + 1),
+          };
+        })
+      : [];
+    return { header, cookies };
+  };
+  const serializeCookie = (name, value, options = {}) => {
+    const parts = [`${name}=${encodeURIComponent(String(value ?? ""))}`];
+    if (options.path) parts.push(`Path=${options.path}`);
+    if (options.domain) parts.push(`Domain=${options.domain}`);
+    if (options.maxAge) parts.push(`Max-Age=${options.maxAge}`);
+    if (options.expires) parts.push(`Expires=${options.expires}`);
+    if (options.sameSite) parts.push(`SameSite=${options.sameSite}`);
+    if (options.secure) parts.push("Secure");
+    return parts.join("; ");
+  };
+  const expireCookie = (name, options = {}) => {
+    document.cookie = serializeCookie(name, "", {
+      path: options.path,
+      domain: options.domain,
+      expires: "Thu, 01 Jan 1970 00:00:00 GMT",
+      maxAge: "0",
+    });
+  };
+  const pathCandidates = (() => {
+    const candidates = [];
+    const pushPath = (value) => {
+      if (typeof value !== "string") return;
+      const trimmed = value.trim();
+      if (!trimmed || candidates.includes(trimmed)) return;
+      candidates.push(trimmed);
+    };
+    pushPath(input.path);
+    pushPath("/");
+    pushPath(currentDirectory);
+    pushPath(currentPath);
+    return candidates.length ? candidates : ["/"];
+  })();
+
+  let changedNames = [];
+  if (operation === "set") {
+    document.cookie = serializeCookie(input.name, input.value ?? "", {
+      path: input.path || "/",
+      domain: input.domain,
+      expires: input.expires,
+      maxAge: input.maxAge,
+      sameSite: input.sameSite,
+      secure: input.secure === "true",
+    });
+    changedNames = [input.name];
+  } else if (operation === "delete") {
+    for (const path of pathCandidates) {
+      expireCookie(input.name, { path, domain: input.domain });
+    }
+    changedNames = [input.name];
+  } else if (operation === "clear") {
+    const before = cookieEntries().cookies;
+    changedNames = before.map((entry) => entry.name);
+    for (const entry of before) {
+      for (const path of pathCandidates) {
+        expireCookie(entry.name, { path, domain: input.domain });
+      }
+    }
+  } else {
+    throw new Error(`Unsupported cookie mutation operation: ${operation}`);
+  }
+
+  const after = cookieEntries();
+  return {
+    operation,
+    url: href,
+    domain: hostname,
+    cookieHeader: after.header,
+    appliedPayload: input,
+    changedCount: changedNames.length,
+    changedNames,
+    cookies: after.cookies,
+  };
+})()
+"""
+            return .success(script)
+        } catch {
+            return .failure(.internalFailure("The Browser cookie mutation payload could not be serialized."))
+        }
+    }
+
+    private static func normalizedCookieMutationPayload(
+        operation: CookieMutationOperation,
+        payload: [String: String]
+    ) -> Result<[String: String], BrowserControlError> {
+        let normalized: [String: String] = Dictionary(
+            uniqueKeysWithValues: payload.compactMap { key, value in
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return nil }
+                switch key {
+                case "name", "value", "domain", "path", "expires", "maxAge", "sameSite", "secure":
+                    return (key, trimmed)
+                default:
+                    return nil
+                }
+            }
+        )
+
+        switch operation {
+        case .set:
+            guard let name = normalized["name"], !name.isEmpty else {
+                return .failure(.invalidRequest("The setCookie command requires a non-empty name payload."))
+            }
+
+            if let secure = normalized["secure"], secure != "true", secure != "false" {
+                return .failure(.invalidRequest("The secure payload must be 'true' or 'false' when provided."))
+            }
+
+            if let maxAge = normalized["maxAge"], Int(maxAge) == nil {
+                return .failure(.invalidRequest("The maxAge payload must be an integer when provided."))
+            }
+
+            if let sameSite = normalized["sameSite"] {
+                let allowed = Set(["Lax", "Strict", "None"])
+                guard allowed.contains(sameSite) else {
+                    return .failure(.invalidRequest("The sameSite payload must be one of Lax, Strict, or None."))
+                }
+            }
+
+            var result = normalized
+            result["name"] = name
+            if result["path"] == nil {
+                result["path"] = "/"
+            }
+            return .success(result)
+        case .delete:
+            guard let name = normalized["name"], !name.isEmpty else {
+                return .failure(.invalidRequest("The deleteCookie command requires a non-empty name payload."))
+            }
+
+            var result: [String: String] = [:]
+            result["name"] = name
+            if let domain = normalized["domain"] {
+                result["domain"] = domain
+            }
+            if let path = normalized["path"] {
+                result["path"] = path
+            }
+            return .success(result)
+        case .clear:
+            var result: [String: String] = [:]
+            if let domain = normalized["domain"] {
+                result["domain"] = domain
+            }
+            if let path = normalized["path"] {
+                result["path"] = path
+            }
+            return .success(result)
+        }
+    }
+
+    private static func jsonStringLiteral(_ value: String) throws -> String {
+        let data = try JSONEncoder().encode(value)
+        guard let encoded = String(data: data, encoding: .utf8) else {
+            throw BrowserControlError.internalFailure("The Browser command string literal could not be serialized as UTF-8.")
+        }
+        return encoded
     }
 }
 

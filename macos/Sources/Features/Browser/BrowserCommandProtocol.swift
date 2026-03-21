@@ -9,6 +9,9 @@ enum BrowserExternalCommandKind: String, Codable, Hashable {
     case newTab
     case loadURL
     case getCookies
+    case setCookie
+    case deleteCookie
+    case clearCookies
     case evaluateJavaScript
     case runDOMBatch
     case subscribeEvents
@@ -131,6 +134,17 @@ struct BrowserExternalCookieInspectionResult: Hashable, Codable {
     let domain: String
     let cookieHeader: String
     let appliedFilters: [String: String]
+    let cookies: [BrowserExternalCookieEntry]
+}
+
+struct BrowserExternalCookieMutationResult: Hashable, Codable {
+    let operation: String
+    let url: String
+    let domain: String
+    let cookieHeader: String
+    let appliedPayload: [String: String]
+    let changedCount: Int
+    let changedNames: [String]
     let cookies: [BrowserExternalCookieEntry]
 }
 

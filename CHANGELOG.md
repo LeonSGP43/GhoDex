@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): add cookie mutation commands
+
+- What changed: Added first-class `setCookie`, `deleteCookie`, and `clearCookies` commands to `browser.tab.v1`, wired them through both the async IPC path and the synchronous AppleScript compatibility path, and documented their payload/result semantics in the external Browser command protocol guide. The mutation commands normalize payloads up front, then run one scoped page-side JavaScript mutation script that updates `document.cookie` and returns the resulting visible cookie state plus the names it attempted to change.
+- Why: The cookie persistence harness established how to verify cookie state across restarts, but full-pass Browser control still lacked any stable API for writing or removing cookies. Without first-class mutation commands, external clients would still need to hand-roll fragile JavaScript snippets and could not rely on one documented request/response contract for cookie lifecycle work.
+- Impact: Local Browser control clients can now set, delete, and clear page-visible cookies through the same `browser.tab.v1` envelope used for navigation, DOM control, and event subscriptions. The API remains intentionally scoped to the active page's `document.cookie` surface, so it is useful for profile-backed acceptance and common web-session automation without pretending to be a full Chromium cookie-store API.
+- Verification: `swiftlint lint macos/Sources/Features/Browser/BrowserCommandProtocol.swift macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `tmp_dd=$(mktemp -d /tmp/ghodex-browser-cookie-mutation-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-cookie-mutation-build.XXXXXX) && xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" build`
+- Files: `macos/Sources/Features/Browser/BrowserCommandProtocol.swift`, `macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `browser-tab-command-protocol.md`, `CHANGELOG.md`
+
 ### feat(browser): add cookie inspection commands
 
 - What changed: Added a new `getCookies` command to `browser.tab.v1`, plus the matching AppleScript/IPC routing inside `ScriptBrowserTab`, so external Browser control clients can inspect the active page's visible cookie state without dropping down to ad-hoc JavaScript. The new result payload returns the current page URL, hostname, raw `document.cookie` header, the normalized filters applied to the request, and the decoded `{name,value}` cookie entries that remain after filtering.

@@ -108,6 +108,9 @@ Field notes:
 
 - `loadURL`
 - `getCookies`
+- `setCookie`
+- `deleteCookie`
+- `clearCookies`
 - `evaluateJavaScript`
 - `runDOMBatch`
 
@@ -153,6 +156,73 @@ Payload notes:
 - `cookieHeader`: raw `document.cookie` string
 - `appliedFilters`: the normalized non-empty filters that were applied
 - `cookies`: decoded `{name,value}` entries after filtering
+
+`setCookie` payload:
+
+```json
+{
+  "name": "session_id",
+  "value": "abc123",
+  "path": "/",
+  "domain": "example.com",
+  "maxAge": "3600",
+  "sameSite": "Lax",
+  "secure": "true"
+}
+```
+
+Payload notes:
+
+- `name` is required
+- `value` defaults to the empty string when omitted
+- `path` defaults to `/`
+- `maxAge` must be an integer string when provided
+- `sameSite` must be one of `Lax`, `Strict`, or `None`
+- `secure` must be `true` or `false` when provided
+
+`deleteCookie` payload:
+
+```json
+{
+  "name": "session_id",
+  "domain": "example.com",
+  "path": "/"
+}
+```
+
+Payload notes:
+
+- `name` is required
+- when `path` is omitted, GhoDex tries a small best-effort set of current-page
+  path candidates while expiring the cookie
+
+`clearCookies` payload:
+
+```json
+{
+  "domain": "example.com",
+  "path": "/"
+}
+```
+
+Payload notes:
+
+- all payload fields are optional
+- `clearCookies` only clears page-visible cookies from the active page's
+  `document.cookie` view
+- when `path` is omitted, GhoDex expires each visible cookie across the same
+  best-effort current-page path candidates used by `deleteCookie`
+
+`setCookie`, `deleteCookie`, and `clearCookies` return a JSON object with:
+
+- `operation`: `set`, `delete`, or `clear`
+- `url`: current page URL
+- `domain`: current page hostname
+- `cookieHeader`: raw `document.cookie` string after mutation
+- `appliedPayload`: the normalized payload GhoDex used for the mutation
+- `changedCount`: number of cookie names the command attempted to change
+- `changedNames`: cookie names the command targeted
+- `cookies`: decoded `{name,value}` entries visible after mutation
 
 ### Event Subscription Lifecycle
 
@@ -318,11 +388,40 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 7. Drain buffered events from that subscription
+### 7. Set a page-visible cookie in that tab
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
   "id":"77777777-7777-7777-7777-777777777777",
+  "version":"browser.tab.v1",
+  "command":"setCookie",
+  "browserTabID":"browser-tab-1",
+  "payload":{
+    "name":"session_id",
+    "value":"abc123",
+    "path":"/",
+    "sameSite":"Lax"
+  }
+}'
+```
+
+### 8. Clear page-visible cookies in that tab
+
+```bash
+ghodex +browser-control --transport=ipc --request '{
+  "id":"88888888-8888-8888-8888-888888888888",
+  "version":"browser.tab.v1",
+  "command":"clearCookies",
+  "browserTabID":"browser-tab-1",
+  "payload":{}
+}'
+```
+
+### 9. Drain buffered events from that subscription
+
+```bash
+ghodex +browser-control --transport=ipc --request '{
+  "id":"99999999-9999-9999-9999-999999999999",
   "version":"browser.tab.v1",
   "command":"drainEvents",
   "browserTabID":"browser-tab-1",
@@ -348,6 +447,8 @@ end tell
 - treat `resultJSON` as a nested JSON string, not as a pre-decoded object
 - `getCookies` currently reflects the page-visible `document.cookie` view, not
   the full Chromium cookie store
+- `setCookie`, `deleteCookie`, and `clearCookies` also operate only on the
+  page-visible `document.cookie` surface, so they do not touch HTTPOnly cookies
 - subscribe once and drain incrementally instead of polling one-off inspection
   commands when you need passive page visibility
 - keep draining long-lived IPC sessions; once unread response bytes on one
