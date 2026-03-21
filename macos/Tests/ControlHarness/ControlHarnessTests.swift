@@ -1777,6 +1777,7 @@ struct ControlHarnessTests {
         #expect(envelope.status == "ok")
 
         let snapshot = try #require(envelope.result)
+        #expect(snapshot.windowAgeMs >= 0)
         #expect(snapshot.sampler.tick.count == 1)
         #expect(snapshot.sampler.capture.count == 1)
         #expect(snapshot.sampler.lastTargetCount == 3)
@@ -1791,6 +1792,73 @@ struct ControlHarnessTests {
         #expect(snapshot.gateway.openStreams == 0)
         #expect(snapshot.gateway.streamTransportCounts["tcp"] == 1)
         #expect(snapshot.gateway.streamCloseReasons["client_disconnect"] == 1)
+    }
+
+    @Test func gatewayMetricsResetClearsRollingWindow() async throws {
+        let bundleID = "ghdx.tests.gateway-metrics-reset"
+        let performanceMonitor = ControlHarnessPerformanceMonitor(
+            now: { Date(timeIntervalSince1970: 1_710_100_000) }
+        )
+        performanceMonitor.recordSamplerTick(
+            targetCount: 2,
+            refreshedCount: 1,
+            durationMs: 3.0,
+            at: Date(timeIntervalSince1970: 1_710_100_005)
+        )
+        performanceMonitor.recordGatewayRequest(
+            command: "snapshot",
+            transport: "tcp",
+            durationMs: 1.5
+        )
+
+        let gateway = await MainActor.run {
+            ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: 0,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096
+                ),
+                performanceMonitor: performanceMonitor
+            )
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+
+        let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+        defer { Darwin.close(clientFD) }
+
+        try ControlHarnessSocketSupport.writeAll(
+            Data(#"{"request_id":"req-gateway-metrics-reset","command":"gateway.metrics.reset"}"#.utf8),
+            to: clientFD
+        )
+        guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+
+        let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
+        let envelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessPerformanceSnapshot>.self,
+            from: responseData
+        )
+
+        #expect(envelope.status == "ok")
+        let snapshot = try #require(envelope.result)
+        #expect(snapshot.windowAgeMs == 0)
+        #expect(snapshot.sampler.tick.count == 0)
+        #expect(snapshot.sampler.capture.count == 0)
+        #expect(snapshot.sampler.lastTargetCount == 0)
+        #expect(snapshot.sampler.lastRefreshedCount == 0)
+        #expect(snapshot.gateway.totalRequests == 0)
+        #expect(snapshot.gateway.totalStreamsStarted == 0)
+        #expect(snapshot.gateway.totalStreamsClosed == 0)
+        #expect(snapshot.gateway.openStreams == 0)
+        #expect(snapshot.gateway.requestCounts.isEmpty)
+        #expect(snapshot.gateway.streamCloseReasons.isEmpty)
     }
 
     @Test func gatewayPairingLifecycleIssuesRotatesAndRevokesTokens() async throws {
