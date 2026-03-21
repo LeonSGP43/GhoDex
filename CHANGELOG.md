@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### test(browser): shorten isolated cookie harness socket paths
+
+- What changed: Changed `scripts/browser_cookie_persistence_acceptance.py` to create its isolated workspace under `/tmp/ghx-cookie-*` instead of the much longer platform-default temp root.
+- Why: The new isolated Browser app-support root fixed the shared-socket conflict with `/Applications/GhoDex.app`, but the original temp workspace path was long enough to overflow the Unix-domain socket path limit. That made the test app silently fail to bind `browser-control.sock`, so the harness timed out before it could even prove the bridge fix.
+- Impact: The isolated harness now keeps its Browser IPC socket path comfortably below `sockaddr_un.sun_path` limits on macOS while preserving the no-shared-state safety boundary.
+- Verification: `python3 -m py_compile scripts/browser_cookie_persistence_acceptance.py`
+- Files: `scripts/browser_cookie_persistence_acceptance.py`, `CHANGELOG.md`
+
 ### test(browser): isolate cookie harness from live app support paths
 
 - What changed: Added an isolated Browser app-support-root override in `BrowserPaths`, taught the Browser config/defaults mirror paths in `main.swift` and `AppDelegate.swift` to stand down when that override is active, and updated `scripts/browser_cookie_persistence_acceptance.py` to launch each mode against its own temporary Browser app-support root instead of the shared `~/Library/Application Support/GhoDex` socket/profile location.

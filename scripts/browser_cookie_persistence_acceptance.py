@@ -599,7 +599,7 @@ def main() -> int:
         )
 
     profile_modes = ["managed", "external"] if args.profile_mode == "all" else [args.profile_mode]
-    workspace = Path(tempfile.mkdtemp(prefix="ghodex-browser-cookie-acceptance-"))
+    workspace = Path(tempfile.mkdtemp(prefix="ghx-cookie-", dir="/tmp"))
 
     with local_cookie_server() as server_info:
         results = [
