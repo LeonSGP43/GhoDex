@@ -5,6 +5,23 @@ import GhoDexKit
 private let browserProfileConfigKey = "ghodex-browser-profile-path"
 private let browserRuntimeConfigKey = "ghodex-browser-runtime-path"
 
+private func validatedBrowserDirectorySetting(_ value: String?) -> String? {
+    guard let value, !value.isEmpty else { return nil }
+
+    let standardized = (value as NSString).standardizingPath
+    guard !standardized.isEmpty, standardized.hasPrefix("/") else {
+        return nil
+    }
+
+    var isDirectory = ObjCBool(false)
+    guard FileManager.default.fileExists(atPath: standardized, isDirectory: &isDirectory),
+          isDirectory.boolValue else {
+        return nil
+    }
+
+    return standardized
+}
+
 private func browserSettingValue(for key: String, in text: String) -> String? {
     var result: String?
 
@@ -15,8 +32,8 @@ private func browserSettingValue(for key: String, in text: String) -> String? {
         }
 
         let rawValue = trimmed[trimmed.index(after: separatorIndex)...].trimmingCharacters(in: .whitespaces)
+        let data = Data("[\(rawValue)]".utf8)
         guard
-            let data = "[\(rawValue)]".data(using: .utf8),
             let decoded = try? JSONSerialization.jsonObject(with: data) as? [String],
             let value = decoded.first
         else {
@@ -39,13 +56,23 @@ private func seedBrowserCEFDefaultsFromConfigFile() {
 
     let defaults = UserDefaults.standard
     if let profilePath = browserSettingValue(for: browserProfileConfigKey, in: text), !profilePath.isEmpty {
-        defaults.set(profilePath, forKey: BrowserPaths.profileDefaultsKey)
+        if let validatedProfilePath = validatedBrowserDirectorySetting(profilePath) {
+            defaults.set(validatedProfilePath, forKey: BrowserPaths.profileDefaultsKey)
+        } else {
+            NSLog("[CEF] Ignoring invalid Browser profile override from config file: %@", profilePath)
+            defaults.removeObject(forKey: BrowserPaths.profileDefaultsKey)
+        }
     } else {
         defaults.removeObject(forKey: BrowserPaths.profileDefaultsKey)
     }
 
     if let runtimePath = browserSettingValue(for: browserRuntimeConfigKey, in: text), !runtimePath.isEmpty {
-        defaults.set(runtimePath, forKey: BrowserPaths.runtimeDefaultsKey)
+        if let validatedRuntimePath = validatedBrowserDirectorySetting(runtimePath) {
+            defaults.set(validatedRuntimePath, forKey: BrowserPaths.runtimeDefaultsKey)
+        } else {
+            NSLog("[CEF] Ignoring invalid Browser runtime override from config file: %@", runtimePath)
+            defaults.removeObject(forKey: BrowserPaths.runtimeDefaultsKey)
+        }
     } else {
         defaults.removeObject(forKey: BrowserPaths.runtimeDefaultsKey)
     }

@@ -1197,21 +1197,23 @@ class AppDelegate: NSObject,
 
     private func syncBrowserProfileConfig(_ config: Ghostty.Config) {
         let fileOverrides = Self.loadBrowserSettingsConfig()
-        let normalized = Self.normalizedBrowserProfilePath(
-            fileOverrides.profilePath ?? config.ghodexBrowserProfilePath
+        let resolved = Self.resolvedBrowserProfilePath(
+            fileOverride: fileOverrides.profilePath,
+            configOverride: config.ghodexBrowserProfilePath
         )
-        browserProfilePathOverride = normalized
-        applyBrowserProfileDefaults(path: normalized)
+        browserProfilePathOverride = resolved
+        applyBrowserProfileDefaults(path: resolved)
         UserDefaults.standard.synchronize()
     }
 
     private func syncBrowserRuntimeConfig(_ config: Ghostty.Config) {
         let fileOverrides = Self.loadBrowserSettingsConfig()
-        let normalized = Self.normalizedBrowserRuntimePath(
-            fileOverrides.runtimePath ?? config.ghodexBrowserRuntimePath
+        let resolved = Self.resolvedBrowserRuntimePath(
+            fileOverride: fileOverrides.runtimePath,
+            configOverride: config.ghodexBrowserRuntimePath
         )
-        browserRuntimePathOverride = normalized
-        applyBrowserRuntimeDefaults(path: normalized)
+        browserRuntimePathOverride = resolved
+        applyBrowserRuntimeDefaults(path: resolved)
         UserDefaults.standard.synchronize()
     }
 
@@ -1733,12 +1735,67 @@ extension AppDelegate {
         return (trimmed as NSString).standardizingPath
     }
 
+    fileprivate static func validatedExistingBrowserOverridePath(
+        _ normalizedPath: String?,
+        settingName: String,
+        source: String
+    ) -> String? {
+        guard let normalizedPath else { return nil }
+
+        var isDirectory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: normalizedPath, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            AppDelegate.logger.warning(
+                "Ignoring invalid Browser \(settingName, privacy: .public) override from \(source, privacy: .public): \(normalizedPath, privacy: .public)"
+            )
+            return nil
+        }
+
+        return normalizedPath
+    }
+
+    fileprivate static func resolvedBrowserProfilePath(
+        fileOverride: String?,
+        configOverride: String?
+    ) -> String? {
+        if fileOverride != nil {
+            return validatedExistingBrowserOverridePath(
+                normalizedBrowserProfilePath(fileOverride),
+                settingName: "profile",
+                source: "browser settings block"
+            )
+        }
+
+        return validatedExistingBrowserOverridePath(
+            normalizedBrowserProfilePath(configOverride),
+            settingName: "profile",
+            source: "Ghostty config"
+        )
+    }
+
+    fileprivate static func resolvedBrowserRuntimePath(
+        fileOverride: String?,
+        configOverride: String?
+    ) -> String? {
+        if fileOverride != nil {
+            return validatedExistingBrowserOverridePath(
+                normalizedBrowserRuntimePath(fileOverride),
+                settingName: "runtime",
+                source: "browser settings block"
+            )
+        }
+
+        return validatedExistingBrowserOverridePath(
+            normalizedBrowserRuntimePath(configOverride),
+            settingName: "runtime",
+            source: "Ghostty config"
+        )
+    }
+
     fileprivate static func browserSettingsConfigURL() -> URL {
         let fileManager = FileManager.default
-        if
-            let envPath = ProcessInfo.processInfo.environment["GHOSTTY_CONFIG_PATH"],
-            !envPath.isEmpty
-        {
+        if let envPath = ProcessInfo.processInfo.environment["GHOSTTY_CONFIG_PATH"],
+           !envPath.isEmpty {
             let url = URL(fileURLWithPath: envPath, isDirectory: false)
             try? fileManager.createDirectory(
                 at: url.deletingLastPathComponent(),
@@ -1870,8 +1927,8 @@ extension AppDelegate {
 
             guard let separatorIndex = trimmed.firstIndex(of: "=") else { continue }
             let rawValue = trimmed[trimmed.index(after: separatorIndex)...].trimmingCharacters(in: .whitespaces)
+            let data = Data("[\(rawValue)]".utf8)
             guard
-                let data = "[\(rawValue)]".data(using: .utf8),
                 let decoded = try? JSONSerialization.jsonObject(with: data) as? [String],
                 let value = decoded.first
             else {
