@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(macos): keep rapid todo completion toggles responsive
+
+- What changed: Added an in-memory per-day todo document cache and moved app-mode todo file persistence onto a coalescing background coordinator so rapid completion toggles update UI state immediately without forcing synchronous `load -> mutate -> save` work on the main actor for every click.
+- Why: The todo panel was mutating daily JSON files directly on the main actor. Rapidly clicking the completion control could stack repeated disk IO and whole-panel refreshes on the UI thread, which made the panel appear frozen.
+- Impact: Fast completion toggles now stay responsive in the panel and quick-look surfaces. The latest document state is still persisted, but repeated writes for the same day are coalesced off the main thread instead of blocking interaction.
+- Verification: `git diff --check`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild test -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' -only-testing:'GhosttyTests/AITerminalManagerTests'`
+- Files: `macos/Sources/Features/AI Terminal Manager/AITerminalManagerStore.swift`, `CHANGELOG.md`
+- Decision trail: Keep tests deterministic by preserving synchronous writes under the existing test-mode path, but switch real app interactions to cache-first mutation plus serialized background saves so UX stays snappy without weakening file-backed state.
+
 ### refactor(macos): make the todo side panel content-first
 
 - What changed: Flattened the in-window todo panel into a list-first layout, removed the oversized top summary card, moved day/progress status into a slim footer, hid the visible scroll indicator, promoted `Add Task` into a full-width primary action, enlarged task title/notes typography, localized the created/completed timeline copy, and replaced the per-row overflow menu with direct visible edit/reset controls plus a visible assignment control.

@@ -3,6 +3,37 @@ import Foundation
 import SwiftUI
 import GhoDexKit
 
+private actor TodoDocumentPersistenceCoordinator {
+    private struct PendingSave {
+        var document: AITerminalTodoDayDocument
+        var path: String
+    }
+
+    private var pendingByPath: [String: PendingSave] = [:]
+    private var activePaths: Set<String> = []
+
+    func scheduleSave(
+        document: AITerminalTodoDayDocument,
+        to path: String,
+        writer: @Sendable @escaping (AITerminalTodoDayDocument, String) throws -> Void,
+        onError: @Sendable @escaping (Error) async -> Void
+    ) async {
+        pendingByPath[path] = .init(document: document, path: path)
+        guard activePaths.insert(path).inserted else { return }
+
+        while let pending = pendingByPath[path] {
+            pendingByPath[path] = nil
+            do {
+                try writer(pending.document, pending.path)
+            } catch {
+                await onError(error)
+            }
+        }
+
+        activePaths.remove(path)
+    }
+}
+
 @MainActor
 final class AITerminalManagerStore: ObservableObject {
     private struct PendingSSHPasswordAutomation {
@@ -111,10 +142,12 @@ final class AITerminalManagerStore: ObservableObject {
     private let heartbeatInboxDirectoryURL: URL
     private let sshConfigHostLoader: () -> [AITerminalHost]
     private let credentialStore: SSHConnectionCredentialStore
+    private let todoDocumentPersistence = TodoDocumentPersistenceCoordinator()
     private var registrations: [UUID: AITerminalLaunchRegistration] = [:]
     private var sshSessionAuthStates: [UUID: AITerminalSSHSessionAuthState] = [:]
     private var pendingSSHPasswordAutomations: [UUID: PendingSSHPasswordAutomation] = [:]
     private var taskBindings: [UUID: UUID] = [:]
+    private var todoDocumentCache: [String: AITerminalTodoDayDocument] = [:]
     private var sshPasswordAutomationTimer: Timer?
     private var heartbeatTimer: Timer?
     private var heartbeatSchedulerTimer: Timer?
@@ -454,15 +487,25 @@ final class AITerminalManagerStore: ObservableObject {
 
     func todoDocument(for date: Date) -> AITerminalTodoDayDocument {
         do {
-            let document = try Self.loadTodoDocument(
-                at: configuration.todoSettings.dayFilePath(for: date),
-                date: AITerminalTodoSettings.dayString(from: date)
-            )
+            let path = configuration.todoSettings.dayFilePath(for: date)
+            let cacheKey = todoDocumentCacheKey(for: path)
+            let document: AITerminalTodoDayDocument
+            if let cached = todoDocumentCache[cacheKey] {
+                document = cached
+            } else {
+                document = try Self.loadTodoDocument(
+                    at: path,
+                    date: AITerminalTodoSettings.dayString(from: date)
+                )
+                todoDocumentCache[cacheKey] = document
+            }
             lastError = nil
             return document
         } catch {
             lastError = error.localizedDescription
-            return .init(date: AITerminalTodoSettings.dayString(from: date))
+            let fallback = AITerminalTodoDayDocument(date: AITerminalTodoSettings.dayString(from: date))
+            todoDocumentCache[todoDocumentCacheKey(for: configuration.todoSettings.dayFilePath(for: date))] = fallback
+            return fallback
         }
     }
 
@@ -3469,6 +3512,7 @@ final class AITerminalManagerStore: ObservableObject {
 
     private func applyConfiguration(_ nextConfiguration: AITerminalManagerConfiguration) {
         configuration = Self.sanitizeConfiguration(nextConfiguration)
+        todoDocumentCache.removeAll()
         configurationRevision = UUID()
         bumpTodoRevision()
     }
@@ -3595,15 +3639,27 @@ final class AITerminalManagerStore: ObservableObject {
         do {
             let dayString = AITerminalTodoSettings.dayString(from: date)
             let path = configuration.todoSettings.dayFilePath(for: date)
-            var document = try Self.loadTodoDocument(at: path, date: dayString)
+            let cacheKey = todoDocumentCacheKey(for: path)
+            var document: AITerminalTodoDayDocument
+            if let cached = todoDocumentCache[cacheKey] {
+                document = cached
+            } else {
+                document = try Self.loadTodoDocument(at: path, date: dayString)
+            }
             let original = document
             mutation(&document)
             guard document != original else {
+                todoDocumentCache[cacheKey] = document
                 lastError = nil
                 return document
             }
             document.updatedAt = .now
-            try Self.saveTodoDocument(document, to: path)
+            todoDocumentCache[cacheKey] = document
+            if Self.isRunningTests {
+                try Self.saveTodoDocument(document, to: path)
+            } else {
+                enqueueTodoDocumentSave(document, to: path)
+            }
             bumpTodoRevision()
             lastError = nil
             return document
@@ -3616,12 +3672,40 @@ final class AITerminalManagerStore: ObservableObject {
     private func todoDocumentSnapshot(for date: Date) -> AITerminalTodoDayDocument {
         let dayString = AITerminalTodoSettings.dayString(from: date)
         let path = configuration.todoSettings.dayFilePath(for: date)
-        return (try? Self.loadTodoDocument(at: path, date: dayString)) ?? .init(date: dayString)
+        let cacheKey = todoDocumentCacheKey(for: path)
+        if let cached = todoDocumentCache[cacheKey] {
+            return cached
+        }
+        let document = (try? Self.loadTodoDocument(at: path, date: dayString)) ?? .init(date: dayString)
+        todoDocumentCache[cacheKey] = document
+        return document
     }
 
     private func bumpTodoRevision() {
         todoRevision = UUID()
         NotificationCenter.default.post(name: .ghodexTodoStateDidChange, object: self)
+    }
+
+    private func enqueueTodoDocumentSave(_ document: AITerminalTodoDayDocument, to path: String) {
+        let persistence = todoDocumentPersistence
+        Task(priority: .utility) { [weak self] in
+            await persistence.scheduleSave(
+                document: document,
+                to: path,
+                writer: { document, path in
+                    try Self.saveTodoDocument(document, to: path)
+                },
+                onError: { error in
+                    await MainActor.run {
+                        self?.lastError = error.localizedDescription
+                    }
+                }
+            )
+        }
+    }
+
+    private func todoDocumentCacheKey(for path: String) -> String {
+        URL(fileURLWithPath: path, isDirectory: false).standardizedFileURL.path
     }
 
     nonisolated private static func encodedPayload<T: Encodable>(_ value: T) -> String? {
