@@ -11,6 +11,7 @@ final class ControlHarnessGateway {
         case tokenRotate
         case tokenRevoke
         case metrics
+        case metricsReset
     }
 
     struct Configuration: Sendable {
@@ -568,7 +569,7 @@ final class ControlHarnessGateway {
         case .pairingExchange:
             return .allow(sessionIdentity: nil)
 
-        case .metrics:
+        case .metrics, .metricsReset:
             guard Self.isLoopbackPeer(peerDescription) else {
                 return .deny(ControlHarnessResponse(
                     requestID: request.requestID,
@@ -608,7 +609,8 @@ final class ControlHarnessGateway {
     private func handleGatewayCommand(_ request: ControlHarnessRequest) -> ControlHarnessResponse? {
         guard let gatewayCommand = gatewayCommand(for: request) else { return nil }
 
-        if case .metrics = gatewayCommand {
+        switch gatewayCommand {
+        case .metrics:
             return ControlHarnessResponse(
                 requestID: request.requestID,
                 status: "ok",
@@ -619,6 +621,19 @@ final class ControlHarnessGateway {
                 errorCode: nil,
                 errorMessage: nil
             )
+        case .metricsReset:
+            return ControlHarnessResponse(
+                requestID: request.requestID,
+                status: "ok",
+                result: AnyEncodable(
+                    performanceMonitor?.reset()
+                        ?? ControlHarnessPerformanceSnapshot.empty()
+                ),
+                errorCode: nil,
+                errorMessage: nil
+            )
+        default:
+            break
         }
 
         guard let authManager else {
@@ -666,6 +681,11 @@ final class ControlHarnessGateway {
                     performanceMonitor?.snapshot()
                         ?? ControlHarnessPerformanceSnapshot.empty()
                 )
+            case .metricsReset:
+                return AnyEncodable(
+                    performanceMonitor?.reset()
+                        ?? ControlHarnessPerformanceSnapshot.empty()
+                )
             }
         }
 
@@ -703,6 +723,8 @@ final class ControlHarnessGateway {
             return .tokenRevoke
         case "gateway.metrics":
             return .metrics
+        case "gateway.metrics.reset":
+            return .metricsReset
         default:
             return nil
         }
@@ -1517,11 +1539,15 @@ struct ControlHarnessGatewayMetricsSnapshot: Codable, Equatable {
 
 struct ControlHarnessPerformanceSnapshot: Codable, Equatable {
     let generatedAt: String
+    let windowStartedAt: String
+    let windowAgeMs: Int
     let sampler: ControlHarnessSamplerMetricsSnapshot
     let gateway: ControlHarnessGatewayMetricsSnapshot
 
     enum CodingKeys: String, CodingKey {
         case generatedAt = "generated_at"
+        case windowStartedAt = "window_started_at"
+        case windowAgeMs = "window_age_ms"
         case sampler
         case gateway
     }
@@ -1535,6 +1561,8 @@ struct ControlHarnessPerformanceSnapshot: Codable, Equatable {
         )
         return Self(
             generatedAt: ControlHarnessPerformanceMonitor.timestamp(now),
+            windowStartedAt: ControlHarnessPerformanceMonitor.timestamp(now),
+            windowAgeMs: 0,
             sampler: .init(
                 tick: emptyDuration,
                 capture: emptyDuration,
@@ -1621,12 +1649,14 @@ final class ControlHarnessPerformanceMonitor {
     private var requestTransportCounts: [String: Int] = [:]
     private var streamTransportCounts: [String: Int] = [:]
     private var streamCloseReasons: [String: Int] = [:]
+    private var windowStartedAt: Date
 
     init(
         windowSize: Int = 128,
         now: @escaping () -> Date = Date.init
     ) {
         self.now = now
+        self.windowStartedAt = now()
         self.samplerTick = RollingDurationWindow(maxSamples: max(8, windowSize / 2))
         self.samplerCapture = RollingDurationWindow(maxSamples: max(8, windowSize))
         self.gatewayRequest = RollingDurationWindow(maxSamples: max(8, windowSize))
@@ -1699,8 +1729,11 @@ final class ControlHarnessPerformanceMonitor {
 
     func snapshot(now: Date? = nil) -> ControlHarnessPerformanceSnapshot {
         queue.sync {
+            let referenceNow = now ?? self.now()
             ControlHarnessPerformanceSnapshot(
-                generatedAt: Self.timestamp(now ?? self.now()),
+                generatedAt: Self.timestamp(referenceNow),
+                windowStartedAt: Self.timestamp(windowStartedAt),
+                windowAgeMs: max(0, Int(referenceNow.timeIntervalSince(windowStartedAt) * 1_000)),
                 sampler: .init(
                     tick: samplerTick.snapshot(),
                     capture: samplerCapture.snapshot(),
@@ -1724,6 +1757,32 @@ final class ControlHarnessPerformanceMonitor {
                     streamCloseReasons: streamCloseReasons
                 )
             )
+        }
+    }
+
+    func reset(now: Date? = nil) -> ControlHarnessPerformanceSnapshot {
+        queue.sync {
+            let referenceNow = now ?? self.now()
+            samplerTick = RollingDurationWindow(maxSamples: samplerTick.maxSamples)
+            samplerCapture = RollingDurationWindow(maxSamples: samplerCapture.maxSamples)
+            gatewayRequest = RollingDurationWindow(maxSamples: gatewayRequest.maxSamples)
+            gatewayStreamLifetime = RollingDurationWindow(maxSamples: gatewayStreamLifetime.maxSamples)
+            lastSamplerTargetCount = 0
+            lastSamplerRefreshedCount = 0
+            lastSamplerTickAt = nil
+            lastCaptureScope = nil
+            lastCaptureActivityClass = nil
+            lastCaptureAt = nil
+            totalRequests = 0
+            openStreams = 0
+            totalStreamsStarted = 0
+            totalStreamsClosed = 0
+            requestCounts = [:]
+            requestTransportCounts = [:]
+            streamTransportCounts = [:]
+            streamCloseReasons = [:]
+            windowStartedAt = referenceNow
+            return ControlHarnessPerformanceSnapshot.empty(now: referenceNow)
         }
     }
 

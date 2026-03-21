@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(control): add resettable gateway metrics windows
+
+- What changed: Extended the local-only gateway metrics surface with `gateway.metrics.reset` so acceptance runs can start from a clean measurement window instead of mixing old sampler and gateway activity into new captures. `ControlHarnessPerformanceSnapshot` now also reports `window_started_at` and `window_age_ms`, and a new `android-remote-control-acceptance.md` runbook records how to collect representative scenario evidence against the blueprint's acceptance section.
+- Why: `gateway.metrics` was useful for spot inspection, but it still forced acceptance work to reason about an implicit rolling window. That made it awkward to capture repeatable scenario-by-scenario baselines and left no durable place to record the evidence workflow.
+- Impact: Desktop-side acceptance measurement can now reset the performance window before each scenario, collect snapshots with explicit window boundaries, and archive the evidence using a dedicated runbook instead of ad hoc notes.
+- Verification: `git diff --check`
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessGateway.swift`, `macos/Tests/ControlHarness/ControlHarnessTests.swift`, `android-remote-control-acceptance.md`, `CHANGELOG.md`
+- Decision trail: Keep the acceptance surface local-only and lightweight. The immediate gap was repeatable measurement workflow, not a new telemetry backend or remote metrics API.
+
 ### docs(control): annotate blueprint progress and drift status
 
 - What changed: Updated `android-remote-control-blueprint.md` to carry an explicit status legend plus a dated progress snapshot for each milestone, the acceptance-gate section, and the original file/module plan. The blueprint now distinguishes `completed`, `in_progress`, `pending`, and `drift`, and calls out where the current desktop implementation intentionally diverged from the original file split.
