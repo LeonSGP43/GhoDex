@@ -248,6 +248,7 @@ enum AppLocalization {
         "ssh.connections.todo.workspace_required": "Todo workspace root path is required.",
         "ssh.connections.todo.day_file_path": "Selected day file path",
         "ssh.connections.todo.show_completed_items": "Show completed items",
+        "ssh.connections.todo.hide_completed_items": "Hide completed items",
         "ssh.connections.todo.presentation_title": "Presentation",
         "ssh.connections.todo.sidebar_placement": "Cmd+Shift+M panel side",
         "ssh.connections.todo.sidebar_placement_left": "Left",
@@ -1359,6 +1360,7 @@ enum L10n {
         nonisolated static var todoWorkspaceRequired: String { AppLocalization.localizedString("ssh.connections.todo.workspace_required") }
         nonisolated static var todoDayFilePath: String { AppLocalization.localizedString("ssh.connections.todo.day_file_path") }
         nonisolated static var todoShowCompletedItems: String { AppLocalization.localizedString("ssh.connections.todo.show_completed_items") }
+        nonisolated static var todoHideCompletedItems: String { AppLocalization.localizedString("ssh.connections.todo.hide_completed_items") }
         nonisolated static var todoPresentationTitle: String { AppLocalization.localizedString("ssh.connections.todo.presentation_title") }
         nonisolated static var todoSidebarPlacement: String { AppLocalization.localizedString("ssh.connections.todo.sidebar_placement") }
         nonisolated static var todoSidebarPlacementLeft: String { AppLocalization.localizedString("ssh.connections.todo.sidebar_placement_left") }

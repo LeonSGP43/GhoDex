@@ -6,7 +6,7 @@
   - a dedicated `Todo` tab inside the existing Settings Panel,
   - config-backed settings plus date-based task files under `gho_todolist_workspace`,
   - today / other days navigation,
-  - timeline-style presentation for the selected day,
+  - timeline-first presentation for the selected day,
   - completion rate for today,
   - explicit manual add / edit / complete / reset flows,
   - an app-wide in-window todo side panel from any GhoDex screen,

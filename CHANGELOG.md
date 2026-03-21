@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### refactor(macos): simplify the todo side-panel hierarchy
+
+- What changed: Reworked the in-window todo side panel so the selected day and timeline become the visual anchor, moved secondary actions into a compact control bar and overflow menu, collapsed task creation into a cleaner quick-add composer, and replaced per-row button clusters with quieter metadata pills plus a trailing actions menu.
+- Why: The first side-panel MVP exposed too many equal-weight controls at once, which pulled attention away from the task list itself and made quick capture feel heavier than it needed to be.
+- Impact: The todo panel now defaults to a more focused reading flow: open panel, see today, scan timeline, then optionally expand quick add. Navigation and filtering remain available, but they no longer compete visually with the main task content.
+- Verification: `git diff --check`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild test -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' -skip-testing GhosttyUITests`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `ghodex-todo-picker-phase1-doc.md`, `CHANGELOG.md`
+- Decision trail: Keep the side panel as a management surface, but make the timeline the first-class visual object. Secondary controls should stay discoverable without dominating the panel, and task creation should start from one intentional entry point instead of two always-open text fields.
+
 ### feat(macos): add todo workspace quick access and denser new-tab picker
 
 - What changed: Added a manual-first `Todo` tab to the Settings Panel with config-backed settings, workspace bootstrap for date-based todo files, day navigation, completion summaries, inline add/edit/complete/reset actions, task-to-workspace assignment, focused-workspace summaries, an app-wide `Cmd+Shift+M` todo side panel, titlebar progress badges for tabs with assigned tasks, and a configurable in-tab quick-look card for completing or resetting today's assigned tasks; also enlarged the new-tab picker window and tightened row spacing so more options remain visible without changing picker behavior.

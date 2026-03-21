@@ -6,6 +6,7 @@
 - Todo must not be built on top of the learning command-execution path because learning currently optimizes for controlled command templates, not task-state correctness.
 - Todo and Task Queue stay separate because one represents personal task tracking and the other represents scheduled terminal command execution.
 - Fast todo access still belongs to the app shell, but the quick entry point should stay inside the current tab context, so `Cmd+Shift+M` now opens an in-window side panel and leaves the Settings Panel as the durable configuration/editor surface.
+- The in-window side panel should be timeline-first: the selected day is the hero, the timeline consumes most of the surface, and quick add stays collapsed until the user explicitly opens it.
 - Task assignment must attach to the stable top-level workspace/tab object, not to transient panes or focused surfaces inside a split tree.
 - The tab quick-look card is useful for ambient awareness but should not cover content by default, so its placement and visibility are config-backed.
 - Picker work is intentionally visual-only in phase 1 to reduce regression risk.
@@ -18,6 +19,7 @@
 - Per-task `assignedWorkspaceID` links a todo item to a top-level tab/workspace object.
 - Terminal UI surfaces may read and mutate assigned items, but they still route through the same store/file path as the Settings Panel.
 - The in-window side panel and the Settings Panel share the same config-backed selected date and completed-item visibility settings.
+- Secondary panel actions such as filtering completed items and opening settings stay in compact controls so the task list remains the dominant visual object.
 
 ## Default Paths
 
