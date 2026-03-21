@@ -749,6 +749,15 @@ final class BrowserTabModel: ObservableObject {
         self.addressText = initialURL.absoluteString
         self.runtimeState = .runtimeUnavailable
         register(page: initialPage)
+
+        // External callers can create Browser tabs very early in app startup.
+        // If the model snapshots runtime state before global CEF init runs,
+        // the view can get stuck on the disabled placeholder and never bind
+        // the page bridge for that first tab.
+        if GhoDexCEFBuildHasRuntime(), !GhoDexCEFIsInitialized() {
+            _ = GhoDexCEFInitializeGlobal()
+        }
+
         refreshRuntimeState()
         syncActivePageState()
     }

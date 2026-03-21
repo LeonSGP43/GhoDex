@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(browser): initialize CEF before first browser page bridge snapshot
+
+- What changed: `BrowserTabModel` now opportunistically calls `GhoDexCEFInitializeGlobal()` before its first runtime-state snapshot whenever the build already has a Chromium runtime but CEF is not initialized yet. The model still refreshes runtime state immediately after that call, so the first Browser tab created through the external control plane sees the post-init runtime status instead of a stale pre-init placeholder state.
+- Why: External `browser.tab.v1 newTab` requests can arrive very early in app startup. Before this fix, the first Browser tab model could be created while global CEF initialization was still pending, which left `runtimeState` stuck on the disabled-browser path and caused later `evaluateJavaScript` requests to fail with `bridgeUnavailable` even after the runtime became available.
+- Impact: The first externally created Browser tab no longer snapshots a stale "runtime unavailable" state just because it won the startup race against global CEF initialization. This should let the Browser page bridge bind on the first tab instead of getting stranded behind the disabled runtime placeholder.
+- Verification: `swiftlint lint macos/Sources/Features/Browser/BrowserTabModel.swift`
+- Files: `macos/Sources/Features/Browser/BrowserTabModel.swift`, `CHANGELOG.md`
+
 ### feat(debug): add config-gated browser remote debugging
 
 - What changed: Added a new `ghodex-browser-remote-debug-port` config key, mirrored it through the macOS config bridge into `UserDefaults`, and taught the CEF initialization path to set `CefSettings.remote_debugging_port` only when the configured port is a valid non-zero local port. The main-process bootstrap now seeds this value before `GhoDexCEFExecuteProcessIfNeeded()`, and the CEF initialization log now records the effective remote debug port alongside the existing framework/profile metadata.
