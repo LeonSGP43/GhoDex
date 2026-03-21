@@ -42,6 +42,10 @@ private enum AITerminalManagerTestSupport {
         return String(encoded.dropFirst().dropLast())
     }
 
+    static func encodedConfigStringLiteral(_ value: String) throws -> String {
+        try configStringLiteral(Data(value.utf8).base64EncodedString())
+    }
+
     static func encodedPayload<T: Encodable>(_ value: T) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -87,6 +91,9 @@ struct AITerminalManagerTests {
         let data = Data(#"{"schemaVersion":2,"savedHosts":[],"importedHostOverrides":[],"favoriteHostIDs":[],"recentHosts":[],"workspaces":[]}"#.utf8)
         let configuration = try JSONDecoder().decode(AITerminalManagerConfiguration.self, from: data)
 
+        #expect(configuration.todoSettings.enabled)
+        #expect(configuration.todoSettings.workspaceRootPath == AITerminalTodoSettings.defaultWorkspaceRootPath)
+        #expect(configuration.todoSettings.showCompletedItems)
         #expect(configuration.learningSettings.enabled)
         #expect(configuration.learningSettings.preferTabWorkingDirectory)
         #expect(configuration.learningSettings.notesRelativePath == AITerminalLearningSettings.defaultNotesRelativePath)
@@ -492,6 +499,165 @@ struct AITerminalManagerTests {
         #expect(configuration.learningSettings.promptTemplate == AITerminalLearningSettings.defaultPromptTemplate)
     }
 
+    @Test @MainActor func storeSavesTodoSettings() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        store.saveTodoSettings(.init(
+            enabled: true,
+            workspaceRootPath: "/tmp/ghodex-todo-tests",
+            showCompletedItems: false,
+            selectedDateAnchor: "2026-03-20"
+        ))
+
+        let configuration = try AITerminalManagerStore.loadConfiguration(at: tempURL)
+        #expect(configuration.todoSettings.enabled)
+        #expect(configuration.todoSettings.workspaceRootPath == "/tmp/ghodex-todo-tests")
+        #expect(configuration.todoSettings.showCompletedItems == false)
+        #expect(configuration.todoSettings.selectedDateAnchor == "2026-03-20")
+    }
+
+    @Test @MainActor func storeClearsTodoErrorsWhenSavingSettings() {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        #expect(store.addTodoItem(title: "   ", notes: "", for: .now) == nil)
+        #expect(store.lastError == "Todo title cannot be empty.")
+
+        store.saveTodoSettings(.init(
+            enabled: true,
+            workspaceRootPath: "/tmp/ghodex-todo-tests",
+            showCompletedItems: true,
+            selectedDateAnchor: "2026-03-21"
+        ))
+
+        #expect(store.lastError == nil)
+        #expect(store.todoSettings.workspaceRootPath == "/tmp/ghodex-todo-tests")
+    }
+
+    @Test @MainActor func newTabPickerControllerUsesExpandedWindowSizing() {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+        let controller = NewTabPickerController(store: store)
+
+        #expect(controller.window?.frame.size.width == 860)
+        #expect(controller.window?.frame.size.height == 640)
+        #expect(controller.window?.minSize.width == 760)
+        #expect(controller.window?.minSize.height == 560)
+    }
+
+    @Test func newTabPickerEntriesPreserveOrderingAndFilteringBehavior() {
+        let favorite = AITerminalHost(
+            id: "ssh:fav",
+            name: "Favorite Box",
+            transport: .ssh,
+            sshAlias: "fav",
+            hostname: "10.0.0.2",
+            user: "deploy",
+            port: 22,
+            defaultDirectory: "/srv/fav",
+            source: .configurationFile
+        )
+        let duplicateRecent = favorite
+        let saved = AITerminalHost(
+            id: "ssh:saved",
+            name: "Saved Box",
+            transport: .ssh,
+            sshAlias: "saved",
+            hostname: "10.0.0.3",
+            user: "deploy",
+            port: 22,
+            defaultDirectory: "/srv/saved",
+            source: .configurationFile
+        )
+        let imported = AITerminalHost(
+            id: "ssh:imported",
+            name: "Imported Box",
+            transport: .ssh,
+            sshAlias: "imported",
+            hostname: "10.0.0.4",
+            user: "deploy",
+            port: 22,
+            defaultDirectory: "/srv/imported",
+            source: .sshConfig
+        )
+        let passwordHost = AITerminalHost(
+            id: "ssh:password",
+            name: "Password Box",
+            transport: .ssh,
+            sshAlias: "password",
+            hostname: "10.0.0.5",
+            user: "deploy",
+            port: 22,
+            defaultDirectory: "/srv/password",
+            source: .configurationFile,
+            authMode: .password
+        )
+        let workspace = AITerminalSavedWorkspaceTemplate(
+            name: "Research Workspace",
+            root: .pane(.init(
+                tabs: [.init(hostID: favorite.id, directory: "/tmp/research")],
+                activeTabIndex: 0
+            ))
+        )
+
+        let entries = NewTabPickerModel.entries(
+            favoriteHosts: [favorite],
+            recentHosts: [duplicateRecent],
+            savedHosts: [saved, passwordHost],
+            importedHosts: [imported],
+            savedWorkspaceTemplates: [workspace],
+            mode: .topLevel
+        ) { host in
+            host.id != passwordHost.id
+        }
+
+        #expect(entries.map(\.id) == [
+            AITerminalHost.local.id,
+            favorite.id,
+            saved.id,
+            imported.id,
+            workspace.id,
+        ])
+        #expect(entries.map(\.shortcutIndex) == [1, 2, 3, 4, 5])
+
+        let filtered = NewTabPickerModel.filteredEntries(entries, query: "research")
+        #expect(filtered.map(\.id) == [workspace.id])
+
+        let paneChildEntries = NewTabPickerModel.entries(
+            favoriteHosts: [favorite],
+            recentHosts: [],
+            savedHosts: [],
+            importedHosts: [],
+            savedWorkspaceTemplates: [workspace],
+            mode: .paneChild
+        ) { _ in true }
+        #expect(!paneChildEntries.contains(where: { entry in
+            if case .savedWorkspace = entry.kind {
+                return true
+            }
+            return false
+        }))
+    }
+
     @Test @MainActor func storeLoadsConfigurationFromManagedGhoDexConfigBlock() throws {
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
@@ -621,6 +787,40 @@ struct AITerminalManagerTests {
         #expect(storeB.configuration.heartbeatQueueSettings.maxConcurrentTasks == 3)
     }
 
+    @Test @MainActor func storeRefreshReloadsTodoSettingsFromManagedConfigBlock() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        try """
+        font-size = 14
+        """.write(to: tempURL, atomically: true, encoding: .utf8)
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        let text = """
+        font-size = 14
+
+        \(AITerminalManagerTestSupport.managedConfigStartMarker)
+        ghodex-todo-enabled = false
+        ghodex-todo-workspace-root-path = \(try AITerminalManagerTestSupport.encodedConfigStringLiteral("/tmp/refreshed-todo-root"))
+        ghodex-todo-show-completed-items = false
+        ghodex-todo-selected-date-anchor = \(try AITerminalManagerTestSupport.encodedConfigStringLiteral("2026-03-19"))
+        \(AITerminalManagerTestSupport.managedConfigEndMarker)
+        """
+        try text.write(to: tempURL, atomically: true, encoding: .utf8)
+
+        store.refresh()
+
+        #expect(store.todoSettings.enabled == false)
+        #expect(store.todoSettings.workspaceRootPath == "/tmp/refreshed-todo-root")
+        #expect(store.todoSettings.showCompletedItems == false)
+        #expect(store.todoSettings.selectedDateAnchor == "2026-03-19")
+    }
+
     @Test @MainActor func storeUsesConfigDirectoryForHeartbeatInbox() {
         let baseDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -675,6 +875,215 @@ struct AITerminalManagerTests {
         #expect(FileManager.default.fileExists(atPath: expectedKnowledgeURL.path))
         #expect(store.learningSettings.defaultProjectPath == result.learnWorkspacePath)
         #expect(store.learningSettings.notesRelativePath == AITerminalLearningSettings.defaultNotesRelativePath)
+    }
+
+    @Test @MainActor func storeInitializesTodoWorkspaceAndMutatesDailyFiles() throws {
+        let tempConfigURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+        let tempTodoRootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ghodex-todo-\(UUID().uuidString)", isDirectory: true)
+
+        defer {
+            try? FileManager.default.removeItem(at: tempConfigURL)
+            try? FileManager.default.removeItem(at: tempTodoRootURL)
+        }
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempConfigURL
+        )
+
+        let result = try #require(store.initializeTodoWorkspace(rootPath: tempTodoRootURL.path))
+        let creatorURL = tempTodoRootURL.appendingPathComponent("creator.md", isDirectory: false)
+        let readmeURL = tempTodoRootURL.appendingPathComponent("README.md", isDirectory: false)
+        let day = Date(timeIntervalSince1970: 1_710_892_800)
+
+        #expect(result.workspaceRootPath == tempTodoRootURL.path)
+        #expect(FileManager.default.fileExists(atPath: creatorURL.path))
+        #expect(FileManager.default.fileExists(atPath: readmeURL.path))
+
+        let added = try #require(store.addTodoItem(
+            title: "Ship todo phase 1",
+            notes: "manual-first",
+            for: day
+        ))
+        #expect(added.items.count == 1)
+
+        let itemID = try #require(added.items.first?.id)
+        let completed = try #require(store.setTodoItemCompleted(
+            id: itemID,
+            isCompleted: true,
+            for: day
+        ))
+        #expect(completed.items.first?.isCompleted == true)
+
+        let updated = try #require(store.updateTodoItem(
+            id: itemID,
+            title: "Ship todo phase 1.1",
+            notes: "picker included",
+            for: day
+        ))
+        #expect(updated.items.first?.title == "Ship todo phase 1.1")
+        #expect(updated.items.first?.notes == "picker included")
+
+        let reloaded = store.todoDocument(for: day)
+        #expect(reloaded.items.count == 1)
+        #expect(reloaded.items.first?.title == "Ship todo phase 1.1")
+        #expect(reloaded.items.first?.isCompleted == true)
+        #expect(reloaded.completionRate == 1)
+    }
+
+    @Test @MainActor func todoDocumentLoadsMissingDayDeterministically() throws {
+        let tempConfigURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+        let tempTodoRootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ghodex-empty-day-\(UUID().uuidString)", isDirectory: true)
+
+        defer {
+            try? FileManager.default.removeItem(at: tempConfigURL)
+            try? FileManager.default.removeItem(at: tempTodoRootURL)
+        }
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempConfigURL
+        )
+
+        _ = try #require(store.initializeTodoWorkspace(rootPath: tempTodoRootURL.path))
+        let day = Date(timeIntervalSince1970: 1_710_979_200)
+        let expectedDayString = AITerminalTodoSettings.dayString(from: day)
+        let expectedPath = tempTodoRootURL
+            .appendingPathComponent("days", isDirectory: true)
+            .appendingPathComponent("\(expectedDayString).json", isDirectory: false)
+
+        let firstLoad = store.todoDocument(for: day)
+        let secondLoad = store.todoDocument(for: day)
+
+        #expect(firstLoad.date == expectedDayString)
+        #expect(firstLoad.items.isEmpty)
+        #expect(firstLoad.completionRate == 0)
+        #expect(secondLoad.date == expectedDayString)
+        #expect(secondLoad.items.isEmpty)
+        #expect(secondLoad.completionRate == 0)
+        #expect(secondLoad.updatedAt >= firstLoad.updatedAt)
+        #expect(FileManager.default.fileExists(atPath: expectedPath.path) == false)
+    }
+
+    @Test @MainActor func storeResetsTodoCompletionWithoutLosingItem() throws {
+        let tempConfigURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+        let tempTodoRootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ghodex-reset-\(UUID().uuidString)", isDirectory: true)
+
+        defer {
+            try? FileManager.default.removeItem(at: tempConfigURL)
+            try? FileManager.default.removeItem(at: tempTodoRootURL)
+        }
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempConfigURL
+        )
+
+        _ = try #require(store.initializeTodoWorkspace(rootPath: tempTodoRootURL.path))
+        let day = Date(timeIntervalSince1970: 1_710_892_800)
+        let added = try #require(store.addTodoItem(
+            title: "Reset me",
+            notes: "todo",
+            for: day
+        ))
+        let itemID = try #require(added.items.first?.id)
+
+        _ = try #require(store.setTodoItemCompleted(
+            id: itemID,
+            isCompleted: true,
+            for: day
+        ))
+        let reset = try #require(store.setTodoItemCompleted(
+            id: itemID,
+            isCompleted: false,
+            for: day
+        ))
+
+        #expect(reset.items.count == 1)
+        #expect(reset.items.first?.isCompleted == false)
+        #expect(reset.items.first?.completedAt == nil)
+        #expect(reset.completionRate == 0)
+    }
+
+    @Test @MainActor func storeAssignsTodoItemsToWorkspaceAndSummarizesProgress() throws {
+        let tempConfigURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+        let tempTodoRootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ghodex-assignment-\(UUID().uuidString)", isDirectory: true)
+
+        defer {
+            try? FileManager.default.removeItem(at: tempConfigURL)
+            try? FileManager.default.removeItem(at: tempTodoRootURL)
+        }
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempConfigURL
+        )
+
+        _ = try #require(store.initializeTodoWorkspace(rootPath: tempTodoRootURL.path))
+        let day = Date(timeIntervalSince1970: 1_710_892_800)
+        let workspaceID = UUID()
+        let otherWorkspaceID = UUID()
+
+        let first = try #require(store.addTodoItem(
+            title: "Ship tab quick look",
+            notes: "today",
+            for: day
+        ))
+        let second = try #require(store.addTodoItem(
+            title: "Refine picker layout",
+            notes: "",
+            for: day
+        ))
+
+        let firstID = try #require(first.items.first?.id)
+        let secondID = try #require(second.items.last?.id)
+
+        _ = try #require(store.assignTodoItem(id: firstID, to: workspaceID, for: day))
+        _ = try #require(store.assignTodoItem(id: secondID, to: workspaceID, for: day))
+        _ = try #require(store.setTodoItemCompleted(id: firstID, isCompleted: true, for: day))
+
+        let unrelated = try #require(store.addTodoItem(
+            title: "Other tab",
+            notes: "",
+            for: day
+        ))
+        let unrelatedID = try #require(unrelated.items.last?.id)
+        _ = try #require(store.assignTodoItem(id: unrelatedID, to: otherWorkspaceID, for: day))
+
+        let assignedItems = store.todoItems(assignedTo: workspaceID, on: day)
+        #expect(assignedItems.count == 2)
+        #expect(assignedItems.map(\.id) == [firstID, secondID])
+        #expect(assignedItems.first?.isCompleted == true)
+        #expect(store.todoItems(assignedTo: workspaceID, on: day, includeCompleted: false).map(\.id) == [secondID])
+
+        let summary = store.todoWorkspaceSummary(for: workspaceID, on: day)
+        #expect(summary.completedCount == 1)
+        #expect(summary.totalCount == 2)
+        #expect(summary.remainingCount == 1)
+        #expect(store.todoWorkspaceSummary(for: otherWorkspaceID, on: day).totalCount == 1)
+
+        _ = try #require(store.assignTodoItem(id: secondID, to: nil, for: day))
+        let clearedSummary = store.todoWorkspaceSummary(for: workspaceID, on: day)
+        #expect(clearedSummary.completedCount == 1)
+        #expect(clearedSummary.totalCount == 1)
+        #expect(clearedSummary.remainingCount == 0)
+
+        let reloaded = store.todoDocument(for: day)
+        #expect(reloaded.items.first(where: { $0.id == firstID })?.assignedWorkspaceID == workspaceID)
+        #expect(reloaded.items.first(where: { $0.id == secondID })?.assignedWorkspaceID == nil)
+        #expect(reloaded.items.first(where: { $0.id == unrelatedID })?.assignedWorkspaceID == otherWorkspaceID)
     }
 
     @Test @MainActor func initializeWorkspaceMigratesLegacyLearnScriptCommandTemplate() throws {
@@ -1019,7 +1428,7 @@ struct AITerminalManagerTests {
         let decoded = try JSONDecoder().decode(AITerminalManagerConfiguration.self, from: data)
 
         #expect(decoded.savedWorkspaceTemplates == [workspace])
-        #expect(decoded.schemaVersion == 6)
+        #expect(decoded.schemaVersion == 7)
     }
 
     @Test @MainActor func storeLoadsSavedWorkspaceTemplatesFromGhoDexConfigWithoutDiagnostics() throws {

@@ -46,6 +46,13 @@ struct SSHConnectionsView: View {
         return formatter
     }()
 
+    private static let todoTimelineTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
     private struct VisualEffectBackground: NSViewRepresentable {
         let material: NSVisualEffectView.Material
 
@@ -80,6 +87,18 @@ struct SSHConnectionsView: View {
     @State private var selectedHostID: String?
     @State private var hostSearchText = ""
 
+    @State private var todoEnabled = true
+    @State private var todoWorkspaceRootPath = ""
+    @State private var todoShowCompletedItems = true
+    @State private var todoSelectedDate = Date.now
+    @State private var todoDocument = AITerminalTodoDayDocument()
+    @State private var todoDraftTitle = ""
+    @State private var todoDraftNotes = ""
+    @State private var todoEditingItemID: UUID?
+    @State private var todoEditingTitle = ""
+    @State private var todoEditingNotes = ""
+    @State private var todoStatusMessage: String?
+
     @State private var learningEnabled = true
     @State private var learningChatWorkspacePath = ""
     @State private var learningCommandTemplate = ""
@@ -108,6 +127,15 @@ struct SSHConnectionsView: View {
         )
     }
 
+    private var todoWorkspaceTargets: [AITerminalTodoWorkspaceTarget] {
+        store.liveTodoWorkspaceTargets()
+    }
+
+    private var focusedTodoWorkspaceTarget: AITerminalTodoWorkspaceTarget? {
+        guard let focusedID = presentation.todoFocusedWorkspaceID else { return nil }
+        return todoWorkspaceTargets.first(where: { $0.workspaceID == focusedID })
+    }
+
     var body: some View {
         ZStack {
             VisualEffectBackground(material: .underWindowBackground)
@@ -130,6 +158,9 @@ struct SSHConnectionsView: View {
                 case .connections:
                     connectionsTabContent
 
+                case .todo:
+                    todoTabContent
+
                 case .learning:
                     learningTabContent
 
@@ -147,6 +178,7 @@ struct SSHConnectionsView: View {
         }
         .onAppear {
             syncSelection()
+            syncTodoSettings()
             syncLearningSettings()
             syncTaskQueueSettings()
         }
@@ -155,11 +187,17 @@ struct SSHConnectionsView: View {
         }
         .onChange(of: store.configurationRevision) { _ in
             syncSelection()
+            syncTodoSettings()
             syncLearningSettings()
             syncTaskQueueSettings()
         }
+        .onChange(of: store.todoRevision) { _ in
+            refreshTodoDocument()
+        }
         .onChange(of: presentation.selectedTab) { tab in
-            if tab == .learning {
+            if tab == .todo {
+                syncTodoSettings()
+            } else if tab == .learning {
                 syncLearningSettings()
             } else if tab == .taskQueue {
                 syncTaskQueueSettings()
@@ -183,7 +221,7 @@ struct SSHConnectionsView: View {
             }
         }
         .pickerStyle(.segmented)
-        .frame(maxWidth: 320)
+        .frame(maxWidth: 440)
     }
 
     private var connectionsTabContent: some View {
@@ -298,6 +336,119 @@ struct SSHConnectionsView: View {
                 }
 
                 Text(L10n.SSHConnections.learningInitializeWorkspaceHint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(22)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .panelSurface()
+        .padding(.horizontal, 20)
+        .padding(.bottom, 20)
+    }
+
+    private var todoTabContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(L10n.SSHConnections.todoTitle)
+                        .font(.title2.weight(.semibold))
+
+                    Text(L10n.SSHConnections.todoSubtitle)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Toggle(L10n.SSHConnections.todoEnable, isOn: $todoEnabled)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(L10n.SSHConnections.todoWorkspaceRootPath)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField(
+                        AITerminalTodoSettings.defaultWorkspaceRootPath,
+                        text: $todoWorkspaceRootPath
+                    )
+                    .textFieldStyle(.roundedBorder)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(L10n.SSHConnections.todoDayFilePath)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(selectedTodoDayFilePath)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                HStack(alignment: .center, spacing: 12) {
+                    Button(L10n.SSHConnections.todoDateYesterday) {
+                        todoSelectedDate = Calendar.current.date(byAdding: .day, value: -1, to: todoSelectedDate) ?? todoSelectedDate
+                        persistTodoDateSelection()
+                    }
+                    .buttonStyle(.bordered)
+
+                    DatePicker(
+                        "",
+                        selection: $todoSelectedDate,
+                        displayedComponents: [.date]
+                    )
+                    .labelsHidden()
+                    .datePickerStyle(.compact)
+                    .onChange(of: todoSelectedDate) { _ in
+                        persistTodoDateSelection()
+                    }
+
+                    Button(L10n.SSHConnections.todoDateToday) {
+                        todoSelectedDate = .now
+                        persistTodoDateSelection()
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button(L10n.SSHConnections.todoDateTomorrow) {
+                        todoSelectedDate = Calendar.current.date(byAdding: .day, value: 1, to: todoSelectedDate) ?? todoSelectedDate
+                        persistTodoDateSelection()
+                    }
+                    .buttonStyle(.bordered)
+
+                    Spacer(minLength: 12)
+
+                    Toggle(L10n.SSHConnections.todoShowCompletedItems, isOn: $todoShowCompletedItems)
+                        .toggleStyle(.switch)
+                        .onChange(of: todoShowCompletedItems) { _ in
+                            persistTodoSettings(showSavedMessage: false)
+                        }
+                }
+
+                todoSummaryCard
+                focusedTodoWorkspaceCard
+                todoComposerCard
+                todoTimelinePanel
+
+                HStack(spacing: 12) {
+                    Button(L10n.SSHConnections.todoInitializeWorkspace) {
+                        initializeTodoWorkspace()
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button(L10n.SSHConnections.todoSaveSettings) {
+                        persistTodoSettings(showSavedMessage: true)
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+
+                    if let todoStatusMessage, !todoStatusMessage.isEmpty {
+                        Text(todoStatusMessage)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Text(L10n.SSHConnections.todoInitializeWorkspaceHint)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -468,6 +619,225 @@ struct SSHConnectionsView: View {
         .panelSurface()
         .padding(.horizontal, 20)
         .padding(.bottom, 20)
+    }
+
+    private var todoSummaryCard: some View {
+        let completedCount = todoDocument.items.filter(\.isCompleted).count
+        let totalCount = todoDocument.items.count
+        let percentage = Int((todoDocument.completionRate * 100).rounded())
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(L10n.SSHConnections.todoSummaryTitle)
+                .font(.headline)
+
+            Text("\(completedCount) / \(totalCount) complete · \(percentage)%")
+                .font(.title3.weight(.semibold))
+
+            Text(L10n.SSHConnections.todoSelectedDay(AITerminalTodoSettings.dayString(from: todoSelectedDate)))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.primary.opacity(0.04))
+        )
+    }
+
+    @ViewBuilder
+    private var focusedTodoWorkspaceCard: some View {
+        if let target = focusedTodoWorkspaceTarget {
+            let summary = store.todoWorkspaceSummary(for: target.workspaceID, on: todoSelectedDate)
+            VStack(alignment: .leading, spacing: 8) {
+                Text(L10n.SSHConnections.todoFocusedWorkspaceTitle)
+                    .font(.headline)
+
+                Text(target.title)
+                    .font(.title3.weight(.semibold))
+
+                Text("\(summary.completedCount) / \(summary.totalCount) complete · \(summary.remainingCount) remaining")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                Text(L10n.SSHConnections.todoFocusedWorkspaceHint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.accentColor.opacity(colorScheme == .dark ? 0.12 : 0.08))
+            )
+        }
+    }
+
+    private var todoComposerCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(L10n.SSHConnections.todoAddAction)
+                .font(.headline)
+
+            TextField(L10n.SSHConnections.todoAddTitle, text: $todoDraftTitle)
+                .textFieldStyle(.roundedBorder)
+
+            TextField(L10n.SSHConnections.todoAddNotes, text: $todoDraftNotes)
+                .textFieldStyle(.roundedBorder)
+
+            HStack {
+                Spacer()
+
+                Button(L10n.SSHConnections.todoAddAction) {
+                    guard let document = store.addTodoItem(
+                        title: todoDraftTitle,
+                        notes: todoDraftNotes,
+                        for: todoSelectedDate
+                    ) else {
+                        todoStatusMessage = store.lastError
+                        return
+                    }
+                    todoDocument = document
+                    todoDraftTitle = ""
+                    todoDraftNotes = ""
+                    todoStatusMessage = nil
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.primary.opacity(0.04))
+        )
+    }
+
+    private var todoTimelinePanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(L10n.SSHConnections.todoTimelineTitle)
+                .font(.headline)
+
+            if visibleTodoItems.isEmpty {
+                Text(L10n.SSHConnections.todoEmpty)
+                    .foregroundStyle(.secondary)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    ForEach(visibleTodoItems, id: \.id) { item in
+                        todoItemRow(item)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.primary.opacity(0.04))
+        )
+    }
+
+    private func todoItemRow(_ item: AITerminalTodoItem) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Button {
+                    guard let document = store.setTodoItemCompleted(
+                        id: item.id,
+                        isCompleted: !item.isCompleted,
+                        for: todoSelectedDate
+                    ) else {
+                        todoStatusMessage = store.lastError
+                        return
+                    }
+                    todoDocument = document
+                    todoStatusMessage = nil
+                } label: {
+                    Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(item.isCompleted ? Color.green : Color.secondary)
+                        .font(.title3)
+                }
+                .buttonStyle(.plain)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    if todoEditingItemID == item.id {
+                        TextField(L10n.SSHConnections.todoAddTitle, text: $todoEditingTitle)
+                            .textFieldStyle(.roundedBorder)
+                        TextField(L10n.SSHConnections.todoAddNotes, text: $todoEditingNotes)
+                            .textFieldStyle(.roundedBorder)
+                    } else {
+                        Text(item.title)
+                            .font(.callout.weight(.semibold))
+                            .strikethrough(item.isCompleted, color: .secondary)
+
+                        if !item.notes.isEmpty {
+                            Text(item.notes)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+
+                    Text(todoTimelineLabel(for: item))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+
+                    todoAssignmentMenu(for: item)
+                }
+
+                Spacer(minLength: 10)
+
+                if todoEditingItemID == item.id {
+                    Button("Cancel") {
+                        todoEditingItemID = nil
+                        todoEditingTitle = ""
+                        todoEditingNotes = ""
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button(L10n.SSHConnections.todoActionSave) {
+                        guard let document = store.updateTodoItem(
+                            id: item.id,
+                            title: todoEditingTitle,
+                            notes: todoEditingNotes,
+                            for: todoSelectedDate
+                        ) else {
+                            todoStatusMessage = store.lastError
+                            return
+                        }
+                        todoDocument = document
+                        todoEditingItemID = nil
+                        todoEditingTitle = ""
+                        todoEditingNotes = ""
+                        todoStatusMessage = nil
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    Button(L10n.SSHConnections.todoActionEdit) {
+                        todoEditingItemID = item.id
+                        todoEditingTitle = item.title
+                        todoEditingNotes = item.notes
+                    }
+                    .buttonStyle(.bordered)
+
+                    if item.isCompleted {
+                        Button(L10n.SSHConnections.todoActionReset) {
+                            guard let document = store.setTodoItemCompleted(
+                                id: item.id,
+                                isCompleted: false,
+                                for: todoSelectedDate
+                            ) else {
+                                todoStatusMessage = store.lastError
+                                return
+                            }
+                            todoDocument = document
+                            todoStatusMessage = nil
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.white.opacity(colorScheme == .dark ? 0.04 : 0.6))
+        )
     }
 
     private var header: some View {
@@ -1526,6 +1896,71 @@ struct SSHConnectionsView: View {
         selectedHostID = allConnectionHosts.first?.id
     }
 
+    private func syncTodoSettings() {
+        let settings = store.todoSettings
+        todoEnabled = settings.enabled
+        todoWorkspaceRootPath = settings.workspaceRootPath
+        todoShowCompletedItems = settings.showCompletedItems
+        todoSelectedDate = AITerminalTodoSettings.date(fromDayString: settings.selectedDateAnchor) ?? .now
+        refreshTodoDocument()
+        if todoStatusMessage == L10n.SSHConnections.todoSaved {
+            todoStatusMessage = nil
+        }
+    }
+
+    private func refreshTodoDocument() {
+        todoDocument = store.todoDocument(for: todoSelectedDate)
+    }
+
+    private func persistTodoDateSelection() {
+        persistTodoSettings(showSavedMessage: false)
+        refreshTodoDocument()
+    }
+
+    private func persistTodoSettings(showSavedMessage: Bool) {
+        let trimmedRootPath = todoWorkspaceRootPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedRootPath.isEmpty else {
+            todoStatusMessage = L10n.SSHConnections.todoWorkspaceRequired
+            return
+        }
+
+        store.saveTodoSettings(.init(
+            enabled: todoEnabled,
+            workspaceRootPath: trimmedRootPath,
+            showCompletedItems: todoShowCompletedItems,
+            selectedDateAnchor: AITerminalTodoSettings.dayString(from: todoSelectedDate)
+        ))
+
+        if store.lastError == nil {
+            todoWorkspaceRootPath = trimmedRootPath
+            todoStatusMessage = showSavedMessage ? L10n.SSHConnections.todoSaved : nil
+        } else {
+            todoStatusMessage = store.lastError
+        }
+    }
+
+    private func initializeTodoWorkspace() {
+        let trimmedRootPath = todoWorkspaceRootPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedRootPath.isEmpty else {
+            todoStatusMessage = L10n.SSHConnections.todoWorkspaceRequired
+            return
+        }
+
+        guard let result = store.initializeTodoWorkspace(rootPath: trimmedRootPath) else {
+            todoStatusMessage = L10n.SSHConnections.todoInitializeFailedMessage(
+                store.lastError ?? "unknown"
+            )
+            return
+        }
+
+        todoWorkspaceRootPath = result.workspaceRootPath
+        todoStatusMessage = L10n.SSHConnections.todoInitializedMessage(
+            result.createdFileCount,
+            result.reusedFileCount
+        )
+        refreshTodoDocument()
+    }
+
     private func syncLearningSettings() {
         let settings = store.learningSettings
         learningEnabled = settings.enabled
@@ -1726,6 +2161,74 @@ struct SSHConnectionsView: View {
         return AITerminalLearningSettings.learnWorkspacePath(
             fromChatWorkspacePath: trimmedChatWorkspacePath
         )
+    }
+
+    private var selectedTodoDayFilePath: String {
+        let trimmedRootPath = todoWorkspaceRootPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedRootPath.isEmpty else {
+            return "-"
+        }
+        return AITerminalTodoSettings(
+            enabled: todoEnabled,
+            workspaceRootPath: trimmedRootPath,
+            showCompletedItems: todoShowCompletedItems,
+            selectedDateAnchor: AITerminalTodoSettings.dayString(from: todoSelectedDate)
+        ).dayFilePath(for: todoSelectedDate)
+    }
+
+    private var visibleTodoItems: [AITerminalTodoItem] {
+        let ordered = todoDocument.orderedItems
+        guard !todoShowCompletedItems else { return ordered }
+        return ordered.filter { !$0.isCompleted }
+    }
+
+    private func todoAssignmentMenu(for item: AITerminalTodoItem) -> some View {
+        Menu {
+            Button(L10n.SSHConnections.todoAssignmentClear) {
+                assignTodoItem(item.id, to: nil)
+            }
+
+            if todoWorkspaceTargets.isEmpty {
+                Text(L10n.SSHConnections.todoAssignmentNoTabs)
+            } else {
+                ForEach(todoWorkspaceTargets) { target in
+                    Button(target.title) {
+                        assignTodoItem(item.id, to: target.workspaceID)
+                    }
+                }
+            }
+        } label: {
+            Label(todoAssignmentTitle(for: item), systemImage: "rectangle.stack.badge.person.crop")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+    }
+
+    private func todoAssignmentTitle(for item: AITerminalTodoItem) -> String {
+        guard let workspaceID = item.assignedWorkspaceID else {
+            return L10n.SSHConnections.todoAssignmentUnassigned
+        }
+        return todoWorkspaceTargets.first(where: { $0.workspaceID == workspaceID })?.title
+            ?? L10n.SSHConnections.todoAssignmentUnavailable
+    }
+
+    private func todoTimelineLabel(for item: AITerminalTodoItem) -> String {
+        let created = Self.todoTimelineTimeFormatter.string(from: item.createdAt)
+        if let completedAt = item.completedAt {
+            let completed = Self.todoTimelineTimeFormatter.string(from: completedAt)
+            return "Created \(created) · Completed \(completed)"
+        }
+        return "Created \(created)"
+    }
+
+    private func assignTodoItem(_ id: UUID, to workspaceID: UUID?) {
+        guard let document = store.assignTodoItem(id: id, to: workspaceID, for: todoSelectedDate) else {
+            todoStatusMessage = store.lastError
+            return
+        }
+        todoDocument = document
+        todoStatusMessage = nil
     }
 
     private var displayRecentHosts: [AITerminalHost] {

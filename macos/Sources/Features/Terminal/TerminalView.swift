@@ -74,6 +74,8 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
 
     var body: some View {
         let paneTabModel = viewModel as? any TerminalPaneTabModel
+        let terminalController = viewModel as? BaseTerminalController
+        let appDelegate = NSApp.delegate as? AppDelegate
         switch ghostty.readiness {
         case .loading:
             Text(AppLocalization.localizedText("Loading"))
@@ -130,12 +132,157 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                     }
                 }
 
+                if let terminalController, let store = appDelegate?.aiTerminalManagerStore {
+                    TodoWorkspaceOverlay(
+                        store: store,
+                        workspaceID: terminalController.workspaceID,
+                        workspaceTitle: terminalController.titleOverride?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                            ? terminalController.titleOverride!
+                            : (terminalController.window?.title ?? "Tab"),
+                        parentWindow: terminalController.window
+                    )
+                }
+
                 // Show update information above all else.
                 if viewModel.updateOverlayIsVisible {
                     UpdateOverlay()
                 }
             }
             .frame(maxWidth: .greatestFiniteMagnitude, maxHeight: .greatestFiniteMagnitude)
+        }
+    }
+}
+
+private struct TodoWorkspaceOverlay: View {
+    @ObservedObject var store: AITerminalManagerStore
+
+    let workspaceID: UUID
+    let workspaceTitle: String
+    weak var parentWindow: NSWindow?
+
+    @State private var expanded = true
+
+    private let rowLimit = 3
+
+    private var summary: AITerminalTodoWorkspaceProgressSummary {
+        store.todoWorkspaceSummary(for: workspaceID)
+    }
+
+    private var items: [AITerminalTodoItem] {
+        store.todoItems(assignedTo: workspaceID, includeCompleted: true)
+    }
+
+    private var visibleItems: ArraySlice<AITerminalTodoItem> {
+        items.prefix(expanded ? rowLimit : 0)
+    }
+
+    var body: some View {
+        if store.todoSettings.enabled, summary.totalCount > 0 {
+            VStack {
+                Spacer()
+
+                HStack(alignment: .bottom) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .top, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(L10n.SSHConnections.todoQuickLookTitle)
+                                    .font(.headline)
+
+                                Text(workspaceTitle)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+
+                                Text(L10n.SSHConnections.todoQuickLookSummary(
+                                    summary.completedCount,
+                                    summary.totalCount,
+                                    summary.remainingCount
+                                ))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Spacer(minLength: 12)
+
+                            Button {
+                                expanded.toggle()
+                            } label: {
+                                Image(systemName: expanded ? "chevron.down.circle.fill" : "chevron.up.circle.fill")
+                                    .imageScale(.large)
+                            }
+                            .buttonStyle(.borderless)
+                            .help(L10n.SSHConnections.todoQuickLookTitle)
+
+                            Button(L10n.SSHConnections.todoQuickLookManage) {
+                                guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
+                                appDelegate.showTodoWorkspace(
+                                    focusedWorkspaceID: workspaceID,
+                                    from: parentWindow
+                                )
+                            }
+                            .buttonStyle(.borderless)
+                        }
+
+                        if expanded {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(Array(visibleItems), id: \.id) { item in
+                                    todoItemRow(item)
+                                }
+
+                                if items.count > rowLimit {
+                                    Text(L10n.SSHConnections.todoQuickLookMore(items.count - rowLimit))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                    .padding(12)
+                    .frame(maxWidth: 320, alignment: .leading)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.08))
+                    )
+
+                    Spacer()
+                }
+                .padding(.leading, 12)
+                .padding(.bottom, 12)
+            }
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
+        }
+    }
+
+    private func todoItemRow(_ item: AITerminalTodoItem) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Button {
+                _ = store.setTodoItemCompleted(
+                    id: item.id,
+                    isCompleted: !item.isCompleted,
+                    for: .now
+                )
+            } label: {
+                Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(item.isCompleted ? Color.green : Color.secondary)
+                    .font(.body)
+            }
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title)
+                    .font(.callout)
+                    .strikethrough(item.isCompleted)
+                    .foregroundStyle(item.isCompleted ? .secondary : .primary)
+                    .lineLimit(2)
+
+                if !item.notes.isEmpty {
+                    Text(item.notes)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
         }
     }
 }

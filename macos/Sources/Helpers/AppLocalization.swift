@@ -237,9 +237,47 @@ enum AppLocalization {
         "ssh.connections.new_tab_picker.search": "Search local and SSH connections",
         "ssh.connections.new_tab_picker.quick_connect": "⌘1-9 Quick Connect",
         "ssh.connections.tab.connections": "Connection Center",
+        "ssh.connections.tab.todo": "Todo",
         "ssh.connections.tab.learning": "Learning Settings",
         "ssh.connections.page.connections.title": "Connection Center",
         "ssh.connections.page.connections.subtitle": "Manage saved SSH connections, reuse Keychain passwords, and jump back into active remote sessions.",
+        "ssh.connections.todo.title": "Todo Workspace",
+        "ssh.connections.todo.subtitle": "Track today's tasks in a manual-first flow with local daily files.",
+        "ssh.connections.todo.enable": "Enable todo workflow",
+        "ssh.connections.todo.workspace_root_path": "Todo workspace root path",
+        "ssh.connections.todo.workspace_required": "Todo workspace root path is required.",
+        "ssh.connections.todo.day_file_path": "Selected day file path",
+        "ssh.connections.todo.show_completed_items": "Show completed items",
+        "ssh.connections.todo.initialize_workspace": "Initialize Todo Workspace",
+        "ssh.connections.todo.initialize_workspace_hint": "Create the todo workspace root, creator note, README, and days directory.",
+        "ssh.connections.todo.saved": "Todo settings saved.",
+        "ssh.connections.todo.initialized_message": "Todo workspace initialized. Created %d file(s), reused %d existing file(s).",
+        "ssh.connections.todo.initialize_failed_message": "Todo workspace initialization failed: %@",
+        "ssh.connections.todo.add_title": "New task title",
+        "ssh.connections.todo.add_notes": "Optional notes",
+        "ssh.connections.todo.add_action": "Add Task",
+        "ssh.connections.todo.empty": "No tasks for the selected day yet.",
+        "ssh.connections.todo.date_yesterday": "Yesterday",
+        "ssh.connections.todo.date_today": "Today",
+        "ssh.connections.todo.date_tomorrow": "Tomorrow",
+        "ssh.connections.todo.summary_title": "Day Summary",
+        "ssh.connections.todo.selected_day": "Selected day: %@",
+        "ssh.connections.todo.focused_workspace_title": "Focused Tab",
+        "ssh.connections.todo.focused_workspace_hint": "This summary tracks tasks assigned to the tab that opened the todo panel.",
+        "ssh.connections.todo.quick_look_title": "Tab Tasks",
+        "ssh.connections.todo.quick_look_empty": "No tasks are assigned to this tab for today.",
+        "ssh.connections.todo.quick_look_manage": "Open Todo Workspace",
+        "ssh.connections.todo.quick_look_summary": "%d / %d complete · %d remaining",
+        "ssh.connections.todo.quick_look_more": "%d more task(s)",
+        "ssh.connections.todo.timeline_title": "Timeline",
+        "ssh.connections.todo.save_settings": "Save Todo Settings",
+        "ssh.connections.todo.action_save": "Save",
+        "ssh.connections.todo.action_edit": "Edit",
+        "ssh.connections.todo.action_reset": "Reset",
+        "ssh.connections.todo.assignment_clear": "Remove Tab Assignment",
+        "ssh.connections.todo.assignment_no_tabs": "No live tabs available",
+        "ssh.connections.todo.assignment_unassigned": "Unassigned",
+        "ssh.connections.todo.assignment_unavailable": "Assigned Tab Unavailable",
         "ssh.connections.learning.title": "Learning Settings",
         "ssh.connections.learning.subtitle": "Configure how selected terminal text is summarized and written into your project knowledge files.",
         "ssh.connections.learning.enable": "Enable Learn action",
@@ -553,9 +591,47 @@ enum AppLocalization {
         "ssh.connections.new_tab_picker.search": "搜索本地和 SSH 连接",
         "ssh.connections.new_tab_picker.quick_connect": "⌘1-9 快速连接",
         "ssh.connections.tab.connections": "连接中心",
+        "ssh.connections.tab.todo": "待办",
         "ssh.connections.tab.learning": "学习设置",
         "ssh.connections.page.connections.title": "连接中心",
         "ssh.connections.page.connections.subtitle": "管理已保存 SSH 连接、复用 Keychain 密码，并快速回到活动中的远程会话。",
+        "ssh.connections.todo.title": "Todo 工作区",
+        "ssh.connections.todo.subtitle": "用手动优先的方式管理今日任务，并把每日任务文件保存在本地。",
+        "ssh.connections.todo.enable": "启用 Todo 工作流",
+        "ssh.connections.todo.workspace_root_path": "Todo 根目录",
+        "ssh.connections.todo.workspace_required": "必须先填写 Todo 根目录。",
+        "ssh.connections.todo.day_file_path": "当前日期文件路径",
+        "ssh.connections.todo.show_completed_items": "显示已完成任务",
+        "ssh.connections.todo.initialize_workspace": "初始化 Todo 工作区",
+        "ssh.connections.todo.initialize_workspace_hint": "创建 todo 根目录、creator 说明、README 和 days 目录。",
+        "ssh.connections.todo.saved": "Todo 设置已保存。",
+        "ssh.connections.todo.initialized_message": "Todo 工作区初始化完成：新建 %d 个文件，复用 %d 个已存在文件。",
+        "ssh.connections.todo.initialize_failed_message": "Todo 工作区初始化失败：%@",
+        "ssh.connections.todo.add_title": "新任务标题",
+        "ssh.connections.todo.add_notes": "可选备注",
+        "ssh.connections.todo.add_action": "添加任务",
+        "ssh.connections.todo.empty": "当前选择日期还没有任务。",
+        "ssh.connections.todo.date_yesterday": "昨天",
+        "ssh.connections.todo.date_today": "今天",
+        "ssh.connections.todo.date_tomorrow": "明天",
+        "ssh.connections.todo.summary_title": "日期汇总",
+        "ssh.connections.todo.selected_day": "当前日期：%@",
+        "ssh.connections.todo.focused_workspace_title": "当前 Tab",
+        "ssh.connections.todo.focused_workspace_hint": "这里显示唤起当前 Todo 面板的 tab 所分配任务的完成情况。",
+        "ssh.connections.todo.quick_look_title": "Tab 任务",
+        "ssh.connections.todo.quick_look_empty": "这个 Tab 今天还没有分配任务。",
+        "ssh.connections.todo.quick_look_manage": "打开 Todo 工作区",
+        "ssh.connections.todo.quick_look_summary": "已完成 %d / %d · 剩余 %d",
+        "ssh.connections.todo.quick_look_more": "还有 %d 个任务",
+        "ssh.connections.todo.timeline_title": "时间轴",
+        "ssh.connections.todo.save_settings": "保存 Todo 设置",
+        "ssh.connections.todo.action_save": "保存",
+        "ssh.connections.todo.action_edit": "编辑",
+        "ssh.connections.todo.action_reset": "重置",
+        "ssh.connections.todo.assignment_clear": "移除 Tab 分配",
+        "ssh.connections.todo.assignment_no_tabs": "当前没有可分配的活动标签页",
+        "ssh.connections.todo.assignment_unassigned": "未分配",
+        "ssh.connections.todo.assignment_unavailable": "已分配标签页不可用",
         "ssh.connections.learning.title": "学习参数",
         "ssh.connections.learning.subtitle": "配置如何把终端选中文本总结并写入项目知识文件。",
         "ssh.connections.learning.enable": "启用学习动作",
@@ -1244,9 +1320,55 @@ enum L10n {
         nonisolated static var newTabPickerSearch: String { AppLocalization.localizedString("ssh.connections.new_tab_picker.search") }
         nonisolated static var newTabPickerQuickConnect: String { AppLocalization.localizedString("ssh.connections.new_tab_picker.quick_connect") }
         nonisolated static var tabConnections: String { AppLocalization.localizedString("ssh.connections.tab.connections") }
+        nonisolated static var tabTodo: String { AppLocalization.localizedString("ssh.connections.tab.todo") }
         nonisolated static var tabLearning: String { AppLocalization.localizedString("ssh.connections.tab.learning") }
         nonisolated static var connectionsPageTitle: String { AppLocalization.localizedString("ssh.connections.page.connections.title") }
         nonisolated static var connectionsPageSubtitle: String { AppLocalization.localizedString("ssh.connections.page.connections.subtitle") }
+        nonisolated static var todoTitle: String { AppLocalization.localizedString("ssh.connections.todo.title") }
+        nonisolated static var todoSubtitle: String { AppLocalization.localizedString("ssh.connections.todo.subtitle") }
+        nonisolated static var todoEnable: String { AppLocalization.localizedString("ssh.connections.todo.enable") }
+        nonisolated static var todoWorkspaceRootPath: String { AppLocalization.localizedString("ssh.connections.todo.workspace_root_path") }
+        nonisolated static var todoWorkspaceRequired: String { AppLocalization.localizedString("ssh.connections.todo.workspace_required") }
+        nonisolated static var todoDayFilePath: String { AppLocalization.localizedString("ssh.connections.todo.day_file_path") }
+        nonisolated static var todoShowCompletedItems: String { AppLocalization.localizedString("ssh.connections.todo.show_completed_items") }
+        nonisolated static var todoInitializeWorkspace: String { AppLocalization.localizedString("ssh.connections.todo.initialize_workspace") }
+        nonisolated static var todoInitializeWorkspaceHint: String { AppLocalization.localizedString("ssh.connections.todo.initialize_workspace_hint") }
+        nonisolated static var todoSaved: String { AppLocalization.localizedString("ssh.connections.todo.saved") }
+        nonisolated static func todoInitializedMessage(_ createdCount: Int, _ reusedCount: Int) -> String {
+            AppLocalization.localizedString("ssh.connections.todo.initialized_message", createdCount, reusedCount)
+        }
+        nonisolated static func todoInitializeFailedMessage(_ detail: String) -> String {
+            AppLocalization.localizedString("ssh.connections.todo.initialize_failed_message", detail)
+        }
+        nonisolated static var todoAddTitle: String { AppLocalization.localizedString("ssh.connections.todo.add_title") }
+        nonisolated static var todoAddNotes: String { AppLocalization.localizedString("ssh.connections.todo.add_notes") }
+        nonisolated static var todoAddAction: String { AppLocalization.localizedString("ssh.connections.todo.add_action") }
+        nonisolated static var todoEmpty: String { AppLocalization.localizedString("ssh.connections.todo.empty") }
+        nonisolated static var todoDateYesterday: String { AppLocalization.localizedString("ssh.connections.todo.date_yesterday") }
+        nonisolated static var todoDateToday: String { AppLocalization.localizedString("ssh.connections.todo.date_today") }
+        nonisolated static var todoDateTomorrow: String { AppLocalization.localizedString("ssh.connections.todo.date_tomorrow") }
+        nonisolated static var todoSummaryTitle: String { AppLocalization.localizedString("ssh.connections.todo.summary_title") }
+        nonisolated static func todoSelectedDay(_ value: String) -> String { AppLocalization.localizedString("ssh.connections.todo.selected_day", value) }
+        nonisolated static var todoFocusedWorkspaceTitle: String { AppLocalization.localizedString("ssh.connections.todo.focused_workspace_title") }
+        nonisolated static var todoFocusedWorkspaceHint: String { AppLocalization.localizedString("ssh.connections.todo.focused_workspace_hint") }
+        nonisolated static var todoQuickLookTitle: String { AppLocalization.localizedString("ssh.connections.todo.quick_look_title") }
+        nonisolated static var todoQuickLookEmpty: String { AppLocalization.localizedString("ssh.connections.todo.quick_look_empty") }
+        nonisolated static var todoQuickLookManage: String { AppLocalization.localizedString("ssh.connections.todo.quick_look_manage") }
+        nonisolated static func todoQuickLookSummary(_ completedCount: Int, _ totalCount: Int, _ remainingCount: Int) -> String {
+            AppLocalization.localizedString("ssh.connections.todo.quick_look_summary", completedCount, totalCount, remainingCount)
+        }
+        nonisolated static func todoQuickLookMore(_ count: Int) -> String {
+            AppLocalization.localizedString("ssh.connections.todo.quick_look_more", count)
+        }
+        nonisolated static var todoTimelineTitle: String { AppLocalization.localizedString("ssh.connections.todo.timeline_title") }
+        nonisolated static var todoSaveSettings: String { AppLocalization.localizedString("ssh.connections.todo.save_settings") }
+        nonisolated static var todoActionSave: String { AppLocalization.localizedString("ssh.connections.todo.action_save") }
+        nonisolated static var todoActionEdit: String { AppLocalization.localizedString("ssh.connections.todo.action_edit") }
+        nonisolated static var todoActionReset: String { AppLocalization.localizedString("ssh.connections.todo.action_reset") }
+        nonisolated static var todoAssignmentClear: String { AppLocalization.localizedString("ssh.connections.todo.assignment_clear") }
+        nonisolated static var todoAssignmentNoTabs: String { AppLocalization.localizedString("ssh.connections.todo.assignment_no_tabs") }
+        nonisolated static var todoAssignmentUnassigned: String { AppLocalization.localizedString("ssh.connections.todo.assignment_unassigned") }
+        nonisolated static var todoAssignmentUnavailable: String { AppLocalization.localizedString("ssh.connections.todo.assignment_unavailable") }
         nonisolated static var learningTitle: String { AppLocalization.localizedString("ssh.connections.learning.title") }
         nonisolated static var learningSubtitle: String { AppLocalization.localizedString("ssh.connections.learning.subtitle") }
         nonisolated static var learningEnable: String { AppLocalization.localizedString("ssh.connections.learning.enable") }

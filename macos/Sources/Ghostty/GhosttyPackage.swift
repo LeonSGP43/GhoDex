@@ -336,6 +336,9 @@ extension Notification.Name {
     static let ghosttyColorDidChange = Notification.Name("com.leongong.ghodex.ghosttyColorDidChange")
     static let GhosttyColorChangeKey = ghosttyColorDidChange.rawValue
 
+    /// Todo state change for global quick-view and per-tab progress surfaces.
+    static let ghodexTodoStateDidChange = Notification.Name("com.leongong.ghodex.todoStateDidChange")
+
     /// Goto tab. Has tab index in the userinfo.
     static let ghosttyMoveTab = Notification.Name("com.leongong.ghodex.moveTab")
     static let GhosttyMoveTabKey = ghosttyMoveTab.rawValue
