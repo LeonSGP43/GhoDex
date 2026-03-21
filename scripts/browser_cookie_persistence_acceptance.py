@@ -425,45 +425,6 @@ def clear_cookie(socket_path: str, browser_tab_id: str, cookie_name: str) -> dic
     return extract_result_json(response["response"])
 
 
-def subscribe_bridge_events(socket_path: str, browser_tab_id: str) -> str:
-    response = send_request(
-        socket_path,
-        "subscribeEvents",
-        browser_tab_id=browser_tab_id,
-        payload={"kindsJSON": json.dumps(["bridgeReady"])},
-    )
-    result = extract_result_json(response["response"])
-    subscription_id = result.get("subscriptionID")
-    if not isinstance(subscription_id, str):
-        raise RuntimeError(f"Invalid bridgeReady subscription response: {json.dumps(result, sort_keys=True)}")
-    return subscription_id
-
-
-def wait_for_bridge_ready(socket_path: str, subscription_id: str, timeout_ms: int) -> dict:
-    deadline = time.monotonic() + (timeout_ms / 1000.0)
-    while time.monotonic() < deadline:
-        response = send_request(
-            socket_path,
-            "drainEvents",
-            payload={"subscriptionID": subscription_id, "limit": "64"},
-        )
-        result = extract_result_json(response["response"])
-        events = result.get("events", [])
-        for event in events:
-            if event.get("kind") == "bridgeReady":
-                return event
-        time.sleep(0.25)
-    raise RuntimeError("Timed out waiting for bridgeReady")
-
-
-def unsubscribe_events(socket_path: str, subscription_id: str) -> None:
-    send_request(
-        socket_path,
-        "unsubscribeEvents",
-        payload={"subscriptionID": subscription_id},
-    )
-
-
 def exercise_cookie_roundtrip(
     socket_path: str,
     page_url: str,
@@ -474,22 +435,15 @@ def exercise_cookie_roundtrip(
     new_tab = send_request(socket_path, "newTab", payload={"url": page_url})
     tab_summary = extract_result_json(new_tab["response"])
     browser_tab_id = tab_summary["id"]
-
-    subscription_id = subscribe_bridge_events(socket_path, browser_tab_id)
-    try:
-        bridge_event = wait_for_bridge_ready(socket_path, subscription_id, timeout_ms)
-        first_ready = wait_for_page_ready(socket_path, browser_tab_id, page_url, timeout_ms)
-        write_result = set_cookie(socket_path, browser_tab_id, cookie_name, cookie_value)
-        read_back = read_cookie(socket_path, browser_tab_id, cookie_name)
-        return {
-            "browser_tab_id": browser_tab_id,
-            "bridge_event": bridge_event,
-            "initial_page": first_ready,
-            "write_result": write_result,
-            "read_back": read_back,
-        }
-    finally:
-        unsubscribe_events(socket_path, subscription_id)
+    first_ready = wait_for_page_ready(socket_path, browser_tab_id, page_url, timeout_ms)
+    write_result = set_cookie(socket_path, browser_tab_id, cookie_name, cookie_value)
+    read_back = read_cookie(socket_path, browser_tab_id, cookie_name)
+    return {
+        "browser_tab_id": browser_tab_id,
+        "initial_page": first_ready,
+        "write_result": write_result,
+        "read_back": read_back,
+    }
 
 
 def cleanup_cookie(
@@ -501,19 +455,14 @@ def cleanup_cookie(
     new_tab = send_request(socket_path, "newTab", payload={"url": page_url})
     tab_summary = extract_result_json(new_tab["response"])
     browser_tab_id = tab_summary["id"]
-    subscription_id = subscribe_bridge_events(socket_path, browser_tab_id)
-    try:
-        wait_for_bridge_ready(socket_path, subscription_id, timeout_ms)
-        wait_for_page_ready(socket_path, browser_tab_id, page_url, timeout_ms)
-        clear_result = clear_cookie(socket_path, browser_tab_id, cookie_name)
-        after_clear = read_cookie(socket_path, browser_tab_id, cookie_name)
-        return {
-            "browser_tab_id": browser_tab_id,
-            "clear_result": clear_result,
-            "after_clear": after_clear,
-        }
-    finally:
-        unsubscribe_events(socket_path, subscription_id)
+    wait_for_page_ready(socket_path, browser_tab_id, page_url, timeout_ms)
+    clear_result = clear_cookie(socket_path, browser_tab_id, cookie_name)
+    after_clear = read_cookie(socket_path, browser_tab_id, cookie_name)
+    return {
+        "browser_tab_id": browser_tab_id,
+        "clear_result": clear_result,
+        "after_clear": after_clear,
+    }
 
 
 def run_mode(

@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### test(browser): avoid bridgeReady races in the cookie persistence harness
+
+- What changed: Simplified `scripts/browser_cookie_persistence_acceptance.py` so the restart-based cookie harness no longer subscribes to `bridgeReady` before validating a new Browser tab. The harness now treats the first successful `evaluateJavaScript`-backed page-readiness probe as the Browser-ready signal and proceeds directly to the cookie write/readback flow.
+- Why: The harness was creating a new Browser tab with an initial URL and only then subscribing to `bridgeReady`. On fast loads the page could become ready before the subscription existed, which made the acceptance run fail on a missed event even though the tab was already controllable over `browser.tab.v1`.
+- Impact: Cookie persistence runs are now keyed to the actual requirement that matters for the test—being able to evaluate page state and read/write cookies—without depending on a racy one-shot event subscription. This makes the acceptance result a better signal for cookie/profile behavior instead of event-timing noise.
+- Verification: `python3 -m py_compile scripts/browser_cookie_persistence_acceptance.py`, `python3 scripts/browser_cookie_persistence_acceptance.py --help`
+- Files: `scripts/browser_cookie_persistence_acceptance.py`, `CHANGELOG.md`
+
 ### feat(browser): add cookie mutation commands
 
 - What changed: Added first-class `setCookie`, `deleteCookie`, and `clearCookies` commands to `browser.tab.v1`, wired them through both the async IPC path and the synchronous AppleScript compatibility path, and documented their payload/result semantics in the external Browser command protocol guide. The mutation commands normalize payloads up front, then run one scoped page-side JavaScript mutation script that updates `document.cookie` and returns the resulting visible cookie state plus the names it attempted to change.
