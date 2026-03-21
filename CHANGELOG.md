@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### refactor(macos): make the todo side panel content-first
+
+- What changed: Flattened the in-window todo panel into a list-first layout, removed the oversized top summary card, moved day/progress status into a slim footer, hid the visible scroll indicator, promoted `Add Task` into a full-width primary action, enlarged task title/notes typography, localized the created/completed timeline copy, and replaced the per-row overflow menu with direct visible edit/reset controls plus a visible assignment control.
+- Why: The previous side-panel pass still spent too much visual weight on summary chrome, date controls, and nested rounded surfaces. In practice the task list itself needs to dominate the panel, and common actions cannot require an extra overflow-menu click.
+- Impact: Opening the todo panel now lands the user directly in the task list. Tasks read larger, done vs undone cards are visually distinct, the footer carries low-priority progress state, and editing/resetting/assigning a task is available directly from the card without drilling into a hidden menu.
+- Verification: `git diff --check`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration ReleaseLocal -destination 'platform=macOS,arch=arm64' SYMROOT=macos/build`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `ghodex-todo-picker-phase1-doc.md`, `CHANGELOG.md`
+- Decision trail: Treat the side panel as a fast reading and manipulation surface, not a dashboard. Summary state still matters, but it belongs at the edge of the panel. The main body should spend its space on large task content, direct status affordances, and one-tap row actions instead of nested containers and overflow menus.
+
 ### refactor(macos): simplify the todo side-panel hierarchy
 
 - What changed: Reworked the in-window todo side panel so the selected day and timeline become the visual anchor, moved secondary actions into a compact control bar and overflow menu, collapsed task creation into a cleaner quick-add composer, and replaced per-row button clusters with quieter metadata pills plus a trailing actions menu.
