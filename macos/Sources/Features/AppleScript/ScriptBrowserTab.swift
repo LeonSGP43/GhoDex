@@ -50,118 +50,118 @@ final class ScriptBrowserTab: NSObject {
         )
     }
 
-    fileprivate func load(url rawURL: String) -> Result<Bool, BrowserControlError> {
+    fileprivate func load(url rawURL: String, pageID: UUID? = nil) -> Result<Bool, BrowserControlError> {
         awaitControlResultSynchronously { completion in
-            issueLoad(url: rawURL, completion: completion)
+            issueLoad(url: rawURL, pageID: pageID, completion: completion)
         }
     }
 
-    fileprivate func loadAsync(url rawURL: String) async -> Result<Bool, BrowserControlError> {
+    fileprivate func loadAsync(url rawURL: String, pageID: UUID? = nil) async -> Result<Bool, BrowserControlError> {
         await awaitControlResult { completion in
-            issueLoad(url: rawURL, completion: completion)
+            issueLoad(url: rawURL, pageID: pageID, completion: completion)
         }
     }
 
-    fileprivate func evaluate(javaScript script: String) -> Result<String, BrowserControlError> {
+    fileprivate func evaluate(javaScript script: String, pageID: UUID? = nil) -> Result<String, BrowserControlError> {
         awaitControlResultSynchronously { completion in
-            issueEvaluation(javaScript: script, completion: completion)
+            issueEvaluation(javaScript: script, pageID: pageID, completion: completion)
         }
     }
 
-    fileprivate func evaluateAsync(javaScript script: String) async -> Result<String, BrowserControlError> {
+    fileprivate func evaluateAsync(javaScript script: String, pageID: UUID? = nil) async -> Result<String, BrowserControlError> {
         await awaitControlResult { completion in
-            issueEvaluation(javaScript: script, completion: completion)
+            issueEvaluation(javaScript: script, pageID: pageID, completion: completion)
         }
     }
 
-    fileprivate func getCookies(payload: [String: String]) -> Result<String, BrowserControlError> {
+    fileprivate func getCookies(payload: [String: String], pageID: UUID? = nil) -> Result<String, BrowserControlError> {
         switch Self.cookieInspectionScript(payload: payload) {
         case let .success(script):
-            return evaluate(javaScript: script)
+            return evaluate(javaScript: script, pageID: pageID)
         case let .failure(error):
             return .failure(error)
         }
     }
 
-    fileprivate func getCookiesAsync(payload: [String: String]) async -> Result<String, BrowserControlError> {
+    fileprivate func getCookiesAsync(payload: [String: String], pageID: UUID? = nil) async -> Result<String, BrowserControlError> {
         switch Self.cookieInspectionScript(payload: payload) {
         case let .success(script):
-            return await evaluateAsync(javaScript: script)
+            return await evaluateAsync(javaScript: script, pageID: pageID)
         case let .failure(error):
             return .failure(error)
         }
     }
 
-    fileprivate func setCookie(payload: [String: String]) -> Result<String, BrowserControlError> {
+    fileprivate func setCookie(payload: [String: String], pageID: UUID? = nil) -> Result<String, BrowserControlError> {
         switch Self.cookieMutationScript(operation: .set, payload: payload) {
         case let .success(script):
-            return evaluate(javaScript: script)
+            return evaluate(javaScript: script, pageID: pageID)
         case let .failure(error):
             return .failure(error)
         }
     }
 
-    fileprivate func setCookieAsync(payload: [String: String]) async -> Result<String, BrowserControlError> {
+    fileprivate func setCookieAsync(payload: [String: String], pageID: UUID? = nil) async -> Result<String, BrowserControlError> {
         switch Self.cookieMutationScript(operation: .set, payload: payload) {
         case let .success(script):
-            return await evaluateAsync(javaScript: script)
+            return await evaluateAsync(javaScript: script, pageID: pageID)
         case let .failure(error):
             return .failure(error)
         }
     }
 
-    fileprivate func deleteCookie(payload: [String: String]) -> Result<String, BrowserControlError> {
+    fileprivate func deleteCookie(payload: [String: String], pageID: UUID? = nil) -> Result<String, BrowserControlError> {
         switch Self.cookieMutationScript(operation: .delete, payload: payload) {
         case let .success(script):
-            return evaluate(javaScript: script)
+            return evaluate(javaScript: script, pageID: pageID)
         case let .failure(error):
             return .failure(error)
         }
     }
 
-    fileprivate func deleteCookieAsync(payload: [String: String]) async -> Result<String, BrowserControlError> {
+    fileprivate func deleteCookieAsync(payload: [String: String], pageID: UUID? = nil) async -> Result<String, BrowserControlError> {
         switch Self.cookieMutationScript(operation: .delete, payload: payload) {
         case let .success(script):
-            return await evaluateAsync(javaScript: script)
+            return await evaluateAsync(javaScript: script, pageID: pageID)
         case let .failure(error):
             return .failure(error)
         }
     }
 
-    fileprivate func clearCookies(payload: [String: String]) -> Result<String, BrowserControlError> {
+    fileprivate func clearCookies(payload: [String: String], pageID: UUID? = nil) -> Result<String, BrowserControlError> {
         switch Self.cookieMutationScript(operation: .clear, payload: payload) {
         case let .success(script):
-            return evaluate(javaScript: script)
+            return evaluate(javaScript: script, pageID: pageID)
         case let .failure(error):
             return .failure(error)
         }
     }
 
-    fileprivate func clearCookiesAsync(payload: [String: String]) async -> Result<String, BrowserControlError> {
+    fileprivate func clearCookiesAsync(payload: [String: String], pageID: UUID? = nil) async -> Result<String, BrowserControlError> {
         switch Self.cookieMutationScript(operation: .clear, payload: payload) {
         case let .success(script):
-            return await evaluateAsync(javaScript: script)
+            return await evaluateAsync(javaScript: script, pageID: pageID)
         case let .failure(error):
             return .failure(error)
         }
     }
 
-    fileprivate func runDOMBatch(commandsJSON: String) -> Result<String, BrowserControlError> {
+    fileprivate func runDOMBatch(commandsJSON: String, pageID: UUID? = nil) -> Result<String, BrowserControlError> {
         switch decodeDOMBatchCommands(commandsJSON: commandsJSON) {
         case let .success(commands):
             return awaitControlResultSynchronously { completion in
-                issueDOMBatch(commands: commands, completion: completion)
+                issueDOMBatch(commands: commands, pageID: pageID, completion: completion)
             }
         case let .failure(error):
             return .failure(error)
         }
     }
 
-    fileprivate func runDOMBatchAsync(commandsJSON: String) async -> Result<String, BrowserControlError> {
+    fileprivate func runDOMBatchAsync(commandsJSON: String, pageID: UUID? = nil) async -> Result<String, BrowserControlError> {
         switch decodeDOMBatchCommands(commandsJSON: commandsJSON) {
         case let .success(commands):
             return await awaitControlResult { completion in
-                issueDOMBatch(commands: commands, completion: completion)
+                issueDOMBatch(commands: commands, pageID: pageID, completion: completion)
             }
         case let .failure(error):
             return .failure(error)
@@ -181,15 +181,16 @@ final class ScriptBrowserTab: NSObject {
 
     private func issueLoad(
         url rawURL: String,
+        pageID: UUID?,
         completion: @escaping (Result<Bool, BrowserControlError>) -> Void
     ) {
-        guard let controller, let activePage = controller.model.activePage else {
-            completion(.failure(.pageNotFound("No active browser page is available.")))
+        guard let page = requestedPage(pageID) else {
+            completion(.failure(.pageNotFound(pageNotFoundMessage(for: pageID))))
             return
         }
 
-        let normalizedURL = BrowserPaths.normalizedURLString(rawURL, fallback: controller.model.displayedURL)
-        activePage.send(.loadURL, payload: ["url": normalizedURL]) { response in
+        let normalizedURL = BrowserPaths.normalizedURLString(rawURL, fallback: page.displayedURL)
+        page.send(.loadURL, payload: ["url": normalizedURL]) { response in
             if let error = response.error {
                 completion(.failure(error))
                 return
@@ -201,14 +202,15 @@ final class ScriptBrowserTab: NSObject {
 
     private func issueEvaluation(
         javaScript script: String,
+        pageID: UUID?,
         completion: @escaping (Result<String, BrowserControlError>) -> Void
     ) {
-        guard let controller, let activePage = controller.model.activePage else {
-            completion(.failure(.pageNotFound("No active browser page is available.")))
+        guard let page = requestedPage(pageID) else {
+            completion(.failure(.pageNotFound(pageNotFoundMessage(for: pageID))))
             return
         }
 
-        activePage.send(.evaluateJavaScript, payload: ["script": script]) { response in
+        page.send(.evaluateJavaScript, payload: ["script": script]) { response in
             if let error = response.error {
                 completion(.failure(error))
                 return
@@ -220,14 +222,15 @@ final class ScriptBrowserTab: NSObject {
 
     private func issueDOMBatch(
         commands: [BrowserDOMBatchCommand],
+        pageID: UUID?,
         completion: @escaping (Result<String, BrowserControlError>) -> Void
     ) {
-        guard let controller, let activePage = controller.model.activePage else {
-            completion(.failure(.pageNotFound("No active browser page is available.")))
+        guard let page = requestedPage(pageID) else {
+            completion(.failure(.pageNotFound(pageNotFoundMessage(for: pageID))))
             return
         }
 
-        activePage.runDecodedDOMCommandBatch(commands) { result in
+        page.runDecodedDOMCommandBatch(commands) { result in
             switch result {
             case let .success(decodedResult):
                 do {
@@ -332,6 +335,19 @@ final class ScriptBrowserTab: NSObject {
         let data = try JSONEncoder().encode(value)
         return try JSONSerialization.jsonObject(with: data)
     }
+
+    private func requestedPage(_ pageID: UUID?) -> BrowserPageState? {
+        guard let controller else { return nil }
+        guard let pageID else { return controller.model.activePage }
+        return controller.model.pages.first(where: { $0.id == pageID })
+    }
+
+    private func pageNotFoundMessage(for pageID: UUID?) -> String {
+        if let pageID {
+            return "No browser page exists for \(pageID.uuidString)."
+        }
+        return "No active browser page is available."
+    }
 }
 
 private final class BrowserControlAwaitGate {
@@ -398,6 +414,18 @@ extension ScriptBrowserTab {
         return .success(summary)
     }
 
+    static func parseRequestedPageID(from request: BrowserExternalCommandRequest) -> Result<UUID?, BrowserExternalCommandError> {
+        guard let rawPageID = request.pageID?.trimmingCharacters(in: .whitespacesAndNewlines), !rawPageID.isEmpty else {
+            return .success(nil)
+        }
+
+        guard let pageID = UUID(uuidString: rawPageID) else {
+            return .failure(.invalidRequest("The pageID field must be a UUID string when provided."))
+        }
+
+        return .success(pageID)
+    }
+
     static func runExternalCommandProtocol(requestJSON: String) async throws -> String {
         let request = try decodeExternalCommandRequest(requestJSON)
         let response = await routeExternalCommandAsync(request)
@@ -437,11 +465,18 @@ extension ScriptBrowserTab {
             guard let browserTab = browserTab(for: request) else {
                 return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
             }
+            let requestedPageID: UUID?
+            switch parseRequestedPageID(from: request) {
+            case let .success(pageID):
+                requestedPageID = pageID
+            case let .failure(error):
+                return .failure(for: request, error: error)
+            }
             guard let rawURL = request.payload["url"], !rawURL.isEmpty else {
                 return .failure(for: request, error: .invalidRequest("The loadURL command requires a non-empty url payload."))
             }
 
-            switch await browserTab.loadAsync(url: rawURL) {
+            switch await browserTab.loadAsync(url: rawURL, pageID: requestedPageID) {
             case let .success(result):
                 do {
                     return .success(for: request, resultJSON: try jsonString(from: ["loaded": result]))
@@ -455,8 +490,15 @@ extension ScriptBrowserTab {
             guard let browserTab = browserTab(for: request) else {
                 return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
             }
+            let requestedPageID: UUID?
+            switch parseRequestedPageID(from: request) {
+            case let .success(pageID):
+                requestedPageID = pageID
+            case let .failure(error):
+                return .failure(for: request, error: error)
+            }
 
-            switch await browserTab.getCookiesAsync(payload: request.payload) {
+            switch await browserTab.getCookiesAsync(payload: request.payload, pageID: requestedPageID) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -466,8 +508,15 @@ extension ScriptBrowserTab {
             guard let browserTab = browserTab(for: request) else {
                 return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
             }
+            let requestedPageID: UUID?
+            switch parseRequestedPageID(from: request) {
+            case let .success(pageID):
+                requestedPageID = pageID
+            case let .failure(error):
+                return .failure(for: request, error: error)
+            }
 
-            switch await browserTab.setCookieAsync(payload: request.payload) {
+            switch await browserTab.setCookieAsync(payload: request.payload, pageID: requestedPageID) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -477,8 +526,15 @@ extension ScriptBrowserTab {
             guard let browserTab = browserTab(for: request) else {
                 return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
             }
+            let requestedPageID: UUID?
+            switch parseRequestedPageID(from: request) {
+            case let .success(pageID):
+                requestedPageID = pageID
+            case let .failure(error):
+                return .failure(for: request, error: error)
+            }
 
-            switch await browserTab.deleteCookieAsync(payload: request.payload) {
+            switch await browserTab.deleteCookieAsync(payload: request.payload, pageID: requestedPageID) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -488,8 +544,15 @@ extension ScriptBrowserTab {
             guard let browserTab = browserTab(for: request) else {
                 return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
             }
+            let requestedPageID: UUID?
+            switch parseRequestedPageID(from: request) {
+            case let .success(pageID):
+                requestedPageID = pageID
+            case let .failure(error):
+                return .failure(for: request, error: error)
+            }
 
-            switch await browserTab.clearCookiesAsync(payload: request.payload) {
+            switch await browserTab.clearCookiesAsync(payload: request.payload, pageID: requestedPageID) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -499,6 +562,13 @@ extension ScriptBrowserTab {
             guard let browserTab = browserTab(for: request) else {
                 return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
             }
+            let requestedPageID: UUID?
+            switch parseRequestedPageID(from: request) {
+            case let .success(pageID):
+                requestedPageID = pageID
+            case let .failure(error):
+                return .failure(for: request, error: error)
+            }
             guard let script = request.payload["script"], !script.isEmpty else {
                 return .failure(
                     for: request,
@@ -506,7 +576,7 @@ extension ScriptBrowserTab {
                 )
             }
 
-            switch await browserTab.evaluateAsync(javaScript: script) {
+            switch await browserTab.evaluateAsync(javaScript: script, pageID: requestedPageID) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -516,6 +586,13 @@ extension ScriptBrowserTab {
             guard let browserTab = browserTab(for: request) else {
                 return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
             }
+            let requestedPageID: UUID?
+            switch parseRequestedPageID(from: request) {
+            case let .success(pageID):
+                requestedPageID = pageID
+            case let .failure(error):
+                return .failure(for: request, error: error)
+            }
             guard let commandsJSON = request.payload["commandsJSON"], !commandsJSON.isEmpty else {
                 return .failure(
                     for: request,
@@ -523,7 +600,7 @@ extension ScriptBrowserTab {
                 )
             }
 
-            switch await browserTab.runDOMBatchAsync(commandsJSON: commandsJSON) {
+            switch await browserTab.runDOMBatchAsync(commandsJSON: commandsJSON, pageID: requestedPageID) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -645,11 +722,18 @@ extension ScriptBrowserTab {
             guard let browserTab = browserTab(for: request) else {
                 return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
             }
+            let requestedPageID: UUID?
+            switch parseRequestedPageID(from: request) {
+            case let .success(pageID):
+                requestedPageID = pageID
+            case let .failure(error):
+                return .failure(for: request, error: error)
+            }
             guard let rawURL = request.payload["url"], !rawURL.isEmpty else {
                 return .failure(for: request, error: .invalidRequest("The loadURL command requires a non-empty url payload."))
             }
 
-            switch browserTab.load(url: rawURL) {
+            switch browserTab.load(url: rawURL, pageID: requestedPageID) {
             case let .success(result):
                 do {
                     return .success(for: request, resultJSON: try jsonString(from: ["loaded": result]))
@@ -663,8 +747,15 @@ extension ScriptBrowserTab {
             guard let browserTab = browserTab(for: request) else {
                 return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
             }
+            let requestedPageID: UUID?
+            switch parseRequestedPageID(from: request) {
+            case let .success(pageID):
+                requestedPageID = pageID
+            case let .failure(error):
+                return .failure(for: request, error: error)
+            }
 
-            switch browserTab.getCookies(payload: request.payload) {
+            switch browserTab.getCookies(payload: request.payload, pageID: requestedPageID) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -674,8 +765,15 @@ extension ScriptBrowserTab {
             guard let browserTab = browserTab(for: request) else {
                 return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
             }
+            let requestedPageID: UUID?
+            switch parseRequestedPageID(from: request) {
+            case let .success(pageID):
+                requestedPageID = pageID
+            case let .failure(error):
+                return .failure(for: request, error: error)
+            }
 
-            switch browserTab.setCookie(payload: request.payload) {
+            switch browserTab.setCookie(payload: request.payload, pageID: requestedPageID) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -685,8 +783,15 @@ extension ScriptBrowserTab {
             guard let browserTab = browserTab(for: request) else {
                 return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
             }
+            let requestedPageID: UUID?
+            switch parseRequestedPageID(from: request) {
+            case let .success(pageID):
+                requestedPageID = pageID
+            case let .failure(error):
+                return .failure(for: request, error: error)
+            }
 
-            switch browserTab.deleteCookie(payload: request.payload) {
+            switch browserTab.deleteCookie(payload: request.payload, pageID: requestedPageID) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -696,8 +801,15 @@ extension ScriptBrowserTab {
             guard let browserTab = browserTab(for: request) else {
                 return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
             }
+            let requestedPageID: UUID?
+            switch parseRequestedPageID(from: request) {
+            case let .success(pageID):
+                requestedPageID = pageID
+            case let .failure(error):
+                return .failure(for: request, error: error)
+            }
 
-            switch browserTab.clearCookies(payload: request.payload) {
+            switch browserTab.clearCookies(payload: request.payload, pageID: requestedPageID) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -707,6 +819,13 @@ extension ScriptBrowserTab {
             guard let browserTab = browserTab(for: request) else {
                 return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
             }
+            let requestedPageID: UUID?
+            switch parseRequestedPageID(from: request) {
+            case let .success(pageID):
+                requestedPageID = pageID
+            case let .failure(error):
+                return .failure(for: request, error: error)
+            }
             guard let script = request.payload["script"], !script.isEmpty else {
                 return .failure(
                     for: request,
@@ -714,7 +833,7 @@ extension ScriptBrowserTab {
                 )
             }
 
-            switch browserTab.evaluate(javaScript: script) {
+            switch browserTab.evaluate(javaScript: script, pageID: requestedPageID) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -724,6 +843,13 @@ extension ScriptBrowserTab {
             guard let browserTab = browserTab(for: request) else {
                 return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
             }
+            let requestedPageID: UUID?
+            switch parseRequestedPageID(from: request) {
+            case let .success(pageID):
+                requestedPageID = pageID
+            case let .failure(error):
+                return .failure(for: request, error: error)
+            }
             guard let commandsJSON = request.payload["commandsJSON"], !commandsJSON.isEmpty else {
                 return .failure(
                     for: request,
@@ -731,7 +857,7 @@ extension ScriptBrowserTab {
                 )
             }
 
-            switch browserTab.runDOMBatch(commandsJSON: commandsJSON) {
+            switch browserTab.runDOMBatch(commandsJSON: commandsJSON, pageID: requestedPageID) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):

@@ -208,6 +208,11 @@ ghodex-browser-remote-debug-port = 9222
 
 Payload notes:
 
+- page-targeted commands may include a top-level `pageID` field in the request
+  envelope
+- when `pageID` is omitted, the command still targets the active page for
+  backward compatibility
+- when `pageID` is present, it must be a UUID string returned by `listPages`
 - all `getCookies` payload fields are optional filters
 - `name` matches one visible cookie name exactly
 - `domain` matches the current page hostname exactly or by suffix
@@ -408,6 +413,7 @@ ghodex +browser-control --transport=ipc --request '{
   "version":"browser.tab.v1",
   "command":"loadURL",
   "browserTabID":"browser-tab-1",
+  "pageID":"E5F4C926-7F1C-466E-A6D9-3A6F6A2F6D4E",
   "payload":{"url":"https://example.com"}
 }'
 ```
@@ -455,6 +461,7 @@ ghodex +browser-control --transport=ipc --request '{
   "version":"browser.tab.v1",
   "command":"runDOMBatch",
   "browserTabID":"browser-tab-1",
+  "pageID":"E5F4C926-7F1C-466E-A6D9-3A6F6A2F6D4E",
   "payload":{
     "commandsJSON":"[{\"id\":\"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA\",\"command\":\"query\",\"selector\":\"h1\"},{\"id\":\"BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB\",\"command\":\"getDOMSnapshot\",\"selector\":\"body\",\"maxDepth\":2,\"includeText\":true}]"
   }
@@ -469,6 +476,7 @@ ghodex +browser-control --transport=ipc --request '{
   "version":"browser.tab.v1",
   "command":"getCookies",
   "browserTabID":"browser-tab-1",
+  "pageID":"E5F4C926-7F1C-466E-A6D9-3A6F6A2F6D4E",
   "payload":{
     "domain":"example.com"
   }
@@ -497,6 +505,7 @@ ghodex +browser-control --transport=ipc --request '{
   "version":"browser.tab.v1",
   "command":"setCookie",
   "browserTabID":"browser-tab-1",
+  "pageID":"E5F4C926-7F1C-466E-A6D9-3A6F6A2F6D4E",
   "payload":{
     "name":"session_id",
     "value":"abc123",
@@ -514,6 +523,7 @@ ghodex +browser-control --transport=ipc --request '{
   "version":"browser.tab.v1",
   "command":"clearCookies",
   "browserTabID":"browser-tab-1",
+  "pageID":"E5F4C926-7F1C-466E-A6D9-3A6F6A2F6D4E",
   "payload":{}
 }'
 ```

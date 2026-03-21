@@ -61,6 +61,7 @@ struct BrowserExternalCommandRequest: Identifiable, Hashable, Codable {
     let version: String
     let command: BrowserExternalCommandKind
     let browserTabID: String?
+    let pageID: String?
     let payload: [String: String]
 
     init(
@@ -68,12 +69,14 @@ struct BrowserExternalCommandRequest: Identifiable, Hashable, Codable {
         version: String = BrowserCommandProtocolVersion.v1,
         command: BrowserExternalCommandKind,
         browserTabID: String? = nil,
+        pageID: String? = nil,
         payload: [String: String] = [:]
     ) {
         self.id = id
         self.version = version
         self.command = command
         self.browserTabID = browserTabID
+        self.pageID = pageID
         self.payload = payload
     }
 

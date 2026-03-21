@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): add page-aware external command routing
+
+- What changed: Extended `browser.tab.v1` requests with an optional top-level `pageID` field and taught `ScriptBrowserTab` to resolve `loadURL`, `evaluateJavaScript`, `runDOMBatch`, and the page-visible cookie commands against either the requested page or the currently active page. The protocol guide now documents the new page-targeting field and shows page-specific IPC examples.
+- Why: External clients can already discover and activate internal Browser pages, but the command plane still hard-wired all page-manipulating commands to whichever page happened to be active. That left page discovery incomplete because callers still could not reliably target one specific page without mutating global Browser-tab selection first.
+- Impact: Browser automation clients can now address one discovered page directly while remaining backward compatible with older active-page-only requests. This is the first real page-aware routing layer, and it reduces cross-page races before the later frame-targeting and revision-guard work lands.
+- Verification: `swiftlint lint macos/Sources/Features/Browser/BrowserCommandProtocol.swift macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `tmp_dd=$(mktemp -d /tmp/ghodex-browser-page-route-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-page-route-build.XXXXXX) && xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" build`
+- Files: `macos/Sources/Features/Browser/BrowserCommandProtocol.swift`, `macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `browser-tab-command-protocol.md`, `CHANGELOG.md`
+
 ### feat(browser): add external page discovery commands
 
 - What changed: Added `listPages`, `getActivePage`, and `activatePage` to `browser.tab.v1`, defined a typed `BrowserExternalPageSummary`, and routed the new commands through `ScriptBrowserTab` so external clients can enumerate the internal Browser pages inside one Browser tab, inspect the currently selected page, and switch the selected page by `pageID`.
