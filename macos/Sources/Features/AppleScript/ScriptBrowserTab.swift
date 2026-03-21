@@ -62,109 +62,163 @@ final class ScriptBrowserTab: NSObject {
         }
     }
 
-    fileprivate func evaluate(javaScript script: String, pageID: UUID? = nil) -> Result<String, BrowserControlError> {
+    fileprivate func evaluate(
+        javaScript script: String,
+        pageID: UUID? = nil,
+        frameName: String? = nil
+    ) -> Result<String, BrowserControlError> {
         awaitControlResultSynchronously { completion in
-            issueEvaluation(javaScript: script, pageID: pageID, completion: completion)
+            issueEvaluation(javaScript: script, pageID: pageID, frameName: frameName, completion: completion)
         }
     }
 
-    fileprivate func evaluateAsync(javaScript script: String, pageID: UUID? = nil) async -> Result<String, BrowserControlError> {
+    fileprivate func evaluateAsync(
+        javaScript script: String,
+        pageID: UUID? = nil,
+        frameName: String? = nil
+    ) async -> Result<String, BrowserControlError> {
         await awaitControlResult { completion in
-            issueEvaluation(javaScript: script, pageID: pageID, completion: completion)
+            issueEvaluation(javaScript: script, pageID: pageID, frameName: frameName, completion: completion)
         }
     }
 
-    fileprivate func getCookies(payload: [String: String], pageID: UUID? = nil) -> Result<String, BrowserControlError> {
+    fileprivate func getCookies(
+        payload: [String: String],
+        pageID: UUID? = nil,
+        frameName: String? = nil
+    ) -> Result<String, BrowserControlError> {
         switch Self.cookieInspectionScript(payload: payload) {
         case let .success(script):
-            return evaluate(javaScript: script, pageID: pageID)
+            return evaluate(javaScript: script, pageID: pageID, frameName: frameName)
         case let .failure(error):
             return .failure(error)
         }
     }
 
-    fileprivate func getCookiesAsync(payload: [String: String], pageID: UUID? = nil) async -> Result<String, BrowserControlError> {
+    fileprivate func getCookiesAsync(
+        payload: [String: String],
+        pageID: UUID? = nil,
+        frameName: String? = nil
+    ) async -> Result<String, BrowserControlError> {
         switch Self.cookieInspectionScript(payload: payload) {
         case let .success(script):
-            return await evaluateAsync(javaScript: script, pageID: pageID)
+            return await evaluateAsync(javaScript: script, pageID: pageID, frameName: frameName)
         case let .failure(error):
             return .failure(error)
         }
     }
 
-    fileprivate func setCookie(payload: [String: String], pageID: UUID? = nil) -> Result<String, BrowserControlError> {
+    fileprivate func setCookie(
+        payload: [String: String],
+        pageID: UUID? = nil,
+        frameName: String? = nil
+    ) -> Result<String, BrowserControlError> {
         switch Self.cookieMutationScript(operation: .set, payload: payload) {
         case let .success(script):
-            return evaluate(javaScript: script, pageID: pageID)
+            return evaluate(javaScript: script, pageID: pageID, frameName: frameName)
         case let .failure(error):
             return .failure(error)
         }
     }
 
-    fileprivate func setCookieAsync(payload: [String: String], pageID: UUID? = nil) async -> Result<String, BrowserControlError> {
+    fileprivate func setCookieAsync(
+        payload: [String: String],
+        pageID: UUID? = nil,
+        frameName: String? = nil
+    ) async -> Result<String, BrowserControlError> {
         switch Self.cookieMutationScript(operation: .set, payload: payload) {
         case let .success(script):
-            return await evaluateAsync(javaScript: script, pageID: pageID)
+            return await evaluateAsync(javaScript: script, pageID: pageID, frameName: frameName)
         case let .failure(error):
             return .failure(error)
         }
     }
 
-    fileprivate func deleteCookie(payload: [String: String], pageID: UUID? = nil) -> Result<String, BrowserControlError> {
+    fileprivate func deleteCookie(
+        payload: [String: String],
+        pageID: UUID? = nil,
+        frameName: String? = nil
+    ) -> Result<String, BrowserControlError> {
         switch Self.cookieMutationScript(operation: .delete, payload: payload) {
         case let .success(script):
-            return evaluate(javaScript: script, pageID: pageID)
+            return evaluate(javaScript: script, pageID: pageID, frameName: frameName)
         case let .failure(error):
             return .failure(error)
         }
     }
 
-    fileprivate func deleteCookieAsync(payload: [String: String], pageID: UUID? = nil) async -> Result<String, BrowserControlError> {
+    fileprivate func deleteCookieAsync(
+        payload: [String: String],
+        pageID: UUID? = nil,
+        frameName: String? = nil
+    ) async -> Result<String, BrowserControlError> {
         switch Self.cookieMutationScript(operation: .delete, payload: payload) {
         case let .success(script):
-            return await evaluateAsync(javaScript: script, pageID: pageID)
+            return await evaluateAsync(javaScript: script, pageID: pageID, frameName: frameName)
         case let .failure(error):
             return .failure(error)
         }
     }
 
-    fileprivate func clearCookies(payload: [String: String], pageID: UUID? = nil) -> Result<String, BrowserControlError> {
+    fileprivate func clearCookies(
+        payload: [String: String],
+        pageID: UUID? = nil,
+        frameName: String? = nil
+    ) -> Result<String, BrowserControlError> {
         switch Self.cookieMutationScript(operation: .clear, payload: payload) {
         case let .success(script):
-            return evaluate(javaScript: script, pageID: pageID)
+            return evaluate(javaScript: script, pageID: pageID, frameName: frameName)
         case let .failure(error):
             return .failure(error)
         }
     }
 
-    fileprivate func clearCookiesAsync(payload: [String: String], pageID: UUID? = nil) async -> Result<String, BrowserControlError> {
+    fileprivate func clearCookiesAsync(
+        payload: [String: String],
+        pageID: UUID? = nil,
+        frameName: String? = nil
+    ) async -> Result<String, BrowserControlError> {
         switch Self.cookieMutationScript(operation: .clear, payload: payload) {
         case let .success(script):
-            return await evaluateAsync(javaScript: script, pageID: pageID)
+            return await evaluateAsync(javaScript: script, pageID: pageID, frameName: frameName)
         case let .failure(error):
             return .failure(error)
         }
     }
 
-    fileprivate func runDOMBatch(commandsJSON: String, pageID: UUID? = nil) -> Result<String, BrowserControlError> {
+    fileprivate func runDOMBatch(
+        commandsJSON: String,
+        pageID: UUID? = nil,
+        frameName: String? = nil
+    ) -> Result<String, BrowserControlError> {
         switch decodeDOMBatchCommands(commandsJSON: commandsJSON) {
         case let .success(commands):
             return awaitControlResultSynchronously { completion in
-                issueDOMBatch(commands: commands, pageID: pageID, completion: completion)
+                issueDOMBatch(commands: commands, pageID: pageID, frameName: frameName, completion: completion)
             }
         case let .failure(error):
             return .failure(error)
         }
     }
 
-    fileprivate func runDOMBatchAsync(commandsJSON: String, pageID: UUID? = nil) async -> Result<String, BrowserControlError> {
+    fileprivate func runDOMBatchAsync(
+        commandsJSON: String,
+        pageID: UUID? = nil,
+        frameName: String? = nil
+    ) async -> Result<String, BrowserControlError> {
         switch decodeDOMBatchCommands(commandsJSON: commandsJSON) {
         case let .success(commands):
             return await awaitControlResult { completion in
-                issueDOMBatch(commands: commands, pageID: pageID, completion: completion)
+                issueDOMBatch(commands: commands, pageID: pageID, frameName: frameName, completion: completion)
             }
         case let .failure(error):
             return .failure(error)
+        }
+    }
+
+    fileprivate func listFrames(pageID: UUID? = nil) -> Result<String, BrowserControlError> {
+        awaitControlResultSynchronously { completion in
+            issueListFrames(pageID: pageID, completion: completion)
         }
     }
 
@@ -203,6 +257,7 @@ final class ScriptBrowserTab: NSObject {
     private func issueEvaluation(
         javaScript script: String,
         pageID: UUID?,
+        frameName: String?,
         completion: @escaping (Result<String, BrowserControlError>) -> Void
     ) {
         guard let page = requestedPage(pageID) else {
@@ -210,7 +265,12 @@ final class ScriptBrowserTab: NSObject {
             return
         }
 
-        page.send(.evaluateJavaScript, payload: ["script": script]) { response in
+        let request = BrowserControlRequest(
+            target: BrowserControlTarget(pageID: page.id, frameName: frameName, documentRevision: page.documentRevision),
+            command: .evaluateJavaScript,
+            payload: ["script": script]
+        )
+        page.route(request) { response in
             if let error = response.error {
                 completion(.failure(error))
                 return
@@ -223,6 +283,7 @@ final class ScriptBrowserTab: NSObject {
     private func issueDOMBatch(
         commands: [BrowserDOMBatchCommand],
         pageID: UUID?,
+        frameName: String?,
         completion: @escaping (Result<String, BrowserControlError>) -> Void
     ) {
         guard let page = requestedPage(pageID) else {
@@ -230,7 +291,24 @@ final class ScriptBrowserTab: NSObject {
             return
         }
 
-        page.runDecodedDOMCommandBatch(commands) { result in
+        let commandsJSON: String
+        do {
+            commandsJSON = try Self.encodedDOMBatchCommands(commands)
+        } catch let error as BrowserControlError {
+            completion(.failure(error))
+            return
+        } catch {
+            completion(.failure(.internalFailure("The browser DOM batch could not be encoded as JSON.")))
+            return
+        }
+
+        let request = BrowserControlRequest(
+            target: BrowserControlTarget(pageID: page.id, frameName: frameName, documentRevision: page.documentRevision),
+            command: .batchDOMCommands,
+            payload: ["commandsJSON": commandsJSON]
+        )
+        page.route(request) { response in
+            let result = Self.decodeDOMBatchResponse(response)
             switch result {
             case let .success(decodedResult):
                 do {
@@ -241,6 +319,57 @@ final class ScriptBrowserTab: NSObject {
             case let .failure(error):
                 completion(.failure(error))
             }
+        }
+    }
+
+    private func issueListFrames(
+        pageID: UUID?,
+        completion: @escaping (Result<String, BrowserControlError>) -> Void
+    ) {
+        guard let page = requestedPage(pageID) else {
+            completion(.failure(.pageNotFound(pageNotFoundMessage(for: pageID))))
+            return
+        }
+
+        let request = BrowserControlRequest(
+            target: BrowserControlTarget(pageID: page.id, documentRevision: page.documentRevision),
+            command: .listFrames
+        )
+        page.route(request) { response in
+            if let error = response.error {
+                completion(.failure(error))
+                return
+            }
+
+            completion(.success(response.valueJSON ?? "[]"))
+        }
+    }
+
+    private static func encodedDOMBatchCommands(_ commands: [BrowserDOMBatchCommand]) throws -> String {
+        let encoder = JSONEncoder()
+        let encodedCommands = try encoder.encode(commands)
+        guard let commandsJSON = String(data: encodedCommands, encoding: .utf8) else {
+            throw BrowserControlError.internalFailure("The browser DOM batch could not be encoded as UTF-8.")
+        }
+        return commandsJSON
+    }
+
+    private static func decodeDOMBatchResponse(
+        _ response: BrowserControlResponse
+    ) -> Result<BrowserDOMDecodedBatchResult, BrowserControlError> {
+        if let error = response.error {
+            return .failure(error)
+        }
+
+        guard let valueJSON = response.valueJSON, let data = valueJSON.data(using: .utf8) else {
+            return .failure(.internalFailure("The browser control command returned no JSON payload."))
+        }
+
+        do {
+            let decodedValue = try JSONDecoder().decode(BrowserDOMBatchResult.self, from: data)
+            return .success(decodedValue.decoded())
+        } catch {
+            return .failure(.internalFailure("The browser control command returned an unexpected JSON payload: \(error.localizedDescription)"))
         }
     }
 
@@ -367,6 +496,7 @@ extension ScriptBrowserTab {
     private struct ResolvedExternalPageTarget {
         let browserTab: ScriptBrowserTab
         let pageID: UUID?
+        let frameName: String?
         let page: BrowserPageState
     }
 
@@ -432,6 +562,13 @@ extension ScriptBrowserTab {
         return .success(pageID)
     }
 
+    static func parseRequestedFrameName(from request: BrowserExternalCommandRequest) -> String? {
+        guard let rawFrameName = request.frameName?.trimmingCharacters(in: .whitespacesAndNewlines), !rawFrameName.isEmpty else {
+            return nil
+        }
+        return rawFrameName
+    }
+
     private static func resolvePageTarget(
         for request: BrowserExternalCommandRequest
     ) -> Result<ResolvedExternalPageTarget, BrowserExternalCommandError> {
@@ -466,6 +603,7 @@ extension ScriptBrowserTab {
             ResolvedExternalPageTarget(
                 browserTab: browserTab,
                 pageID: requestedPageID,
+                frameName: parseRequestedFrameName(from: request),
                 page: page
             )
         )
@@ -504,7 +642,7 @@ extension ScriptBrowserTab {
         }
 
         switch request.command {
-        case .listPages, .getActivePage, .activatePage:
+        case .listPages, .getActivePage, .activatePage, .listFrames:
             return routeExternalCommand(request)
         case .loadURL:
             let target: ResolvedExternalPageTarget
@@ -537,7 +675,7 @@ extension ScriptBrowserTab {
                 return .failure(for: request, error: error)
             }
 
-            switch await target.browserTab.getCookiesAsync(payload: request.payload, pageID: target.page.id) {
+            switch await target.browserTab.getCookiesAsync(payload: request.payload, pageID: target.page.id, frameName: target.frameName) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -552,7 +690,7 @@ extension ScriptBrowserTab {
                 return .failure(for: request, error: error)
             }
 
-            switch await target.browserTab.setCookieAsync(payload: request.payload, pageID: target.page.id) {
+            switch await target.browserTab.setCookieAsync(payload: request.payload, pageID: target.page.id, frameName: target.frameName) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -567,7 +705,7 @@ extension ScriptBrowserTab {
                 return .failure(for: request, error: error)
             }
 
-            switch await target.browserTab.deleteCookieAsync(payload: request.payload, pageID: target.page.id) {
+            switch await target.browserTab.deleteCookieAsync(payload: request.payload, pageID: target.page.id, frameName: target.frameName) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -582,7 +720,7 @@ extension ScriptBrowserTab {
                 return .failure(for: request, error: error)
             }
 
-            switch await target.browserTab.clearCookiesAsync(payload: request.payload, pageID: target.page.id) {
+            switch await target.browserTab.clearCookiesAsync(payload: request.payload, pageID: target.page.id, frameName: target.frameName) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -603,7 +741,7 @@ extension ScriptBrowserTab {
                 )
             }
 
-            switch await target.browserTab.evaluateAsync(javaScript: script, pageID: target.page.id) {
+            switch await target.browserTab.evaluateAsync(javaScript: script, pageID: target.page.id, frameName: target.frameName) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -624,7 +762,7 @@ extension ScriptBrowserTab {
                 )
             }
 
-            switch await target.browserTab.runDOMBatchAsync(commandsJSON: commandsJSON, pageID: target.page.id) {
+            switch await target.browserTab.runDOMBatchAsync(commandsJSON: commandsJSON, pageID: target.page.id, frameName: target.frameName) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -681,6 +819,21 @@ extension ScriptBrowserTab {
                     for: request,
                     error: .internalFailure("The active browser page summary could not be serialized as JSON.")
                 )
+            }
+        case .listFrames:
+            let target: ResolvedExternalPageTarget
+            switch resolvePageTarget(for: request) {
+            case let .success(resolved):
+                target = resolved
+            case let .failure(error):
+                return .failure(for: request, error: error)
+            }
+
+            switch target.browserTab.listFrames(pageID: target.page.id) {
+            case let .success(resultJSON):
+                return .success(for: request, resultJSON: resultJSON)
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
             }
         case .activatePage:
             guard let browserTab = browserTab(for: request) else {
@@ -773,7 +926,7 @@ extension ScriptBrowserTab {
                 return .failure(for: request, error: error)
             }
 
-            switch target.browserTab.getCookies(payload: request.payload, pageID: target.page.id) {
+            switch target.browserTab.getCookies(payload: request.payload, pageID: target.page.id, frameName: target.frameName) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -788,7 +941,7 @@ extension ScriptBrowserTab {
                 return .failure(for: request, error: error)
             }
 
-            switch target.browserTab.setCookie(payload: request.payload, pageID: target.page.id) {
+            switch target.browserTab.setCookie(payload: request.payload, pageID: target.page.id, frameName: target.frameName) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -803,7 +956,7 @@ extension ScriptBrowserTab {
                 return .failure(for: request, error: error)
             }
 
-            switch target.browserTab.deleteCookie(payload: request.payload, pageID: target.page.id) {
+            switch target.browserTab.deleteCookie(payload: request.payload, pageID: target.page.id, frameName: target.frameName) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -818,7 +971,7 @@ extension ScriptBrowserTab {
                 return .failure(for: request, error: error)
             }
 
-            switch target.browserTab.clearCookies(payload: request.payload, pageID: target.page.id) {
+            switch target.browserTab.clearCookies(payload: request.payload, pageID: target.page.id, frameName: target.frameName) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -839,7 +992,7 @@ extension ScriptBrowserTab {
                 )
             }
 
-            switch target.browserTab.evaluate(javaScript: script, pageID: target.page.id) {
+            switch target.browserTab.evaluate(javaScript: script, pageID: target.page.id, frameName: target.frameName) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
@@ -860,7 +1013,7 @@ extension ScriptBrowserTab {
                 )
             }
 
-            switch target.browserTab.runDOMBatch(commandsJSON: commandsJSON, pageID: target.page.id) {
+            switch target.browserTab.runDOMBatch(commandsJSON: commandsJSON, pageID: target.page.id, frameName: target.frameName) {
             case let .success(resultJSON):
                 return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):

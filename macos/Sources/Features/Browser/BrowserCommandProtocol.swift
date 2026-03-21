@@ -10,6 +10,7 @@ enum BrowserExternalCommandKind: String, Codable, Hashable {
     case listPages
     case getActivePage
     case activatePage
+    case listFrames
     case getDebugStatus
     case loadURL
     case getCookies
@@ -66,6 +67,7 @@ struct BrowserExternalCommandRequest: Identifiable, Hashable, Codable {
     let command: BrowserExternalCommandKind
     let browserTabID: String?
     let pageID: String?
+    let frameName: String?
     let documentRevision: Int?
     let payload: [String: String]
 
@@ -75,6 +77,7 @@ struct BrowserExternalCommandRequest: Identifiable, Hashable, Codable {
         command: BrowserExternalCommandKind,
         browserTabID: String? = nil,
         pageID: String? = nil,
+        frameName: String? = nil,
         documentRevision: Int? = nil,
         payload: [String: String] = [:]
     ) {
@@ -83,6 +86,7 @@ struct BrowserExternalCommandRequest: Identifiable, Hashable, Codable {
         self.command = command
         self.browserTabID = browserTabID
         self.pageID = pageID
+        self.frameName = frameName
         self.documentRevision = documentRevision
         self.payload = payload
     }
@@ -144,6 +148,12 @@ struct BrowserExternalPageSummary: Hashable, Codable {
     let url: String
     let isActive: Bool
     let documentRevision: Int
+}
+
+struct BrowserExternalFrameSummary: Hashable, Codable {
+    let name: String
+    let url: String
+    let isMainFrame: Bool
 }
 
 struct BrowserExternalDebugStatusResult: Hashable, Codable {

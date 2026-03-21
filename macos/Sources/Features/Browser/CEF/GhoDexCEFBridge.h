@@ -29,7 +29,12 @@ typedef void (^GhoDexCEFJavaScriptEvaluationCompletion)(NSString * _Nullable res
 - (void)goForward;
 - (void)reloadPage;
 - (void)executeJavaScript:(NSString *)javaScript;
+- (void)executeJavaScript:(NSString *)javaScript frameName:(NSString * _Nullable)frameName;
 - (void)evaluateJavaScript:(NSString *)javaScript completion:(GhoDexCEFJavaScriptEvaluationCompletion)completion;
+- (void)evaluateJavaScript:(NSString *)javaScript
+                 frameName:(NSString * _Nullable)frameName
+                completion:(GhoDexCEFJavaScriptEvaluationCompletion)completion;
+- (void)listFramesWithCompletion:(GhoDexCEFJavaScriptEvaluationCompletion)completion;
 @end
 
 @protocol GhoDexCEFViewDelegate <NSObject>

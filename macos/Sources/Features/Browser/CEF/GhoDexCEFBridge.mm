@@ -498,13 +498,19 @@ public:
   void GoForward();
   void Reload();
   void ExecuteJavaScript(const std::string &script);
+  void ExecuteJavaScript(const std::string &script,
+                         const std::string *frame_name);
   bool EvaluateJavaScript(const std::string &script,
+                          const std::string *frame_name,
                           const std::string &request_id,
                           std::string *error_description);
+  bool ListFrames(std::string *result_json, std::string *error_description);
   void WasResized();
   void CloseBrowser();
 
 private:
+  CefRefPtr<CefFrame> ResolveFrame(const std::string *frame_name,
+                                   std::string *error_description);
   void EmitState(bool isLoading, bool canGoBack, bool canGoForward);
 
   __weak GhoDexCEFView *owner_;
@@ -622,16 +628,30 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
 }
 
 - (void)executeJavaScript:(NSString *)javaScript {
+  [self executeJavaScript:javaScript frameName:nil];
+}
+
+- (void)executeJavaScript:(NSString *)javaScript frameName:(NSString *)frameName {
   if (_client) {
-    _client->ExecuteJavaScript(std::string(javaScript.UTF8String ?: ""));
+    std::string frame_name(frameName.UTF8String ?: "");
+    _client->ExecuteJavaScript(std::string(javaScript.UTF8String ?: ""),
+                               frame_name.empty() ? nullptr : &frame_name);
   }
 }
 
 - (void)evaluateJavaScript:(NSString *)javaScript completion:(GhoDexCEFJavaScriptEvaluationCompletion)completion {
+  [self evaluateJavaScript:javaScript frameName:nil completion:completion];
+}
+
+- (void)evaluateJavaScript:(NSString *)javaScript
+                 frameName:(NSString *)frameName
+                completion:(GhoDexCEFJavaScriptEvaluationCompletion)completion {
   if (_client) {
     NSString *request_id = [self registerEvaluationCompletion:completion];
+    std::string frame_name(frameName.UTF8String ?: "");
     std::string error_description;
     if (_client->EvaluateJavaScript(std::string(javaScript.UTF8String ?: ""),
+                                    frame_name.empty() ? nullptr : &frame_name,
                                     std::string(request_id.UTF8String ?: ""),
                                     &error_description)) {
       return;
@@ -642,6 +662,31 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
                                 error:MakeControlError(
                                           GhoDexCEFControlErrorCodeEvaluationFailed,
                                           [NSString stringWithUTF8String:error_description.c_str() ?: "The browser could not dispatch the JavaScript evaluation request."])];
+    return;
+  }
+
+  if (completion != nil) {
+    completion(nil, MakeControlError(GhoDexCEFControlErrorCodeBridgeUnavailable, @"The CEF browser bridge is unavailable."));
+  }
+}
+
+- (void)listFramesWithCompletion:(GhoDexCEFJavaScriptEvaluationCompletion)completion {
+  if (_client) {
+    std::string result_json;
+    std::string error_description;
+    if (_client->ListFrames(&result_json, &error_description)) {
+      if (completion != nil) {
+        completion([NSString stringWithUTF8String:result_json.c_str() ?: "[]"], nil);
+      }
+      return;
+    }
+
+    if (completion != nil) {
+      completion(nil,
+                 MakeControlError(
+                     GhoDexCEFControlErrorCodeEvaluationFailed,
+                     [NSString stringWithUTF8String:error_description.c_str() ?: "The browser could not enumerate frames."]));
+    }
     return;
   }
 
@@ -920,18 +965,24 @@ void GhoDexCEFClient::Reload() {
 }
 
 void GhoDexCEFClient::ExecuteJavaScript(const std::string &script) {
+  ExecuteJavaScript(script, nullptr);
+}
+
+void GhoDexCEFClient::ExecuteJavaScript(const std::string &script,
+                                        const std::string *frame_name) {
   CEF_REQUIRE_UI_THREAD();
   if (!browser_) {
     return;
   }
 
-  CefRefPtr<CefFrame> frame = browser_->GetMainFrame();
+  CefRefPtr<CefFrame> frame = ResolveFrame(frame_name, nullptr);
   if (frame) {
     frame->ExecuteJavaScript(script, frame->GetURL(), 0);
   }
 }
 
 bool GhoDexCEFClient::EvaluateJavaScript(const std::string &script,
+                                         const std::string *frame_name,
                                          const std::string &request_id,
                                          std::string *error_description) {
   CEF_REQUIRE_UI_THREAD();
@@ -942,11 +993,8 @@ bool GhoDexCEFClient::EvaluateJavaScript(const std::string &script,
     return false;
   }
 
-  CefRefPtr<CefFrame> frame = browser_->GetMainFrame();
+  CefRefPtr<CefFrame> frame = ResolveFrame(frame_name, error_description);
   if (!frame.get()) {
-    if (error_description != nullptr) {
-      *error_description = "The CEF main frame is unavailable.";
-    }
     return false;
   }
 
@@ -956,6 +1004,106 @@ bool GhoDexCEFClient::EvaluateJavaScript(const std::string &script,
   arguments->SetString(kEvaluateScriptIndex, script);
   frame->SendProcessMessage(PID_RENDERER, message);
   return true;
+}
+
+bool GhoDexCEFClient::ListFrames(std::string *result_json,
+                                 std::string *error_description) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!browser_) {
+    if (error_description != nullptr) {
+      *error_description = "The CEF browser instance is not ready.";
+    }
+    return false;
+  }
+
+  CefRefPtr<CefFrame> main_frame = browser_->GetMainFrame();
+  if (!main_frame.get()) {
+    if (error_description != nullptr) {
+      *error_description = "The CEF main frame is unavailable.";
+    }
+    return false;
+  }
+
+  NSMutableArray<NSDictionary *> *frames = [NSMutableArray array];
+  NSMutableSet<NSString *> *seen_frame_ids = [NSMutableSet set];
+
+  auto append_frame = ^(CefRefPtr<CefFrame> frame) {
+    if (!frame.get()) {
+      return;
+    }
+
+    NSString *frame_id = [NSString stringWithUTF8String:frame->GetIdentifier().ToString().c_str() ?: ""];
+    if (frame_id == nil || [seen_frame_ids containsObject:frame_id]) {
+      return;
+    }
+    [seen_frame_ids addObject:frame_id];
+
+    NSString *name = [NSString stringWithUTF8String:frame->GetName().ToString().c_str() ?: ""];
+    NSString *url = [NSString stringWithUTF8String:frame->GetURL().ToString().c_str() ?: ""];
+    BOOL is_main = main_frame.get() && frame->GetIdentifier() == main_frame->GetIdentifier();
+    [frames addObject:@{
+      @"name" : name ?: @"",
+      @"url" : url ?: @"",
+      @"isMainFrame" : @(is_main),
+    }];
+  };
+
+  append_frame(main_frame);
+
+  std::vector<CefString> frame_identifiers;
+  browser_->GetFrameIdentifiers(frame_identifiers);
+  for (const auto &frame_identifier : frame_identifiers) {
+    CefRefPtr<CefFrame> frame = browser_->GetFrameByIdentifier(frame_identifier);
+    append_frame(frame);
+  }
+
+  NSError *serialization_error = nil;
+  NSData *data = [NSJSONSerialization dataWithJSONObject:frames options:0 error:&serialization_error];
+  if (!data || serialization_error != nil) {
+    if (error_description != nullptr) {
+      NSString *message = serialization_error.localizedDescription ?: @"The browser frame list could not be encoded as JSON.";
+      *error_description = std::string(message.UTF8String ?: "The browser frame list could not be encoded as JSON.");
+    }
+    return false;
+  }
+
+  NSString *encoded = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+  if (encoded.length == 0) {
+    if (error_description != nullptr) {
+      *error_description = "The browser frame list could not be encoded as UTF-8.";
+    }
+    return false;
+  }
+
+  if (result_json != nullptr) {
+    *result_json = std::string(encoded.UTF8String ?: "[]");
+  }
+  return true;
+}
+
+CefRefPtr<CefFrame> GhoDexCEFClient::ResolveFrame(const std::string *frame_name,
+                                                  std::string *error_description) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!browser_) {
+    if (error_description != nullptr) {
+      *error_description = "The CEF browser instance is not ready.";
+    }
+    return nullptr;
+  }
+
+  if (frame_name == nullptr || frame_name->empty()) {
+    CefRefPtr<CefFrame> frame = browser_->GetMainFrame();
+    if (!frame.get() && error_description != nullptr) {
+      *error_description = "The CEF main frame is unavailable.";
+    }
+    return frame;
+  }
+
+  CefRefPtr<CefFrame> frame = browser_->GetFrameByName(*frame_name);
+  if (!frame.get() && error_description != nullptr) {
+    *error_description = "The requested CEF frame is unavailable.";
+  }
+  return frame;
 }
 
 void GhoDexCEFClient::WasResized() {
@@ -1503,7 +1651,27 @@ BOOL GhoDexCEFIsInitialized(void) {
 - (void)executeJavaScript:(NSString *)javaScript {
 }
 
+- (void)executeJavaScript:(NSString *)javaScript frameName:(NSString *)frameName {
+}
+
 - (void)evaluateJavaScript:(NSString *)javaScript completion:(GhoDexCEFJavaScriptEvaluationCompletion)completion {
+  [self evaluateJavaScript:javaScript frameName:nil completion:completion];
+}
+
+- (void)evaluateJavaScript:(NSString *)javaScript
+                 frameName:(NSString *)frameName
+                completion:(GhoDexCEFJavaScriptEvaluationCompletion)completion {
+  if (completion != nil) {
+    NSError *error = [NSError errorWithDomain:GhoDexCEFControlErrorDomain
+                                         code:GhoDexCEFControlErrorCodeBridgeUnavailable
+                                     userInfo:@{
+                                       NSLocalizedDescriptionKey : @"CEF support is disabled in this build."
+                                     }];
+    completion(nil, error);
+  }
+}
+
+- (void)listFramesWithCompletion:(GhoDexCEFJavaScriptEvaluationCompletion)completion {
   if (completion != nil) {
     NSError *error = [NSError errorWithDomain:GhoDexCEFControlErrorDomain
                                          code:GhoDexCEFControlErrorCodeBridgeUnavailable

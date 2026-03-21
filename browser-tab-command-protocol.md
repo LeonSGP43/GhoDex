@@ -55,6 +55,7 @@ Every request is a JSON object with this shape:
   "command": "listTabs",
   "browserTabID": null,
   "pageID": null,
+  "frameName": null,
   "documentRevision": null,
   "payload": {}
 }
@@ -67,6 +68,8 @@ Field notes:
 - `command`: one of the supported command names
 - `browserTabID`: optional tab identifier; required for tab-specific commands
 - `pageID`: optional internal page identifier for page-targeted commands
+- `frameName`: optional named-frame target for commands that can address a
+  specific frame
 - `documentRevision`: optional page precondition; when present, page-targeted
   commands fail if the resolved page has since navigated
 - `payload`: string-valued map for command arguments
@@ -99,6 +102,7 @@ Field notes:
 - `listPages`
 - `getActivePage`
 - `activatePage`
+- `listFrames`
 
 `listTabs` returns a JSON array of tab summaries:
 
@@ -140,6 +144,28 @@ page.
 ```
 
 `activatePage` returns the activated page summary.
+
+`listFrames` returns a JSON array of frame summaries for one Browser page:
+
+```json
+[
+  {
+    "name": "",
+    "url": "https://example.com",
+    "isMainFrame": true
+  },
+  {
+    "name": "embedded-checkout",
+    "url": "https://checkout.example.com/frame",
+    "isMainFrame": false
+  }
+]
+```
+
+`listFrames` is page-scoped, so callers should pass the Browser tab plus the
+page they want to inspect. Named child frames are addressable through
+`frameName`; unnamed child frames are observable in events but are not yet
+targetable through the external command envelope.
 
 ### Navigation and Runtime
 
@@ -218,6 +244,11 @@ Payload notes:
 - when `pageID` is omitted, the command still targets the active page for
   backward compatibility
 - when `pageID` is present, it must be a UUID string returned by `listPages`
+- commands that evaluate JavaScript or run DOM/cookie helpers may also include
+  top-level `frameName`
+- when `frameName` is provided, GhoDex routes the command to that named frame
+  instead of the page's main frame
+- `frameName` values come from `listFrames`
 - page-targeted commands may also include top-level `documentRevision`
 - when `documentRevision` is provided, the command fails with
   `stale_document_revision` if the resolved page has already moved to a newer
@@ -462,11 +493,38 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 7. Run a DOM batch
+### 7. Enumerate the frames inside one page
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
   "id":"77777777-7777-7777-7777-777777777777",
+  "version":"browser.tab.v1",
+  "command":"listFrames",
+  "browserTabID":"browser-tab-1",
+  "pageID":"E5F4C926-7F1C-466E-A6D9-3A6F6A2F6D4E",
+  "payload":{}
+}'
+```
+
+### 8. Evaluate JavaScript inside a named frame
+
+```bash
+ghodex +browser-control --transport=ipc --request '{
+  "id":"88888888-8888-8888-8888-888888888888",
+  "version":"browser.tab.v1",
+  "command":"evaluateJavaScript",
+  "browserTabID":"browser-tab-1",
+  "pageID":"E5F4C926-7F1C-466E-A6D9-3A6F6A2F6D4E",
+  "frameName":"embedded-checkout",
+  "payload":{"script":"JSON.stringify({ href: location.href, title: document.title })"}
+}'
+```
+
+### 9. Run a DOM batch
+
+```bash
+ghodex +browser-control --transport=ipc --request '{
+  "id":"99999999-9999-9999-9999-999999999999",
   "version":"browser.tab.v1",
   "command":"runDOMBatch",
   "browserTabID":"browser-tab-1",
@@ -477,11 +535,11 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 8. Inspect page-visible cookies in that tab
+### 10. Inspect page-visible cookies in that tab
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
-  "id":"88888888-8888-8888-8888-888888888888",
+  "id":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
   "version":"browser.tab.v1",
   "command":"getCookies",
   "browserTabID":"browser-tab-1",
@@ -492,11 +550,11 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 9. Subscribe to passive events
+### 11. Subscribe to passive events
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
-  "id":"99999999-9999-9999-9999-999999999999",
+  "id":"BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB",
   "version":"browser.tab.v1",
   "command":"subscribeEvents",
   "browserTabID":"browser-tab-1",
@@ -506,11 +564,11 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 10. Set a page-visible cookie in that tab
+### 12. Set a page-visible cookie in that tab
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
-  "id":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+  "id":"CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC",
   "version":"browser.tab.v1",
   "command":"setCookie",
   "browserTabID":"browser-tab-1",
@@ -524,11 +582,11 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 11. Clear page-visible cookies in that tab
+### 13. Clear page-visible cookies in that tab
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
-  "id":"BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB",
+  "id":"DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD",
   "version":"browser.tab.v1",
   "command":"clearCookies",
   "browserTabID":"browser-tab-1",
@@ -537,11 +595,11 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 9. Drain buffered events from that subscription
+### 14. Drain buffered events from that subscription
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
-  "id":"99999999-9999-9999-9999-999999999999",
+  "id":"EEEEEEEE-EEEE-EEEE-EEEE-EEEEEEEEEEEE",
   "version":"browser.tab.v1",
   "command":"drainEvents",
   "browserTabID":"browser-tab-1",

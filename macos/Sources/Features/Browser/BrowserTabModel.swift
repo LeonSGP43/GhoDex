@@ -8,6 +8,7 @@ enum BrowserControlCommandKind: String, Codable, Hashable {
     case reload
     case executeJavaScript
     case evaluateJavaScript
+    case listFrames
     case query
     case click
     case typeText

@@ -355,7 +355,7 @@ private struct BrowserCEFDeckView: NSViewRepresentable {
                         ))
                         return
                     }
-                    view.executeJavaScript(script)
+                    view.executeJavaScript(script, frameName: request.target.frameName)
                     completion(.success(for: request))
                 case .evaluateJavaScript:
                     guard let script = request.payload["script"], !script.isEmpty else {
@@ -365,7 +365,19 @@ private struct BrowserCEFDeckView: NSViewRepresentable {
                         ))
                         return
                     }
-                    view.evaluateJavaScript(script) { resultJSON, error in
+                    view.evaluateJavaScript(script, frameName: request.target.frameName) { resultJSON, error in
+                        if let error {
+                            completion(.failure(
+                                for: request,
+                                error: .internalFailure(error.localizedDescription)
+                            ))
+                            return
+                        }
+
+                        completion(.success(for: request, valueJSON: resultJSON))
+                    }
+                case .listFrames:
+                    view.listFrames { resultJSON, error in
                         if let error {
                             completion(.failure(
                                 for: request,
@@ -406,7 +418,7 @@ private struct BrowserCEFDeckView: NSViewRepresentable {
                 return
             }
 
-            view.evaluateJavaScript(script) { resultJSON, error in
+            view.evaluateJavaScript(script, frameName: request.target.frameName) { resultJSON, error in
                 if let error {
                     completion(.failure(
                         for: request,
