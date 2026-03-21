@@ -1204,7 +1204,9 @@ class AppDelegate: NSObject,
         )
         browserProfilePathOverride = resolved
         applyBrowserProfileDefaults(path: resolved)
-        UserDefaults.standard.synchronize()
+        if BrowserPaths.shouldMirrorBrowserConfigIntoDefaults() {
+            UserDefaults.standard.synchronize()
+        }
     }
 
     private func syncBrowserRuntimeConfig(_ config: Ghostty.Config) {
@@ -1215,13 +1217,17 @@ class AppDelegate: NSObject,
         )
         browserRuntimePathOverride = resolved
         applyBrowserRuntimeDefaults(path: resolved)
-        UserDefaults.standard.synchronize()
+        if BrowserPaths.shouldMirrorBrowserConfigIntoDefaults() {
+            UserDefaults.standard.synchronize()
+        }
     }
 
     private func syncBrowserRemoteDebugPortConfig(_ config: Ghostty.Config) {
         let resolved = Self.normalizedBrowserRemoteDebugPort(config.ghodexBrowserRemoteDebugPort)
         applyBrowserRemoteDebugPortDefaults(port: resolved)
-        UserDefaults.standard.synchronize()
+        if BrowserPaths.shouldMirrorBrowserConfigIntoDefaults() {
+            UserDefaults.standard.synchronize()
+        }
     }
 
     private func initializeBrowserCEFIfPossible() {
@@ -1230,6 +1236,7 @@ class AppDelegate: NSObject,
     }
 
     private func applyBrowserProfileDefaults(path: String?) {
+        guard BrowserPaths.shouldMirrorBrowserConfigIntoDefaults() else { return }
         if let path {
             UserDefaults.standard.set(path, forKey: BrowserPaths.profileDefaultsKey)
         } else {
@@ -1238,6 +1245,7 @@ class AppDelegate: NSObject,
     }
 
     private func applyBrowserRuntimeDefaults(path: String?) {
+        guard BrowserPaths.shouldMirrorBrowserConfigIntoDefaults() else { return }
         if let path {
             UserDefaults.standard.set(path, forKey: BrowserPaths.runtimeDefaultsKey)
         } else {
@@ -1246,6 +1254,7 @@ class AppDelegate: NSObject,
     }
 
     private func applyBrowserRemoteDebugPortDefaults(port: Int?) {
+        guard BrowserPaths.shouldMirrorBrowserConfigIntoDefaults() else { return }
         if let port {
             UserDefaults.standard.set(port, forKey: BrowserPaths.remoteDebugPortDefaultsKey)
         } else {

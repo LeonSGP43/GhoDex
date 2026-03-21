@@ -50,6 +50,10 @@ private func browserSettingValue(for key: String, in text: String) -> String? {
 }
 
 private func seedBrowserCEFDefaultsFromConfigFile() {
+    guard BrowserPaths.shouldMirrorBrowserConfigIntoDefaults() else {
+        return
+    }
+
     guard let configPath = ProcessInfo.processInfo.environment["GHOSTTY_CONFIG_PATH"], !configPath.isEmpty else {
         return
     }

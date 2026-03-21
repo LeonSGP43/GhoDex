@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### test(browser): isolate cookie harness from live app support paths
+
+- What changed: Added an isolated Browser app-support-root override in `BrowserPaths`, taught the Browser config/defaults mirror paths in `main.swift` and `AppDelegate.swift` to stand down when that override is active, and updated `scripts/browser_cookie_persistence_acceptance.py` to launch each mode against its own temporary Browser app-support root instead of the shared `~/Library/Application Support/GhoDex` socket/profile location.
+- Why: The restart-based cookie harness was still sharing the live Browser IPC socket and managed profile root with `/Applications/GhoDex.app`, which forced destructive cleanup just to get a clean acceptance run. That broke the safety boundary the user asked for and made the harness unfit to rerun on a machine with a real app session already open.
+- Impact: Cookie acceptance can now launch a dedicated CEF-enabled test app without touching the live app's Browser socket or managed profile root. When the isolated override is present, the test app also stops mirroring Browser config into the shared `UserDefaults` domain, so the harness no longer needs to kill `/Applications/GhoDex.app` just to own the Browser control plane.
+- Verification: `python3 -m py_compile scripts/browser_cookie_persistence_acceptance.py`
+- Files: `macos/Sources/Features/Browser/BrowserPaths.swift`, `macos/Sources/App/macOS/main.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `scripts/browser_cookie_persistence_acceptance.py`, `CHANGELOG.md`
+
 ### fix(browser): initialize CEF before first browser page bridge snapshot
 
 - What changed: `BrowserTabModel` now opportunistically calls `GhoDexCEFInitializeGlobal()` before its first runtime-state snapshot whenever the build already has a Chromium runtime but CEF is not initialized yet. The model still refreshes runtime state immediately after that call, so the first Browser tab created through the external control plane sees the post-init runtime status instead of a stale pre-init placeholder state.

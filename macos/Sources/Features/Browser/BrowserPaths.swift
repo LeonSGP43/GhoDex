@@ -3,6 +3,7 @@ import Foundation
 enum BrowserPaths {
     static let envRoot = "GHODEX_CEF_ROOT"
     static let envProfilePath = "GHODEX_CEF_PROFILE_PATH"
+    static let envAppSupportRoot = "GHODEX_BROWSER_APP_SUPPORT_ROOT"
     static let runtimeDefaultsKey = "BrowserCEFRuntimePath"
     static let profileDefaultsKey = "BrowserCEFProfilePath"
     static let remoteDebugPortDefaultsKey = "BrowserCEFRemoteDebugPort"
@@ -13,10 +14,31 @@ enum BrowserPaths {
     static let managedRuntimeSHA256 = "004c79437220489f363b615a28f05c607fc13b7feb5045bdc8c7073e180506ad"
 
     static func defaultAppSupportRootDirectory() -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        if let override = isolatedAppSupportRootOverride() {
+            return override
+        }
+
+        return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library", isDirectory: true)
             .appendingPathComponent("Application Support", isDirectory: true)
             .appendingPathComponent("GhoDex", isDirectory: true)
+    }
+
+    static func isolatedAppSupportRootOverride() -> URL? {
+        guard let override = ProcessInfo.processInfo.environment[envAppSupportRoot], !override.isEmpty else {
+            return nil
+        }
+
+        let standardized = (override as NSString).standardizingPath
+        guard !standardized.isEmpty, standardized.hasPrefix("/") else {
+            return nil
+        }
+
+        return URL(fileURLWithPath: standardized, isDirectory: true)
+    }
+
+    static func shouldMirrorBrowserConfigIntoDefaults() -> Bool {
+        isolatedAppSupportRootOverride() == nil
     }
 
     static func defaultCEFRootDirectory() -> URL {

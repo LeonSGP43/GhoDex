@@ -12,10 +12,11 @@ By default it exercises both:
 - external profile mode (config-driven Chromium-style profile directory)
 
 Safety note:
-- the Browser IPC socket and Browser defaults domain are shared by the running
-  macOS app, so this harness refuses to run while another GhoDex instance or an
-  existing Browser IPC socket is present unless `--allow-existing-ghodex` is
-  explicitly passed.
+- by default the harness launches the test app against an isolated Browser app-
+  support root, so its managed profile and Browser IPC socket do not overlap
+  with a running `/Applications/GhoDex.app`
+- if `--socket` points at a shared live socket, the harness will refuse to run
+  unless `--allow-existing-ghodex` is explicitly passed
 """
 
 from __future__ import annotations
@@ -47,7 +48,7 @@ CEF_INIT_RE = re.compile(
 )
 
 
-def default_socket_path() -> str:
+def default_shared_socket_path() -> str:
     home = Path.home()
     return str(home / "Library" / "Application Support" / "GhoDex" / "browser-control.sock")
 
@@ -82,8 +83,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--socket",
-        default=default_socket_path(),
-        help="Path to browser-control.sock",
+        default=None,
+        help="Path to browser-control.sock; defaults to an isolated socket under the harness workspace",
     )
     parser.add_argument(
         "--profile-mode",
@@ -225,16 +226,6 @@ def parse_single_cef_init_log(text: str) -> dict:
     }
 
 
-def write_config(config_path: Path, runtime_root: str, profile_path: str | None) -> None:
-    lines = [
-        'window-save-state = "never"',
-        f'ghodex-browser-runtime-path = "{runtime_root}"',
-    ]
-    if profile_path is not None:
-        lines.append(f'ghodex-browser-profile-path = "{profile_path}"')
-    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
 def terminate_process(proc: subprocess.Popen[str], timeout: float = 15.0) -> None:
     if proc.poll() is not None:
         return
@@ -255,13 +246,27 @@ def terminate_process(proc: subprocess.Popen[str], timeout: float = 15.0) -> Non
     raise RuntimeError(f"Process {proc.pid} did not exit in time")
 
 
-def launch_app(app_bundle: Path, config_path: Path, log_path: Path) -> subprocess.Popen[str]:
+def launch_app(
+    app_bundle: Path,
+    log_path: Path,
+    *,
+    runtime_root: str,
+    app_support_root: Path,
+    profile_path: str | None,
+) -> subprocess.Popen[str]:
     executable = app_bundle / "Contents" / "MacOS" / "GhoDex"
     if not executable.exists():
         raise RuntimeError(f"App executable does not exist: {executable}")
 
     env = os.environ.copy()
-    env["GHOSTTY_CONFIG_PATH"] = str(config_path)
+    env["GHODEX_CEF_ROOT"] = runtime_root
+    env["GHODEX_BROWSER_APP_SUPPORT_ROOT"] = str(app_support_root)
+    if profile_path is not None:
+        env["GHODEX_CEF_PROFILE_PATH"] = profile_path
+    else:
+        env.pop("GHODEX_CEF_PROFILE_PATH", None)
+
+    app_support_root.mkdir(parents=True, exist_ok=True)
     log_path.write_text("", encoding="utf-8")
     with log_path.open("a", encoding="utf-8") as log_file:
         return subprocess.Popen(
@@ -470,19 +475,21 @@ def run_mode(
     *,
     app_bundle: Path,
     runtime_root: str,
-    socket_path: str,
     page_url: str,
     timeout_ms: int,
     workspace: Path,
 ) -> dict:
-    config_path = workspace / f"{mode}.ghodex"
-    log_first = workspace / f"{mode}-launch-1.log"
-    log_second = workspace / f"{mode}-launch-2.log"
+    mode_workspace = workspace / mode
+    mode_workspace.mkdir(parents=True, exist_ok=True)
+    app_support_root = mode_workspace / "app-support"
+    socket_path = str(app_support_root / "browser-control.sock")
+    log_first = mode_workspace / "launch-1.log"
+    log_second = mode_workspace / "launch-2.log"
     cookie_name = f"ghodex_cookie_{mode}_{uuid.uuid4().hex}"
     cookie_value = uuid.uuid4().hex
 
     if mode == "external":
-        profile_path = workspace / "external-profile" / "Profile 7"
+        profile_path = mode_workspace / "external-profile" / "Profile 7"
         profile_path.mkdir(parents=True, exist_ok=True)
         configured_profile = str(profile_path)
     elif mode == "managed":
@@ -490,9 +497,13 @@ def run_mode(
     else:
         raise RuntimeError(f"Unsupported profile mode: {mode}")
 
-    write_config(config_path, runtime_root, configured_profile)
-
-    first_proc = launch_app(app_bundle, config_path, log_first)
+    first_proc = launch_app(
+        app_bundle,
+        log_first,
+        runtime_root=runtime_root,
+        app_support_root=app_support_root,
+        profile_path=configured_profile,
+    )
     try:
         socket_ready = wait_for_socket_ready(socket_path, timeout_ms)
         first_roundtrip = exercise_cookie_roundtrip(
@@ -508,7 +519,13 @@ def run_mode(
         terminate_process(first_proc)
         wait_for_socket_gone(socket_path, timeout_ms)
 
-    second_proc = launch_app(app_bundle, config_path, log_second)
+    second_proc = launch_app(
+        app_bundle,
+        log_second,
+        runtime_root=runtime_root,
+        app_support_root=app_support_root,
+        profile_path=configured_profile,
+    )
     try:
         second_socket_ready = wait_for_socket_ready(socket_path, timeout_ms)
         second_roundtrip = exercise_cookie_roundtrip(
@@ -528,7 +545,7 @@ def run_mode(
     persisted_cookie = second_roundtrip["read_back"]["cookieValue"]
     return {
         "mode": mode,
-        "config_path": str(config_path),
+        "app_support_root": str(app_support_root),
         "configured_profile_path": configured_profile,
         "cookie_name": cookie_name,
         "cookie_value": cookie_value,
@@ -562,8 +579,8 @@ def run_mode(
 def main() -> int:
     args = parse_args()
     app_bundle = Path(os.path.expanduser(args.app)).resolve() if args.app else resolve_default_app().resolve()
-    socket_path = os.path.expanduser(args.socket)
     runtime_root = str(Path(os.path.expanduser(args.runtime_root)).resolve())
+    shared_socket_path = os.path.expanduser(args.socket) if args.socket else default_shared_socket_path()
 
     if not app_bundle.exists():
         raise SystemExit(f"App bundle does not exist: {app_bundle}")
@@ -571,12 +588,12 @@ def main() -> int:
         raise SystemExit(f"Runtime root does not exist: {runtime_root}")
 
     existing_processes = running_ghodex_processes()
-    existing_socket = os.path.exists(socket_path)
-    if not args.allow_existing_ghodex and (existing_processes or existing_socket):
+    existing_socket = os.path.exists(shared_socket_path)
+    if args.socket and not args.allow_existing_ghodex and (existing_processes or existing_socket):
         raise SystemExit(
-            "Refusing to run while another GhoDex instance or Browser IPC socket is already present. "
-            "Close existing GhoDex instances first, or rerun with --allow-existing-ghodex if you intentionally "
-            "want to share the live defaults/socket environment.\n"
+            "Refusing to run against the requested shared Browser IPC socket while another GhoDex instance or "
+            "Browser IPC socket is already present. Close existing GhoDex instances first, or rerun with "
+            "--allow-existing-ghodex if you intentionally want to share the live environment.\n"
             f"processes={existing_processes}\n"
             f"socket_present={existing_socket}"
         )
@@ -590,7 +607,6 @@ def main() -> int:
                 mode,
                 app_bundle=app_bundle,
                 runtime_root=runtime_root,
-                socket_path=socket_path,
                 page_url=server_info["page_url"],
                 timeout_ms=args.page_timeout_ms,
                 workspace=workspace,
@@ -601,7 +617,7 @@ def main() -> int:
     artifact = {
         "app_bundle": str(app_bundle),
         "runtime_root": runtime_root,
-        "socket_path": socket_path,
+        "shared_socket_path": shared_socket_path,
         "workspace": str(workspace),
         "results": results,
         "acceptance": {
@@ -619,6 +635,7 @@ def main() -> int:
         },
         "notes": [
             "This harness proves cookie persistence by writing one unique cookie, restarting the app, and reading the same cookie back through browser.tab.v1 evaluateJavaScript.",
+            "Each mode launches the test app with an isolated Browser app-support root so the managed profile and Browser IPC socket do not overlap with /Applications/GhoDex.app.",
             "The managed-profile run intentionally uses no external profile override so the default managed profile path is exercised.",
             "The external-profile run creates a dedicated temporary Chromium-style profile directory and verifies that CEF reports it as the external profile.",
         ],
