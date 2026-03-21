@@ -1,5 +1,32 @@
 # Android Remote Control Blueprint
 
+## Status Legend
+
+- `completed`: implemented in this worktree and covered by current code/tests
+- `in_progress`: partially implemented or implemented but still missing acceptance evidence
+- `pending`: intentionally not started in this worktree
+- `drift`: the original file/module plan no longer matches the actual implementation shape
+
+## Current Status Snapshot
+
+Status date: `2026-03-21`
+
+- Overall desktop-side status: `in_progress`
+- Milestone 0 status: `completed`
+- Milestone 1 status: `completed`
+- Milestone 2 status: `completed`
+- Milestone 3 status: `completed`
+- Milestone 4 status: `pending`
+- Milestone 5 status: `pending`
+- Acceptance metrics status: `in_progress`
+
+Current reality:
+
+- The desktop-side gateway, sampled-read path, auth/token lifecycle, policy gate, rate limiting, TCP transport, WebSocket transport, backpressure, replay, and local performance snapshots are implemented.
+- The Android client is not implemented in this repo/worktree.
+- Shannon integration is not implemented in this repo/worktree.
+- Performance instrumentation exists, but the blueprint's representative macOS acceptance measurements have not yet been recorded.
+
 ## Goal
 
 Build an Android app that can observe and control GhoDex tabs and terminal sessions with low latency while keeping desktop rendering, input responsiveness, and normal local workflows effectively unaffected.
@@ -74,7 +101,8 @@ Android must not poll `read-terminal` at high frequency. The steady-state model 
 
 3. `ControlHarnessGateway`
    - New network-facing gateway.
-   - Exposes WebSocket for duplex events/commands and HTTP for pairing/bootstrap endpoints if needed.
+   - Exposes WebSocket for duplex events/commands and a raw TCP JSON transport today.
+   - HTTP pairing/bootstrap endpoints remain optional and are not implemented in this worktree.
    - Runs on separate queues from the current local Unix-socket harness.
 
 4. `ControlHarnessAuth`
@@ -84,10 +112,12 @@ Android must not poll `read-terminal` at high frequency. The steady-state model 
 5. `ControlHarnessRateLimiter`
    - New request budgeting and abuse protection layer.
    - Enforces per-client and global ceilings for reads, commands, subscriptions, and reconnection churn.
+   - Current implementation note: this exists as types and logic embedded in `ControlHarnessGateway.swift`, not as a standalone file.
 
 6. `RemoteApprovalPolicy`
    - New policy adapter that maps remote mutation intents to `AITerminalManagedState`.
    - Blocks or defers risky commands when state is `manual`, `managed_waiting_approval`, or otherwise unapproved.
+   - Current implementation note: this is currently wired through `AppDelegate.controlHarnessGatewayAccessDecision(...)`, not a standalone module.
 
 ### Android Side
 
@@ -236,38 +266,52 @@ Required direction:
 
 ## File and Module Plan
 
+Current status: `drift`
+
+Reason:
+
+- The desktop implementation grew slightly differently than this original file map.
+- Some planned modules landed as integrated types inside `ControlHarnessGateway.swift` or `AppDelegate.swift`.
+- Test coverage landed in the existing `ControlHarnessTests.swift` file instead of being split into dedicated test files.
+
 ### Desktop files to add
 
-- `macos/Sources/Features/Control Harness/ControlHarnessGateway.swift`
-- `macos/Sources/Features/Control Harness/ControlHarnessGatewayProtocol.swift`
-- `macos/Sources/Features/Control Harness/ControlHarnessGatewayClientSession.swift`
-- `macos/Sources/Features/Control Harness/ControlHarnessAuth.swift`
-- `macos/Sources/Features/Control Harness/ControlHarnessRateLimiter.swift`
-- `macos/Sources/Features/Control Harness/ControlHarnessReadSampler.swift`
-- `macos/Sources/Features/Control Harness/ControlHarnessSampleStore.swift`
-- `macos/Sources/Features/Control Harness/ControlHarnessRemotePolicy.swift`
+- `macos/Sources/Features/Control Harness/ControlHarnessGateway.swift` - `completed`
+- `macos/Sources/Features/Control Harness/ControlHarnessGatewayProtocol.swift` - `completed`
+- `macos/Sources/Features/Control Harness/ControlHarnessGatewayClientSession.swift` - `completed`
+- `macos/Sources/Features/Control Harness/ControlHarnessAuth.swift` - `completed`
+- `macos/Sources/Features/Control Harness/ControlHarnessRateLimiter.swift` - `drift`
+- `macos/Sources/Features/Control Harness/ControlHarnessReadSampler.swift` - `completed`
+- `macos/Sources/Features/Control Harness/ControlHarnessSampleStore.swift` - `completed`
+- `macos/Sources/Features/Control Harness/ControlHarnessRemotePolicy.swift` - `drift`
 
 ### Desktop files to modify
 
-- `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`
-- `macos/Sources/Features/Control Harness/ControlHarnessService.swift`
-- `macos/Sources/Features/Control Harness/ControlHarnessSupport.swift`
-- `macos/Sources/App/macOS/AppDelegate.swift`
-- `macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift`
-- `macos/Sources/Features/AI Terminal Manager/AITerminalManagerModels.swift`
-- `macos/Sources/Features/AI Terminal Manager/AITerminalManagerStore.swift`
+- `macos/Sources/Features/Control Harness/ControlHarnessCore.swift` - `completed`
+- `macos/Sources/Features/Control Harness/ControlHarnessService.swift` - `pending`
+- `macos/Sources/Features/Control Harness/ControlHarnessSupport.swift` - `completed`
+- `macos/Sources/App/macOS/AppDelegate.swift` - `completed`
+- `macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift` - `pending`
+- `macos/Sources/Features/AI Terminal Manager/AITerminalManagerModels.swift` - `pending`
+- `macos/Sources/Features/AI Terminal Manager/AITerminalManagerStore.swift` - `pending`
 
 ### Tests to add
 
-- `macos/Tests/ControlHarness/ControlHarnessGatewayTests.swift`
-- `macos/Tests/ControlHarness/ControlHarnessReadSamplerTests.swift`
-- `macos/Tests/ControlHarness/ControlHarnessRateLimiterTests.swift`
-- `macos/Tests/ControlHarness/ControlHarnessAuthTests.swift`
-- `macos/Tests/ControlHarness/ControlHarnessBackpressureTests.swift`
+- `macos/Tests/ControlHarness/ControlHarnessGatewayTests.swift` - `drift`
+- `macos/Tests/ControlHarness/ControlHarnessReadSamplerTests.swift` - `drift`
+- `macos/Tests/ControlHarness/ControlHarnessRateLimiterTests.swift` - `drift`
+- `macos/Tests/ControlHarness/ControlHarnessAuthTests.swift` - `drift`
+- `macos/Tests/ControlHarness/ControlHarnessBackpressureTests.swift` - `drift`
+
+Actual test status:
+
+- `macos/Tests/ControlHarness/ControlHarnessTests.swift` currently contains the gateway, sampler, auth, rate-limit, backpressure, TCP, and WebSocket coverage for this worktree.
 
 ## Milestones
 
 ### Milestone 0: Contract Freeze
+
+Status: `completed`
 
 Goal:
 
@@ -279,7 +323,14 @@ Must prove:
 - delta/snapshot lineage rules are documented
 - overflow and resync semantics are documented
 
+Current evidence:
+
+- The blueprint documents the protocol shape and replay/gap semantics.
+- The gateway exposes stable `gateway.*`, `snapshot`, `read-terminal`, and `events.subscribe` command handling on both TCP and WebSocket transports.
+
 ### Milestone 1: Low-Impact Desktop Foundation
+
+Status: `completed`
 
 Goal:
 
@@ -298,7 +349,15 @@ Must prove:
 - inactive/manual terminals stay on low cadence
 - sampled reads can drive terminal view updates without forcing fresh main-actor reads
 
+Current evidence:
+
+- `ControlHarnessReadSampler` and `ControlHarnessSampleStore` are implemented.
+- `read-terminal` now prefers sampled data, checks freshness, and invalidates samples after writes.
+- Sampling cadence already separates `managed_active`, `observed`, and background/manual terminals.
+
 ### Milestone 2: Gateway Isolation
+
+Status: `completed`
 
 Goal:
 
@@ -316,7 +375,15 @@ Must prove:
 - one slow client does not degrade other remote clients
 - disconnect and reconnect with `since_sequence` works cleanly
 
+Current evidence:
+
+- The gateway now runs as a separate TCP/WebSocket listener with per-client buffering and session caps.
+- Overflow emits explicit resync markers.
+- Replay/live event subscription is covered by current TCP and WebSocket tests.
+
 ### Milestone 3: Auth and Policy
+
+Status: `completed`
 
 Goal:
 
@@ -335,7 +402,15 @@ Must prove:
 - rate limits fail closed
 - risky writes are blocked or approval-gated
 
+Current evidence:
+
+- Pairing, token issue, token rotate, token revoke, expiration, and disk persistence are implemented.
+- AppDelegate now enforces managed-state-aware remote mutation policy.
+- Global, command, snapshot, and resync request limits fail closed before core dispatch.
+
 ### Milestone 4: Android MVP
+
+Status: `pending`
 
 Goal:
 
@@ -356,7 +431,13 @@ Must prove:
 - snapshot fallback recovers from overflow/gap
 - remote writes are acknowledged and reflected in subsequent sampled updates
 
+Current gap:
+
+- No Android client implementation exists in this repo/worktree yet.
+
 ### Milestone 5: Shannon Integration
+
+Status: `pending`
 
 Goal:
 
@@ -373,7 +454,13 @@ Must prove:
 - Shannon integration does not become a new hot path for terminal rendering
 - gateway contract remains backward compatible or versioned
 
+Current gap:
+
+- No Shannon-side bridge or compatibility/versioning layer exists in this worktree yet.
+
 ## Acceptance Metrics
+
+Status: `in_progress`
 
 The system cannot be called complete until these are met on a representative macOS build:
 
@@ -400,6 +487,12 @@ Recommended initial measurable targets:
 - active-terminal update latency to Android stays under `150ms p95` on same-LAN Wi-Fi
 - inactive-terminal update latency stays under `1s`
 - overflow recovery to a valid snapshot completes within `2s` on same-LAN Wi-Fi
+
+Current evidence and gap:
+
+- `gateway.metrics` now exposes rolling sampler/gateway timing snapshots for local inspection.
+- The representative macOS benchmark and latency runs required by this section have not yet been recorded in this worktree.
+- Therefore the desktop slice is feature-complete through Milestone 3, but not acceptance-complete.
 
 ## No-Compromise Rules
 

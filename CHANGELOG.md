@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### docs(control): annotate blueprint progress and drift status
+
+- What changed: Updated `android-remote-control-blueprint.md` to carry an explicit status legend plus a dated progress snapshot for each milestone, the acceptance-gate section, and the original file/module plan. The blueprint now distinguishes `completed`, `in_progress`, `pending`, and `drift`, and calls out where the current desktop implementation intentionally diverged from the original file split.
+- Why: The branch has moved well past the original planning state. Without an explicit status pass, the blueprint still reads like a future-only design doc even though Milestones 0 through 3 are already largely implemented while Android MVP, Shannon integration, and representative performance validation are still outstanding.
+- Impact: Later agents can now use the blueprint as an execution status document instead of reverse-engineering progress from commits and tests, and they can see immediately which remaining items are true product gaps versus harmless planning drift.
+- Verification: `git diff --check`
+- Files: `android-remote-control-blueprint.md`, `CHANGELOG.md`
+- Decision trail: Keep the status update inside the durable blueprint rather than a one-off chat summary so the branch’s remaining work, done work, and plan drift stay visible to future agents in the same place as the original design constraints.
+
 ### feat(control): expose gateway performance snapshots
 
 - What changed: Added a lightweight `ControlHarnessPerformanceMonitor` that records rolling sampler tick/capture timings plus gateway request/stream timings and counters. `ControlHarnessReadSampler` now reports tick size, refreshed sample count, and fresh-capture durations; `ControlHarnessGateway` records per-transport request timings, active stream counts, stream lifetimes, and exposes the current snapshot through a local-only `gateway.metrics` command on both TCP and WebSocket transports. `AppDelegate` wires the shared monitor into the sampler and gateway, and the control-harness tests now verify that `gateway.metrics` returns structured sampler/gateway stats.
