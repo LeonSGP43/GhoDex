@@ -16,14 +16,14 @@ Status date: `2026-03-21`
 - Milestone 1 status: `completed`
 - Milestone 2 status: `completed`
 - Milestone 3 status: `completed`
-- Milestone 4 status: `pending`
+- Milestone 4 status: `in_progress`
 - Milestone 5 status: `pending`
 - Acceptance metrics status: `in_progress`
 
 Current reality:
 
 - The desktop-side gateway, sampled-read path, auth/token lifecycle, policy gate, rate limiting, TCP transport, WebSocket transport, backpressure, replay, and local performance snapshots are implemented.
-- The Android client is not implemented in this repo/worktree.
+- A minimal Android client contract foundation now exists in the repo as pure Java request/resume models, but there is still no full Android app, transport binding, or UI shell in this worktree.
 - Shannon integration is not implemented in this repo/worktree.
 - Performance instrumentation exists, but the blueprint's representative macOS acceptance measurements have not yet been recorded.
 
@@ -410,7 +410,7 @@ Current evidence:
 
 ### Milestone 4: Android MVP
 
-Status: `pending`
+Status: `in_progress`
 
 Goal:
 
@@ -433,7 +433,7 @@ Must prove:
 
 Current gap:
 
-- No Android client implementation exists in this repo/worktree yet.
+- A compileable Android client contract foundation now exists, but there is still no Android transport adapter, terminal/session store, or UI implementation in this repo/worktree yet.
 
 ### Milestone 5: Shannon Integration
 

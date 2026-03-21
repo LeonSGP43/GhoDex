@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(android): add client contract foundation
+
+- What changed: Added a new top-level `android/` workspace with `creator.md`, a local README, a pure Java `GhoDexGatewayRequest` request-builder layer, a `GhoDexGatewayResumeState` helper for reconnect/replay state, and a `GhoDexGatewayContractSelfTest` entrypoint that can be compiled and run with the host JDK. The blueprint now marks Milestone 4 as `in_progress` instead of `pending`.
+- Why: This worktree still has no Gradle/Kotlin Android app shell, but Milestone 4 needed a real implementation entry point rather than more placeholder planning. A JDK-compiled contract layer is the safest way to start the client side without introducing an unverified Android build system into the repo.
+- Impact: The branch now has a concrete, compileable client-side contract foundation for pairing, observe, mutate, and replay requests. Future Android work can layer transport and UI on top of this instead of restating gateway payload shapes from scratch.
+- Verification: `javac -d \"$tmpdir\" android/GhoDexGatewayRequest.java android/GhoDexGatewayResumeState.java android/GhoDexGatewayContractSelfTest.java`; `java -ea -cp \"$tmpdir\" GhoDexGatewayContractSelfTest`
+- Files: `android/creator.md`, `android/README.md`, `android/GhoDexGatewayRequest.java`, `android/GhoDexGatewayResumeState.java`, `android/GhoDexGatewayContractSelfTest.java`, `android-remote-control-blueprint.md`, `CHANGELOG.md`
+- Decision trail: Start Milestone 4 with a pure Java contract layer because the current repo and machine can verify that immediately with `javac`, while a Gradle/Kotlin Android app shell would add unverified toolchain assumptions before the transport and state model are even stable.
+
 ### feat(control): add resettable gateway metrics windows
 
 - What changed: Extended the local-only gateway metrics surface with `gateway.metrics.reset` so acceptance runs can start from a clean measurement window instead of mixing old sampler and gateway activity into new captures. `ControlHarnessPerformanceSnapshot` now also reports `window_started_at` and `window_age_ms`, and a new `android-remote-control-acceptance.md` runbook records how to collect representative scenario evidence against the blueprint's acceptance section.
