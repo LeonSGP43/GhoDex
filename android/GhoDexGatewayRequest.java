@@ -130,6 +130,14 @@ public final class GhoDexGatewayRequest {
         return "{" + String.join(",", fields) + "}";
     }
 
+    public String requestId() {
+        return requestId;
+    }
+
+    public String command() {
+        return command;
+    }
+
     public static Builder builder(String requestId, String command) {
         return new Builder(requestId, command);
     }

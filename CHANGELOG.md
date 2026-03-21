@@ -28,7 +28,7 @@ All notable changes to this project are documented in this file.
 - Why: The previous Android slice stopped at request builders and resume state, which still left Milestone 4 without a real client orchestration layer. The next blocker was turning raw gateway payload builders into something that can own session lifecycle and terminal indexing.
 - Impact: Milestone 4 now has a real, host-verifiable client runtime core that future Android UI or network code can plug into instead of re-deriving pairing/subscription semantics from scratch.
 - Verification: `tmpdir=\"$(mktemp -d)\"; javac -d \"$tmpdir\" android/*.java && java -ea -cp \"$tmpdir\" GhoDexGatewayContractSelfTest`
-- Files: `android/GhoDexGatewayRequest.java`, `android/GhoDexGatewayEnvelope.java`, `android/GhoDexGatewayTransport.java`, `android/GhoDexGatewaySessionStore.java`, `android/GhoDexTerminalIndexStore.java`, `android/GhoDexGatewayClientStateMachine.java`, `android/GhoDexGatewayContractSelfTest.java`, `android/README.md`, `CHANGELOG.md`
+- Files: `android/GhoDexGatewayRequest.java`, `android/GhoDexGatewayResumeState.java`, `android/GhoDexGatewayEnvelope.java`, `android/GhoDexGatewayTransport.java`, `android/GhoDexGatewaySessionStore.java`, `android/GhoDexTerminalIndexStore.java`, `android/GhoDexGatewayClientStateMachine.java`, `android/GhoDexGatewayContractSelfTest.java`, `android/README.md`, `CHANGELOG.md`
 - Decision trail: Keep Milestone 4 pure Java until a verified Android toolchain exists in this repo. The critical missing piece was state-machine ownership, not UI scaffolding or premature Gradle wiring.
 
 ### fix(control): use the audit logger support root for gateway auth storage

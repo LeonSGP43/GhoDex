@@ -6,6 +6,9 @@ Current scope:
 
 - pure Java gateway request builders
 - resume/subscription state for reconnect and replay
+- transport and envelope abstractions
+- session store plus terminal index store
+- a local client state machine that drives pairing, snapshot, subscribe, and mutation calls
 - a local self-test that compiles and runs with `javac` and `java`
 
 Why Java first:
@@ -18,18 +21,23 @@ Current files:
 
 - `GhoDexGatewayRequest.java`
 - `GhoDexGatewayResumeState.java`
+- `GhoDexGatewayEnvelope.java`
+- `GhoDexGatewayTransport.java`
+- `GhoDexGatewaySessionStore.java`
+- `GhoDexTerminalIndexStore.java`
+- `GhoDexGatewayClientStateMachine.java`
 - `GhoDexGatewayContractSelfTest.java`
 
 Local verification:
 
 ```bash
 tmpdir="$(mktemp -d)"
-javac -d "$tmpdir" android/GhoDexGatewayRequest.java android/GhoDexGatewayResumeState.java android/GhoDexGatewayContractSelfTest.java
+javac -d "$tmpdir" android/*.java
 java -ea -cp "$tmpdir" GhoDexGatewayContractSelfTest
 ```
 
 Next Milestone 4 steps:
 
-- add a real transport adapter on top of this contract layer
-- bind live gateway events into a terminal/session index store
+- bind this state machine onto a real socket/WebSocket transport
+- persist session/index state into an actual Android app module
 - promote this foundation into a Gradle/Kotlin Android module when toolchain support is available
