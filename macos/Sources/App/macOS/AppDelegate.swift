@@ -981,6 +981,7 @@ class AppDelegate: NSObject,
         self.derivedConfig = DerivedConfig(config)
         syncBrowserProfileConfig(config)
         syncBrowserRuntimeConfig(config)
+        syncBrowserRemoteDebugPortConfig(config)
         initializeBrowserCEFIfPossible()
 
         // Depending on the "window-save-state" setting we have to set the NSQuitAlwaysKeepsWindows
@@ -1217,6 +1218,12 @@ class AppDelegate: NSObject,
         UserDefaults.standard.synchronize()
     }
 
+    private func syncBrowserRemoteDebugPortConfig(_ config: Ghostty.Config) {
+        let resolved = Self.normalizedBrowserRemoteDebugPort(config.ghodexBrowserRemoteDebugPort)
+        applyBrowserRemoteDebugPortDefaults(port: resolved)
+        UserDefaults.standard.synchronize()
+    }
+
     private func initializeBrowserCEFIfPossible() {
         guard !GhoDexCEFIsInitialized(), GhoDexCEFBuildHasRuntime() else { return }
         _ = GhoDexCEFInitializeGlobal()
@@ -1235,6 +1242,14 @@ class AppDelegate: NSObject,
             UserDefaults.standard.set(path, forKey: BrowserPaths.runtimeDefaultsKey)
         } else {
             UserDefaults.standard.removeObject(forKey: BrowserPaths.runtimeDefaultsKey)
+        }
+    }
+
+    private func applyBrowserRemoteDebugPortDefaults(port: Int?) {
+        if let port {
+            UserDefaults.standard.set(port, forKey: BrowserPaths.remoteDebugPortDefaultsKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: BrowserPaths.remoteDebugPortDefaultsKey)
         }
     }
 
@@ -1720,6 +1735,7 @@ extension AppDelegate {
     private static let browserSettingsEndMarker = "# <<< GhoDex browser settings <<<"
     private static let browserProfileConfigKey = "ghodex-browser-profile-path"
     private static let browserRuntimeConfigKey = "ghodex-browser-runtime-path"
+    private static let browserRemoteDebugPortConfigKey = "ghodex-browser-remote-debug-port"
 
     fileprivate static func normalizedBrowserProfilePath(_ value: String?) -> String? {
         guard let value else { return nil }
@@ -1733,6 +1749,11 @@ extension AppDelegate {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         return (trimmed as NSString).standardizingPath
+    }
+
+    fileprivate static func normalizedBrowserRemoteDebugPort(_ value: Int) -> Int? {
+        guard (1...65535).contains(value) else { return nil }
+        return value
     }
 
     fileprivate static func validatedExistingBrowserOverridePath(

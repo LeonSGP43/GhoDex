@@ -5,6 +5,7 @@ enum BrowserPaths {
     static let envProfilePath = "GHODEX_CEF_PROFILE_PATH"
     static let runtimeDefaultsKey = "BrowserCEFRuntimePath"
     static let profileDefaultsKey = "BrowserCEFProfilePath"
+    static let remoteDebugPortDefaultsKey = "BrowserCEFRemoteDebugPort"
     static let browserControlSocketName = "browser-control.sock"
     static let builtInHomePage = "https://www.google.com"
     static let managedRuntimeSlug = "cef_binary_145.0.28+g51162e8+chromium-145.0.7632.160_macosarm64_minimal"

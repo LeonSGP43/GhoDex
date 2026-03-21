@@ -4,6 +4,7 @@ import GhoDexKit
 
 private let browserProfileConfigKey = "ghodex-browser-profile-path"
 private let browserRuntimeConfigKey = "ghodex-browser-runtime-path"
+private let browserRemoteDebugPortConfigKey = "ghodex-browser-remote-debug-port"
 
 private func validatedBrowserDirectorySetting(_ value: String?) -> String? {
     guard let value, !value.isEmpty else { return nil }
@@ -22,9 +23,7 @@ private func validatedBrowserDirectorySetting(_ value: String?) -> String? {
     return standardized
 }
 
-private func browserSettingValue(for key: String, in text: String) -> String? {
-    var result: String?
-
+private func browserSettingJSONValue(for key: String, in text: String) -> Any? {
     for line in text.components(separatedBy: .newlines) {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard trimmed.hasPrefix("\(key) ="), let separatorIndex = trimmed.firstIndex(of: "=") else {
@@ -34,16 +33,20 @@ private func browserSettingValue(for key: String, in text: String) -> String? {
         let rawValue = trimmed[trimmed.index(after: separatorIndex)...].trimmingCharacters(in: .whitespaces)
         let data = Data("[\(rawValue)]".utf8)
         guard
-            let decoded = try? JSONSerialization.jsonObject(with: data) as? [String],
+            let decoded = try? JSONSerialization.jsonObject(with: data) as? [Any],
             let value = decoded.first
         else {
             continue
         }
 
-        result = value
+        return value
     }
 
-    return result
+    return nil
+}
+
+private func browserSettingValue(for key: String, in text: String) -> String? {
+    browserSettingJSONValue(for: key, in: text) as? String
 }
 
 private func seedBrowserCEFDefaultsFromConfigFile() {
@@ -75,6 +78,25 @@ private func seedBrowserCEFDefaultsFromConfigFile() {
         }
     } else {
         defaults.removeObject(forKey: BrowserPaths.runtimeDefaultsKey)
+    }
+
+    if let debugValue = browserSettingJSONValue(for: browserRemoteDebugPortConfigKey, in: text) {
+        if let portNumber = debugValue as? NSNumber {
+            let port = portNumber.intValue
+            if (1...65535).contains(port) {
+                defaults.set(port, forKey: BrowserPaths.remoteDebugPortDefaultsKey)
+            } else if port == 0 {
+                defaults.removeObject(forKey: BrowserPaths.remoteDebugPortDefaultsKey)
+            } else {
+                NSLog("[CEF] Ignoring invalid Browser remote debug port from config file: %@", "\(port)")
+                defaults.removeObject(forKey: BrowserPaths.remoteDebugPortDefaultsKey)
+            }
+        } else {
+            NSLog("[CEF] Ignoring invalid Browser remote debug port from config file: %@", "\(debugValue)")
+            defaults.removeObject(forKey: BrowserPaths.remoteDebugPortDefaultsKey)
+        }
+    } else {
+        defaults.removeObject(forKey: BrowserPaths.remoteDebugPortDefaultsKey)
     }
 
     defaults.synchronize()

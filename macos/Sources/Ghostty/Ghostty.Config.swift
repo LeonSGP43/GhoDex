@@ -802,6 +802,10 @@ extension Ghostty {
             optionalString(for: "ghodex-browser-runtime-path")
         }
 
+        var ghodexBrowserRemoteDebugPort: Int {
+            Int(uint(for: "ghodex-browser-remote-debug-port", default: 0))
+        }
+
         var ghodexHeartbeatEnabled: Bool {
             bool(for: "ghodex-heartbeat-enabled", default: true)
         }

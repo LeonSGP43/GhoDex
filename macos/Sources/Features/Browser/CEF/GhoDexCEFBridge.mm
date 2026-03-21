@@ -1029,6 +1029,16 @@ NSString *ConfiguredFrameworkBinaryPath(void) {
   return [framework_directory stringByAppendingPathComponent:@"Chromium Embedded Framework"];
 }
 
+int ConfiguredRemoteDebuggingPort(void) {
+  NSInteger defaults_port =
+      [NSUserDefaults.standardUserDefaults integerForKey:@"BrowserCEFRemoteDebugPort"];
+  if (defaults_port >= 1 && defaults_port <= 65535) {
+    return static_cast<int>(defaults_port);
+  }
+
+  return 0;
+}
+
 NSString *ExecutablePath(void) {
   return NSBundle.mainBundle.executablePath.stringByStandardizingPath;
 }
@@ -1280,6 +1290,11 @@ BOOL GhoDexCEFInitializeGlobal(void) {
     CefString(&settings.framework_dir_path) = framework_path.UTF8String;
   }
 
+  int remote_debugging_port = ConfiguredRemoteDebuggingPort();
+  if (remote_debugging_port > 0) {
+    settings.remote_debugging_port = remote_debugging_port;
+  }
+
   NSString *profile_root = ConfiguredProfileRootPath();
   if (profile_root.length > 0) {
     NSString *cache_path = ConfiguredProfileCachePath();
@@ -1288,12 +1303,13 @@ BOOL GhoDexCEFInitializeGlobal(void) {
     settings.persist_session_cookies = true;
   }
 
-  NSLog(@"[CEF] Initializing framework=%@ profile=%@ cache=%@ external_profile=%@ bundle=%@",
+  NSLog(@"[CEF] Initializing framework=%@ profile=%@ cache=%@ external_profile=%@ bundle=%@ remote_debug_port=%d",
         framework_path ?: @"<none>",
         profile_root ?: @"<none>",
         ConfiguredProfileCachePath() ?: @"<none>",
         ConfiguredExternalProfilePath() ?: @"<none>",
-        bundle_path ?: @"<none>");
+        bundle_path ?: @"<none>",
+        remote_debugging_port);
 
   BOOL initialized = CefInitialize(args.mainArgs(), settings, g_cef_app.get(), nullptr) ? YES : NO;
   g_cef_initialized.store(initialized == YES);
