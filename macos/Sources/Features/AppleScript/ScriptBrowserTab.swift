@@ -74,6 +74,24 @@ final class ScriptBrowserTab: NSObject {
         }
     }
 
+    fileprivate func getCookies(payload: [String: String]) -> Result<String, BrowserControlError> {
+        switch Self.cookieInspectionScript(payload: payload) {
+        case let .success(script):
+            return evaluate(javaScript: script)
+        case let .failure(error):
+            return .failure(error)
+        }
+    }
+
+    fileprivate func getCookiesAsync(payload: [String: String]) async -> Result<String, BrowserControlError> {
+        switch Self.cookieInspectionScript(payload: payload) {
+        case let .success(script):
+            return await evaluateAsync(javaScript: script)
+        case let .failure(error):
+            return .failure(error)
+        }
+    }
+
     fileprivate func runDOMBatch(commandsJSON: String) -> Result<String, BrowserControlError> {
         switch decodeDOMBatchCommands(commandsJSON: commandsJSON) {
         case let .success(commands):
@@ -339,6 +357,17 @@ extension ScriptBrowserTab {
             case let .failure(error):
                 return .failure(for: request, error: error.externalCommandError)
             }
+        case .getCookies:
+            guard let browserTab = browserTab(for: request) else {
+                return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
+            }
+
+            switch await browserTab.getCookiesAsync(payload: request.payload) {
+            case let .success(resultJSON):
+                return .success(for: request, resultJSON: resultJSON)
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
         case .evaluateJavaScript:
             guard let browserTab = browserTab(for: request) else {
                 return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
@@ -441,6 +470,17 @@ extension ScriptBrowserTab {
                 } catch {
                     return .failure(for: request, error: .internalFailure("The loadURL result could not be serialized as JSON."))
                 }
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
+        case .getCookies:
+            guard let browserTab = browserTab(for: request) else {
+                return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
+            }
+
+            switch browserTab.getCookies(payload: request.payload) {
+            case let .success(resultJSON):
+                return .success(for: request, resultJSON: resultJSON)
             case let .failure(error):
                 return .failure(for: request, error: error.externalCommandError)
             }
@@ -625,6 +665,72 @@ extension ScriptBrowserTab {
         }
 
         return limit
+    }
+
+    private static func cookieInspectionScript(payload: [String: String]) -> Result<String, BrowserControlError> {
+        let appliedFilters: [String: String] = Dictionary(
+            uniqueKeysWithValues: payload.compactMap { key, value in
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return nil }
+                switch key {
+                case "name", "domain", "url":
+                    return (key, trimmed)
+                default:
+                    return nil
+                }
+            }
+        )
+
+        do {
+            let filtersJSON = try jsonString(from: appliedFilters)
+            let script = """
+(() => {
+  const filters = \(filtersJSON);
+  const href = String(location.href ?? "");
+  const hostname = String(location.hostname ?? "");
+  const cookieHeader = String(document.cookie ?? "");
+  const entries = cookieHeader
+    ? cookieHeader.split(";").map((part) => {
+        const trimmed = part.trim();
+        const equalsIndex = trimmed.indexOf("=");
+        if (equalsIndex === -1) {
+          return { name: trimmed, value: "" };
+        }
+        return {
+          name: trimmed.slice(0, equalsIndex),
+          value: trimmed.slice(equalsIndex + 1),
+        };
+      })
+    : [];
+
+  const requestedDomain = typeof filters.domain === "string" ? filters.domain.toLowerCase() : null;
+  const hostMatchesDomain = !requestedDomain
+    || hostname.toLowerCase() === requestedDomain
+    || hostname.toLowerCase().endsWith("." + requestedDomain);
+
+  const requestedURL = typeof filters.url === "string" ? filters.url : null;
+  const requestedName = typeof filters.name === "string" ? filters.name : null;
+
+  const cookies = entries.filter((entry) => {
+    if (requestedURL && href !== requestedURL) return false;
+    if (!hostMatchesDomain) return false;
+    if (requestedName && entry.name !== requestedName) return false;
+    return true;
+  });
+
+  return {
+    url: href,
+    domain: hostname,
+    cookieHeader,
+    appliedFilters: filters,
+    cookies,
+  };
+})()
+"""
+            return .success(script)
+        } catch {
+            return .failure(.internalFailure("The Browser cookie inspection payload could not be serialized."))
+        }
     }
 }
 

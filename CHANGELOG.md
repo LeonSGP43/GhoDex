@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): add cookie inspection commands
+
+- What changed: Added a new `getCookies` command to `browser.tab.v1`, plus the matching AppleScript/IPC routing inside `ScriptBrowserTab`, so external Browser control clients can inspect the active page's visible cookie state without dropping down to ad-hoc JavaScript. The new result payload returns the current page URL, hostname, raw `document.cookie` header, the normalized filters applied to the request, and the decoded `{name,value}` cookie entries that remain after filtering.
+- Why: The cookie full-pass plan needed a first-class inspection surface before we can claim Browser tabs are command-addressable for cookie lifecycle work. The existing protocol could run arbitrary JavaScript, but callers still had to hand-roll `document.cookie` parsing and filtering themselves, which made cookie acceptance and future mutation commands harder to standardize.
+- Impact: External Browser clients now have one stable, documented cookie read command they can use from IPC, CLI, or AppleScript transport adapters when validating profile-backed cookie persistence. This is intentionally scoped to page-visible cookies for `browser.tab.v1`; HTTPOnly cookie management remains out of scope until a deeper Chromium cookie-store API exists.
+- Verification: `swiftlint lint macos/Sources/Features/Browser/BrowserCommandProtocol.swift macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `zig build -Demit-xcframework=true -Demit-macos-app=false`, `tmp_dd=$(mktemp -d /tmp/ghodex-browser-cookie-inspect-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-cookie-inspect-build.XXXXXX) && xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" build`
+- Files: `macos/Sources/Features/Browser/BrowserCommandProtocol.swift`, `macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `browser-tab-command-protocol.md`, `CHANGELOG.md`
+
 ### test(browser): add cookie persistence acceptance harness
 
 - What changed: Added `scripts/browser_cookie_persistence_acceptance.py`, a restart-based Browser acceptance harness that launches a CEF-enabled GhoDex app, writes a unique cookie through `browser.tab.v1`, restarts the app, and verifies that the same cookie is still readable when the same profile is reused. The harness covers both managed-profile mode and config-driven external-profile mode, records the observed CEF profile metadata from the app launch log, and clears the test cookie before finishing each scenario.

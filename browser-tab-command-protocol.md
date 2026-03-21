@@ -107,6 +107,7 @@ Field notes:
 ### Navigation and Runtime
 
 - `loadURL`
+- `getCookies`
 - `evaluateJavaScript`
 - `runDOMBatch`
 
@@ -125,6 +126,33 @@ Field notes:
   "script": "JSON.stringify({ title: document.title, href: location.href })"
 }
 ```
+
+`getCookies` payload:
+
+```json
+{
+  "name": "session_id",
+  "domain": "example.com",
+  "url": "https://example.com/account"
+}
+```
+
+Payload notes:
+
+- all `getCookies` payload fields are optional filters
+- `name` matches one visible cookie name exactly
+- `domain` matches the current page hostname exactly or by suffix
+- `url` matches the active page URL exactly
+- the command currently inspects page-visible `document.cookie`, so HTTPOnly
+  cookies are intentionally out of scope for `browser.tab.v1`
+
+`getCookies` returns a JSON object with:
+
+- `url`: current page URL
+- `domain`: current page hostname
+- `cookieHeader`: raw `document.cookie` string
+- `appliedFilters`: the normalized non-empty filters that were applied
+- `cookies`: decoded `{name,value}` entries after filtering
 
 ### Event Subscription Lifecycle
 
@@ -262,11 +290,25 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 5. Subscribe to passive events
+### 5. Inspect page-visible cookies in that tab
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
   "id":"55555555-5555-5555-5555-555555555555",
+  "version":"browser.tab.v1",
+  "command":"getCookies",
+  "browserTabID":"browser-tab-1",
+  "payload":{
+    "domain":"example.com"
+  }
+}'
+```
+
+### 6. Subscribe to passive events
+
+```bash
+ghodex +browser-control --transport=ipc --request '{
+  "id":"66666666-6666-6666-6666-666666666666",
   "version":"browser.tab.v1",
   "command":"subscribeEvents",
   "browserTabID":"browser-tab-1",
@@ -276,11 +318,11 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 6. Drain buffered events from that subscription
+### 7. Drain buffered events from that subscription
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
-  "id":"66666666-6666-6666-6666-666666666666",
+  "id":"77777777-7777-7777-7777-777777777777",
   "version":"browser.tab.v1",
   "command":"drainEvents",
   "browserTabID":"browser-tab-1",
@@ -304,6 +346,8 @@ end tell
 
 - always generate a fresh UUID for each request
 - treat `resultJSON` as a nested JSON string, not as a pre-decoded object
+- `getCookies` currently reflects the page-visible `document.cookie` view, not
+  the full Chromium cookie store
 - subscribe once and drain incrementally instead of polling one-off inspection
   commands when you need passive page visibility
 - keep draining long-lived IPC sessions; once unread response bytes on one
