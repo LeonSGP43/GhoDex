@@ -7,6 +7,7 @@ enum BrowserCommandProtocolVersion {
 enum BrowserExternalCommandKind: String, Codable, Hashable {
     case listTabs
     case newTab
+    case getDebugStatus
     case loadURL
     case getCookies
     case setCookie
@@ -122,6 +123,14 @@ struct BrowserExternalTabSummary: Hashable, Codable {
     let id: String
     let title: String
     let url: String
+}
+
+struct BrowserExternalDebugStatusResult: Hashable, Codable {
+    let enabled: Bool
+    let port: Int?
+    let source: String
+    let cefInitialized: Bool
+    let runtimeAvailable: Bool
 }
 
 struct BrowserExternalCookieEntry: Hashable, Codable {

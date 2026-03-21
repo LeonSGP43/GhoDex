@@ -106,6 +106,7 @@ Field notes:
 
 ### Navigation and Runtime
 
+- `getDebugStatus`
 - `loadURL`
 - `getCookies`
 - `setCookie`
@@ -113,6 +114,20 @@ Field notes:
 - `clearCookies`
 - `evaluateJavaScript`
 - `runDOMBatch`
+
+`getDebugStatus` payload:
+
+```json
+{}
+```
+
+`getDebugStatus` returns a JSON object with:
+
+- `enabled`: whether the config-gated CEF remote debugging lane is currently enabled
+- `port`: the configured remote debugging port when enabled, otherwise `null`
+- `source`: currently `config` or `disabled`
+- `cefInitialized`: whether global CEF initialization has completed in this app session
+- `runtimeAvailable`: whether this app session can see a usable CEF runtime root
 
 `loadURL` payload:
 
@@ -346,11 +361,22 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 4. Run a DOM batch
+### 4. Inspect the current debug-lane status
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
   "id":"44444444-4444-4444-4444-444444444444",
+  "version":"browser.tab.v1",
+  "command":"getDebugStatus",
+  "payload":{}
+}'
+```
+
+### 5. Run a DOM batch
+
+```bash
+ghodex +browser-control --transport=ipc --request '{
+  "id":"55555555-5555-5555-5555-555555555555",
   "version":"browser.tab.v1",
   "command":"runDOMBatch",
   "browserTabID":"browser-tab-1",
@@ -360,11 +386,11 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 5. Inspect page-visible cookies in that tab
+### 6. Inspect page-visible cookies in that tab
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
-  "id":"55555555-5555-5555-5555-555555555555",
+  "id":"66666666-6666-6666-6666-666666666666",
   "version":"browser.tab.v1",
   "command":"getCookies",
   "browserTabID":"browser-tab-1",
@@ -374,11 +400,11 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 6. Subscribe to passive events
+### 7. Subscribe to passive events
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
-  "id":"66666666-6666-6666-6666-666666666666",
+  "id":"77777777-7777-7777-7777-777777777777",
   "version":"browser.tab.v1",
   "command":"subscribeEvents",
   "browserTabID":"browser-tab-1",
@@ -388,11 +414,11 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 7. Set a page-visible cookie in that tab
+### 8. Set a page-visible cookie in that tab
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
-  "id":"77777777-7777-7777-7777-777777777777",
+  "id":"88888888-8888-8888-8888-888888888888",
   "version":"browser.tab.v1",
   "command":"setCookie",
   "browserTabID":"browser-tab-1",
@@ -405,7 +431,7 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 8. Clear page-visible cookies in that tab
+### 9. Clear page-visible cookies in that tab
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{

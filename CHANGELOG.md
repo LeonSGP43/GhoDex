@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(debug): expose browser debug status through browser.tab.v1
+
+- What changed: Added a first-class `getDebugStatus` command to `browser.tab.v1`, defined a typed `BrowserExternalDebugStatusResult`, and routed the command through `ScriptBrowserTab` so external clients can query whether the config-gated CEF remote debugging lane is enabled, which port it uses, and whether CEF/runtime activation is currently live in the app session.
+- Why: The remote-debugging config gate now exists, but external automation clients still had no stable way to tell whether the diagnostics lane was actually enabled before trying to use it. That left the debug lane half-productized and forced callers to infer state from config files or logs.
+- Impact: Browser control clients can now ask the app for one explicit debug-lane status snapshot before attempting any diagnostics-only workflow. This keeps the main browser control surface bridge-first while still making the optional debug lane observable and scriptable.
+- Verification: `swiftlint lint macos/Sources/Features/Browser/BrowserCommandProtocol.swift macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`
+- Files: `macos/Sources/Features/Browser/BrowserCommandProtocol.swift`, `macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `browser-tab-command-protocol.md`, `CHANGELOG.md`
+
 ### test(browser): shorten isolated cookie harness socket paths
 
 - What changed: Changed `scripts/browser_cookie_persistence_acceptance.py` to create its isolated workspace under `/tmp/ghx-cookie-*` instead of the much longer platform-default temp root.

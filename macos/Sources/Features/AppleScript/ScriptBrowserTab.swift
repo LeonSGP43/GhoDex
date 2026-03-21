@@ -512,6 +512,15 @@ extension ScriptBrowserTab {
                     error: .internalFailure("The browser tab list could not be serialized as JSON.")
                 )
             }
+        case .getDebugStatus:
+            do {
+                return .success(for: request, resultJSON: try jsonString(from: debugStatusResult()))
+            } catch {
+                return .failure(
+                    for: request,
+                    error: .internalFailure("The Browser debug status could not be serialized as JSON.")
+                )
+            }
         case .newTab:
             guard let appDelegate = NSApp.delegate as? AppDelegate else {
                 return .failure(for: request, error: .internalFailure("The GhoDex app delegate is unavailable."))
@@ -730,6 +739,19 @@ extension ScriptBrowserTab {
             return nil
         }
         return NSApp.browserTabsForExternalControl.first(where: { $0.stableID == browserTabID })
+    }
+
+    private static func debugStatusResult() -> BrowserExternalDebugStatusResult {
+        let configuredPort = UserDefaults.standard.integer(forKey: BrowserPaths.remoteDebugPortDefaultsKey)
+        let enabledPort = (1...65535).contains(configuredPort) ? configuredPort : nil
+
+        return BrowserExternalDebugStatusResult(
+            enabled: enabledPort != nil,
+            port: enabledPort,
+            source: enabledPort == nil ? "disabled" : "config",
+            cefInitialized: GhoDexCEFIsInitialized(),
+            runtimeAvailable: GhoDexCEFBuildHasRuntime()
+        )
     }
 
     private static func jsonString<T: Encodable>(from value: T) throws -> String {
