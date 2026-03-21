@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### docs(browser): document cookie lifecycle semantics
+
+- What changed: Added `browser-tab-cookie-lifecycle.md`, a durable note that explains how Browser tab cookie state is selected through managed or external profiles, how `browser.tab.v1` cookie commands map onto the page-visible `document.cookie` surface, how isolated test roots interact with runtime/profile selection, and which current limits remain intentional.
+- Why: Cookie inspection and mutation commands plus the restart-based persistence proof already exist, but the behavior was still spread across changelog entries, protocol docs, and implementation details. That made it too easy for future agents to overclaim support for the full Chromium cookie store or miss how profile selection affects persistence.
+- Impact: Future agents and external clients now have one stable cookie-lifecycle reference that explains what is genuinely supported today, where the persistence proof lives, and why HTTPOnly or metadata-rich cookie workflows remain out of scope for the current Browser control contract.
+- Verification: `rg -n "Browser Tab Cookie Lifecycle|GHODEX_CEF_PROFILE_PATH|ghodex-browser-profile-path|document.cookie|ghodex-browser-cookie-persistence-acceptance-rerun" browser-tab-cookie-lifecycle.md`
+- Files: `browser-tab-cookie-lifecycle.md`, `CHANGELOG.md`
+
 ### fix(browser): guard external page commands by document revision
 
 - What changed: Extended `browser.tab.v1` requests with an optional top-level `documentRevision` field, added a dedicated `stale_document_revision` external error, and centralized page-target resolution inside `ScriptBrowserTab` so page-targeted commands now verify the current page revision before dispatching `loadURL`, JavaScript evaluation, DOM batches, and page-visible cookie commands.
