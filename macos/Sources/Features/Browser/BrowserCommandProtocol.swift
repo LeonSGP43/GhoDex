@@ -54,6 +54,10 @@ struct BrowserExternalCommandError: Error, Hashable, Codable {
     static func internalFailure(_ message: String) -> BrowserExternalCommandError {
         BrowserExternalCommandError(code: "internal_failure", message: message)
     }
+
+    static func staleDocumentRevision(_ message: String) -> BrowserExternalCommandError {
+        BrowserExternalCommandError(code: "stale_document_revision", message: message, isRetryable: true)
+    }
 }
 
 struct BrowserExternalCommandRequest: Identifiable, Hashable, Codable {
@@ -62,6 +66,7 @@ struct BrowserExternalCommandRequest: Identifiable, Hashable, Codable {
     let command: BrowserExternalCommandKind
     let browserTabID: String?
     let pageID: String?
+    let documentRevision: Int?
     let payload: [String: String]
 
     init(
@@ -70,6 +75,7 @@ struct BrowserExternalCommandRequest: Identifiable, Hashable, Codable {
         command: BrowserExternalCommandKind,
         browserTabID: String? = nil,
         pageID: String? = nil,
+        documentRevision: Int? = nil,
         payload: [String: String] = [:]
     ) {
         self.id = id
@@ -77,6 +83,7 @@ struct BrowserExternalCommandRequest: Identifiable, Hashable, Codable {
         self.command = command
         self.browserTabID = browserTabID
         self.pageID = pageID
+        self.documentRevision = documentRevision
         self.payload = payload
     }
 

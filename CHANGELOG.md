@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(browser): guard external page commands by document revision
+
+- What changed: Extended `browser.tab.v1` requests with an optional top-level `documentRevision` field, added a dedicated `stale_document_revision` external error, and centralized page-target resolution inside `ScriptBrowserTab` so page-targeted commands now verify the current page revision before dispatching `loadURL`, JavaScript evaluation, DOM batches, and page-visible cookie commands.
+- Why: Page-aware routing already let external clients target a specific internal page by `pageID`, but there was still no precondition at the external boundary to stop a stale command from landing after that page navigated. That left callers racing against navigation state they had already observed through `listPages` or event payloads.
+- Impact: Clients can now pin a command to the exact page revision they previously discovered. Old clients remain compatible because `documentRevision` is optional, while newer clients can opt into deterministic stale-request rejection instead of mutating the wrong document after a navigation.
+- Verification: `swiftlint lint macos/Sources/Features/Browser/BrowserCommandProtocol.swift macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `tmp_dd=$(mktemp -d /tmp/ghodex-browser-revision-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-browser-revision-build.XXXXXX) && xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" build`
+- Files: `macos/Sources/Features/Browser/BrowserCommandProtocol.swift`, `macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `browser-tab-command-protocol.md`, `browser-tab-acceptance-matrix.md`, `CHANGELOG.md`
+
 ### feat(browser): add page-aware external command routing
 
 - What changed: Extended `browser.tab.v1` requests with an optional top-level `pageID` field and taught `ScriptBrowserTab` to resolve `loadURL`, `evaluateJavaScript`, `runDOMBatch`, and the page-visible cookie commands against either the requested page or the currently active page. The protocol guide now documents the new page-targeting field and shows page-specific IPC examples.

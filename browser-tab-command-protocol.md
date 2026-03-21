@@ -54,6 +54,8 @@ Every request is a JSON object with this shape:
   "version": "browser.tab.v1",
   "command": "listTabs",
   "browserTabID": null,
+  "pageID": null,
+  "documentRevision": null,
   "payload": {}
 }
 ```
@@ -64,6 +66,9 @@ Field notes:
 - `version`: must currently be `browser.tab.v1`
 - `command`: one of the supported command names
 - `browserTabID`: optional tab identifier; required for tab-specific commands
+- `pageID`: optional internal page identifier for page-targeted commands
+- `documentRevision`: optional page precondition; when present, page-targeted
+  commands fail if the resolved page has since navigated
 - `payload`: string-valued map for command arguments
 
 Every response is a JSON object with this shape:
@@ -213,6 +218,10 @@ Payload notes:
 - when `pageID` is omitted, the command still targets the active page for
   backward compatibility
 - when `pageID` is present, it must be a UUID string returned by `listPages`
+- page-targeted commands may also include top-level `documentRevision`
+- when `documentRevision` is provided, the command fails with
+  `stale_document_revision` if the resolved page has already moved to a newer
+  document
 - all `getCookies` payload fields are optional filters
 - `name` matches one visible cookie name exactly
 - `domain` matches the current page hostname exactly or by suffix
