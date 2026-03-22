@@ -222,6 +222,44 @@ final class ScriptBrowserTab: NSObject {
         }
     }
 
+    fileprivate func runExternalDOMCommand(
+        _ command: BrowserControlCommandKind,
+        payload: [String: String],
+        pageID: UUID? = nil,
+        frameName: String? = nil,
+        timeoutMS: Int? = nil
+    ) -> Result<String, BrowserControlError> {
+        awaitControlResultSynchronously { completion in
+            issueExternalDOMCommand(
+                command,
+                payload: payload,
+                pageID: pageID,
+                frameName: frameName,
+                timeoutMS: timeoutMS,
+                completion: completion
+            )
+        }
+    }
+
+    fileprivate func runExternalDOMCommandAsync(
+        _ command: BrowserControlCommandKind,
+        payload: [String: String],
+        pageID: UUID? = nil,
+        frameName: String? = nil,
+        timeoutMS: Int? = nil
+    ) async -> Result<String, BrowserControlError> {
+        await awaitControlResult { completion in
+            issueExternalDOMCommand(
+                command,
+                payload: payload,
+                pageID: pageID,
+                frameName: frameName,
+                timeoutMS: timeoutMS,
+                completion: completion
+            )
+        }
+    }
+
     private func decodeDOMBatchCommands(commandsJSON: String) -> Result<[BrowserDOMBatchCommand], BrowserControlError> {
         do {
             guard let data = commandsJSON.data(using: .utf8) else {
@@ -342,6 +380,35 @@ final class ScriptBrowserTab: NSObject {
             }
 
             completion(.success(response.valueJSON ?? "[]"))
+        }
+    }
+
+    private func issueExternalDOMCommand(
+        _ command: BrowserControlCommandKind,
+        payload: [String: String],
+        pageID: UUID?,
+        frameName: String?,
+        timeoutMS: Int?,
+        completion: @escaping (Result<String, BrowserControlError>) -> Void
+    ) {
+        guard let page = requestedPage(pageID) else {
+            completion(.failure(.pageNotFound(pageNotFoundMessage(for: pageID))))
+            return
+        }
+
+        let request = BrowserControlRequest(
+            target: BrowserControlTarget(pageID: page.id, frameName: frameName, documentRevision: page.documentRevision),
+            command: command,
+            payload: payload,
+            timeoutMS: timeoutMS
+        )
+        page.route(request) { response in
+            if let error = response.error {
+                completion(.failure(error))
+                return
+            }
+
+            completion(.success(response.valueJSON ?? "null"))
         }
     }
 
@@ -569,6 +636,86 @@ extension ScriptBrowserTab {
         return rawFrameName
     }
 
+    private static func parseTimeoutMS(from payload: [String: String]) -> Result<Int?, BrowserExternalCommandError> {
+        guard let rawTimeout = payload["timeoutMS"]?.trimmingCharacters(in: .whitespacesAndNewlines), !rawTimeout.isEmpty else {
+            return .success(nil)
+        }
+
+        guard let timeoutMS = Int(rawTimeout), timeoutMS >= 0 else {
+            return .failure(.invalidRequest("The timeoutMS payload must be a non-negative integer string when provided."))
+        }
+
+        return .success(timeoutMS)
+    }
+
+    private static func routeExternalDOMCommandAsync(
+        _ request: BrowserExternalCommandRequest,
+        command: BrowserControlCommandKind
+    ) async -> BrowserExternalCommandResponse {
+        let target: ResolvedExternalPageTarget
+        switch resolvePageTarget(for: request) {
+        case let .success(resolved):
+            target = resolved
+        case let .failure(error):
+            return .failure(for: request, error: error)
+        }
+
+        let timeoutMS: Int?
+        switch parseTimeoutMS(from: request.payload) {
+        case let .success(parsed):
+            timeoutMS = parsed
+        case let .failure(error):
+            return .failure(for: request, error: error)
+        }
+
+        switch await target.browserTab.runExternalDOMCommandAsync(
+            command,
+            payload: request.payload,
+            pageID: target.page.id,
+            frameName: target.frameName,
+            timeoutMS: timeoutMS
+        ) {
+        case let .success(resultJSON):
+            return .success(for: request, resultJSON: resultJSON)
+        case let .failure(error):
+            return .failure(for: request, error: error.externalCommandError)
+        }
+    }
+
+    private static func routeExternalDOMCommand(
+        _ request: BrowserExternalCommandRequest,
+        command: BrowserControlCommandKind
+    ) -> BrowserExternalCommandResponse {
+        let target: ResolvedExternalPageTarget
+        switch resolvePageTarget(for: request) {
+        case let .success(resolved):
+            target = resolved
+        case let .failure(error):
+            return .failure(for: request, error: error)
+        }
+
+        let timeoutMS: Int?
+        switch parseTimeoutMS(from: request.payload) {
+        case let .success(parsed):
+            timeoutMS = parsed
+        case let .failure(error):
+            return .failure(for: request, error: error)
+        }
+
+        switch target.browserTab.runExternalDOMCommand(
+            command,
+            payload: request.payload,
+            pageID: target.page.id,
+            frameName: target.frameName,
+            timeoutMS: timeoutMS
+        ) {
+        case let .success(resultJSON):
+            return .success(for: request, resultJSON: resultJSON)
+        case let .failure(error):
+            return .failure(for: request, error: error.externalCommandError)
+        }
+    }
+
     private static func resolvePageTarget(
         for request: BrowserExternalCommandRequest
     ) -> Result<ResolvedExternalPageTarget, BrowserExternalCommandError> {
@@ -644,6 +791,22 @@ extension ScriptBrowserTab {
         switch request.command {
         case .listPages, .getActivePage, .activatePage, .listFrames:
             return routeExternalCommand(request)
+        case .query:
+            return await routeExternalDOMCommandAsync(request, command: .query)
+        case .click:
+            return await routeExternalDOMCommandAsync(request, command: .click)
+        case .typeText:
+            return await routeExternalDOMCommandAsync(request, command: .typeText)
+        case .waitForSelector:
+            return await routeExternalDOMCommandAsync(request, command: .waitForSelector)
+        case .getText:
+            return await routeExternalDOMCommandAsync(request, command: .getText)
+        case .getAttributes:
+            return await routeExternalDOMCommandAsync(request, command: .getAttributes)
+        case .getBoundingBox:
+            return await routeExternalDOMCommandAsync(request, command: .getBoundingBox)
+        case .getDOMSnapshot:
+            return await routeExternalDOMCommandAsync(request, command: .getDOMSnapshot)
         case .loadURL:
             let target: ResolvedExternalPageTarget
             switch resolvePageTarget(for: request) {
@@ -865,6 +1028,22 @@ extension ScriptBrowserTab {
                     error: .internalFailure("The Browser debug status could not be serialized as JSON.")
                 )
             }
+        case .query:
+            return routeExternalDOMCommand(request, command: .query)
+        case .click:
+            return routeExternalDOMCommand(request, command: .click)
+        case .typeText:
+            return routeExternalDOMCommand(request, command: .typeText)
+        case .waitForSelector:
+            return routeExternalDOMCommand(request, command: .waitForSelector)
+        case .getText:
+            return routeExternalDOMCommand(request, command: .getText)
+        case .getAttributes:
+            return routeExternalDOMCommand(request, command: .getAttributes)
+        case .getBoundingBox:
+            return routeExternalDOMCommand(request, command: .getBoundingBox)
+        case .getDOMSnapshot:
+            return routeExternalDOMCommand(request, command: .getDOMSnapshot)
         case .newTab:
             guard let appDelegate = NSApp.delegate as? AppDelegate else {
                 return .failure(for: request, error: .internalFailure("The GhoDex app delegate is unavailable."))

@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): add first-class external DOM commands
+
+- What changed: Promoted the existing Browser DOM verbs to top-level `browser.tab.v1` commands by adding `query`, `click`, `typeText`, `waitForSelector`, `getText`, `getAttributes`, `getBoundingBox`, and `getDOMSnapshot`. `ScriptBrowserTab` now routes those commands directly through the typed Browser control plane with optional `pageID`, `frameName`, `documentRevision`, and `timeoutMS`, and the protocol guide documents the new payload/result shapes with CLI examples.
+- Why: External callers could already reach these capabilities through `runDOMBatch`, but that kept the stable API one layer too low and forced every client to hand-assemble mini batch payloads just to perform one semantic DOM action. The remaining full-pass goal was to make those common operations first-class product commands.
+- Impact: Local clients can now call the main Browser control verbs directly without wrapping them in a one-command batch. The old `runDOMBatch` path remains available for compatibility and batching, while the top-level API becomes clearer, more discoverable, and easier to document as a durable automation surface.
+- Verification: `swiftlint lint macos/Sources/Features/Browser/BrowserCommandProtocol.swift macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `tmp_dd=$(mktemp -d /tmp/ghodex-dom-std-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-dom-std-build.XXXXXX) && xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" build`, `tmp_dd=$(mktemp -d /tmp/ghodex-dom-cef-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-dom-cef-build.XXXXXX) && env GITHUB_ACTIONS=1 xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" GHODEX_CEF_ENABLED=1 GHODEX_CEF_ROOT=/tmp/ghodex-cef-runtime-current GHODEX_CEF_OTHER_LDFLAGS='' GHODEX_CEF_WRAPPER_LIB=/tmp/ghodex-cef-runtime-current/lib/Debug/libcef_dll_wrapper.a build`
+- Files: `macos/Sources/Features/Browser/BrowserCommandProtocol.swift`, `macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `browser-tab-command-protocol.md`, `CHANGELOG.md`
+
 ### feat(browser): add frame-aware external targeting
 
 - What changed: Added `listFrames` and top-level `frameName` support to `browser.tab.v1`, extended the Browser CEF bridge so JavaScript evaluation and DOM-batch dispatch can target a named frame instead of always using the main frame, and documented the new frame-discovery and frame-targeting flow in `browser-tab-command-protocol.md`.

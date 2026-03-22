@@ -18,6 +18,14 @@ enum BrowserExternalCommandKind: String, Codable, Hashable {
     case deleteCookie
     case clearCookies
     case evaluateJavaScript
+    case query
+    case click
+    case typeText
+    case waitForSelector
+    case getText
+    case getAttributes
+    case getBoundingBox
+    case getDOMSnapshot
     case runDOMBatch
     case subscribeEvents
     case drainEvents

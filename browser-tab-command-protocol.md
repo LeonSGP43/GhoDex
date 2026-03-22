@@ -178,6 +178,17 @@ targetable through the external command envelope.
 - `evaluateJavaScript`
 - `runDOMBatch`
 
+### First-Class DOM Commands
+
+- `query`
+- `click`
+- `typeText`
+- `waitForSelector`
+- `getText`
+- `getAttributes`
+- `getBoundingBox`
+- `getDOMSnapshot`
+
 `getDebugStatus` payload:
 
 ```json
@@ -249,6 +260,8 @@ Payload notes:
 - when `frameName` is provided, GhoDex routes the command to that named frame
   instead of the page's main frame
 - `frameName` values come from `listFrames`
+- `timeoutMS` is accepted as a string payload only for commands that wait, such
+  as `waitForSelector`
 - page-targeted commands may also include top-level `documentRevision`
 - when `documentRevision` is provided, the command fails with
   `stale_document_revision` if the resolved page has already moved to a newer
@@ -334,6 +347,57 @@ Payload notes:
 - `changedCount`: number of cookie names the command attempted to change
 - `changedNames`: cookie names the command targeted
 - `cookies`: decoded `{name,value}` entries visible after mutation
+
+### DOM Command Payloads
+
+`query`, `click`, `getText`, `getAttributes`, and `getBoundingBox` payload:
+
+```json
+{
+  "selector": "button.primary"
+}
+```
+
+`typeText` payload:
+
+```json
+{
+  "selector": "input[name=email]",
+  "text": "alice@example.com"
+}
+```
+
+`waitForSelector` payload:
+
+```json
+{
+  "selector": ".checkout-ready",
+  "state": "present",
+  "timeoutMS": "5000"
+}
+```
+
+`getDOMSnapshot` payload:
+
+```json
+{
+  "selector": "body",
+  "maxDepth": "2",
+  "includeText": "true"
+}
+```
+
+Result notes:
+
+- `query` returns the existing `BrowserDOMQueryResult` JSON shape
+- `click` returns `BrowserDOMClickResult`
+- `typeText` returns `BrowserDOMTypeTextResult`
+- `waitForSelector` returns the structured observer result produced by the page
+  agent, including `found`, `timedOut`, `selector`, `state`, and `elapsedMS`
+- `getText` returns `BrowserDOMTextResult`
+- `getAttributes` returns `BrowserDOMAttributesResult`
+- `getBoundingBox` returns `BrowserDOMBoundingBoxResult`
+- `getDOMSnapshot` returns `BrowserDOMSnapshotResult`
 
 ### Event Subscription Lifecycle
 
@@ -535,7 +599,35 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 10. Inspect page-visible cookies in that tab
+### 10. Query an element directly without `runDOMBatch`
+
+```bash
+ghodex +browser-control --transport=ipc --request '{
+  "id":"AAAAAAAA-1111-1111-1111-111111111111",
+  "version":"browser.tab.v1",
+  "command":"query",
+  "browserTabID":"browser-tab-1",
+  "pageID":"E5F4C926-7F1C-466E-A6D9-3A6F6A2F6D4E",
+  "payload":{"selector":"h1"}
+}'
+```
+
+### 11. Wait for an element inside a named frame
+
+```bash
+ghodex +browser-control --transport=ipc --request '{
+  "id":"BBBBBBBB-1111-1111-1111-111111111111",
+  "version":"browser.tab.v1",
+  "command":"waitForSelector",
+  "browserTabID":"browser-tab-1",
+  "pageID":"E5F4C926-7F1C-466E-A6D9-3A6F6A2F6D4E",
+  "frameName":"embedded-checkout",
+  "documentRevision":4,
+  "payload":{"selector":".checkout-ready","state":"present","timeoutMS":"5000"}
+}'
+```
+
+### 12. Inspect page-visible cookies in that tab
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
@@ -550,7 +642,7 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 11. Subscribe to passive events
+### 13. Subscribe to passive events
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
@@ -564,7 +656,7 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 12. Set a page-visible cookie in that tab
+### 14. Set a page-visible cookie in that tab
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
@@ -582,7 +674,7 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 13. Clear page-visible cookies in that tab
+### 15. Clear page-visible cookies in that tab
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
@@ -595,7 +687,7 @@ ghodex +browser-control --transport=ipc --request '{
 }'
 ```
 
-### 14. Drain buffered events from that subscription
+### 16. Drain buffered events from that subscription
 
 ```bash
 ghodex +browser-control --transport=ipc --request '{
