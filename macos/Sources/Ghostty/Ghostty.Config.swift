@@ -815,7 +815,7 @@ extension Ghostty {
         }
 
         var ghodexTodoWorkspaceOverlayVisible: Bool {
-            bool(for: "ghodex-todo-workspace-overlay-visible", default: true)
+            bool(for: "ghodex-todo-workspace-overlay-visible", default: false)
         }
 
         var ghodexTodoWorkspaceOverlayCorner: String? {

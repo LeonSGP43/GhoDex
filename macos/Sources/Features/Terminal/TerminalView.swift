@@ -322,13 +322,15 @@ private struct TodoWorkspaceSidebar: View {
     @State private var todoDocument = AITerminalTodoDayDocument()
     @State private var draftTitle = ""
     @State private var draftNotes = ""
-    @State private var composerIsExpanded = false
     @State private var composerShowsNotes = false
     @State private var editingItemID: UUID?
     @State private var editingTitle = ""
     @State private var editingNotes = ""
     @State private var statusMessage: String?
+    @State private var contentIsVisible = false
     @FocusState private var composerTitleFieldFocused: Bool
+
+    private static let sidebarAnimation = Animation.spring(response: 0.24, dampingFraction: 0.9)
 
     private var workspaceTitle: String {
         let trimmed = terminalController.titleOverride?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -373,15 +375,13 @@ private struct TodoWorkspaceSidebar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
+            quickAddBar
             controlBar
-            if composerIsExpanded {
-                composerCard
-            }
             timelinePanel
             footer
         }
         .padding(14)
-        .frame(width: 416)
+        .frame(width: 424)
         .frame(maxHeight: .infinity, alignment: .topLeading)
         .background(.ultraThinMaterial)
         .overlay(alignment: sidebarEdge == .leading ? .trailing : .leading) {
@@ -389,9 +389,21 @@ private struct TodoWorkspaceSidebar: View {
                 .fill(Color.primary.opacity(0.08))
                 .frame(width: 1)
         }
-        .animation(.snappy(duration: 0.22), value: composerIsExpanded)
-        .animation(.snappy(duration: 0.22), value: editingItemID)
-        .onAppear(perform: syncFromSettings)
+        .opacity(contentIsVisible ? 1 : 0.001)
+        .offset(x: contentIsVisible ? 0 : (sidebarEdge == .leading ? -14 : 14))
+        .animation(Self.sidebarAnimation, value: composerShowsNotes)
+        .animation(Self.sidebarAnimation, value: editingItemID)
+        .animation(Self.sidebarAnimation, value: contentIsVisible)
+        .onAppear {
+            syncFromSettings()
+            withAnimation(Self.sidebarAnimation) {
+                contentIsVisible = true
+            }
+            composerTitleFieldFocused = true
+        }
+        .onDisappear {
+            contentIsVisible = false
+        }
         .onChange(of: store.configurationRevision) { _ in
             syncFromSettings()
         }
@@ -404,7 +416,7 @@ private struct TodoWorkspaceSidebar: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(L10n.SSHConnections.todoPanelTitle)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.headline.weight(.semibold))
 
                 Text(workspaceTitle)
                     .font(.caption2)
@@ -437,166 +449,132 @@ private struct TodoWorkspaceSidebar: View {
         }
     }
 
-    private var controlBar: some View {
+    private var quickAddBar: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Button {
-                    selectedDate = Calendar.current.date(byAdding: .day, value: -1, to: selectedDate) ?? selectedDate
-                    persistSelection()
-                } label: {
-                    Image(systemName: "chevron.left")
+            HStack(alignment: .center, spacing: 10) {
+                TextField(L10n.SSHConnections.todoAddTitle, text: $draftTitle, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 20, weight: .semibold))
+                    .focused($composerTitleFieldFocused)
+                    .onSubmit(addDraftItem)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                Button(action: addDraftItem) {
+                    Label(L10n.SSHConnections.todoAddAction, systemImage: "plus")
+                        .font(.headline.weight(.semibold))
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 13)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .controlCapsule()
-
-                Button(L10n.SSHConnections.todoDateToday) {
-                    selectedDate = .now
-                    persistSelection()
-                }
-                .buttonStyle(.plain)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(Calendar.current.isDateInToday(selectedDate) ? Color.accentColor : Color.primary)
-                .controlCapsule(isEmphasized: Calendar.current.isDateInToday(selectedDate))
-
-                Button {
-                    selectedDate = Calendar.current.date(byAdding: .day, value: 1, to: selectedDate) ?? selectedDate
-                    persistSelection()
-                } label: {
-                    Image(systemName: "chevron.right")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .controlCapsule()
-
-                Spacer(minLength: 8)
-
-                DatePicker("", selection: $selectedDate, displayedComponents: [.date])
-                    .labelsHidden()
-                    .datePickerStyle(.compact)
-                    .scaleEffect(0.92, anchor: .trailing)
-                    .onChange(of: selectedDate) { _ in
-                        persistSelection()
-                    }
-
-                Button {
-                    showCompletedItems.toggle()
-                    persistSelection()
-                } label: {
-                    Image(systemName: showCompletedItems ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
-                        .font(.title3)
-                        .foregroundStyle(showCompletedItems ? Color.accentColor : .secondary)
-                }
-                .buttonStyle(.plain)
-                .help(showCompletedItems ? L10n.SSHConnections.todoHideCompletedItems : L10n.SSHConnections.todoShowCompletedItems)
+                .foregroundStyle(Color.accentColor)
+                .background(Color.accentColor.opacity(0.16), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color.accentColor.opacity(0.3), lineWidth: 1)
+                )
+                .disabled(draftTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-
-            Button {
-                composerIsExpanded = true
-                composerTitleFieldFocused = true
-            } label: {
-                Label(L10n.SSHConnections.todoAddAction, systemImage: "plus")
-                    .font(.headline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 14)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.accentColor)
-            .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.accentColor.opacity(0.28), lineWidth: 1)
-            )
-        }
-    }
-
-    private var composerCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Text(L10n.SSHConnections.todoAddAction)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                Spacer(minLength: 8)
-
-                Button {
-                    composerShowsNotes.toggle()
-                } label: {
-                    Label(L10n.SSHConnections.todoAddNotes, systemImage: composerShowsNotes ? "text.justify" : "note.text.badge.plus")
-                        .font(.caption2)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-
-                Button {
-                    composerIsExpanded = false
-                    composerShowsNotes = false
-                    draftTitle = ""
-                    draftNotes = ""
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.caption.weight(.semibold))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-            }
-
-            TextField(L10n.SSHConnections.todoAddTitle, text: $draftTitle, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.system(size: 18, weight: .semibold))
-                .focused($composerTitleFieldFocused)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
             if composerShowsNotes {
                 TextField(L10n.SSHConnections.todoAddNotes, text: $draftNotes, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 15))
+                    .onSubmit(addDraftItem)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 12)
-                    .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
 
-            HStack {
+            HStack(alignment: .center, spacing: 10) {
                 Text(L10n.SSHConnections.todoSelectedDay(AITerminalTodoSettings.dayString(from: selectedDate)))
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
                 Spacer(minLength: 8)
 
-                Button(L10n.SSHConnections.todoAddAction) {
-                    guard let document = store.addTodoItem(
-                        title: draftTitle,
-                        notes: draftNotes,
-                        for: selectedDate
-                    ) else {
-                        statusMessage = store.lastError
-                        return
+                Button {
+                    withAnimation(Self.sidebarAnimation) {
+                        composerShowsNotes.toggle()
                     }
-
-                    todoDocument = document
-                    draftTitle = ""
-                    draftNotes = ""
-                    composerIsExpanded = false
-                    composerShowsNotes = false
-                    statusMessage = nil
+                } label: {
+                    Label(L10n.SSHConnections.todoAddNotes, systemImage: composerShowsNotes ? "text.justify" : "note.text.badge.plus")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(draftTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .buttonStyle(.plain)
+                .foregroundStyle(composerShowsNotes ? Color.accentColor : .secondary)
+                .background((composerShowsNotes ? Color.accentColor.opacity(0.12) : Color.white.opacity(0.045)), in: Capsule())
             }
         }
-        .padding(14)
-        .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .padding(12)
+        .background(Color.white.opacity(0.028), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                .stroke(Color.white.opacity(0.055), lineWidth: 1)
         )
     }
 
+    private var controlBar: some View {
+        HStack(spacing: 8) {
+            Button {
+                selectedDate = Calendar.current.date(byAdding: .day, value: -1, to: selectedDate) ?? selectedDate
+                persistSelection()
+            } label: {
+                Image(systemName: "chevron.left")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .controlCapsule()
+
+            Button(L10n.SSHConnections.todoDateToday) {
+                selectedDate = .now
+                persistSelection()
+            }
+            .buttonStyle(.plain)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(Calendar.current.isDateInToday(selectedDate) ? Color.accentColor : Color.primary)
+            .controlCapsule(isEmphasized: Calendar.current.isDateInToday(selectedDate))
+
+            Button {
+                selectedDate = Calendar.current.date(byAdding: .day, value: 1, to: selectedDate) ?? selectedDate
+                persistSelection()
+            } label: {
+                Image(systemName: "chevron.right")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .controlCapsule()
+
+            Spacer(minLength: 8)
+
+            DatePicker("", selection: $selectedDate, displayedComponents: [.date])
+                .labelsHidden()
+                .datePickerStyle(.compact)
+                .scaleEffect(0.92, anchor: .trailing)
+                .onChange(of: selectedDate) { _ in
+                    persistSelection()
+                }
+
+            Button {
+                showCompletedItems.toggle()
+                persistSelection()
+            } label: {
+                Image(systemName: showCompletedItems ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                    .font(.title3)
+                    .foregroundStyle(showCompletedItems ? Color.accentColor : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help(showCompletedItems ? L10n.SSHConnections.todoHideCompletedItems : L10n.SSHConnections.todoShowCompletedItems)
+        }
+    }
+
     private var timelinePanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text(L10n.SSHConnections.todoTimelineTitle)
                     .font(.caption2.weight(.semibold))
@@ -619,7 +597,6 @@ private struct TodoWorkspaceSidebar: View {
                         .foregroundStyle(.secondary)
 
                     Button(L10n.SSHConnections.todoAddAction) {
-                        composerIsExpanded = true
                         composerTitleFieldFocused = true
                     }
                     .buttonStyle(.borderless)
@@ -686,23 +663,21 @@ private struct TodoWorkspaceSidebar: View {
     private func todoItemRow(_ item: AITerminalTodoItem) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 14) {
-                Button {
-                    guard let document = store.setTodoItemCompleted(
-                        id: item.id,
-                        isCompleted: !item.isCompleted,
-                        for: selectedDate
-                    ) else {
-                        statusMessage = store.lastError
-                        return
+                Button(
+                    action: { toggleCompletion(for: item, isCompleted: !item.isCompleted) },
+                    label: {
+                        Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(item.isCompleted ? Color.green : Color.accentColor)
+                            .font(.system(size: 28, weight: .semibold))
+                            .frame(width: 48, height: 48)
+                            .background(
+                                Circle()
+                                    .fill((item.isCompleted ? Color.green : Color.accentColor).opacity(0.12))
+                            )
                     }
-                    todoDocument = document
-                    statusMessage = nil
-                } label: {
-                    Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(item.isCompleted ? Color.green : Color.accentColor)
-                        .font(.system(size: 28, weight: .semibold))
-                }
+                )
                 .buttonStyle(.plain)
+                .contentShape(Circle())
 
                 VStack(alignment: .leading, spacing: 10) {
                     if editingItemID == item.id {
@@ -768,9 +743,13 @@ private struct TodoWorkspaceSidebar: View {
                 }
             } else {
                 HStack(alignment: .center, spacing: 8) {
-                    todoAssignmentMenu(for: item)
-
-                    Spacer(minLength: 8)
+                    todoInlineActionButton(
+                        title: item.isCompleted ? L10n.SSHConnections.todoActionReset : L10n.SSHConnections.todoActionComplete,
+                        systemImage: item.isCompleted ? "arrow.counterclockwise" : "checkmark",
+                        isEmphasized: true
+                    ) {
+                        toggleCompletion(for: item, isCompleted: !item.isCompleted)
+                    }
 
                     todoInlineActionButton(title: L10n.SSHConnections.todoActionEdit, systemImage: "square.and.pencil") {
                         editingItemID = item.id
@@ -778,20 +757,7 @@ private struct TodoWorkspaceSidebar: View {
                         editingNotes = item.notes
                     }
 
-                    if item.isCompleted {
-                        todoInlineActionButton(title: L10n.SSHConnections.todoActionReset, systemImage: "arrow.counterclockwise") {
-                            guard let document = store.setTodoItemCompleted(
-                                id: item.id,
-                                isCompleted: false,
-                                for: selectedDate
-                            ) else {
-                                statusMessage = store.lastError
-                                return
-                            }
-                            todoDocument = document
-                            statusMessage = nil
-                        }
-                    }
+                    todoAssignmentMenu(for: item)
                 }
             }
         }
@@ -875,6 +841,24 @@ private struct TodoWorkspaceSidebar: View {
         todoDocument = store.todoDocument(for: selectedDate)
     }
 
+    private func addDraftItem() {
+        guard let document = store.addTodoItem(
+            title: draftTitle,
+            notes: draftNotes,
+            for: selectedDate
+        ) else {
+            statusMessage = store.lastError
+            return
+        }
+
+        todoDocument = document
+        draftTitle = ""
+        draftNotes = ""
+        composerShowsNotes = false
+        statusMessage = nil
+        composerTitleFieldFocused = true
+    }
+
     private func persistSelection() {
         let settings = store.todoSettings
         store.saveTodoSettings(.init(
@@ -899,13 +883,31 @@ private struct TodoWorkspaceSidebar: View {
         statusMessage = nil
     }
 
+    private func toggleCompletion(for item: AITerminalTodoItem, isCompleted: Bool) {
+        guard let document = store.setTodoItemCompleted(
+            id: item.id,
+            isCompleted: isCompleted,
+            for: selectedDate
+        ) else {
+            statusMessage = store.lastError
+            return
+        }
+        todoDocument = document
+        statusMessage = nil
+    }
+
     private func metadataText(_ title: String, systemImage: String) -> some View {
         Label(title, systemImage: systemImage)
             .font(.caption2)
             .foregroundStyle(.secondary)
     }
 
-    private func todoInlineActionButton(title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+    private func todoInlineActionButton(
+        title: String,
+        systemImage: String,
+        isEmphasized: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             Label(title, systemImage: systemImage)
                 .font(.caption.weight(.semibold))
@@ -913,8 +915,11 @@ private struct TodoWorkspaceSidebar: View {
                 .padding(.vertical, 7)
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .background(Color.white.opacity(0.045), in: Capsule())
+        .foregroundStyle(isEmphasized ? Color.accentColor : .secondary)
+        .background(
+            (isEmphasized ? Color.accentColor.opacity(0.12) : Color.white.opacity(0.045)),
+            in: Capsule()
+        )
     }
 
     private func todoCardBackground(for item: AITerminalTodoItem) -> Color {

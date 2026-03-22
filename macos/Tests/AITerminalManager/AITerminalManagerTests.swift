@@ -95,7 +95,7 @@ struct AITerminalManagerTests {
         #expect(configuration.todoSettings.workspaceRootPath == AITerminalTodoSettings.defaultWorkspaceRootPath)
         #expect(configuration.todoSettings.showCompletedItems)
         #expect(configuration.todoSettings.sidebarEdge == .leading)
-        #expect(configuration.todoSettings.workspaceOverlayVisible)
+        #expect(configuration.todoSettings.workspaceOverlayVisible == false)
         #expect(configuration.todoSettings.workspaceOverlayCorner == .topLeading)
         #expect(configuration.learningSettings.enabled)
         #expect(configuration.learningSettings.preferTabWorkingDirectory)

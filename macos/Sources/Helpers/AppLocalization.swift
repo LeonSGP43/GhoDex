@@ -289,6 +289,7 @@ enum AppLocalization {
         "ssh.connections.todo.panel_open_settings": "Open Todo Settings",
         "ssh.connections.todo.panel_close": "Close",
         "ssh.connections.todo.action_save": "Save",
+        "ssh.connections.todo.action_complete": "Complete",
         "ssh.connections.todo.action_edit": "Edit",
         "ssh.connections.todo.action_reset": "Reset",
         "ssh.connections.todo.assignment_clear": "Remove Tab Assignment",
@@ -659,6 +660,7 @@ enum AppLocalization {
         "ssh.connections.todo.panel_open_settings": "打开待办设置",
         "ssh.connections.todo.panel_close": "关闭",
         "ssh.connections.todo.action_save": "保存",
+        "ssh.connections.todo.action_complete": "完成",
         "ssh.connections.todo.action_edit": "编辑",
         "ssh.connections.todo.action_reset": "重置",
         "ssh.connections.todo.assignment_clear": "移除标签页分配",
@@ -1417,6 +1419,7 @@ enum L10n {
         nonisolated static var todoPanelOpenSettings: String { AppLocalization.localizedString("ssh.connections.todo.panel_open_settings") }
         nonisolated static var todoPanelClose: String { AppLocalization.localizedString("ssh.connections.todo.panel_close") }
         nonisolated static var todoActionSave: String { AppLocalization.localizedString("ssh.connections.todo.action_save") }
+        nonisolated static var todoActionComplete: String { AppLocalization.localizedString("ssh.connections.todo.action_complete") }
         nonisolated static var todoActionEdit: String { AppLocalization.localizedString("ssh.connections.todo.action_edit") }
         nonisolated static var todoActionReset: String { AppLocalization.localizedString("ssh.connections.todo.action_reset") }
         nonisolated static var todoAssignmentClear: String { AppLocalization.localizedString("ssh.connections.todo.assignment_clear") }

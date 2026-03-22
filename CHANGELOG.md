@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### refactor(macos): speed up todo sidebar capture and motion
+
+- What changed: Reworked the todo sidebar into an always-ready quick-add flow with a persistent title field, return-to-add submission, optional inline notes, a larger primary add button, larger completion hit targets, a direct complete/reset pill on every row, and a unified sidebar content entrance animation; also changed the default tab quick-look card setting to off so the main tab view stays clean until explicitly enabled.
+- Why: The previous panel still made fast capture feel too modal because adding a task required opening a composer first, and marking completion relied too heavily on a smaller icon target. The tab quick-look card also started visible by default even though the side panel is now the primary task-management surface.
+- Impact: Opening the todo panel now lands directly in a ready-to-type state, repeated task entry is faster, completion toggles are easier to hit, and the sidebar content enters with a more coherent motion rhythm. New configs and default-state reloads also no longer show the in-tab quick-look card unless the user turns it on.
+- Verification: `git diff --check`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild test -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' -only-testing:'GhosttyTests/AITerminalManagerTests'`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Features/AI Terminal Manager/AITerminalManagerModels.swift`, `macos/Sources/Ghostty/Ghostty.Config.swift`, `src/config/Config.zig`, `macos/Sources/Helpers/AppLocalization.swift`, `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`, `CHANGELOG.md`
+- Decision trail: Treat the side panel as the default capture surface and optimize for the loop of `open -> type -> return -> repeat`. Reduce visual and interaction indirection first, then let secondary details such as notes remain expandable. Keep the quick-look card opt-in because duplicated task chrome across the tab and the side panel hurts focus more than it helps.
+
 ### fix(macos): keep rapid todo completion toggles responsive
 
 - What changed: Added an in-memory per-day todo document cache and moved app-mode todo file persistence onto a coalescing background coordinator so rapid completion toggles update UI state immediately without forcing synchronous `load -> mutate -> save` work on the main actor for every click.

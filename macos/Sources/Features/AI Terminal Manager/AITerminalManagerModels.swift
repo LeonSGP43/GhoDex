@@ -501,7 +501,7 @@ struct AITerminalTodoSettings: Codable, Hashable, Sendable {
         showCompletedItems: Bool = true,
         selectedDateAnchor: String = AITerminalTodoSettings.defaultSelectedDateAnchor,
         sidebarEdge: AITerminalTodoSidebarEdge = .leading,
-        workspaceOverlayVisible: Bool = true,
+        workspaceOverlayVisible: Bool = false,
         workspaceOverlayCorner: AITerminalTodoOverlayCorner = .topLeading
     ) {
         self.enabled = enabled
@@ -541,7 +541,7 @@ struct AITerminalTodoSettings: Codable, Hashable, Sendable {
         workspaceOverlayVisible = try container.decodeIfPresent(
             Bool.self,
             forKey: .workspaceOverlayVisible
-        ) ?? true
+        ) ?? false
         workspaceOverlayCorner = try container.decodeIfPresent(
             AITerminalTodoOverlayCorner.self,
             forKey: .workspaceOverlayCorner
