@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(browser): defer eager CEF init until first browser use
+
+- What changed: Stopped `ghosttyConfigDidChange(config:)` from eagerly calling `GhoDexCEFInitializeGlobal()` during app launch and config reload. Browser defaults for runtime/profile/remote-debug still sync immediately, but global CEF activation is now left to the existing lazy Browser-tab path that initializes CEF when the first Browser page model is created.
+- Why: Isolated Browser-control validation was repeatedly timing out before `browser-control.sock` appeared because the app could block inside `CefInitialize` while still in `applicationDidFinishLaunching`, before `browserControlIPCService.start()` runs. Deferring global activation removes that startup choke point without losing the already-landed lazy Browser initialization path.
+- Impact: Fresh app launches should reach Browser IPC startup even when CEF runtime activation is slow or unhealthy, which makes isolated runtime validation and Browser automation less fragile. The actual Browser feature still activates CEF on demand the first time a Browser tab needs it.
+- Verification: `swiftlint lint macos/Sources/App/macOS/AppDelegate.swift`, `tmp_dd=$(mktemp -d /tmp/ghodex-cef-defer-std-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-cef-defer-std-build.XXXXXX) && xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" build`, isolated Profile 10 runtime smoke after rebuilding the CEF-enabled app
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `CHANGELOG.md`
+
 ### docs(browser): finish full-pass browser control docs
 
 - What changed: Expanded the durable Browser control docs to cover the final v1 semantics after page-aware, frame-aware, cookie, and debug-lane work. The acceptance matrix now records frame targeting and first-class DOM support, the cookie lifecycle note now explains `frameName` targeting and iframe-heavy guidance, and the architecture note now marks the landed phases as complete instead of leaving the roadmap stale.

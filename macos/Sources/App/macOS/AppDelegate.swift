@@ -982,7 +982,10 @@ class AppDelegate: NSObject,
         syncBrowserProfileConfig(config)
         syncBrowserRuntimeConfig(config)
         syncBrowserRemoteDebugPortConfig(config)
-        initializeBrowserCEFIfPossible()
+        // Browser tabs now initialize CEF lazily when the first page model is
+        // constructed. Doing eager global init here can stall launch before the
+        // Browser IPC service starts, which makes isolated control-plane
+        // validation impossible even though the runtime is otherwise present.
 
         // Depending on the "window-save-state" setting we have to set the NSQuitAlwaysKeepsWindows
         // configuration. This is the only way to carefully control whether macOS invokes the
