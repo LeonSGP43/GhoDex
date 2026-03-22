@@ -296,6 +296,7 @@ enum AppLocalization {
         "ssh.connections.todo.assignment_no_tabs": "No live tabs available",
         "ssh.connections.todo.assignment_unassigned": "Unassigned",
         "ssh.connections.todo.assignment_unavailable": "Assigned Tab Unavailable",
+        "ssh.connections.todo.title_required": "Enter a task title before saving notes.",
         "ssh.connections.learning.title": "Learning Settings",
         "ssh.connections.learning.subtitle": "Configure how selected terminal text is summarized and written into your project knowledge files.",
         "ssh.connections.learning.enable": "Enable Learn action",
@@ -667,6 +668,7 @@ enum AppLocalization {
         "ssh.connections.todo.assignment_no_tabs": "当前没有可分配的活动标签页",
         "ssh.connections.todo.assignment_unassigned": "未分配",
         "ssh.connections.todo.assignment_unavailable": "已分配标签页不可用",
+        "ssh.connections.todo.title_required": "请先填写任务标题，再保存备注。",
         "ssh.connections.learning.title": "学习参数",
         "ssh.connections.learning.subtitle": "配置如何把终端选中文本总结并写入项目知识文件。",
         "ssh.connections.learning.enable": "启用学习动作",
@@ -1426,6 +1428,7 @@ enum L10n {
         nonisolated static var todoAssignmentNoTabs: String { AppLocalization.localizedString("ssh.connections.todo.assignment_no_tabs") }
         nonisolated static var todoAssignmentUnassigned: String { AppLocalization.localizedString("ssh.connections.todo.assignment_unassigned") }
         nonisolated static var todoAssignmentUnavailable: String { AppLocalization.localizedString("ssh.connections.todo.assignment_unavailable") }
+        nonisolated static var todoTitleRequired: String { AppLocalization.localizedString("ssh.connections.todo.title_required") }
         nonisolated static var learningTitle: String { AppLocalization.localizedString("ssh.connections.learning.title") }
         nonisolated static var learningSubtitle: String { AppLocalization.localizedString("ssh.connections.learning.subtitle") }
         nonisolated static var learningEnable: String { AppLocalization.localizedString("ssh.connections.learning.enable") }

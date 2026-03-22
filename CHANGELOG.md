@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(macos): tighten todo composer keyboard flow
+
+- What changed: Switched the todo quick-add composer onto AppKit-backed title and notes inputs so the panel can place a real insertion caret in the title field when `Cmd+Shift+M` opens it, submit the title with `Enter`, expand into notes with `Shift+Enter`, keep `Shift+Enter` as a newline inside notes, and block save with a red validation state when notes exist without a title.
+- Why: The previous SwiftUI-only quick-add flow could not reliably distinguish the title vs notes keyboard behaviors, and opening the panel did not guarantee that the caret was ready in the title field for immediate typing.
+- Impact: The todo sidebar now matches the intended keyboard-first capture loop: open panel, type title, press `Enter` to save or `Shift+Enter` to continue into notes, then confirm from notes with `Enter` without accidentally creating untitled tasks.
+- Verification: `git diff --check`; `zig build -Demit-xcframework=true -Demit-macos-app=false`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration ReleaseLocal -destination 'platform=macOS,arch=arm64' SYMROOT=macos/build`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `CHANGELOG.md`
+- Decision trail: Keyboard capture is the primary value of the sidebar, so command handling had to move to controls that can intercept the actual AppKit newline selectors and explicitly restore the insertion point instead of relying on generic SwiftUI submit hooks.
+
 ### refactor(macos): align todo sidebar with system typography
 
 - What changed: Reworked the todo sidebar typography to use semantic system text styles instead of hard-coded point sizes, tightened the overall panel spacing, upgraded the header controls into cleaner circular affordances, moved the quick-add container onto a softer grouped surface, and reduced the card/border treatment so task rows rely more on spacing, native text hierarchy, and restrained status color instead of heavy fixed-size chrome.

@@ -383,6 +383,11 @@ private struct TodoWorkspaceSidebar: View {
         return orderedTodoItems.filter { !$0.isCompleted }
     }
 
+    private var composerNeedsTitle: Bool {
+        draftTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            !draftNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var selectedDateTitle: String {
         if Calendar.current.isDateInToday(selectedDate) {
             return L10n.SSHConnections.todoDateToday
@@ -430,6 +435,12 @@ private struct TodoWorkspaceSidebar: View {
         }
         .onChange(of: store.todoRevision) { _ in
             refreshDocument()
+        }
+        .onChange(of: draftTitle) { _ in
+            clearComposerValidationIfNeeded()
+        }
+        .onChange(of: draftNotes) { _ in
+            clearComposerValidationIfNeeded()
         }
     }
 
@@ -511,9 +522,11 @@ private struct TodoWorkspaceSidebar: View {
                 Spacer(minLength: 8)
 
                 Button {
+                    let willShowNotes = !composerShowsNotes
                     withAnimation(Self.sidebarAnimation) {
                         composerShowsNotes.toggle()
                     }
+                    composerFocusField = willShowNotes ? .notes : .title
                 } label: {
                     Label(L10n.SSHConnections.todoAddNotes, systemImage: composerShowsNotes ? "text.justify" : "note.text.badge.plus")
                         .font(.footnote.weight(.semibold))
@@ -523,6 +536,12 @@ private struct TodoWorkspaceSidebar: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(composerShowsNotes ? Color.accentColor : .secondary)
                 .background((composerShowsNotes ? Color.accentColor.opacity(0.12) : Color.white.opacity(0.045)), in: Capsule())
+            }
+
+            if composerNeedsTitle {
+                Text(L10n.SSHConnections.todoTitleRequired)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.red)
             }
         }
         .padding(14)
@@ -534,14 +553,24 @@ private struct TodoWorkspaceSidebar: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color.white.opacity(0.045))
 
-            TextField(L10n.SSHConnections.todoAddTitle, text: $draftTitle, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.title2.weight(.semibold))
-                .focused($composerFocusField, equals: .title)
-                .onSubmit(addDraftItem)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(composerNeedsTitle ? Color.red.opacity(0.85) : Color.clear, lineWidth: 1.5)
+
+            TodoComposerTitleField(
+                placeholder: L10n.SSHConnections.todoAddTitle,
+                text: $draftTitle,
+                isFocused: composerFocusField == .title,
+                onSubmit: addDraftItem,
+                onShiftEnter: {
+                    withAnimation(Self.sidebarAnimation) {
+                        composerShowsNotes = true
+                    }
+                    composerFocusField = .notes
+                }
+            )
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(height: 52)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -556,16 +585,25 @@ private struct TodoWorkspaceSidebar: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color.white.opacity(0.045))
 
-            TextField(L10n.SSHConnections.todoAddNotes, text: $draftNotes, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.body)
-                .focused($composerFocusField, equals: .notes)
-                .onSubmit(addDraftItem)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if draftNotes.isEmpty {
+                Text(L10n.SSHConnections.todoAddNotes)
+                    .font(.body)
+                    .foregroundStyle(.secondary.opacity(0.72))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 14)
+                    .allowsHitTesting(false)
+            }
+
+            TodoComposerNotesField(
+                text: $draftNotes,
+                isFocused: composerFocusField == .notes,
+                onSubmit: addDraftItem
+            )
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
         }
-        .frame(minHeight: 52)
+        .frame(minHeight: 76)
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .onTapGesture {
             composerFocusField = .notes
@@ -898,6 +936,12 @@ private struct TodoWorkspaceSidebar: View {
     }
 
     private func addDraftItem() {
+        if draftTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            statusMessage = L10n.SSHConnections.todoTitleRequired
+            composerFocusField = .title
+            return
+        }
+
         guard let document = store.addTodoItem(
             title: draftTitle,
             notes: draftNotes,
@@ -928,6 +972,12 @@ private struct TodoWorkspaceSidebar: View {
         ))
         statusMessage = store.lastError
         refreshDocument()
+    }
+
+    private func clearComposerValidationIfNeeded() {
+        if !composerNeedsTitle && statusMessage == L10n.SSHConnections.todoTitleRequired {
+            statusMessage = nil
+        }
     }
 
     private func assignTodoItem(_ id: UUID, to workspaceID: UUID?) {
@@ -984,6 +1034,196 @@ private struct TodoWorkspaceSidebar: View {
 
     private func todoCardBorder(for item: AITerminalTodoItem) -> Color {
         item.isCompleted ? Color.green.opacity(0.32) : Color.white.opacity(0.08)
+    }
+}
+
+private struct TodoComposerTitleField: NSViewRepresentable {
+    let placeholder: String
+    @Binding var text: String
+    let isFocused: Bool
+    let onSubmit: () -> Void
+    let onShiftEnter: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, onSubmit: onSubmit, onShiftEnter: onShiftEnter)
+    }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField(frame: .zero)
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = .systemFont(
+            ofSize: NSFont.preferredFont(forTextStyle: .title2).pointSize,
+            weight: .semibold
+        )
+        field.placeholderString = placeholder
+        field.textColor = .labelColor
+        field.lineBreakMode = .byTruncatingTail
+        field.maximumNumberOfLines = 1
+        field.cell?.usesSingleLineMode = true
+        field.delegate = context.coordinator
+        context.coordinator.textField = field
+        return field
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        context.coordinator.text = $text
+        context.coordinator.onSubmit = onSubmit
+        context.coordinator.onShiftEnter = onShiftEnter
+
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+
+        guard isFocused else { return }
+        DispatchQueue.main.async {
+            guard let window = nsView.window else { return }
+            if window.firstResponder !== nsView.currentEditor() {
+                window.makeFirstResponder(nsView)
+            }
+            guard let editor = nsView.currentEditor() as? NSTextView else { return }
+            let insertionPoint = NSRange(location: nsView.stringValue.count, length: 0)
+            if editor.selectedRange() != insertionPoint {
+                editor.setSelectedRange(insertionPoint)
+            }
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var text: Binding<String>
+        var onSubmit: () -> Void
+        var onShiftEnter: () -> Void
+        weak var textField: NSTextField?
+
+        init(
+            text: Binding<String>,
+            onSubmit: @escaping () -> Void,
+            onShiftEnter: @escaping () -> Void
+        ) {
+            self.text = text
+            self.onSubmit = onSubmit
+            self.onShiftEnter = onShiftEnter
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField else { return }
+            text.wrappedValue = field.stringValue
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard control === textField else { return false }
+
+            if commandSelector == #selector(NSResponder.insertLineBreak(_:)) {
+                onShiftEnter()
+                return true
+            }
+
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+                    onShiftEnter()
+                } else {
+                    onSubmit()
+                }
+                return true
+            }
+
+            return false
+        }
+    }
+}
+
+private struct TodoComposerNotesField: NSViewRepresentable {
+    @Binding var text: String
+    let isFocused: Bool
+    let onSubmit: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, onSubmit: onSubmit)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView(frame: .zero)
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+
+        let textView = NSTextView(frame: .zero)
+        textView.drawsBackground = false
+        textView.isRichText = false
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.importsGraphics = false
+        textView.allowsUndo = true
+        textView.font = .preferredFont(forTextStyle: .body)
+        textView.textColor = .labelColor
+        textView.textContainerInset = NSSize(width: 0, height: 4)
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.delegate = context.coordinator
+
+        scrollView.documentView = textView
+        context.coordinator.textView = textView
+        return scrollView
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        context.coordinator.text = $text
+        context.coordinator.onSubmit = onSubmit
+
+        guard let textView = context.coordinator.textView else { return }
+
+        if textView.string != text {
+            textView.string = text
+        }
+
+        guard isFocused else { return }
+        DispatchQueue.main.async {
+            guard let window = textView.window else { return }
+            if window.firstResponder !== textView {
+                window.makeFirstResponder(textView)
+            }
+            let insertionPoint = NSRange(location: textView.string.count, length: 0)
+            if textView.selectedRange() != insertionPoint {
+                textView.setSelectedRange(insertionPoint)
+            }
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var text: Binding<String>
+        var onSubmit: () -> Void
+        weak var textView: NSTextView?
+
+        init(text: Binding<String>, onSubmit: @escaping () -> Void) {
+            self.text = text
+            self.onSubmit = onSubmit
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            text.wrappedValue = textView.string
+        }
+
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertLineBreak(_:)) {
+                textView.insertText("\n", replacementRange: textView.selectedRange())
+                return true
+            }
+
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+                    textView.insertText("\n", replacementRange: textView.selectedRange())
+                } else {
+                    onSubmit()
+                }
+                return true
+            }
+
+            return false
+        }
     }
 }
 
