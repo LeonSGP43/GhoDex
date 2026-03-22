@@ -12,6 +12,14 @@ All notable changes to this project are documented in this file.
 - Verification: `swiftlint lint macos/Sources/App/macOS/AppDelegate.swift`, `tmp_dd=$(mktemp -d /tmp/ghodex-cef-defer-std-dd.XXXXXX) && tmp_sym=$(mktemp -d /tmp/ghodex-cef-defer-std-build.XXXXXX) && xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -derivedDataPath "$tmp_dd" SYMROOT="$tmp_sym" build`, isolated Profile 10 runtime smoke after rebuilding the CEF-enabled app
 - Files: `macos/Sources/App/macOS/AppDelegate.swift`, `CHANGELOG.md`
 
+### fix(browser): activate initial browser tabs without blocking command setup
+
+- What changed: `BrowserTabModel` no longer calls `GhoDexCEFInitializeGlobal()` synchronously inside its initializer. New Browser tabs now schedule runtime activation on the main actor after the model exists, then refresh runtime state and active-page state once Chromium finishes activating.
+- Why: After deferring app-launch CEF activation, isolated Browser IPC startup succeeded, but the first `newTab` request could still stall while the model initializer synchronously entered `CefInitialize`. That kept page-level runtime validation from progressing beyond tab creation.
+- Impact: External `newTab` callers can now receive a tab immediately while CEF activation continues asynchronously. This keeps the Browser control plane responsive and gives the page bridge a chance to bind once Chromium is ready instead of timing out inside tab construction.
+- Verification: `swiftlint lint macos/Sources/Features/Browser/BrowserTabModel.swift`, isolated Browser runtime smoke after rebuilding the CEF-enabled app
+- Files: `macos/Sources/Features/Browser/BrowserTabModel.swift`, `CHANGELOG.md`
+
 ### docs(browser): finish full-pass browser control docs
 
 - What changed: Expanded the durable Browser control docs to cover the final v1 semantics after page-aware, frame-aware, cookie, and debug-lane work. The acceptance matrix now records frame targeting and first-class DOM support, the cookie lifecycle note now explains `frameName` targeting and iframe-heavy guidance, and the architecture note now marks the landed phases as complete instead of leaving the roadmap stale.

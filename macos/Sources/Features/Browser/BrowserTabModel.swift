@@ -751,12 +751,19 @@ final class BrowserTabModel: ObservableObject {
         self.runtimeState = .runtimeUnavailable
         register(page: initialPage)
 
-        // External callers can create Browser tabs very early in app startup.
-        // If the model snapshots runtime state before global CEF init runs,
-        // the view can get stuck on the disabled placeholder and never bind
-        // the page bridge for that first tab.
+        // External callers can create Browser tabs before CEF is activated in
+        // the current app session. Kick off runtime activation asynchronously
+        // so tab creation can complete and the control-plane socket stays
+        // responsive while Chromium warms up.
         if GhoDexCEFBuildHasRuntime(), !GhoDexCEFIsInitialized() {
-            _ = GhoDexCEFInitializeGlobal()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if !GhoDexCEFIsInitialized() {
+                    _ = GhoDexCEFInitializeGlobal()
+                }
+                refreshRuntimeState()
+                syncActivePageState()
+            }
         }
 
         refreshRuntimeState()
