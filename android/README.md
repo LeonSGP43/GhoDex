@@ -12,7 +12,7 @@ Current scope:
 - a UI-facing snapshot store driven by the client state machine
 - a local client state machine that drives pairing, snapshot, subscribe, and mutation calls
 - a minimal `android/app` Gradle module with a plain-Android transport UI and `SharedPreferences` persistence
-- Google Code Scanner-based QR pairing intake so the app can scan desktop-generated pairing payloads instead of relying on manual copy/paste
+- embedded camera-based QR pairing intake so the app can scan desktop-generated pairing payloads instead of relying on manual copy/paste or Play Services
 - a checked-in Gradle wrapper so the app can be built on this machine without a global `gradle` install
 - a local self-test that still compiles and runs with `javac` and `java`
 

@@ -1,6 +1,7 @@
 package com.leongong.ghodex.androidapp;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.View;
@@ -9,10 +10,8 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
-import com.google.mlkit.vision.barcode.common.Barcode;
-import com.google.mlkit.vision.codescanner.GmsBarcodeScanner;
-import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions;
-import com.google.mlkit.vision.codescanner.GmsBarcodeScanning;
+import com.google.zxing.integration.android.IntentIntegrator;
+import com.google.zxing.integration.android.IntentResult;
 import com.leongong.ghodex.remote.GhoDexGatewayClientStateMachine;
 import com.leongong.ghodex.remote.GhoDexGatewaySessionStore;
 import com.leongong.ghodex.remote.GhoDexGatewayTcpTransport;
@@ -26,11 +25,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class MainActivity extends Activity {
+    private static final int REQUEST_SCAN_QR = 0x0A11;
+
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final AtomicLong requestCounter = new AtomicLong(1);
 
     private GatewayPreferencesStore preferencesStore;
-    private GmsBarcodeScanner barcodeScanner;
 
     private EditText hostInput;
     private EditText portInput;
@@ -52,12 +52,6 @@ public final class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         preferencesStore = new GatewayPreferencesStore(this);
-        barcodeScanner = GmsBarcodeScanning.getClient(
-            this,
-            new GmsBarcodeScannerOptions.Builder()
-                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-                .build()
-        );
         setContentView(buildContentView());
         restoreInputs();
         ensureStateMachine(true);
@@ -297,18 +291,15 @@ public final class MainActivity extends Activity {
     }
 
     private void startQrScan() {
-        setStatus("Scanning pairing QR...");
-        barcodeScanner.startScan()
-            .addOnSuccessListener(barcode -> {
-                try {
-                    GatewayQrPayload payload = GatewayQrPayload.parse(barcode.getRawValue());
-                    runOnUiThread(() -> applyScannedPairingPayload(payload));
-                } catch (Exception e) {
-                    setStatus("Scan failed: " + e.getMessage());
-                }
-            })
-            .addOnCanceledListener(() -> setStatus("Scan canceled"))
-            .addOnFailureListener(error -> setStatus("Scan failed: " + error.getMessage()));
+        setStatus("Opening camera scanner...");
+
+        IntentIntegrator integrator = new IntentIntegrator(this);
+        integrator.setDesiredBarcodeFormats(IntentIntegrator.QR_CODE);
+        integrator.setPrompt("Scan GhoDex pairing QR");
+        integrator.setBeepEnabled(false);
+        integrator.setOrientationLocked(false);
+        integrator.setRequestCode(REQUEST_SCAN_QR);
+        integrator.initiateScan();
     }
 
     private void applyScannedPairingPayload(GatewayQrPayload payload) {
@@ -372,6 +363,26 @@ public final class MainActivity extends Activity {
 
     private void setStatus(String message) {
         runOnUiThread(() -> statusView.setText("Status: " + message));
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        IntentResult result = IntentIntegrator.parseActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_SCAN_QR) {
+            if (result == null || result.getContents() == null || result.getContents().isBlank()) {
+                setStatus("Scan canceled");
+            } else {
+                try {
+                    GatewayQrPayload payload = GatewayQrPayload.parse(result.getContents());
+                    applyScannedPairingPayload(payload);
+                } catch (Exception e) {
+                    setStatus("Scan failed: " + e.getMessage());
+                }
+            }
+            return;
+        }
+
+        super.onActivityResult(requestCode, resultCode, data);
     }
 
     private TextView addLabel(LinearLayout root, String text) {

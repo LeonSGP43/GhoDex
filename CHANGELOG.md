@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(android): use embedded camera qr scanner fallback
+
+- What changed: Replaced the Play-Services-based QR scanner path with an embedded ZXing camera scanner, added camera permission to the Android manifest, and kept the existing QR payload parsing / exchange flow unchanged.
+- Why: The first scanner integration depended on a Google Play Services barcode module that was not available on the user's current device, which blocked the whole “scan to pair” path before the camera even opened.
+- Impact: `Scan Pairing QR` now launches an in-app camera scanner instead of requiring a compatible Play Services installation, so pairing works on a wider range of Android environments.
+- Verification: `git diff --check`; `cd android && ANDROID_SDK_ROOT="$HOME/Library/Android/sdk" ./gradlew :app:assembleDebug`
+- Files: `android/app/build.gradle.kts`, `android/app/src/main/AndroidManifest.xml`, `android/app/src/main/java/com/leongong/ghodex/androidapp/MainActivity.java`, `android/README.md`, `CHANGELOG.md`
+- Decision trail: Prefer an embedded scanner for this test shell because it directly matches the user's expectation of “tap button, camera opens, scan QR” and avoids external module/version coupling.
+
 ### fix(remote-pairing): size desktop qr dialog correctly
 
 - What changed: Updated the macOS remote-pairing alert to host the QR content inside a fixed-size container view and switched the QR payload serialization to compact sorted JSON so the generated code fits the dialog and remains easier to scan.
