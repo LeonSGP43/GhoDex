@@ -860,10 +860,12 @@ class AppDelegate: NSObject,
         pairingCode: String,
         expiresAt: String
     ) -> NSView {
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 410))
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.spacing = 12
         stack.alignment = .centerX
+        stack.translatesAutoresizingMaskIntoConstraints = false
 
         let imageView = NSImageView()
         imageView.imageScaling = .scaleProportionallyUpOrDown
@@ -889,7 +891,15 @@ class AppDelegate: NSObject,
         scrollView.documentView = summary
         stack.addArrangedSubview(scrollView)
 
-        return stack
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: container.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+
+        return container
     }
 
     @MainActor
@@ -1012,7 +1022,7 @@ class AppDelegate: NSObject,
 
         func serialized() throws -> String {
             let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.outputFormatting = [.sortedKeys]
             return String(decoding: try encoder.encode(self), as: UTF8.self)
         }
     }

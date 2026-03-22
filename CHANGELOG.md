@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(remote-pairing): size desktop qr dialog correctly
+
+- What changed: Updated the macOS remote-pairing alert to host the QR content inside a fixed-size container view and switched the QR payload serialization to compact sorted JSON so the generated code fits the dialog and remains easier to scan.
+- Why: The first QR dialog implementation attached a stack view directly as the alert accessory without constraining the accessory container size, which could collapse the QR image to an almost invisible height. Pretty-printed JSON also made the code denser than necessary.
+- Impact: The desktop pairing dialog now visibly renders the QR image and the payload encodes into a tighter QR symbol for phone scanning.
+- Verification: `git diff --check`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS,arch=arm64' build`
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `CHANGELOG.md`
+- Decision trail: Keep the existing alert-based UX, but give the accessory a real layout box and reduce payload size instead of introducing a new custom window just to show the QR.
+
 ### feat(remote-pairing): add qr-based desktop pairing flow
 
 - What changed: Added a desktop-side `Show Remote Pairing QR...` action that generates a short-lived pairing QR from the live gateway endpoint, added Google Code Scanner to the Android app shell, and taught the Android UI to scan a QR payload, fill `host` / `port` / `pairing_code`, then immediately exchange and refresh snapshot. Also documented the QR flow in the Android README and refreshed the blueprint status note.
