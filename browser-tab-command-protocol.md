@@ -118,6 +118,13 @@ Field notes:
 
 `newTab` returns a single tab summary for the created tab.
 
+Important semantic note:
+
+- `newTab` creates a new Browser window/controller
+- it does not append an internal page to an existing Browser tab
+- use `listPages` / `activatePage` to work with the internal pages that already
+  exist inside one Browser tab
+
 `listPages` returns a JSON array of page summaries for one Browser tab:
 
 ```json
@@ -398,6 +405,34 @@ Result notes:
 - `getAttributes` returns `BrowserDOMAttributesResult`
 - `getBoundingBox` returns `BrowserDOMBoundingBoxResult`
 - `getDOMSnapshot` returns `BrowserDOMSnapshotResult`
+
+## Error Semantics
+
+Common structured error codes:
+
+- `invalid_request`
+  - malformed JSON
+  - unsupported or missing payload keys
+  - bad `pageID`
+  - dead `browserTabID`
+- `stale_document_revision`
+  - the caller supplied `documentRevision`, but the target page has already
+    navigated to a newer document
+- `bridgeUnavailable`
+  - the page bridge is not currently bound
+- `pageNotFound`
+  - the requested page is gone
+- `internalFailure`
+  - command dispatch reached the Browser control plane, but execution failed in
+    a non-retryable way
+
+Frame-specific notes:
+
+- when `frameName` is missing or empty, the page main frame is used
+- when `frameName` names a frame that no longer exists, the command currently
+  fails with a structured Browser control error from the frame bridge
+- callers should treat frame names as live page state and rediscover them with
+  `listFrames` after navigation
 
 ### Event Subscription Lifecycle
 
