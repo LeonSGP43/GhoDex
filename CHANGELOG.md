@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### refactor(macos): align todo sidebar with system typography
+
+- What changed: Reworked the todo sidebar typography to use semantic system text styles instead of hard-coded point sizes, tightened the overall panel spacing, upgraded the header controls into cleaner circular affordances, moved the quick-add container onto a softer grouped surface, and reduced the card/border treatment so task rows rely more on spacing, native text hierarchy, and restrained status color instead of heavy fixed-size chrome.
+- Why: The previous panel looked visually cheap because it mixed many fixed font sizes with layered rounded rectangles and strong strokes. That made the sidebar feel detached from the rest of macOS and caused type proportions to stop matching the user's system text scale.
+- Impact: The todo sidebar now tracks system typography more naturally, reads less like a custom sketch and more like a native macOS panel, and the hierarchy between title, task content, metadata, and controls is cleaner.
+- Verification: `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
+- Decision trail: Prefer semantic text styles and calmer surface treatment over hand-tuned pixel sizes. When a panel has to live beside native app chrome, matching the system's proportional rhythm matters more than squeezing for a specific screenshot.
+
 ### refactor(macos): tighten todo quick-add hit areas
 
 - What changed: Shrunk the todo sidebar quick-add title field back to a compact fixed-height control, kept the optional notes field bounded, aligned the add button to the top row, and moved the add button's capsule chrome into the button label itself so the whole visible blue surface becomes the real hit target instead of only the label text area.

@@ -355,6 +355,7 @@ private struct TodoWorkspaceSidebar: View {
         formatter.timeStyle = .short
         return formatter
     }()
+    private static let surfaceCornerRadius: CGFloat = 20
 
     private var workspaceTitle: String {
         let trimmed = terminalController.titleOverride?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -402,7 +403,7 @@ private struct TodoWorkspaceSidebar: View {
             timelinePanel
             footer
         }
-        .padding(14)
+        .padding(18)
         .frame(width: 424)
         .frame(maxHeight: .infinity, alignment: .topLeading)
         .background(.ultraThinMaterial)
@@ -436,10 +437,10 @@ private struct TodoWorkspaceSidebar: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(L10n.SSHConnections.todoPanelTitle)
-                    .font(.headline.weight(.semibold))
+                    .font(.title3.weight(.semibold))
 
                 Text(workspaceTitle)
-                    .font(.caption2)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -451,20 +452,24 @@ private struct TodoWorkspaceSidebar: View {
                 appDelegate.openTodoSettings(from: parentWindow)
             } label: {
                 Image(systemName: "slider.horizontal.3")
-                    .font(.body.weight(.medium))
+                    .font(.headline.weight(.medium))
+                    .frame(width: 30, height: 30)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
+            .background(Color.white.opacity(0.03), in: Circle())
             .help(L10n.SSHConnections.todoPanelOpenSettings)
 
             Button {
                 terminalController.todoSidebarIsPresented = false
             } label: {
                 Image(systemName: "xmark")
-                    .font(.body.weight(.medium))
+                    .font(.headline.weight(.medium))
+                    .frame(width: 30, height: 30)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
+            .background(Color.white.opacity(0.03), in: Circle())
             .help(L10n.SSHConnections.todoPanelClose)
         }
     }
@@ -500,7 +505,7 @@ private struct TodoWorkspaceSidebar: View {
 
             HStack(alignment: .center, spacing: 10) {
                 Text(L10n.SSHConnections.todoSelectedDay(AITerminalTodoSettings.dayString(from: selectedDate)))
-                    .font(.caption)
+                    .font(.footnote.weight(.medium))
                     .foregroundStyle(.secondary)
 
                 Spacer(minLength: 8)
@@ -511,7 +516,7 @@ private struct TodoWorkspaceSidebar: View {
                     }
                 } label: {
                     Label(L10n.SSHConnections.todoAddNotes, systemImage: composerShowsNotes ? "text.justify" : "note.text.badge.plus")
-                        .font(.caption.weight(.semibold))
+                        .font(.footnote.weight(.semibold))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 7)
                 }
@@ -520,12 +525,8 @@ private struct TodoWorkspaceSidebar: View {
                 .background((composerShowsNotes ? Color.accentColor.opacity(0.12) : Color.white.opacity(0.045)), in: Capsule())
             }
         }
-        .padding(12)
-        .background(Color.white.opacity(0.028), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.055), lineWidth: 1)
-        )
+        .padding(14)
+        .todoPanelSurface(cornerRadius: Self.surfaceCornerRadius)
     }
 
     private var quickAddTitleField: some View {
@@ -535,7 +536,7 @@ private struct TodoWorkspaceSidebar: View {
 
             TextField(L10n.SSHConnections.todoAddTitle, text: $draftTitle, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.system(size: 20, weight: .semibold))
+                .font(.title2.weight(.semibold))
                 .focused($composerFocusField, equals: .title)
                 .onSubmit(addDraftItem)
                 .padding(.horizontal, 14)
@@ -557,7 +558,7 @@ private struct TodoWorkspaceSidebar: View {
 
             TextField(L10n.SSHConnections.todoAddNotes, text: $draftNotes, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.system(size: 15))
+                .font(.body)
                 .focused($composerFocusField, equals: .notes)
                 .onSubmit(addDraftItem)
                 .padding(.horizontal, 14)
@@ -588,7 +589,7 @@ private struct TodoWorkspaceSidebar: View {
                 persistSelection()
             }
             .buttonStyle(.plain)
-            .font(.caption2.weight(.semibold))
+            .font(.footnote.weight(.semibold))
             .foregroundStyle(Calendar.current.isDateInToday(selectedDate) ? Color.accentColor : Color.primary)
             .controlCapsule(isEmphasized: Calendar.current.isDateInToday(selectedDate))
 
@@ -607,7 +608,7 @@ private struct TodoWorkspaceSidebar: View {
             DatePicker("", selection: $selectedDate, displayedComponents: [.date])
                 .labelsHidden()
                 .datePickerStyle(.compact)
-                .scaleEffect(0.92, anchor: .trailing)
+                .scaleEffect(0.94, anchor: .trailing)
                 .onChange(of: selectedDate) { _ in
                     persistSelection()
                 }
@@ -621,28 +622,29 @@ private struct TodoWorkspaceSidebar: View {
                     .foregroundStyle(showCompletedItems ? Color.accentColor : .secondary)
             }
             .buttonStyle(.plain)
-            .help(showCompletedItems ? L10n.SSHConnections.todoHideCompletedItems : L10n.SSHConnections.todoShowCompletedItems)
+                .help(showCompletedItems ? L10n.SSHConnections.todoHideCompletedItems : L10n.SSHConnections.todoShowCompletedItems)
         }
+        .padding(.vertical, 2)
     }
 
     private var timelinePanel: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text(L10n.SSHConnections.todoTimelineTitle)
-                    .font(.caption2.weight(.semibold))
+                    .font(.footnote.weight(.semibold))
                     .foregroundStyle(.secondary)
 
                 Spacer(minLength: 8)
 
                 Text("\(visibleTodoItems.count)")
-                    .font(.caption2.weight(.medium))
+                    .font(.footnote.weight(.medium))
                     .foregroundStyle(.secondary)
             }
 
             if visibleTodoItems.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
                     Image(systemName: "checklist")
-                        .font(.title2)
+                        .font(.title3)
                         .foregroundStyle(.secondary)
 
                     Text(L10n.SSHConnections.todoEmpty)
@@ -679,10 +681,10 @@ private struct TodoWorkspaceSidebar: View {
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(selectedDateTitle)
-                        .font(.callout.weight(.semibold))
+                        .font(.headline.weight(.semibold))
 
                     Text(selectedDateSubtitle)
-                        .font(.caption2)
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
 
@@ -693,11 +695,11 @@ private struct TodoWorkspaceSidebar: View {
                     summary.totalCount,
                     summary.remainingCount
                 ))
-                .font(.caption)
+                .font(.footnote)
                 .foregroundStyle(.secondary)
 
                 Text("\(percentage)%")
-                    .font(.callout.weight(.bold))
+                    .font(.headline.weight(.bold))
             }
 
             ProgressView(value: todoDocument.completionRate)
@@ -706,7 +708,7 @@ private struct TodoWorkspaceSidebar: View {
 
             if let statusMessage, !statusMessage.isEmpty {
                 Text(statusMessage)
-                    .font(.caption)
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
             }
         }
@@ -720,7 +722,7 @@ private struct TodoWorkspaceSidebar: View {
                     label: {
                         Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
                             .foregroundStyle(item.isCompleted ? Color.green : Color.accentColor)
-                            .font(.system(size: 28, weight: .semibold))
+                            .font(.title2.weight(.semibold))
                             .frame(width: 48, height: 48)
                             .background(
                                 Circle()
@@ -735,27 +737,27 @@ private struct TodoWorkspaceSidebar: View {
                     if editingItemID == item.id {
                         TextField(L10n.SSHConnections.todoAddTitle, text: $editingTitle, axis: .vertical)
                             .textFieldStyle(.plain)
-                            .font(.system(size: 20, weight: .semibold))
+                            .font(.title3.weight(.semibold))
                             .padding(.horizontal, 14)
                             .padding(.vertical, 12)
                             .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                         TextField(L10n.SSHConnections.todoAddNotes, text: $editingNotes, axis: .vertical)
                             .textFieldStyle(.plain)
-                            .font(.system(size: 15))
+                            .font(.body)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 12)
                             .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     } else {
                         Text(item.title)
-                            .font(.system(size: 24, weight: .bold, design: .rounded))
+                            .font(.title3.weight(.semibold))
                             .strikethrough(item.isCompleted, color: .secondary)
                             .foregroundStyle(item.isCompleted ? Color.primary.opacity(0.62) : .primary)
                             .lineLimit(3)
 
                         if !item.notes.isEmpty {
                             Text(item.notes)
-                                .font(.system(size: 16, weight: .medium))
+                                .font(.body)
                                 .foregroundStyle(item.isCompleted ? Color.secondary.opacity(0.85) : Color.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .lineLimit(4)
@@ -847,14 +849,14 @@ private struct TodoWorkspaceSidebar: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "rectangle.stack.badge.person.crop")
-                    .font(.caption)
+                    .font(.footnote)
                 Text(todoAssignmentTitle(for: item))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Image(systemName: "chevron.down")
-                    .font(.caption2.weight(.bold))
+                    .font(.footnote.weight(.bold))
             }
-            .font(.caption.weight(.medium))
+            .font(.footnote.weight(.medium))
             .foregroundStyle(.secondary)
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
@@ -952,7 +954,7 @@ private struct TodoWorkspaceSidebar: View {
 
     private func metadataText(_ title: String, systemImage: String) -> some View {
         Label(title, systemImage: systemImage)
-            .font(.caption2)
+            .font(.footnote)
             .foregroundStyle(.secondary)
     }
 
@@ -964,7 +966,7 @@ private struct TodoWorkspaceSidebar: View {
     ) -> some View {
         Button(action: action) {
             Label(title, systemImage: systemImage)
-                .font(.caption.weight(.semibold))
+                .font(.footnote.weight(.semibold))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
         }
@@ -977,21 +979,30 @@ private struct TodoWorkspaceSidebar: View {
     }
 
     private func todoCardBackground(for item: AITerminalTodoItem) -> Color {
-        item.isCompleted ? Color.green.opacity(0.08) : Color.white.opacity(0.04)
+        item.isCompleted ? Color.green.opacity(0.06) : Color.white.opacity(0.025)
     }
 
     private func todoCardBorder(for item: AITerminalTodoItem) -> Color {
-        item.isCompleted ? Color.green.opacity(0.55) : Color.accentColor.opacity(0.34)
+        item.isCompleted ? Color.green.opacity(0.32) : Color.white.opacity(0.08)
     }
 }
 
 private extension View {
+    func todoPanelSurface(cornerRadius: CGFloat) -> some View {
+        self
+            .background(Color.white.opacity(0.026), in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.05), lineWidth: 1)
+            )
+    }
+
     func controlCapsule(isEmphasized: Bool = false) -> some View {
         self
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
             .background(
-                (isEmphasized ? Color.accentColor.opacity(0.14) : Color.white.opacity(0.06)),
+                (isEmphasized ? Color.accentColor.opacity(0.14) : Color.white.opacity(0.038)),
                 in: Capsule()
             )
     }
