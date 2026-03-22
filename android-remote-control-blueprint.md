@@ -24,6 +24,7 @@ Current reality:
 
 - The desktop-side gateway, sampled-read path, auth/token lifecycle, policy gate, rate limiting, TCP transport, WebSocket transport, backpressure, replay, and local performance snapshots are implemented.
 - A minimal Android client contract foundation now exists in the repo as pure Java request/resume models, but there is still no full Android app, transport binding, or UI shell in this worktree.
+- The Android app shell now includes a transport-backed screen plus QR-driven pairing intake, but it still needs richer terminal UI and real device-product polish.
 - Shannon integration is not implemented in this repo/worktree.
 - Performance instrumentation exists, but the blueprint's representative macOS acceptance measurements have not yet been recorded.
 

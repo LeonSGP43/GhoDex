@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(remote-pairing): add qr-based desktop pairing flow
+
+- What changed: Added a desktop-side `Show Remote Pairing QR...` action that generates a short-lived pairing QR from the live gateway endpoint, added Google Code Scanner to the Android app shell, and taught the Android UI to scan a QR payload, fill `host` / `port` / `pairing_code`, then immediately exchange and refresh snapshot. Also documented the QR flow in the Android README and refreshed the blueprint status note.
+- Why: The previous pairing flow required local begin-pairing plus manual copying of host, port, pairing code, and occasionally token state. That made the first-run path much harder than the actual protocol needed to be.
+- Impact: Remote pairing is now a one-scan bootstrap flow for the test app. The desktop still keeps pairing begin local-only, but the phone no longer needs manual field entry to get through exchange and snapshot.
+- Verification: `git diff --check`; `cd android && ANDROID_SDK_ROOT="$HOME/Library/Android/sdk" ./gradlew :app:assembleDebug`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS,arch=arm64' build`
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `android/app/build.gradle.kts`, `android/app/src/main/java/com/leongong/ghodex/androidapp/MainActivity.java`, `android/app/src/main/java/com/leongong/ghodex/androidapp/GatewayQrPayload.java`, `android/gradle.properties`, `android/README.md`, `android-remote-control-blueprint.md`, `CHANGELOG.md`
+- Decision trail: Keep pairing begin on the desktop and move convenience to the transport boundary. A short-lived QR payload is safer than embedding a long-lived token, and Google Code Scanner is the lightest Android integration that avoids adding camera-permission complexity to this thin app shell.
+
 ### fix(android): sync manual session inputs into active client state
 
 - What changed: Updated the Android app shell so editing `Pairing code`, `Auth token`, and observed terminal state in the form immediately reseeds the live `GhoDexGatewaySessionStore` when the host/port connection target is unchanged, instead of only persisting to `SharedPreferences`.

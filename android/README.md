@@ -12,6 +12,7 @@ Current scope:
 - a UI-facing snapshot store driven by the client state machine
 - a local client state machine that drives pairing, snapshot, subscribe, and mutation calls
 - a minimal `android/app` Gradle module with a plain-Android transport UI and `SharedPreferences` persistence
+- Google Code Scanner-based QR pairing intake so the app can scan desktop-generated pairing payloads instead of relying on manual copy/paste
 - a checked-in Gradle wrapper so the app can be built on this machine without a global `gradle` install
 - a local self-test that still compiles and runs with `javac` and `java`
 
@@ -44,6 +45,7 @@ Current files:
   - `app/src/main/AndroidManifest.xml`
   - `app/src/main/java/com/leongong/ghodex/androidapp/MainActivity.java`
   - `app/src/main/java/com/leongong/ghodex/androidapp/GatewayPreferencesStore.java`
+  - `app/src/main/java/com/leongong/ghodex/androidapp/GatewayQrPayload.java`
 
 Local verification:
 
@@ -61,6 +63,13 @@ ANDROID_SDK_ROOT="$HOME/Library/Android/sdk" ./gradlew :app:assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb shell am start -n com.leongong.ghodex.androidapp/.MainActivity
 ```
+
+QR pairing flow:
+
+1. Launch the desktop app with the gateway enabled.
+2. In the desktop app, open `Show Remote Pairing QR...`.
+3. In Android, tap `Scan Pairing QR`.
+4. The app will fill `host`, `port`, and `pairing code`, then immediately exchange and refresh snapshot.
 
 Observed local environment:
 

@@ -9,6 +9,10 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import com.google.mlkit.vision.barcode.common.Barcode;
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanner;
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions;
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning;
 import com.leongong.ghodex.remote.GhoDexGatewayClientStateMachine;
 import com.leongong.ghodex.remote.GhoDexGatewaySessionStore;
 import com.leongong.ghodex.remote.GhoDexGatewayTcpTransport;
@@ -26,6 +30,7 @@ public final class MainActivity extends Activity {
     private final AtomicLong requestCounter = new AtomicLong(1);
 
     private GatewayPreferencesStore preferencesStore;
+    private GmsBarcodeScanner barcodeScanner;
 
     private EditText hostInput;
     private EditText portInput;
@@ -47,6 +52,12 @@ public final class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         preferencesStore = new GatewayPreferencesStore(this);
+        barcodeScanner = GmsBarcodeScanning.getClient(
+            this,
+            new GmsBarcodeScannerOptions.Builder()
+                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                .build()
+        );
         setContentView(buildContentView());
         restoreInputs();
         ensureStateMachine(true);
@@ -77,6 +88,8 @@ public final class MainActivity extends Activity {
         authTokenInput = addEditText(root, "Auth token");
         terminalIdInput = addEditText(root, "Observed terminal id");
         sendTextInput = addEditText(root, "Text to send");
+
+        addButton(root, "Scan Pairing QR", ignored -> startQrScan());
 
         addButton(root, "Begin Pairing", ignored -> runAction("begin pairing", () -> {
             captureConnectionInputs();
@@ -281,6 +294,41 @@ public final class MainActivity extends Activity {
         autofillTerminalIdIfNeeded();
         authTokenInput.setText(snapshot.isAuthTokenPresent() ? nullToEmpty(sessionStore.getAuthToken()) : "");
         pairingCodeInput.setText(nullToEmpty(snapshot.getPairingCode()));
+    }
+
+    private void startQrScan() {
+        setStatus("Scanning pairing QR...");
+        barcodeScanner.startScan()
+            .addOnSuccessListener(barcode -> {
+                try {
+                    GatewayQrPayload payload = GatewayQrPayload.parse(barcode.getRawValue());
+                    runOnUiThread(() -> applyScannedPairingPayload(payload));
+                } catch (Exception e) {
+                    setStatus("Scan failed: " + e.getMessage());
+                }
+            })
+            .addOnCanceledListener(() -> setStatus("Scan canceled"))
+            .addOnFailureListener(error -> setStatus("Scan failed: " + error.getMessage()));
+    }
+
+    private void applyScannedPairingPayload(GatewayQrPayload payload) {
+        hostInput.setText(payload.host());
+        portInput.setText(Integer.toString(payload.port()));
+        pairingCodeInput.setText(payload.pairingCode());
+        authTokenInput.setText("");
+        terminalIdInput.setText("");
+        captureConnectionInputs();
+
+        runAction("scan pairing qr", () -> {
+            ensureStateMachine(false);
+            String authToken = stateMachine.exchangePairing(
+                nextRequestId("pair-exchange"),
+                payload.pairingCode()
+            );
+            runOnUiThread(() -> authTokenInput.setText(authToken));
+            stateMachine.refreshSnapshot(nextRequestId("snapshot"));
+            runOnUiThread(this::autofillTerminalIdIfNeeded);
+        });
     }
 
     private void autofillTerminalIdIfNeeded() {
