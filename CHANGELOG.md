@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(android): sync manual session inputs into active client state
+
+- What changed: Updated the Android app shell so editing `Pairing code`, `Auth token`, and observed terminal state in the form immediately reseeds the live `GhoDexGatewaySessionStore` when the host/port connection target is unchanged, instead of only persisting to `SharedPreferences`.
+- Why: The existing app reused the same state machine for repeated requests to the same host/port, but it returned early before applying newly typed session inputs. That made manual auth-token testing look broken because `Refresh Snapshot` still ran with an empty live token.
+- Impact: Manual recovery and debugging flows now work as expected. Pasted tokens and pairing codes are visible to the current session without forcing an app restart or host/port change.
+- Verification: `git diff --check`; `cd android && ANDROID_SDK_ROOT="$HOME/Library/Android/sdk" ./gradlew :app:assembleDebug`
+- Files: `android/app/src/main/java/com/leongong/ghodex/androidapp/MainActivity.java`, `CHANGELOG.md`
+- Decision trail: Keep the existing single state-machine-per-endpoint model, but make same-endpoint re-entry re-seed the live session state. That fixes the bug without introducing a heavier reconnect cycle on every button tap.
+
 ### feat(android): add gradle wrapper and verified emulator install path
 
 - What changed: Added a checked-in Gradle wrapper under `android/`, suppressed the known AGP 8.5.2 compileSdk 35 warning in `gradle.properties`, and updated the Android README/blueprint to record the verified local build, install, and launch flow against the existing `Medium_Phone_API_35` emulator.

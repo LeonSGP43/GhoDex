@@ -174,6 +174,8 @@ public final class MainActivity extends Activity {
         int port = storedState.port();
 
         if (!force && stateMachine != null && host.equals(currentHost) && port == currentPort) {
+            syncStateMachineInputs(storedState);
+            runOnUiThread(this::renderSnapshot);
             return;
         }
 
@@ -204,6 +206,19 @@ public final class MainActivity extends Activity {
             persistSession();
             runOnUiThread(this::renderSnapshot);
         });
+    }
+
+    private void syncStateMachineInputs(GatewayPreferencesStore.StoredState storedState) {
+        if (sessionStore == null) {
+            return;
+        }
+
+        storedState.seedSessionStore(sessionStore);
+
+        String observedTerminalId = storedState.observedTerminalId();
+        if (observedTerminalId != null && !observedTerminalId.isEmpty()) {
+            sessionStore.resumeState().observeTerminal(observedTerminalId);
+        }
     }
 
     private void runAction(String label, BackgroundAction action) {
