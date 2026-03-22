@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### docs(browser): finish full-pass browser control docs
+
+- What changed: Expanded the durable Browser control docs to cover the final v1 semantics after page-aware, frame-aware, cookie, and debug-lane work. The acceptance matrix now records frame targeting and first-class DOM support, the cookie lifecycle note now explains `frameName` targeting and iframe-heavy guidance, and the architecture note now marks the landed phases as complete instead of leaving the roadmap stale.
+- Why: The implementation had effectively reached the intended browser-control v1 surface, but the durable docs still lagged behind the code. That made it too easy for future agents or external clients to misunderstand the `tab/page/frame` model, miss the new DOM verbs, or assume the architecture roadmap was still mostly aspirational.
+- Impact: Future agents and local automation clients now have one consistent documentation set that matches the shipped Browser control surface. This should reduce false negatives during acceptance and reduce the chance of re-opening already-landed work because the architecture or acceptance notes looked stale.
+- Verification: `rg -n "newTab|listFrames|query|waitForSelector|stale_document_revision|frameName" browser-tab-command-protocol.md browser-tab-acceptance-matrix.md browser-tab-cookie-lifecycle.md browser-tab-control-architecture.md`
+- Files: `browser-tab-acceptance-matrix.md`, `browser-tab-cookie-lifecycle.md`, `browser-tab-control-architecture.md`, `CHANGELOG.md`
+
 ### feat(browser): add first-class external DOM commands
 
 - What changed: Promoted the existing Browser DOM verbs to top-level `browser.tab.v1` commands by adding `query`, `click`, `typeText`, `waitForSelector`, `getText`, `getAttributes`, `getBoundingBox`, and `getDOMSnapshot`. `ScriptBrowserTab` now routes those commands directly through the typed Browser control plane with optional `pageID`, `frameName`, `documentRevision`, and `timeoutMS`, and the protocol guide documents the new payload/result shapes with CLI examples.

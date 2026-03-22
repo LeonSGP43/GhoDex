@@ -231,31 +231,31 @@ Error requirements:
 
 ### Phase 1: Skeleton
 
-- [ ] add typed request, response, event, and error types in Swift
-- [ ] add page-level bridge routing in `BrowserTabModel`
-- [ ] extend `GhoDexCEFView` with JS execution entry points
-- [ ] keep unsupported commands returning structured errors instead of silent
+- [x] add typed request, response, event, and error types in Swift
+- [x] add page-level bridge routing in `BrowserTabModel`
+- [x] extend `GhoDexCEFView` with JS execution entry points
+- [x] keep unsupported commands returning structured errors instead of silent
       no-ops
 
 ### Phase 2: Transport
 
-- [ ] add request IDs, timeout handling, and pending-request cancellation
-- [ ] add browser-to-renderer message transport for structured results
-- [ ] invalidate pending commands on page close and top-level navigation resets
+- [x] add request IDs, timeout handling, and pending-request cancellation
+- [x] add browser-to-renderer message transport for structured results
+- [x] invalidate pending commands on page close and top-level navigation resets
 
 ### Phase 3: Page Agent
 
-- [ ] inject a renderer page agent with selector and DOM helpers
-- [ ] implement `query`, `click`, `type`, and `waitForSelector`
-- [ ] expose structured DOM snapshots and console streams
+- [x] inject a renderer page agent with selector and DOM helpers
+- [x] implement `query`, `click`, `type`, and `waitForSelector`
+- [x] expose structured DOM snapshots and console streams
 
 ### Phase 4: Adapters
 
-- [ ] add one internal command entry point that future CLI and AppleScript
+- [x] add one internal command entry point that future CLI and AppleScript
       adapters can call
-- [ ] expose browser-specific scripting verbs without leaking raw renderer
+- [x] expose browser-specific scripting verbs without leaking raw renderer
       internals into every caller
-- [ ] keep the external client contract documented in
+- [x] keep the external client contract documented in
       `browser-tab-command-protocol.md` as commands and event kinds evolve
 
 ### Phase 5: Optional Debug Lane
@@ -266,12 +266,12 @@ Error requirements:
 
 ## Atomic Commit Roadmap
 
-1. `docs(browser): record browser tab control architecture`
-2. `feat(browser): add browser control-plane skeleton`
-3. `feat(cef): add request-response JS execution transport`
-4. `feat(browser): add page-agent DOM command primitives`
-5. `feat(browser): add browser inspection events and subscriptions`
-6. `feat(debug): add optional CDP diagnostics lane`
+1. `docs(browser): record browser tab control architecture` — complete
+2. `feat(browser): add browser control-plane skeleton` — complete
+3. `feat(cef): add request-response JS execution transport` — complete
+4. `feat(browser): add page-agent DOM command primitives` — complete
+5. `feat(browser): add browser inspection events and subscriptions` — complete
+6. `feat(debug): add optional CDP diagnostics lane` — complete
 
 ## Decision Trail
 

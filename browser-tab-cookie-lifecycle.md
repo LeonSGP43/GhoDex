@@ -154,7 +154,18 @@ Current targeting behavior:
 - `browserTabID` must resolve to a live Browser tab
 - when `pageID` is omitted, the active page inside that Browser tab is used
 - when `pageID` is present, it must be a UUID from `listPages`
+- when `frameName` is provided, the cookie helper executes in that named frame's
+  JavaScript context
+- even with `frameName`, cookie scope is still determined by the document/origin
+  that owns `document.cookie`, not by a separate frame-private cookie jar
 - results are scoped to the selected page's current `document.cookie` view
+
+Recommended client guidance for iframe-heavy pages:
+
+- pass `browserTabID`
+- pass explicit `pageID`
+- pass the latest `documentRevision`
+- pass `frameName` after discovering it through `listFrames`
 
 ## `getCookies`
 
