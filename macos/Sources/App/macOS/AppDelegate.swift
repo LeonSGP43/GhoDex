@@ -1,9 +1,11 @@
 import AppKit
+import CoreImage
 import SwiftUI
 import UserNotifications
 import OSLog
 import Sparkle
 import GhoDexKit
+import Darwin
 
 class AppDelegate: NSObject,
                     ObservableObject,
@@ -321,6 +323,8 @@ class AppDelegate: NSObject,
     /// The custom app icon image that is currently in use.
     @Published private(set) var appIcon: NSImage?
 
+    private var remotePairingQRMenuItem: NSMenuItem?
+
     override init() {
 #if DEBUG
         ghostty = Ghostty.App(configPath: ProcessInfo.processInfo.environment["GHOSTTY_CONFIG_PATH"])
@@ -476,6 +480,12 @@ class AppDelegate: NSObject,
         // Setup our menu
         setupMenuLocalization()
         setupMenuImages()
+        installRemotePairingQRMenuItemIfNeeded()
+        if shouldShowRemotePairingQROnLaunch() {
+            DispatchQueue.main.async { [weak self] in
+                self?.showRemotePairingQRCode(nil)
+            }
+        }
 
         // Setup signal handlers
         setupSignals()
@@ -754,6 +764,295 @@ class AppDelegate: NSObject,
         installTodoWorkspaceMenuItemIfNeeded()
         menuTodoWorkspace?.title = L10n.SSHConnections.todoPanelTitle
         menuSaveWorkspace?.title = L10n.AITerminalManager.saveWorkspaceAction
+    }
+
+    private func installRemotePairingQRMenuItemIfNeeded() {
+        guard remotePairingQRMenuItem == nil,
+              let appMenu = NSApp.mainMenu?.item(at: 0)?.submenu else {
+            return
+        }
+
+        let menuItem = NSMenuItem(
+            title: "Show Remote Pairing QR...",
+            action: #selector(showRemotePairingQRCode(_:)),
+            keyEquivalent: ""
+        )
+        menuItem.target = self
+        menuItem.setImageIfDesired(systemSymbolName: "qrcode")
+
+        let insertionIndex: Int
+        if let menuSettingsPanel, appMenu.index(of: menuSettingsPanel) >= 0 {
+            insertionIndex = appMenu.index(of: menuSettingsPanel) + 1
+        } else {
+            insertionIndex = min(4, appMenu.items.count)
+        }
+
+        appMenu.insertItem(menuItem, at: insertionIndex)
+        remotePairingQRMenuItem = menuItem
+    }
+
+    private func shouldShowRemotePairingQROnLaunch() -> Bool {
+        guard let rawValue = ProcessInfo.processInfo.environment["GHODEX_CONTROL_HARNESS_PAIRING_QR_ON_LAUNCH"] else {
+            return false
+        }
+
+        switch rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "1", "true", "yes", "on":
+            return true
+        default:
+            return false
+        }
+    }
+
+    @objc
+    func showRemotePairingQRCode(_ sender: Any?) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            do {
+                try await self.presentRemotePairingQRCode()
+            } catch {
+                self.presentRemotePairingQRCodeError(error.localizedDescription)
+            }
+        }
+    }
+
+    @MainActor
+    private func presentRemotePairingQRCode() async throws {
+        guard controlHarnessGateway.configuration.isEnabled else {
+            throw RemotePairingQRCodeError.gatewayDisabled
+        }
+
+        guard let port = controlHarnessGateway.listenerPort, port > 0 else {
+            throw RemotePairingQRCodeError.gatewayListenerUnavailable
+        }
+
+        let host = try preferredGatewayPairingHost()
+        let pairing = try await controlHarnessAuth.beginPairing(
+            client: "android-qr",
+            requestedScopes: ["observe", "mutate"]
+        )
+
+        let payload = RemotePairingQRCodePayload(
+            host: host,
+            port: port,
+            pairingCode: pairing.pairingCode,
+            expiresAt: pairing.expiresAt,
+            scopes: pairing.scopes
+        )
+        let payloadJSON = try payload.serialized()
+
+        let alert = NSAlert()
+        alert.messageText = "Scan Remote Pairing QR"
+        alert.informativeText = "Scan this QR code in GhoDex Remote. It will fill the host, port, and short-lived pairing code, then exchange and refresh automatically."
+        alert.addButton(withTitle: "Close")
+        alert.addButton(withTitle: "Copy Pairing JSON")
+        alert.addButton(withTitle: "Copy Pairing Code")
+        alert.accessoryView = makeRemotePairingAccessoryView(
+            payloadJSON: payloadJSON,
+            host: host,
+            port: port,
+            pairingCode: pairing.pairingCode,
+            expiresAt: pairing.expiresAt
+        )
+
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+        switch response {
+        case .alertSecondButtonReturn:
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(payloadJSON, forType: .string)
+        case .alertThirdButtonReturn:
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(pairing.pairingCode, forType: .string)
+        default:
+            break
+        }
+    }
+
+    @MainActor
+    private func makeRemotePairingAccessoryView(
+        payloadJSON: String,
+        host: String,
+        port: UInt16,
+        pairingCode: String,
+        expiresAt: String
+    ) -> NSView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.spacing = 12
+        stack.alignment = .centerX
+
+        let imageView = NSImageView()
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.image = makeRemotePairingQRCodeImage(from: payloadJSON)
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        imageView.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        imageView.heightAnchor.constraint(equalToConstant: 260).isActive = true
+        stack.addArrangedSubview(imageView)
+
+        let summary = NSTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 110))
+        summary.isEditable = false
+        summary.isSelectable = true
+        summary.drawsBackground = false
+        summary.string = """
+        host: \(host):\(port)
+        pairing_code: \(pairingCode)
+        expires_at: \(expiresAt)
+        """
+
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 320, height: 110))
+        scrollView.hasVerticalScroller = true
+        scrollView.borderType = .bezelBorder
+        scrollView.documentView = summary
+        stack.addArrangedSubview(scrollView)
+
+        return stack
+    }
+
+    @MainActor
+    private func makeRemotePairingQRCodeImage(from payloadJSON: String) -> NSImage? {
+        guard let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
+        filter.setValue(Data(payloadJSON.utf8), forKey: "inputMessage")
+        filter.setValue("M", forKey: "inputCorrectionLevel")
+
+        guard let outputImage = filter.outputImage?.transformed(by: .init(scaleX: 8, y: 8)) else {
+            return nil
+        }
+
+        let representation = NSCIImageRep(ciImage: outputImage)
+        let image = NSImage(size: representation.size)
+        image.addRepresentation(representation)
+        return image
+    }
+
+    private func preferredGatewayPairingHost() throws -> String {
+        let listenHost = controlHarnessGateway.configuration.listenHost
+        switch listenHost {
+        case "127.0.0.1", "localhost", "::1":
+            throw RemotePairingQRCodeError.loopbackOnlyListener
+        case "0.0.0.0", "::", "":
+            if let override = ProcessInfo.processInfo.environment["GHODEX_CONTROL_HARNESS_PAIRING_QR_HOST"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               override.isEmpty == false {
+                return override
+            }
+            guard let address = firstNonLoopbackIPv4Address() else {
+                throw RemotePairingQRCodeError.noAdvertisableAddress
+            }
+            return address
+        default:
+            if let override = ProcessInfo.processInfo.environment["GHODEX_CONTROL_HARNESS_PAIRING_QR_HOST"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               override.isEmpty == false {
+                return override
+            }
+            return listenHost
+        }
+    }
+
+    private func firstNonLoopbackIPv4Address() -> String? {
+        var addressList: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&addressList) == 0, let firstAddress = addressList else {
+            return nil
+        }
+        defer { freeifaddrs(addressList) }
+
+        var cursor: UnsafeMutablePointer<ifaddrs>? = firstAddress
+        while let current = cursor {
+            defer { cursor = current.pointee.ifa_next }
+
+            guard let socketAddress = current.pointee.ifa_addr else {
+                continue
+            }
+
+            let family = socketAddress.pointee.sa_family
+            if family != UInt8(AF_INET) {
+                continue
+            }
+
+            let flags = Int32(current.pointee.ifa_flags)
+            if (flags & IFF_LOOPBACK) != 0 {
+                continue
+            }
+
+            var hostBuffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            let result = getnameinfo(
+                socketAddress,
+                socklen_t(socketAddress.pointee.sa_len),
+                &hostBuffer,
+                socklen_t(hostBuffer.count),
+                nil,
+                0,
+                NI_NUMERICHOST
+            )
+            if result == 0 {
+                let address = String(cString: hostBuffer)
+                if address.isEmpty == false {
+                    return address
+                }
+            }
+        }
+
+        return nil
+    }
+
+    @MainActor
+    private func presentRemotePairingQRCodeError(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = "Remote Pairing QR Unavailable"
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
+    private struct RemotePairingQRCodePayload: Encodable {
+        let version = 1
+        let kind = "ghodex.gateway.pairing"
+        let transport = "tcp"
+        let host: String
+        let port: UInt16
+        let pairingCode: String
+        let expiresAt: String
+        let scopes: [String]
+
+        enum CodingKeys: String, CodingKey {
+            case version
+            case kind
+            case transport
+            case host
+            case port
+            case pairingCode = "pairing_code"
+            case expiresAt = "expires_at"
+            case scopes
+        }
+
+        func serialized() throws -> String {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            return String(decoding: try encoder.encode(self), as: UTF8.self)
+        }
+    }
+
+    private enum RemotePairingQRCodeError: LocalizedError {
+        case gatewayDisabled
+        case gatewayListenerUnavailable
+        case loopbackOnlyListener
+        case noAdvertisableAddress
+
+        var errorDescription: String? {
+            switch self {
+            case .gatewayDisabled:
+                return "The control gateway is disabled. Relaunch GhoDex with GHODEX_CONTROL_HARNESS_GATEWAY_ENABLED=1 first."
+            case .gatewayListenerUnavailable:
+                return "The control gateway listener port is not available yet."
+            case .loopbackOnlyListener:
+                return "The control gateway is bound to loopback only. Use GHODEX_CONTROL_HARNESS_GATEWAY_HOST=0.0.0.0 or a specific LAN IP before generating a pairing QR."
+            case .noAdvertisableAddress:
+                return "No non-loopback IPv4 address was found for the pairing QR."
+            }
+        }
     }
 
     /// Setup all the images for our menu items.
