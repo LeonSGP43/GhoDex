@@ -6,7 +6,7 @@ All notable changes to this project are documented in this file.
 
 ### refactor(macos): tighten todo quick-add hit areas
 
-- What changed: Shrunk the todo sidebar quick-add title field back to a compact fixed-height control, kept the optional notes field bounded, aligned the add button to the top row, and gave the add button an explicit fixed frame plus full rounded-rect hit target so the whole visible button surface responds to clicks instead of only the label text area.
+- What changed: Shrunk the todo sidebar quick-add title field back to a compact fixed-height control, kept the optional notes field bounded, aligned the add button to the top row, and moved the add button's capsule chrome into the button label itself so the whole visible blue surface becomes the real hit target instead of only the label text area.
 - Why: The previous quick-add bar let the title field stretch into an oversized block and the add button still felt fiddly because the visible chrome was larger than the reliably clickable region.
 - Impact: The capture area now reads like a compact input row again, and adding a task feels much more direct because the whole button body is clickable.
 - Verification: `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`

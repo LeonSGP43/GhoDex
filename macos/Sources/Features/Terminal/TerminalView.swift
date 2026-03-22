@@ -475,19 +475,21 @@ private struct TodoWorkspaceSidebar: View {
                 quickAddTitleField
 
                 Button(action: addDraftItem) {
-                    Label(L10n.SSHConnections.todoAddAction, systemImage: "plus")
-                        .font(.headline.weight(.semibold))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.accentColor.opacity(0.16))
+
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(Color.accentColor.opacity(0.3), lineWidth: 1)
+
+                        Label(L10n.SSHConnections.todoAddAction, systemImage: "plus")
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    .frame(width: 132, height: 52)
+                    .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(Color.accentColor)
-                .frame(width: 132, height: 52)
-                .background(Color.accentColor.opacity(0.16), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color.accentColor.opacity(0.3), lineWidth: 1)
-                )
-                .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .disabled(draftTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
