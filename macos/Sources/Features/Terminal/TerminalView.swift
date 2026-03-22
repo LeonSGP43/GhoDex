@@ -311,6 +311,11 @@ private struct TodoWorkspaceOverlay: View {
 }
 
 private struct TodoWorkspaceSidebar: View {
+    private enum ComposerFocusField: Hashable {
+        case title
+        case notes
+    }
+
     @ObservedObject var store: AITerminalManagerStore
     @ObservedObject var terminalController: BaseTerminalController
 
@@ -320,6 +325,7 @@ private struct TodoWorkspaceSidebar: View {
     @State private var selectedDate = Date.now
     @State private var showCompletedItems = true
     @State private var todoDocument = AITerminalTodoDayDocument()
+    @State private var orderedTodoItems: [AITerminalTodoItem] = []
     @State private var draftTitle = ""
     @State private var draftNotes = ""
     @State private var composerShowsNotes = false
@@ -328,9 +334,27 @@ private struct TodoWorkspaceSidebar: View {
     @State private var editingNotes = ""
     @State private var statusMessage: String?
     @State private var contentIsVisible = false
-    @FocusState private var composerTitleFieldFocused: Bool
+    @FocusState private var composerFocusField: ComposerFocusField?
 
     private static let sidebarAnimation = Animation.spring(response: 0.24, dampingFraction: 0.9)
+    private static let weekdayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.setLocalizedDateFormatFromTemplate("EEEE")
+        return formatter
+    }()
+    private static let daySubtitleFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.setLocalizedDateFormatFromTemplate("MMM d, yyyy")
+        return formatter
+    }()
+    private static let timelineFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter
+    }()
 
     private var workspaceTitle: String {
         let trimmed = terminalController.titleOverride?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -345,13 +369,17 @@ private struct TodoWorkspaceSidebar: View {
     }
 
     private var summary: AITerminalTodoWorkspaceProgressSummary {
-        store.todoWorkspaceSummary(for: terminalController.workspaceID, on: selectedDate)
+        let assigned = orderedTodoItems.filter { $0.assignedWorkspaceID == terminalController.workspaceID }
+        return .init(
+            workspaceID: terminalController.workspaceID,
+            completedCount: assigned.filter(\.isCompleted).count,
+            totalCount: assigned.count
+        )
     }
 
     private var visibleTodoItems: [AITerminalTodoItem] {
-        let ordered = todoDocument.orderedItems
-        guard !showCompletedItems else { return ordered }
-        return ordered.filter { !$0.isCompleted }
+        guard !showCompletedItems else { return orderedTodoItems }
+        return orderedTodoItems.filter { !$0.isCompleted }
     }
 
     private var selectedDateTitle: String {
@@ -359,17 +387,11 @@ private struct TodoWorkspaceSidebar: View {
             return L10n.SSHConnections.todoDateToday
         }
 
-        let formatter = DateFormatter()
-        formatter.locale = .current
-        formatter.setLocalizedDateFormatFromTemplate("EEEE")
-        return formatter.string(from: selectedDate).capitalized
+        return Self.weekdayFormatter.string(from: selectedDate).capitalized
     }
 
     private var selectedDateSubtitle: String {
-        let formatter = DateFormatter()
-        formatter.locale = .current
-        formatter.setLocalizedDateFormatFromTemplate("MMM d, yyyy")
-        return formatter.string(from: selectedDate)
+        return Self.daySubtitleFormatter.string(from: selectedDate)
     }
 
     var body: some View {
@@ -391,15 +413,13 @@ private struct TodoWorkspaceSidebar: View {
         }
         .opacity(contentIsVisible ? 1 : 0.001)
         .offset(x: contentIsVisible ? 0 : (sidebarEdge == .leading ? -14 : 14))
-        .animation(Self.sidebarAnimation, value: composerShowsNotes)
-        .animation(Self.sidebarAnimation, value: editingItemID)
         .animation(Self.sidebarAnimation, value: contentIsVisible)
         .onAppear {
             syncFromSettings()
             withAnimation(Self.sidebarAnimation) {
                 contentIsVisible = true
             }
-            composerTitleFieldFocused = true
+            composerFocusField = .title
         }
         .onDisappear {
             contentIsVisible = false
@@ -452,15 +472,7 @@ private struct TodoWorkspaceSidebar: View {
     private var quickAddBar: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center, spacing: 10) {
-                TextField(L10n.SSHConnections.todoAddTitle, text: $draftTitle, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 20, weight: .semibold))
-                    .focused($composerTitleFieldFocused)
-                    .onSubmit(addDraftItem)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                quickAddTitleField
 
                 Button(action: addDraftItem) {
                     Label(L10n.SSHConnections.todoAddAction, systemImage: "plus")
@@ -479,13 +491,7 @@ private struct TodoWorkspaceSidebar: View {
             }
 
             if composerShowsNotes {
-                TextField(L10n.SSHConnections.todoAddNotes, text: $draftNotes, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 15))
-                    .onSubmit(addDraftItem)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
-                    .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                quickAddNotesField
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
 
@@ -517,6 +523,47 @@ private struct TodoWorkspaceSidebar: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(Color.white.opacity(0.055), lineWidth: 1)
         )
+    }
+
+    private var quickAddTitleField: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.white.opacity(0.045))
+
+            TextField(L10n.SSHConnections.todoAddTitle, text: $draftTitle, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.system(size: 20, weight: .semibold))
+                .focused($composerFocusField, equals: .title)
+                .onSubmit(addDraftItem)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onTapGesture {
+            composerFocusField = .title
+        }
+    }
+
+    private var quickAddNotesField: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.white.opacity(0.045))
+
+            TextField(L10n.SSHConnections.todoAddNotes, text: $draftNotes, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.system(size: 15))
+                .focused($composerFocusField, equals: .notes)
+                .onSubmit(addDraftItem)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onTapGesture {
+            composerFocusField = .notes
+        }
     }
 
     private var controlBar: some View {
@@ -597,7 +644,7 @@ private struct TodoWorkspaceSidebar: View {
                         .foregroundStyle(.secondary)
 
                     Button(L10n.SSHConnections.todoAddAction) {
-                        composerTitleFieldFocused = true
+                        composerFocusField = .title
                     }
                     .buttonStyle(.borderless)
                 }
@@ -820,12 +867,12 @@ private struct TodoWorkspaceSidebar: View {
     }
 
     private func todoTimelineLabel(for item: AITerminalTodoItem) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .none
-        formatter.timeStyle = .short
-        let created = formatter.string(from: item.createdAt)
+        let created = Self.timelineFormatter.string(from: item.createdAt)
         if let completedAt = item.completedAt {
-            return L10n.SSHConnections.todoTimelineCreatedCompleted(created, formatter.string(from: completedAt))
+            return L10n.SSHConnections.todoTimelineCreatedCompleted(
+                created,
+                Self.timelineFormatter.string(from: completedAt)
+            )
         }
         return L10n.SSHConnections.todoTimelineCreated(created)
     }
@@ -838,7 +885,9 @@ private struct TodoWorkspaceSidebar: View {
     }
 
     private func refreshDocument() {
-        todoDocument = store.todoDocument(for: selectedDate)
+        let document = store.todoDocument(for: selectedDate)
+        todoDocument = document
+        orderedTodoItems = document.orderedItems
     }
 
     private func addDraftItem() {
@@ -856,7 +905,7 @@ private struct TodoWorkspaceSidebar: View {
         draftNotes = ""
         composerShowsNotes = false
         statusMessage = nil
-        composerTitleFieldFocused = true
+        composerFocusField = .title
     }
 
     private func persistSelection() {

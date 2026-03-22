@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### refactor(macos): smooth todo sidebar interactions
+
+- What changed: Reduced repeated todo-sidebar work during render by caching the ordered day items in view state, deriving workspace progress from that cached list, reusing shared date/time formatters, and trimming the sidebar's always-on animation surface down to the actual entrance transition; also made the quick-add title and notes regions fully tappable so clicking anywhere inside their rounded input areas focuses the field instead of only the text glyph area.
+- Why: The panel still felt sticky during typing and repeated status changes because each refresh was doing unnecessary re-sorting, formatter creation, and broad animation work. On top of that, the quick-add hit target felt wrong because the visible input surface was larger than the actual focusable area.
+- Impact: Todo capture and row updates feel more fluid, the sidebar spends less time doing avoidable per-render work, and the quick-add inputs now behave like proper full-surface fields.
+- Verification: `git diff --check`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild test -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' -derivedDataPath /tmp/ghodex-todo-panel-20260322-0952 -only-testing:'GhosttyTests/AITerminalManagerTests'`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
+- Decision trail: Favor local cheap state for the panel over repeated derived work from the store during every body recomputation, and make visible interaction surfaces match their actual focus behavior so the UI feels native instead of fiddly.
+
 ### refactor(macos): speed up todo sidebar capture and motion
 
 - What changed: Reworked the todo sidebar into an always-ready quick-add flow with a persistent title field, return-to-add submission, optional inline notes, a larger primary add button, larger completion hit targets, a direct complete/reset pill on every row, and a unified sidebar content entrance animation; also changed the default tab quick-look card setting to off so the main tab view stays clean until explicitly enabled.
