@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### refactor(macos): tighten todo quick-add hit areas
+
+- What changed: Shrunk the todo sidebar quick-add title field back to a compact fixed-height control, kept the optional notes field bounded, aligned the add button to the top row, and gave the add button an explicit fixed frame plus full rounded-rect hit target so the whole visible button surface responds to clicks instead of only the label text area.
+- Why: The previous quick-add bar let the title field stretch into an oversized block and the add button still felt fiddly because the visible chrome was larger than the reliably clickable region.
+- Impact: The capture area now reads like a compact input row again, and adding a task feels much more direct because the whole button body is clickable.
+- Verification: `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
+- Decision trail: In the capture row, visible size and interactive size need to match exactly. Favor explicit control heights and a true button-sized hit region over flexible layout that looks larger than it behaves.
+
 ### refactor(macos): smooth todo sidebar interactions
 
 - What changed: Reduced repeated todo-sidebar work during render by caching the ordered day items in view state, deriving workspace progress from that cached list, reusing shared date/time formatters, and trimming the sidebar's always-on animation surface down to the actual entrance transition; also made the quick-add title and notes regions fully tappable so clicking anywhere inside their rounded input areas focuses the field instead of only the text glyph area.

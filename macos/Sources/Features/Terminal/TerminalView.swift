@@ -471,22 +471,23 @@ private struct TodoWorkspaceSidebar: View {
 
     private var quickAddBar: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
                 quickAddTitleField
 
                 Button(action: addDraftItem) {
                     Label(L10n.SSHConnections.todoAddAction, systemImage: "plus")
                         .font(.headline.weight(.semibold))
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 13)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.accentColor)
+                .frame(width: 132, height: 52)
                 .background(Color.accentColor.opacity(0.16), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
                         .stroke(Color.accentColor.opacity(0.3), lineWidth: 1)
                 )
+                .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .disabled(draftTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
@@ -539,6 +540,7 @@ private struct TodoWorkspaceSidebar: View {
                 .padding(.vertical, 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(height: 52)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .onTapGesture {
@@ -560,6 +562,7 @@ private struct TodoWorkspaceSidebar: View {
                 .padding(.vertical, 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(minHeight: 52)
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .onTapGesture {
             composerFocusField = .notes
