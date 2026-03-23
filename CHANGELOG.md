@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(macos): keep todo notes focus and newline behavior plain
+
+- What changed: Hardened the todo quick-add notes editor so focus requests retry across the notes field's animated mount, and changed `Shift+Enter` newline insertion to write a raw line break instead of routing through AppKit text insertion. The notes text view now also disables automatic dash, quote, link, replacement, and completion behaviors that were leaking rich-text style edits into plain task notes.
+- Why: Expanding from the title field with `Shift+Enter` could still miss the real caret because the notes editor was not always attached to a window on the first focus attempt. When the notes text began with list-like prefixes such as `-`, AppKit could auto-continue that formatting on newline, which is wrong for this plain-text todo capture flow.
+- Impact: `Shift+Enter` from the title field now lands the insertion caret in notes more reliably, and line breaks inside notes stay plain instead of auto-inserting extra bullet prefixes.
+- Verification: `git diff --check`; `cd macos && nu build.nu --configuration Debug --action build`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
+- Decision trail: The notes composer should behave like a focused plain-text capture surface, not a smart document editor. Retrying focus at the AppKit boundary is safer than assuming the animated mount is ready on the first pass, and raw newline insertion is more reliable than letting `NSTextView` reinterpret note content as a list.
+
 ### fix(macos): restore isolated debug test builds in worktrees
 
 - What changed: Fixed `macos/build.nu` to target the `GhoDex` Xcode project and scheme by default, auto-bootstrap `macos/GhoDexKit.xcframework` when a clean worktree does not have the linked library yet, and pin Xcode `DerivedData` to `macos/build/DerivedData` so build caches stay local to the current worktree. Updated `macos/AGENTS.md` to document the corrected app name, output path, xcframework bootstrap behavior, and the intended `Debug` test-build workflow.

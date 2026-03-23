@@ -1238,6 +1238,14 @@ private struct TodoComposerNotesField: NSViewRepresentable {
         textView.allowsUndo = true
         textView.font = .preferredFont(forTextStyle: .body)
         textView.textColor = .labelColor
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticDataDetectionEnabled = false
+        textView.isAutomaticLinkDetectionEnabled = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isAutomaticTextCompletionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isContinuousSpellCheckingEnabled = false
         textView.textContainerInset = NSSize(width: 0, height: 4)
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.lineFragmentPadding = 0
@@ -1260,18 +1268,7 @@ private struct TodoComposerNotesField: NSViewRepresentable {
         }
 
         guard isFocused else { return }
-        DispatchQueue.main.async {
-            guard context.coordinator.lastAppliedFocusRequestID != focusRequestID else { return }
-            guard let window = textView.window else { return }
-            if window.firstResponder !== textView {
-                window.makeFirstResponder(textView)
-            }
-            let insertionPoint = NSRange(location: textView.string.count, length: 0)
-            if textView.selectedRange() != insertionPoint {
-                textView.setSelectedRange(insertionPoint)
-            }
-            context.coordinator.lastAppliedFocusRequestID = focusRequestID
-        }
+        context.coordinator.scheduleFocusAttempt()
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -1291,15 +1288,52 @@ private struct TodoComposerNotesField: NSViewRepresentable {
             text.wrappedValue = textView.string
         }
 
+        func scheduleFocusAttempt(remainingAttempts: Int = 8) {
+            DispatchQueue.main.async { [weak self] in
+                self?.applyFocus(remainingAttempts: remainingAttempts)
+            }
+        }
+
+        private func applyFocus(remainingAttempts: Int) {
+            guard lastAppliedFocusRequestID != focusRequestID else { return }
+            guard let textView else { return }
+            guard let window = textView.window else {
+                if remainingAttempts > 0 {
+                    scheduleFocusAttempt(remainingAttempts: remainingAttempts - 1)
+                }
+                return
+            }
+            if window.firstResponder !== textView && !window.makeFirstResponder(textView) {
+                if remainingAttempts > 0 {
+                    scheduleFocusAttempt(remainingAttempts: remainingAttempts - 1)
+                }
+                return
+            }
+            let insertionPoint = NSRange(location: textView.string.count, length: 0)
+            if textView.selectedRange() != insertionPoint {
+                textView.setSelectedRange(insertionPoint)
+            }
+            lastAppliedFocusRequestID = focusRequestID
+        }
+
+        private func insertPlainNewline(into textView: NSTextView) {
+            let selectedRange = textView.selectedRange()
+            guard textView.shouldChangeText(in: selectedRange, replacementString: "\n") else { return }
+            textView.textStorage?.replaceCharacters(in: selectedRange, with: "\n")
+            let nextLocation = selectedRange.location + 1
+            textView.setSelectedRange(NSRange(location: nextLocation, length: 0))
+            textView.didChangeText()
+        }
+
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             if commandSelector == #selector(NSResponder.insertLineBreak(_:)) {
-                textView.insertText("\n", replacementRange: textView.selectedRange())
+                insertPlainNewline(into: textView)
                 return true
             }
 
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
                 if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
-                    textView.insertText("\n", replacementRange: textView.selectedRange())
+                    insertPlainNewline(into: textView)
                 } else {
                     onSubmit()
                 }
