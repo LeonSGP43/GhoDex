@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(macos): sync stale unfinished todo pointers into today
+
+- What changed: Added a `Sync Unfinished` action for today's todo panel that scans older day files, brings unresolved tasks into today as pointer rows instead of cloning them as new tasks, marks those rows as stale carry-forwards in the UI, and routes edit/complete/assignment changes from the pointer row back to the original source task.
+- Why: Older unfinished tasks should stay visible in today's working list, but duplicating them as brand-new items would corrupt the task history and make completion drift across days.
+- Impact: Today's list can now surface stale work with one click while preserving the original task as the single source of truth. Carry-forward rows stay visually distinct and keep source-day context.
+- Verification: `git diff --check`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild test -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' -only-testing:'GhosttyTests/AITerminalManagerTests'`
+- Files: `macos/Sources/Features/AI Terminal Manager/AITerminalManagerModels.swift`, `macos/Sources/Features/AI Terminal Manager/AITerminalManagerStore.swift`, `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`, `CHANGELOG.md`
+- Decision trail: Treat stale carry-forward rows as references with their own placement in today's list, but always resolve state and mutations against the original task. That preserves history and prevents the same unfinished work from splitting into diverging copies across multiple day files.
+
 ### fix(macos): restore todo notes focus after shift-return
 
 - What changed: Added an explicit composer focus-request token so the todo sidebar can re-issue focus even when the target field has not changed, and wired the quick-add title, notes, validation, empty-state CTA, and notes toggle through that shared focus path.

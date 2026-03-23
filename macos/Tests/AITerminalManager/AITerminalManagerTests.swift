@@ -1104,6 +1104,115 @@ struct AITerminalManagerTests {
         #expect(reloaded.items.first(where: { $0.id == unrelatedID })?.assignedWorkspaceID == otherWorkspaceID)
     }
 
+    @Test @MainActor func storeSyncsIncompleteTodoItemsIntoTodayAsPointers() throws {
+        let tempConfigURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+        let tempTodoRootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ghodex-stale-sync-\(UUID().uuidString)", isDirectory: true)
+
+        defer {
+            try? FileManager.default.removeItem(at: tempConfigURL)
+            try? FileManager.default.removeItem(at: tempTodoRootURL)
+        }
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempConfigURL
+        )
+
+        _ = try #require(store.initializeTodoWorkspace(rootPath: tempTodoRootURL.path))
+        let staleDay = Date(timeIntervalSince1970: 1_710_892_800)
+        let today = Date(timeIntervalSince1970: 1_711_152_000)
+        let staleDayString = AITerminalTodoSettings.dayString(from: staleDay)
+
+        let staleAdded = try #require(store.addTodoItem(
+            title: "Carry me forward",
+            notes: "still open",
+            for: staleDay
+        ))
+        let completedAdded = try #require(store.addTodoItem(
+            title: "Already done",
+            notes: "",
+            for: staleDay
+        ))
+        let staleID = try #require(staleAdded.items.first?.id)
+        let completedID = try #require(completedAdded.items.last?.id)
+        _ = try #require(store.setTodoItemCompleted(id: completedID, isCompleted: true, for: staleDay))
+
+        #expect(store.syncableStaleTodoPointerCount(into: today) == 1)
+        #expect(try #require(store.syncIncompleteTodoPointers(into: today)) == 1)
+        #expect(store.syncableStaleTodoPointerCount(into: today) == 0)
+
+        let todayDocument = store.todoDocument(for: today)
+        #expect(todayDocument.items.count == 1)
+
+        let pointer = try #require(todayDocument.items.first)
+        #expect(pointer.id != staleID)
+        #expect(pointer.isCarryForwardPointer)
+        #expect(pointer.sourceItem == .init(day: staleDayString, itemID: staleID))
+        #expect(pointer.title == "Carry me forward")
+        #expect(pointer.notes == "still open")
+        #expect(pointer.createdAt == staleAdded.items.first?.createdAt)
+
+        #expect(try #require(store.syncIncompleteTodoPointers(into: today)) == 0)
+        #expect(store.todoDocument(for: today).items.count == 1)
+    }
+
+    @Test @MainActor func pointerMutationsUpdateTheOriginalTodoItem() throws {
+        let tempConfigURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+        let tempTodoRootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ghodex-stale-pointer-mutation-\(UUID().uuidString)", isDirectory: true)
+
+        defer {
+            try? FileManager.default.removeItem(at: tempConfigURL)
+            try? FileManager.default.removeItem(at: tempTodoRootURL)
+        }
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempConfigURL
+        )
+
+        _ = try #require(store.initializeTodoWorkspace(rootPath: tempTodoRootURL.path))
+        let staleDay = Date(timeIntervalSince1970: 1_710_892_800)
+        let today = Date(timeIntervalSince1970: 1_711_152_000)
+
+        let staleAdded = try #require(store.addTodoItem(
+            title: "Old title",
+            notes: "old notes",
+            for: staleDay
+        ))
+        let staleID = try #require(staleAdded.items.first?.id)
+
+        _ = try #require(store.syncIncompleteTodoPointers(into: today))
+        let pointerID = try #require(store.todoDocument(for: today).items.first?.id)
+
+        _ = try #require(store.updateTodoItem(
+            id: pointerID,
+            title: "Updated from today",
+            notes: "notes from today",
+            for: today
+        ))
+        _ = try #require(store.setTodoItemCompleted(
+            id: pointerID,
+            isCompleted: true,
+            for: today
+        ))
+
+        let staleDocument = store.todoDocument(for: staleDay)
+        let todayDocument = store.todoDocument(for: today)
+
+        #expect(staleDocument.items.first(where: { $0.id == staleID })?.title == "Updated from today")
+        #expect(staleDocument.items.first(where: { $0.id == staleID })?.notes == "notes from today")
+        #expect(staleDocument.items.first(where: { $0.id == staleID })?.isCompleted == true)
+        #expect(todayDocument.items.first(where: { $0.id == pointerID })?.title == "Updated from today")
+        #expect(todayDocument.items.first(where: { $0.id == pointerID })?.isCompleted == true)
+        #expect(todayDocument.items.first(where: { $0.id == pointerID })?.sourceItem?.itemID == staleID)
+    }
+
     @Test @MainActor func initializeWorkspaceMigratesLegacyLearnScriptCommandTemplate() throws {
         let tempConfigURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)

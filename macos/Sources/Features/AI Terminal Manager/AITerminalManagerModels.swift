@@ -584,6 +584,7 @@ struct AITerminalTodoSettings: Codable, Hashable, Sendable {
 }
 
 struct AITerminalTodoItem: Identifiable, Codable, Hashable, Sendable {
+    var sourceItem: AITerminalTodoSourceReference?
     let id: UUID
     var title: String
     var notes: String
@@ -595,6 +596,7 @@ struct AITerminalTodoItem: Identifiable, Codable, Hashable, Sendable {
     var sortOrder: Int
 
     init(
+        sourceItem: AITerminalTodoSourceReference? = nil,
         id: UUID = UUID(),
         title: String,
         notes: String = "",
@@ -605,6 +607,7 @@ struct AITerminalTodoItem: Identifiable, Codable, Hashable, Sendable {
         updatedAt: Date = .now,
         sortOrder: Int = 0
     ) {
+        self.sourceItem = sourceItem
         self.id = id
         self.title = title
         self.notes = notes
@@ -614,6 +617,20 @@ struct AITerminalTodoItem: Identifiable, Codable, Hashable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.sortOrder = sortOrder
+    }
+
+    var isCarryForwardPointer: Bool {
+        sourceItem != nil
+    }
+}
+
+struct AITerminalTodoSourceReference: Codable, Hashable, Sendable {
+    var day: String
+    var itemID: UUID
+
+    init(day: String, itemID: UUID) {
+        self.day = AITerminalTodoSettings.normalizedDateAnchor(day)
+        self.itemID = itemID
     }
 }
 

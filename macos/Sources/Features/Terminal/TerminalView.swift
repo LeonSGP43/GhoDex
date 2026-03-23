@@ -335,6 +335,7 @@ private struct TodoWorkspaceSidebar: View {
     @State private var statusMessage: String?
     @State private var contentIsVisible = false
     @State private var composerFocusRequestID = UUID()
+    @State private var syncableStaleTodoCount = 0
     @FocusState private var composerFocusField: ComposerFocusField?
 
     private static let sidebarAnimation = Animation.spring(response: 0.24, dampingFraction: 0.9)
@@ -387,6 +388,10 @@ private struct TodoWorkspaceSidebar: View {
     private var composerNeedsTitle: Bool {
         draftTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
             !draftNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var selectedDateIsToday: Bool {
+        Calendar.current.isDateInToday(selectedDate)
     }
 
     private var selectedDateTitle: String {
@@ -631,8 +636,26 @@ private struct TodoWorkspaceSidebar: View {
             }
             .buttonStyle(.plain)
             .font(.footnote.weight(.semibold))
-            .foregroundStyle(Calendar.current.isDateInToday(selectedDate) ? Color.accentColor : Color.primary)
-            .controlCapsule(isEmphasized: Calendar.current.isDateInToday(selectedDate))
+            .foregroundStyle(selectedDateIsToday ? Color.accentColor : Color.primary)
+            .controlCapsule(isEmphasized: selectedDateIsToday)
+
+            if selectedDateIsToday {
+                Button(action: syncStaleTodoPointersIntoToday) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.down.circle")
+                        Text(L10n.SSHConnections.todoSyncStaleAction)
+                        if syncableStaleTodoCount > 0 {
+                            Text("\(syncableStaleTodoCount)")
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(syncableStaleTodoCount > 0 ? Color.primary : .secondary)
+                .controlCapsule(isEmphasized: syncableStaleTodoCount > 0)
+                .disabled(syncableStaleTodoCount == 0)
+            }
 
             Button {
                 selectedDate = Calendar.current.date(byAdding: .day, value: 1, to: selectedDate) ?? selectedDate
@@ -804,6 +827,10 @@ private struct TodoWorkspaceSidebar: View {
                                 .lineLimit(4)
                         }
 
+                        if let stalePointerLabel = todoStalePointerLabel(for: item) {
+                            metadataText(stalePointerLabel, systemImage: "arrow.turn.down.right")
+                        }
+
                         metadataText(todoTimelineLabel(for: item), systemImage: "clock")
                     }
                 }
@@ -925,6 +952,14 @@ private struct TodoWorkspaceSidebar: View {
         return L10n.SSHConnections.todoTimelineCreated(created)
     }
 
+    private func todoStalePointerLabel(for item: AITerminalTodoItem) -> String? {
+        guard let sourceReference = item.sourceItem else { return nil }
+        guard let sourceDate = AITerminalTodoSettings.date(fromDayString: sourceReference.day) else {
+            return L10n.SSHConnections.todoStalePointer(sourceReference.day)
+        }
+        return L10n.SSHConnections.todoStalePointer(Self.daySubtitleFormatter.string(from: sourceDate))
+    }
+
     private func syncFromSettings() {
         let settings = store.todoSettings
         showCompletedItems = settings.showCompletedItems
@@ -936,6 +971,7 @@ private struct TodoWorkspaceSidebar: View {
         let document = store.todoDocument(for: selectedDate)
         todoDocument = document
         orderedTodoItems = document.orderedItems
+        refreshStaleTodoSyncState()
     }
 
     private func addDraftItem() {
@@ -983,9 +1019,25 @@ private struct TodoWorkspaceSidebar: View {
         }
     }
 
+    private func refreshStaleTodoSyncState() {
+        syncableStaleTodoCount = selectedDateIsToday ? store.syncableStaleTodoPointerCount(into: selectedDate) : 0
+    }
+
     private func requestComposerFocus(_ field: ComposerFocusField) {
         composerFocusField = field
         composerFocusRequestID = UUID()
+    }
+
+    private func syncStaleTodoPointersIntoToday() {
+        guard let syncedCount = store.syncIncompleteTodoPointers(into: selectedDate) else {
+            statusMessage = store.lastError
+            return
+        }
+
+        statusMessage = syncedCount > 0
+            ? L10n.SSHConnections.todoSyncStaleSuccess(syncedCount)
+            : L10n.SSHConnections.todoSyncStaleEmpty
+        refreshDocument()
     }
 
     private func assignTodoItem(_ id: UUID, to workspaceID: UUID?) {
@@ -1037,11 +1089,23 @@ private struct TodoWorkspaceSidebar: View {
     }
 
     private func todoCardBackground(for item: AITerminalTodoItem) -> Color {
-        item.isCompleted ? Color.green.opacity(0.06) : Color.white.opacity(0.025)
+        if item.isCompleted {
+            return Color.green.opacity(0.06)
+        }
+        if item.isCarryForwardPointer {
+            return Color.orange.opacity(0.045)
+        }
+        return Color.white.opacity(0.025)
     }
 
     private func todoCardBorder(for item: AITerminalTodoItem) -> Color {
-        item.isCompleted ? Color.green.opacity(0.32) : Color.white.opacity(0.08)
+        if item.isCompleted {
+            return Color.green.opacity(0.32)
+        }
+        if item.isCarryForwardPointer {
+            return Color.orange.opacity(0.2)
+        }
+        return Color.white.opacity(0.08)
     }
 }
 

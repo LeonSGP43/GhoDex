@@ -42,6 +42,16 @@ final class AITerminalManagerStore: ObservableObject {
         var hasSentPassword: Bool
     }
 
+    private struct ResolvedTodoSourceState {
+        var reference: AITerminalTodoSourceReference
+        var item: AITerminalTodoItem
+    }
+
+    private struct TodoSyncCandidate {
+        var reference: AITerminalTodoSourceReference
+        var item: AITerminalTodoItem
+    }
+
     private enum ExternalHeartbeatTaskAction: String, Codable {
         case enqueue
         case cancel
@@ -487,24 +497,16 @@ final class AITerminalManagerStore: ObservableObject {
 
     func todoDocument(for date: Date) -> AITerminalTodoDayDocument {
         do {
-            let path = configuration.todoSettings.dayFilePath(for: date)
-            let cacheKey = todoDocumentCacheKey(for: path)
-            let document: AITerminalTodoDayDocument
-            if let cached = todoDocumentCache[cacheKey] {
-                document = cached
-            } else {
-                document = try Self.loadTodoDocument(
-                    at: path,
-                    date: AITerminalTodoSettings.dayString(from: date)
-                )
-                todoDocumentCache[cacheKey] = document
-            }
+            let dayString = AITerminalTodoSettings.dayString(from: date)
+            let document = try rawTodoDocument(forDayString: dayString)
+            let refreshed = refreshedTodoDocument(document)
+            cacheTodoDocument(refreshed)
             lastError = nil
-            return document
+            return refreshed
         } catch {
             lastError = error.localizedDescription
             let fallback = AITerminalTodoDayDocument(date: AITerminalTodoSettings.dayString(from: date))
-            todoDocumentCache[todoDocumentCacheKey(for: configuration.todoSettings.dayFilePath(for: date))] = fallback
+            cacheTodoDocument(fallback)
             return fallback
         }
     }
@@ -528,6 +530,8 @@ final class AITerminalManagerStore: ObservableObject {
                 notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
                 sortOrder: nextSortOrder
             ))
+        }.map { _ in
+            self.todoDocument(for: date)
         }
     }
 
@@ -544,12 +548,23 @@ final class AITerminalManagerStore: ObservableObject {
             return nil
         }
 
-        return mutateTodoDocument(for: date) { document in
-            guard let index = document.items.firstIndex(where: { $0.id == id }) else { return }
+        let dayString = AITerminalTodoSettings.dayString(from: date)
+        guard let target = resolvedTodoMutationTarget(for: id, on: dayString),
+              let targetDate = AITerminalTodoSettings.date(fromDayString: target.day) else {
+            lastError = "Todo item not found."
+            return nil
+        }
+
+        guard mutateTodoDocument(for: targetDate, mutation: { document in
+            guard let index = document.items.firstIndex(where: { $0.id == target.itemID }) else { return }
             document.items[index].title = trimmedTitle
             document.items[index].notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
             document.items[index].updatedAt = .now
+        }) != nil else {
+            return nil
         }
+
+        return todoDocument(for: date)
     }
 
     @discardableResult
@@ -558,12 +573,23 @@ final class AITerminalManagerStore: ObservableObject {
         isCompleted: Bool,
         for date: Date
     ) -> AITerminalTodoDayDocument? {
-        mutateTodoDocument(for: date) { document in
-            guard let index = document.items.firstIndex(where: { $0.id == id }) else { return }
+        let dayString = AITerminalTodoSettings.dayString(from: date)
+        guard let target = resolvedTodoMutationTarget(for: id, on: dayString),
+              let targetDate = AITerminalTodoSettings.date(fromDayString: target.day) else {
+            lastError = "Todo item not found."
+            return nil
+        }
+
+        guard mutateTodoDocument(for: targetDate, mutation: { document in
+            guard let index = document.items.firstIndex(where: { $0.id == target.itemID }) else { return }
             document.items[index].isCompleted = isCompleted
             document.items[index].completedAt = isCompleted ? .now : nil
             document.items[index].updatedAt = .now
+        }) != nil else {
+            return nil
         }
+
+        return todoDocument(for: date)
     }
 
     @discardableResult
@@ -572,10 +598,68 @@ final class AITerminalManagerStore: ObservableObject {
         to workspaceID: UUID?,
         for date: Date
     ) -> AITerminalTodoDayDocument? {
-        mutateTodoDocument(for: date) { document in
-            guard let index = document.items.firstIndex(where: { $0.id == id }) else { return }
+        let dayString = AITerminalTodoSettings.dayString(from: date)
+        guard let target = resolvedTodoMutationTarget(for: id, on: dayString),
+              let targetDate = AITerminalTodoSettings.date(fromDayString: target.day) else {
+            lastError = "Todo item not found."
+            return nil
+        }
+
+        guard mutateTodoDocument(for: targetDate, mutation: { document in
+            guard let index = document.items.firstIndex(where: { $0.id == target.itemID }) else { return }
             document.items[index].assignedWorkspaceID = workspaceID
             document.items[index].updatedAt = .now
+        }) != nil else {
+            return nil
+        }
+
+        return todoDocument(for: date)
+    }
+
+    @discardableResult
+    func syncIncompleteTodoPointers(into date: Date = .now) -> Int? {
+        let dayString = AITerminalTodoSettings.dayString(from: date)
+
+        do {
+            let candidates = try staleTodoSyncCandidates(into: dayString)
+            guard !candidates.isEmpty else {
+                lastError = nil
+                return 0
+            }
+
+            guard mutateTodoDocument(for: date, mutation: { document in
+                var nextSortOrder = (document.items.map(\.sortOrder).max() ?? -1) + 1
+                for candidate in candidates {
+                    document.items.append(.init(
+                        sourceItem: candidate.reference,
+                        title: candidate.item.title,
+                        notes: candidate.item.notes,
+                        assignedWorkspaceID: candidate.item.assignedWorkspaceID,
+                        isCompleted: candidate.item.isCompleted,
+                        completedAt: candidate.item.completedAt,
+                        createdAt: candidate.item.createdAt,
+                        updatedAt: candidate.item.updatedAt,
+                        sortOrder: nextSortOrder
+                    ))
+                    nextSortOrder += 1
+                }
+            }) != nil else {
+                return nil
+            }
+
+            return candidates.count
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    func syncableStaleTodoPointerCount(into date: Date = .now) -> Int {
+        do {
+            return try staleTodoSyncCandidates(into: AITerminalTodoSettings.dayString(from: date)).count
+        } catch {
+            lastError = error.localizedDescription
+            return 0
         }
     }
 
@@ -3632,29 +3716,171 @@ final class AITerminalManagerStore: ObservableObject {
         }
     }
 
+    private func todoDocumentPath(forDayString dayString: String) -> String {
+        URL(fileURLWithPath: configuration.todoSettings.workspaceRootPath, isDirectory: true)
+            .appendingPathComponent("days", isDirectory: true)
+            .appendingPathComponent("\(AITerminalTodoSettings.normalizedDateAnchor(dayString)).json", isDirectory: false)
+            .path
+    }
+
+    private func cacheTodoDocument(_ document: AITerminalTodoDayDocument) {
+        let path = todoDocumentPath(forDayString: document.date)
+        todoDocumentCache[todoDocumentCacheKey(for: path)] = document
+    }
+
+    private func rawTodoDocument(forDayString dayString: String) throws -> AITerminalTodoDayDocument {
+        let normalizedDayString = AITerminalTodoSettings.normalizedDateAnchor(dayString)
+        let path = todoDocumentPath(forDayString: normalizedDayString)
+        let cacheKey = todoDocumentCacheKey(for: path)
+        if let cached = todoDocumentCache[cacheKey] {
+            return cached
+        }
+
+        let document = try Self.loadTodoDocument(at: path, date: normalizedDayString)
+        todoDocumentCache[cacheKey] = document
+        return document
+    }
+
+    private func refreshedTodoDocument(_ document: AITerminalTodoDayDocument) -> AITerminalTodoDayDocument {
+        var refreshed = document
+
+        for index in refreshed.items.indices {
+            guard let sourceReference = refreshed.items[index].sourceItem,
+                  let resolvedSource = resolvedTodoSourceState(for: sourceReference) else {
+                continue
+            }
+
+            refreshed.items[index] = .init(
+                sourceItem: resolvedSource.reference,
+                id: refreshed.items[index].id,
+                title: resolvedSource.item.title,
+                notes: resolvedSource.item.notes,
+                assignedWorkspaceID: resolvedSource.item.assignedWorkspaceID,
+                isCompleted: resolvedSource.item.isCompleted,
+                completedAt: resolvedSource.item.completedAt,
+                createdAt: resolvedSource.item.createdAt,
+                updatedAt: resolvedSource.item.updatedAt,
+                sortOrder: refreshed.items[index].sortOrder
+            )
+        }
+
+        return refreshed
+    }
+
+    private func resolvedTodoSourceState(
+        for reference: AITerminalTodoSourceReference,
+        visited: Set<String> = []
+    ) -> ResolvedTodoSourceState? {
+        let visitKey = todoSourceReferenceKey(reference)
+        guard !visited.contains(visitKey) else { return nil }
+
+        guard let sourceDocument = try? rawTodoDocument(forDayString: reference.day),
+              let sourceItem = sourceDocument.items.first(where: { $0.id == reference.itemID }) else {
+            return nil
+        }
+
+        if let nestedReference = sourceItem.sourceItem,
+           let resolvedNested = resolvedTodoSourceState(
+                for: nestedReference,
+                visited: visited.union([visitKey])
+           ) {
+            return resolvedNested
+        }
+
+        return .init(reference: reference, item: sourceItem)
+    }
+
+    private func resolvedTodoMutationTarget(
+        for id: UUID,
+        on dayString: String
+    ) -> AITerminalTodoSourceReference? {
+        guard let item = try? rawTodoDocument(forDayString: dayString).items.first(where: { $0.id == id }) else {
+            return nil
+        }
+
+        if let sourceReference = item.sourceItem {
+            return resolvedTodoSourceState(for: sourceReference)?.reference ?? sourceReference
+        }
+
+        return .init(day: dayString, itemID: id)
+    }
+
+    private func staleTodoSyncCandidates(into dayString: String) throws -> [TodoSyncCandidate] {
+        let normalizedDayString = AITerminalTodoSettings.normalizedDateAnchor(dayString)
+        let destinationDocument = try rawTodoDocument(forDayString: normalizedDayString)
+        var existingReferences = Set(
+            destinationDocument.items.compactMap { $0.sourceItem.map(todoSourceReferenceKey) }
+        )
+        var candidates: [TodoSyncCandidate] = []
+
+        for url in try todoDayFileURLs(before: normalizedDayString) {
+            let sourceDayString = url.deletingPathExtension().lastPathComponent
+            let sourceDocument = try rawTodoDocument(forDayString: sourceDayString)
+
+            for item in sourceDocument.orderedItems where !item.isCompleted {
+                let resolvedSource: ResolvedTodoSourceState
+                if let sourceReference = item.sourceItem,
+                   let resolved = resolvedTodoSourceState(for: sourceReference) {
+                    resolvedSource = resolved
+                } else {
+                    resolvedSource = .init(
+                        reference: .init(day: sourceDayString, itemID: item.id),
+                        item: item
+                    )
+                }
+
+                let referenceKey = todoSourceReferenceKey(resolvedSource.reference)
+                if existingReferences.contains(referenceKey) || resolvedSource.item.isCompleted {
+                    continue
+                }
+                existingReferences.insert(referenceKey)
+                candidates.append(.init(reference: resolvedSource.reference, item: resolvedSource.item))
+            }
+        }
+
+        return candidates
+    }
+
+    private func todoDayFileURLs(before dayString: String) throws -> [URL] {
+        let daysURL = URL(fileURLWithPath: configuration.todoSettings.workspaceRootPath, isDirectory: true)
+            .appendingPathComponent("days", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: daysURL.path) else {
+            return []
+        }
+
+        return try FileManager.default.contentsOfDirectory(
+            at: daysURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+        .filter { $0.pathExtension == "json" }
+        .filter { $0.deletingPathExtension().lastPathComponent < dayString }
+        .sorted { lhs, rhs in
+            lhs.deletingPathExtension().lastPathComponent < rhs.deletingPathExtension().lastPathComponent
+        }
+    }
+
+    private func todoSourceReferenceKey(_ reference: AITerminalTodoSourceReference) -> String {
+        "\(reference.day)#\(reference.itemID.uuidString.lowercased())"
+    }
+
     private func mutateTodoDocument(
         for date: Date,
         mutation: (inout AITerminalTodoDayDocument) -> Void
     ) -> AITerminalTodoDayDocument? {
         do {
             let dayString = AITerminalTodoSettings.dayString(from: date)
-            let path = configuration.todoSettings.dayFilePath(for: date)
-            let cacheKey = todoDocumentCacheKey(for: path)
-            var document: AITerminalTodoDayDocument
-            if let cached = todoDocumentCache[cacheKey] {
-                document = cached
-            } else {
-                document = try Self.loadTodoDocument(at: path, date: dayString)
-            }
+            let path = todoDocumentPath(forDayString: dayString)
+            var document = try rawTodoDocument(forDayString: dayString)
             let original = document
             mutation(&document)
             guard document != original else {
-                todoDocumentCache[cacheKey] = document
+                cacheTodoDocument(document)
                 lastError = nil
                 return document
             }
             document.updatedAt = .now
-            todoDocumentCache[cacheKey] = document
+            cacheTodoDocument(document)
             if Self.isRunningTests {
                 try Self.saveTodoDocument(document, to: path)
             } else {
@@ -3670,15 +3896,7 @@ final class AITerminalManagerStore: ObservableObject {
     }
 
     private func todoDocumentSnapshot(for date: Date) -> AITerminalTodoDayDocument {
-        let dayString = AITerminalTodoSettings.dayString(from: date)
-        let path = configuration.todoSettings.dayFilePath(for: date)
-        let cacheKey = todoDocumentCacheKey(for: path)
-        if let cached = todoDocumentCache[cacheKey] {
-            return cached
-        }
-        let document = (try? Self.loadTodoDocument(at: path, date: dayString)) ?? .init(date: dayString)
-        todoDocumentCache[cacheKey] = document
-        return document
+        todoDocument(for: date)
     }
 
     private func bumpTodoRevision() {

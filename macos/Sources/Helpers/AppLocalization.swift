@@ -297,6 +297,10 @@ enum AppLocalization {
         "ssh.connections.todo.assignment_unassigned": "Unassigned",
         "ssh.connections.todo.assignment_unavailable": "Assigned Tab Unavailable",
         "ssh.connections.todo.title_required": "Enter a task title before saving notes.",
+        "ssh.connections.todo.sync_stale_action": "Sync Unfinished",
+        "ssh.connections.todo.sync_stale_empty": "No stale unfinished tasks need to be synced into today.",
+        "ssh.connections.todo.sync_stale_success": "Synced %d stale unfinished task pointer(s) into today.",
+        "ssh.connections.todo.stale_pointer": "Stale unfinished from %@",
         "ssh.connections.learning.title": "Learning Settings",
         "ssh.connections.learning.subtitle": "Configure how selected terminal text is summarized and written into your project knowledge files.",
         "ssh.connections.learning.enable": "Enable Learn action",
@@ -669,6 +673,10 @@ enum AppLocalization {
         "ssh.connections.todo.assignment_unassigned": "未分配",
         "ssh.connections.todo.assignment_unavailable": "已分配标签页不可用",
         "ssh.connections.todo.title_required": "请先填写任务标题，再保存备注。",
+        "ssh.connections.todo.sync_stale_action": "同步未完成",
+        "ssh.connections.todo.sync_stale_empty": "没有需要同步到今天的陈旧未完成任务。",
+        "ssh.connections.todo.sync_stale_success": "已将 %d 个陈旧未完成任务指针同步到今天。",
+        "ssh.connections.todo.stale_pointer": "陈旧未完成任务，来自 %@",
         "ssh.connections.learning.title": "学习参数",
         "ssh.connections.learning.subtitle": "配置如何把终端选中文本总结并写入项目知识文件。",
         "ssh.connections.learning.enable": "启用学习动作",
@@ -1429,6 +1437,14 @@ enum L10n {
         nonisolated static var todoAssignmentUnassigned: String { AppLocalization.localizedString("ssh.connections.todo.assignment_unassigned") }
         nonisolated static var todoAssignmentUnavailable: String { AppLocalization.localizedString("ssh.connections.todo.assignment_unavailable") }
         nonisolated static var todoTitleRequired: String { AppLocalization.localizedString("ssh.connections.todo.title_required") }
+        nonisolated static var todoSyncStaleAction: String { AppLocalization.localizedString("ssh.connections.todo.sync_stale_action") }
+        nonisolated static var todoSyncStaleEmpty: String { AppLocalization.localizedString("ssh.connections.todo.sync_stale_empty") }
+        nonisolated static func todoSyncStaleSuccess(_ count: Int) -> String {
+            AppLocalization.localizedString("ssh.connections.todo.sync_stale_success", count)
+        }
+        nonisolated static func todoStalePointer(_ day: String) -> String {
+            AppLocalization.localizedString("ssh.connections.todo.stale_pointer", day)
+        }
         nonisolated static var learningTitle: String { AppLocalization.localizedString("ssh.connections.learning.title") }
         nonisolated static var learningSubtitle: String { AppLocalization.localizedString("ssh.connections.learning.subtitle") }
         nonisolated static var learningEnable: String { AppLocalization.localizedString("ssh.connections.learning.enable") }
