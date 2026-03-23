@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(macos): restore todo notes focus after shift-return
+
+- What changed: Added an explicit composer focus-request token so the todo sidebar can re-issue focus even when the target field has not changed, and wired the quick-add title, notes, validation, empty-state CTA, and notes toggle through that shared focus path.
+- Why: `Shift+Enter` could expand the notes area without actually moving the insertion caret into the notes editor because the focus state was already `.notes` before the AppKit text view finished mounting.
+- Impact: Expanding notes from the title field now lands the real cursor inside the notes editor consistently instead of forcing an extra click.
+- Verification: `git diff --check`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
+- Decision trail: SwiftUI focus state alone was not enough once the notes editor appeared through an animated conditional mount. A separate focus-request identity lets the AppKit bridge treat repeated focus requests as real work instead of ignoring them as unchanged state.
+
 ### fix(macos): tighten todo composer keyboard flow
 
 - What changed: Switched the todo quick-add composer onto AppKit-backed title and notes inputs so the panel can place a real insertion caret in the title field when `Cmd+Shift+M` opens it, submit the title with `Enter`, expand into notes with `Shift+Enter`, keep `Shift+Enter` as a newline inside notes, and block save with a red validation state when notes exist without a title.

@@ -334,6 +334,7 @@ private struct TodoWorkspaceSidebar: View {
     @State private var editingNotes = ""
     @State private var statusMessage: String?
     @State private var contentIsVisible = false
+    @State private var composerFocusRequestID = UUID()
     @FocusState private var composerFocusField: ComposerFocusField?
 
     private static let sidebarAnimation = Animation.spring(response: 0.24, dampingFraction: 0.9)
@@ -425,7 +426,7 @@ private struct TodoWorkspaceSidebar: View {
             withAnimation(Self.sidebarAnimation) {
                 contentIsVisible = true
             }
-            composerFocusField = .title
+            requestComposerFocus(.title)
         }
         .onDisappear {
             contentIsVisible = false
@@ -526,7 +527,7 @@ private struct TodoWorkspaceSidebar: View {
                     withAnimation(Self.sidebarAnimation) {
                         composerShowsNotes.toggle()
                     }
-                    composerFocusField = willShowNotes ? .notes : .title
+                    requestComposerFocus(willShowNotes ? .notes : .title)
                 } label: {
                     Label(L10n.SSHConnections.todoAddNotes, systemImage: composerShowsNotes ? "text.justify" : "note.text.badge.plus")
                         .font(.footnote.weight(.semibold))
@@ -560,12 +561,13 @@ private struct TodoWorkspaceSidebar: View {
                 placeholder: L10n.SSHConnections.todoAddTitle,
                 text: $draftTitle,
                 isFocused: composerFocusField == .title,
+                focusRequestID: composerFocusRequestID,
                 onSubmit: addDraftItem,
                 onShiftEnter: {
                     withAnimation(Self.sidebarAnimation) {
                         composerShowsNotes = true
                     }
-                    composerFocusField = .notes
+                    requestComposerFocus(.notes)
                 }
             )
             .padding(.horizontal, 14)
@@ -576,7 +578,7 @@ private struct TodoWorkspaceSidebar: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .onTapGesture {
-            composerFocusField = .title
+            requestComposerFocus(.title)
         }
     }
 
@@ -598,6 +600,7 @@ private struct TodoWorkspaceSidebar: View {
             TodoComposerNotesField(
                 text: $draftNotes,
                 isFocused: composerFocusField == .notes,
+                focusRequestID: composerFocusRequestID,
                 onSubmit: addDraftItem
             )
             .padding(.horizontal, 12)
@@ -606,7 +609,7 @@ private struct TodoWorkspaceSidebar: View {
         .frame(minHeight: 76)
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .onTapGesture {
-            composerFocusField = .notes
+            requestComposerFocus(.notes)
         }
     }
 
@@ -689,7 +692,7 @@ private struct TodoWorkspaceSidebar: View {
                         .foregroundStyle(.secondary)
 
                     Button(L10n.SSHConnections.todoAddAction) {
-                        composerFocusField = .title
+                        requestComposerFocus(.title)
                     }
                     .buttonStyle(.borderless)
                 }
@@ -938,7 +941,7 @@ private struct TodoWorkspaceSidebar: View {
     private func addDraftItem() {
         if draftTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             statusMessage = L10n.SSHConnections.todoTitleRequired
-            composerFocusField = .title
+            requestComposerFocus(.title)
             return
         }
 
@@ -956,7 +959,7 @@ private struct TodoWorkspaceSidebar: View {
         draftNotes = ""
         composerShowsNotes = false
         statusMessage = nil
-        composerFocusField = .title
+        requestComposerFocus(.title)
     }
 
     private func persistSelection() {
@@ -978,6 +981,11 @@ private struct TodoWorkspaceSidebar: View {
         if !composerNeedsTitle && statusMessage == L10n.SSHConnections.todoTitleRequired {
             statusMessage = nil
         }
+    }
+
+    private func requestComposerFocus(_ field: ComposerFocusField) {
+        composerFocusField = field
+        composerFocusRequestID = UUID()
     }
 
     private func assignTodoItem(_ id: UUID, to workspaceID: UUID?) {
@@ -1041,6 +1049,7 @@ private struct TodoComposerTitleField: NSViewRepresentable {
     let placeholder: String
     @Binding var text: String
     let isFocused: Bool
+    let focusRequestID: UUID
     let onSubmit: () -> Void
     let onShiftEnter: () -> Void
 
@@ -1071,6 +1080,7 @@ private struct TodoComposerTitleField: NSViewRepresentable {
         context.coordinator.text = $text
         context.coordinator.onSubmit = onSubmit
         context.coordinator.onShiftEnter = onShiftEnter
+        context.coordinator.focusRequestID = focusRequestID
 
         if nsView.stringValue != text {
             nsView.stringValue = text
@@ -1078,6 +1088,7 @@ private struct TodoComposerTitleField: NSViewRepresentable {
 
         guard isFocused else { return }
         DispatchQueue.main.async {
+            guard context.coordinator.lastAppliedFocusRequestID != focusRequestID else { return }
             guard let window = nsView.window else { return }
             if window.firstResponder !== nsView.currentEditor() {
                 window.makeFirstResponder(nsView)
@@ -1087,6 +1098,7 @@ private struct TodoComposerTitleField: NSViewRepresentable {
             if editor.selectedRange() != insertionPoint {
                 editor.setSelectedRange(insertionPoint)
             }
+            context.coordinator.lastAppliedFocusRequestID = focusRequestID
         }
     }
 
@@ -1094,6 +1106,8 @@ private struct TodoComposerTitleField: NSViewRepresentable {
         var text: Binding<String>
         var onSubmit: () -> Void
         var onShiftEnter: () -> Void
+        var focusRequestID = UUID()
+        var lastAppliedFocusRequestID: UUID?
         weak var textField: NSTextField?
 
         init(
@@ -1136,6 +1150,7 @@ private struct TodoComposerTitleField: NSViewRepresentable {
 private struct TodoComposerNotesField: NSViewRepresentable {
     @Binding var text: String
     let isFocused: Bool
+    let focusRequestID: UUID
     let onSubmit: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -1172,6 +1187,7 @@ private struct TodoComposerNotesField: NSViewRepresentable {
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         context.coordinator.text = $text
         context.coordinator.onSubmit = onSubmit
+        context.coordinator.focusRequestID = focusRequestID
 
         guard let textView = context.coordinator.textView else { return }
 
@@ -1181,6 +1197,7 @@ private struct TodoComposerNotesField: NSViewRepresentable {
 
         guard isFocused else { return }
         DispatchQueue.main.async {
+            guard context.coordinator.lastAppliedFocusRequestID != focusRequestID else { return }
             guard let window = textView.window else { return }
             if window.firstResponder !== textView {
                 window.makeFirstResponder(textView)
@@ -1189,12 +1206,15 @@ private struct TodoComposerNotesField: NSViewRepresentable {
             if textView.selectedRange() != insertionPoint {
                 textView.setSelectedRange(insertionPoint)
             }
+            context.coordinator.lastAppliedFocusRequestID = focusRequestID
         }
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var text: Binding<String>
         var onSubmit: () -> Void
+        var focusRequestID = UUID()
+        var lastAppliedFocusRequestID: UUID?
         weak var textView: NSTextView?
 
         init(text: Binding<String>, onSubmit: @escaping () -> Void) {
