@@ -51,13 +51,27 @@ final class ScriptBrowserTab: NSObject {
     }
 
     fileprivate func load(url rawURL: String, pageID: UUID? = nil) -> Result<Bool, BrowserControlError> {
-        awaitControlResultSynchronously { completion in
+        switch waitForPageBridgeSynchronously(pageID: pageID) {
+        case .success:
+            break
+        case let .failure(error):
+            return .failure(error)
+        }
+
+        return awaitControlResultSynchronously { completion in
             issueLoad(url: rawURL, pageID: pageID, completion: completion)
         }
     }
 
     fileprivate func loadAsync(url rawURL: String, pageID: UUID? = nil) async -> Result<Bool, BrowserControlError> {
-        await awaitControlResult { completion in
+        switch await waitForPageBridge(pageID: pageID) {
+        case .success:
+            break
+        case let .failure(error):
+            return .failure(error)
+        }
+
+        return await awaitControlResult { completion in
             issueLoad(url: rawURL, pageID: pageID, completion: completion)
         }
     }
@@ -67,7 +81,14 @@ final class ScriptBrowserTab: NSObject {
         pageID: UUID? = nil,
         frameName: String? = nil
     ) -> Result<String, BrowserControlError> {
-        awaitControlResultSynchronously { completion in
+        switch waitForPageBridgeSynchronously(pageID: pageID) {
+        case .success:
+            break
+        case let .failure(error):
+            return .failure(error)
+        }
+
+        return awaitControlResultSynchronously { completion in
             issueEvaluation(javaScript: script, pageID: pageID, frameName: frameName, completion: completion)
         }
     }
@@ -77,7 +98,14 @@ final class ScriptBrowserTab: NSObject {
         pageID: UUID? = nil,
         frameName: String? = nil
     ) async -> Result<String, BrowserControlError> {
-        await awaitControlResult { completion in
+        switch await waitForPageBridge(pageID: pageID) {
+        case .success:
+            break
+        case let .failure(error):
+            return .failure(error)
+        }
+
+        return await awaitControlResult { completion in
             issueEvaluation(javaScript: script, pageID: pageID, frameName: frameName, completion: completion)
         }
     }
@@ -193,6 +221,13 @@ final class ScriptBrowserTab: NSObject {
     ) -> Result<String, BrowserControlError> {
         switch decodeDOMBatchCommands(commandsJSON: commandsJSON) {
         case let .success(commands):
+            switch waitForPageBridgeSynchronously(pageID: pageID) {
+            case .success:
+                break
+            case let .failure(error):
+                return .failure(error)
+            }
+
             return awaitControlResultSynchronously { completion in
                 issueDOMBatch(commands: commands, pageID: pageID, frameName: frameName, completion: completion)
             }
@@ -208,6 +243,13 @@ final class ScriptBrowserTab: NSObject {
     ) async -> Result<String, BrowserControlError> {
         switch decodeDOMBatchCommands(commandsJSON: commandsJSON) {
         case let .success(commands):
+            switch await waitForPageBridge(pageID: pageID) {
+            case .success:
+                break
+            case let .failure(error):
+                return .failure(error)
+            }
+
             return await awaitControlResult { completion in
                 issueDOMBatch(commands: commands, pageID: pageID, frameName: frameName, completion: completion)
             }
@@ -217,7 +259,14 @@ final class ScriptBrowserTab: NSObject {
     }
 
     fileprivate func listFrames(pageID: UUID? = nil) -> Result<String, BrowserControlError> {
-        awaitControlResultSynchronously { completion in
+        switch waitForPageBridgeSynchronously(pageID: pageID) {
+        case .success:
+            break
+        case let .failure(error):
+            return .failure(error)
+        }
+
+        return awaitControlResultSynchronously { completion in
             issueListFrames(pageID: pageID, completion: completion)
         }
     }
@@ -229,7 +278,14 @@ final class ScriptBrowserTab: NSObject {
         frameName: String? = nil,
         timeoutMS: Int? = nil
     ) -> Result<String, BrowserControlError> {
-        awaitControlResultSynchronously { completion in
+        switch waitForPageBridgeSynchronously(pageID: pageID) {
+        case .success:
+            break
+        case let .failure(error):
+            return .failure(error)
+        }
+
+        return awaitControlResultSynchronously { completion in
             issueExternalDOMCommand(
                 command,
                 payload: payload,
@@ -248,7 +304,14 @@ final class ScriptBrowserTab: NSObject {
         frameName: String? = nil,
         timeoutMS: Int? = nil
     ) async -> Result<String, BrowserControlError> {
-        await awaitControlResult { completion in
+        switch await waitForPageBridge(pageID: pageID) {
+        case .success:
+            break
+        case let .failure(error):
+            return .failure(error)
+        }
+
+        return await awaitControlResult { completion in
             issueExternalDOMCommand(
                 command,
                 payload: payload,
@@ -487,6 +550,68 @@ final class ScriptBrowserTab: NSObject {
         )
     }
 
+    private func waitForPageBridge(
+        pageID: UUID?,
+        timeout: TimeInterval = 15.0
+    ) async -> Result<Void, BrowserControlError> {
+        guard let page = requestedPage(pageID) else {
+            return .failure(.pageNotFound(pageNotFoundMessage(for: pageID)))
+        }
+
+        if page.isControlBridgeReady {
+            return .success(())
+        }
+
+        controller?.showWindow(nil)
+        controller?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        controller?.model.ensureRuntimeActivationForExternalControl()
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if page.isControlBridgeReady {
+                return .success(())
+            }
+            if let initializationError = GhoDexCEFLastInitializationError(), !initializationError.isEmpty {
+                return .failure(.bridgeUnavailable(initializationError))
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        return .failure(.bridgeUnavailable("The browser page bridge did not become ready in time."))
+    }
+
+    private func waitForPageBridgeSynchronously(
+        pageID: UUID?,
+        timeout: TimeInterval = 15.0
+    ) -> Result<Void, BrowserControlError> {
+        guard let page = requestedPage(pageID) else {
+            return .failure(.pageNotFound(pageNotFoundMessage(for: pageID)))
+        }
+
+        if page.isControlBridgeReady {
+            return .success(())
+        }
+
+        controller?.showWindow(nil)
+        controller?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        controller?.model.ensureRuntimeActivationForExternalControl()
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if page.isControlBridgeReady {
+                return .success(())
+            }
+            if let initializationError = GhoDexCEFLastInitializationError(), !initializationError.isEmpty {
+                return .failure(.bridgeUnavailable(initializationError))
+            }
+            RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01))
+        }
+
+        return .failure(.bridgeUnavailable("The browser page bridge did not become ready in time."))
+    }
+
     private static func jsonString(from decodedResult: BrowserDOMDecodedBatchResult) throws -> String {
         let payload = [
             "results": decodedResult.results.map(jsonObject(for:)),
@@ -543,6 +668,14 @@ final class ScriptBrowserTab: NSObject {
             return "No browser page exists for \(pageID.uuidString)."
         }
         return "No active browser page is available."
+    }
+
+    private func waitForActivePageBridge(timeout: TimeInterval = 15.0) async -> Result<Void, BrowserControlError> {
+        await waitForPageBridge(pageID: controller?.model.activePage?.id, timeout: timeout)
+    }
+
+    private func waitForActivePageBridgeSynchronously(timeout: TimeInterval = 15.0) -> Result<Void, BrowserControlError> {
+        waitForPageBridgeSynchronously(pageID: controller?.model.activePage?.id, timeout: timeout)
     }
 }
 
@@ -807,6 +940,42 @@ extension ScriptBrowserTab {
             return await routeExternalDOMCommandAsync(request, command: .getBoundingBox)
         case .getDOMSnapshot:
             return await routeExternalDOMCommandAsync(request, command: .getDOMSnapshot)
+        case .newTab:
+            guard let appDelegate = NSApp.delegate as? AppDelegate else {
+                return .failure(for: request, error: .internalFailure("The GhoDex app delegate is unavailable."))
+            }
+
+            let initialURL: URL?
+            if let rawURL = request.payload["url"], !rawURL.isEmpty {
+                let normalizedURL = BrowserPaths.normalizedURLString(
+                    rawURL,
+                    fallback: BrowserTabController.defaultHomePageURL(for: appDelegate.ghostty).absoluteString
+                )
+                guard let url = URL(string: normalizedURL) else {
+                    return .failure(for: request, error: .invalidRequest("The Browser tab URL is invalid."))
+                }
+                initialURL = url
+            } else {
+                initialURL = nil
+            }
+
+            let controller = BrowserTabController.newWindow(appDelegate.ghostty, initialURL: initialURL)
+            let browserTab = ScriptBrowserTab(controller: controller)
+            switch await browserTab.waitForActivePageBridge() {
+            case .success:
+                break
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
+
+            do {
+                return .success(for: request, resultJSON: try jsonString(from: browserTab.tabSummary))
+            } catch {
+                return .failure(
+                    for: request,
+                    error: .internalFailure("The new Browser tab summary could not be serialized as JSON.")
+                )
+            }
         case .loadURL:
             let target: ResolvedExternalPageTarget
             switch resolvePageTarget(for: request) {
@@ -1065,6 +1234,12 @@ extension ScriptBrowserTab {
 
             let controller = BrowserTabController.newWindow(appDelegate.ghostty, initialURL: initialURL)
             let browserTab = ScriptBrowserTab(controller: controller)
+            switch browserTab.waitForActivePageBridgeSynchronously() {
+            case .success:
+                break
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
 
             do {
                 return .success(for: request, resultJSON: try jsonString(from: browserTab.tabSummary))

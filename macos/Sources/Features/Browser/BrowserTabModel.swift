@@ -460,6 +460,7 @@ final class BrowserPageState: ObservableObject, Identifiable {
     @Published private(set) var canGoForward = false
     @Published private(set) var isLoading = false
     @Published private(set) var documentRevision = 0
+    @Published private(set) var isControlBridgeReady = false
 
     fileprivate var onStateChange: (() -> Void)?
     fileprivate var isAddressBarEditing = false
@@ -520,10 +521,20 @@ final class BrowserPageState: ObservableObject, Identifiable {
 
     func bindControlBridge(_ bridge: BrowserPageControlBridge) {
         controlBridge = bridge
+        isControlBridgeReady = false
     }
 
     func unbindControlBridge() {
         controlBridge = nil
+        isControlBridgeReady = false
+    }
+
+    var isControlBridgeBound: Bool {
+        controlBridge != nil
+    }
+
+    func markControlBridgeReady() {
+        isControlBridgeReady = true
     }
 
     func route(_ request: BrowserControlRequest, completion: @escaping BrowserControlCompletion) {
@@ -759,7 +770,14 @@ final class BrowserTabModel: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 if !GhoDexCEFIsInitialized() {
-                    _ = GhoDexCEFInitializeGlobal()
+                    if GhoDexCEFIsInitializing() {
+                        await waitForRuntimeInitialization()
+                    } else {
+                        _ = GhoDexCEFInitializeGlobal()
+                        if !GhoDexCEFIsInitialized(), GhoDexCEFIsInitializing() {
+                            await waitForRuntimeInitialization()
+                        }
+                    }
                 }
                 refreshRuntimeState()
                 syncActivePageState()
@@ -980,7 +998,9 @@ final class BrowserTabModel: ObservableObject {
             if let url = event.payload["url"] {
                 openURLInNewTab(url)
             }
-        case .consoleMessage, .bridgeReady, .networkRequestFinished:
+        case .bridgeReady:
+            pages.first(where: { $0.id == pageID })?.markControlBridgeReady()
+        case .consoleMessage, .networkRequestFinished:
             break
         }
 
@@ -1053,6 +1073,21 @@ final class BrowserTabModel: ObservableObject {
         refreshRuntimeState()
     }
 
+    func ensureRuntimeActivationForExternalControl() {
+        guard GhoDexCEFBuildHasRuntime() else {
+            refreshRuntimeState()
+            return
+        }
+
+        if GhoDexCEFIsInitialized() || GhoDexCEFIsInitializing() {
+            refreshRuntimeState()
+            return
+        }
+
+        _ = GhoDexCEFInitializeGlobal()
+        refreshRuntimeState()
+    }
+
     func revealRuntimeFolder() {
         let runtimeRoot = BrowserPaths.configuredCEFRuntimeRoot()
         try? FileManager.default.createDirectory(at: runtimeRoot, withIntermediateDirectories: true)
@@ -1081,6 +1116,9 @@ final class BrowserTabModel: ObservableObject {
                 "GhoDex needs to download its Chromium runtime before this browser tab can render pages."
             )
         case .initializationFailed:
+            if let detail = GhoDexCEFLastInitializationError(), !detail.isEmpty {
+                return detail
+            }
             return AppLocalization.localizedText(
                 "GhoDex found the Chromium runtime, but Chromium could not be activated in this app session."
             )
@@ -1125,10 +1163,22 @@ final class BrowserTabModel: ObservableObject {
             runtimeState = .unsupportedBuild
         } else if GhoDexCEFIsInitialized() {
             runtimeState = .ready
+        } else if GhoDexCEFIsInitializing() {
+            runtimeState = .runtimeUnavailable
         } else if GhoDexCEFBuildHasRuntime() {
             runtimeState = .initializationFailed
         } else {
             runtimeState = .runtimeUnavailable
+        }
+    }
+
+    private func waitForRuntimeInitialization(timeout: TimeInterval = 20.0) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if GhoDexCEFIsInitialized() || !GhoDexCEFIsInitializing() {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
         }
     }
 

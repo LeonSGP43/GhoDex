@@ -10,6 +10,8 @@ FOUNDATION_EXPORT void GhoDexCEFShutdownGlobal(void);
 FOUNDATION_EXPORT BOOL GhoDexCEFBuildSupportsManagedRuntime(void);
 FOUNDATION_EXPORT BOOL GhoDexCEFBuildHasRuntime(void);
 FOUNDATION_EXPORT BOOL GhoDexCEFIsInitialized(void);
+FOUNDATION_EXPORT BOOL GhoDexCEFIsInitializing(void);
+FOUNDATION_EXPORT NSString * _Nullable GhoDexCEFLastInitializationError(void);
 FOUNDATION_EXPORT NSString * _Nullable GhoDexCEFConfiguredProfileDirectoryName(void);
 FOUNDATION_EXPORT NSString * const GhoDexCEFControlErrorDomain;
 

@@ -28,6 +28,10 @@ NSString * const GhoDexCEFControlErrorDomain = @"com.leongong.ghodex.browser.cef
 
 #include <algorithm>
 #include <atomic>
+#include <errno.h>
+#include <libproc.h>
+#include <signal.h>
+#include <sys/stat.h>
 #include <string>
 #include <vector>
 
@@ -47,6 +51,7 @@ std::atomic<int64_t> g_message_pump_generation{0};
 std::atomic<bool> g_cef_initialized{false};
 std::atomic<bool> g_cef_initializing{false};
 std::atomic<bool> g_cef_library_loaded{false};
+NSString *g_cef_last_initialization_error = nil;
 dispatch_source_t g_message_pump_timer = nullptr;
 constexpr char kEvaluateRequestMessageName[] = "ghodex.browser.evaluate";
 constexpr char kEvaluateResultMessageName[] = "ghodex.browser.evaluate.result";
@@ -60,6 +65,14 @@ NSError *MakeControlError(GhoDexCEFControlErrorCode code, NSString *description)
   return [NSError errorWithDomain:GhoDexCEFControlErrorDomain
                              code:code
                          userInfo:@{NSLocalizedDescriptionKey : description ?: @"Unknown browser control error."}];
+}
+
+void SetLastInitializationError(NSString * _Nullable error) {
+  g_cef_last_initialization_error = [error copy];
+}
+
+NSString * _Nullable CopyLastInitializationError(void) {
+  return [g_cef_last_initialization_error copy];
 }
 
 NSString *ConsoleLevelString(cef_log_severity_t level) {
@@ -1265,6 +1278,104 @@ NSString *ConfiguredExternalProfilePath(void) {
   return ValidatedDirectoryPath(defaults_path);
 }
 
+pid_t ParsedPIDFromSingletonLockTarget(NSString *target) {
+  if (target.length == 0) {
+    return 0;
+  }
+
+  NSString *lock_name = target.lastPathComponent;
+  NSRange separator_range = [lock_name rangeOfString:@"-" options:NSBackwardsSearch];
+  if (separator_range.location == NSNotFound ||
+      separator_range.location + separator_range.length >= lock_name.length) {
+    return 0;
+  }
+
+  NSString *pid_string = [lock_name substringFromIndex:separator_range.location + separator_range.length];
+  NSInteger pid_value = pid_string.integerValue;
+  return pid_value > 0 ? (pid_t)pid_value : 0;
+}
+
+BOOL IsProcessAlive(pid_t pid) {
+  if (pid <= 0) {
+    return NO;
+  }
+
+  if (kill(pid, 0) == 0) {
+    return YES;
+  }
+
+  return errno == EPERM;
+}
+
+NSString * _Nullable ProcessPathForPID(pid_t pid) {
+  if (pid <= 0) {
+    return nil;
+  }
+
+  char path_buffer[PROC_PIDPATHINFO_MAXSIZE];
+  int length = proc_pidpath(pid, path_buffer, sizeof(path_buffer));
+  if (length <= 0) {
+    return nil;
+  }
+
+  return [NSString stringWithUTF8String:path_buffer];
+}
+
+NSString * _Nullable ExternalProfileConflictMessage(void) {
+  NSString *external_profile = ConfiguredExternalProfilePath();
+  if (external_profile.length == 0) {
+    return nil;
+  }
+
+  NSString *user_data_dir = external_profile.stringByDeletingLastPathComponent;
+  if (user_data_dir.length == 0) {
+    return nil;
+  }
+
+  NSFileManager *file_manager = NSFileManager.defaultManager;
+  NSString *singleton_lock = [user_data_dir stringByAppendingPathComponent:@"SingletonLock"];
+  NSString *singleton_cookie = [user_data_dir stringByAppendingPathComponent:@"SingletonCookie"];
+  NSString *singleton_socket = [user_data_dir stringByAppendingPathComponent:@"SingletonSocket"];
+  auto path_exists_even_if_symlink_is_dangling = ^BOOL(NSString *path) {
+    if (path.length == 0) {
+      return NO;
+    }
+
+    struct stat status = {};
+    return lstat(path.fileSystemRepresentation, &status) == 0;
+  };
+
+  if (!path_exists_even_if_symlink_is_dangling(singleton_lock)) {
+    return nil;
+  }
+
+  NSString *lock_target = [file_manager destinationOfSymbolicLinkAtPath:singleton_lock error:nil];
+  pid_t lock_pid = ParsedPIDFromSingletonLockTarget(lock_target);
+  if (IsProcessAlive(lock_pid)) {
+    NSString *process_path = ProcessPathForPID(lock_pid);
+    NSString *process_name = process_path.lastPathComponent;
+    if (process_name.length == 0) {
+      process_name = @"another Chromium process";
+    }
+
+    return [NSString
+        stringWithFormat:@"The external Chrome profile %@ is already in use by %@ (pid %d). "
+                         @"Close Google Chrome and try again.",
+                         external_profile,
+                         process_name,
+                         lock_pid];
+  }
+
+  if (path_exists_even_if_symlink_is_dangling(singleton_cookie) &&
+      path_exists_even_if_symlink_is_dangling(singleton_socket)) {
+    return [NSString stringWithFormat:@"The external Chrome profile %@ appears to still be locked by another "
+                                       @"Chrome instance. Close Google Chrome and try again.",
+                                       external_profile];
+  }
+
+  return nil;
+}
+
 NSString *SanitizedPathComponent(NSString *value) {
   if (value.length == 0) {
     return @"default";
@@ -1396,18 +1507,34 @@ int GhoDexCEFExecuteProcessIfNeeded(void) {
 }
 
 BOOL GhoDexCEFInitializeGlobal(void) {
+  NSLog(@"[CEF] InitializeGlobal requested initialized=%d initializing=%d external_profile=%@",
+        g_cef_initialized.load() ? 1 : 0,
+        g_cef_initializing.load() ? 1 : 0,
+        ConfiguredExternalProfilePath() ?: @"<none>");
   if (g_cef_initialized.load()) {
+    SetLastInitializationError(nil);
     return YES;
   }
   bool expected_initializing = false;
   if (!g_cef_initializing.compare_exchange_strong(expected_initializing, true)) {
+    NSLog(@"[CEF] InitializeGlobal skipped because initialization is already in progress.");
     return NO;
   }
 
   auto clear_initializing = [] {
     g_cef_initializing.store(false);
   };
+  SetLastInitializationError(nil);
   if (!EnsureLibraryLoaded()) {
+    SetLastInitializationError(@"GhoDex could not load the Chromium Embedded Framework from the configured runtime.");
+    clear_initializing();
+    return NO;
+  }
+
+  NSString *external_profile_conflict = ExternalProfileConflictMessage();
+  if (external_profile_conflict.length > 0) {
+    NSLog(@"[CEF] Refusing external profile activation: %@", external_profile_conflict);
+    SetLastInitializationError(external_profile_conflict);
     clear_initializing();
     return NO;
   }
@@ -1462,6 +1589,17 @@ BOOL GhoDexCEFInitializeGlobal(void) {
   BOOL initialized = CefInitialize(args.mainArgs(), settings, g_cef_app.get(), nullptr) ? YES : NO;
   g_cef_initialized.store(initialized == YES);
   clear_initializing();
+  if (!initialized) {
+    NSString *failure =
+        ExternalProfileConflictMessage() ?: (ConfiguredExternalProfilePath().length > 0
+                                                 ? @"Chromium could not activate with the configured external Chrome profile."
+                                                 : @"Chromium could not be activated in this app session.");
+    SetLastInitializationError(failure);
+    NSLog(@"[CEF] CefInitialize returned NO: %@", failure);
+  } else {
+    SetLastInitializationError(nil);
+    NSLog(@"[CEF] CefInitialize returned YES.");
+  }
   if (initialized) {
     StartMessagePumpTimer();
     ScheduleMessagePumpWork(0);
@@ -1589,6 +1727,14 @@ BOOL GhoDexCEFIsInitialized(void) {
   return g_cef_initialized.load() ? YES : NO;
 }
 
+BOOL GhoDexCEFIsInitializing(void) {
+  return g_cef_initializing.load() ? YES : NO;
+}
+
+NSString * _Nullable GhoDexCEFLastInitializationError(void) {
+  return CopyLastInitializationError();
+}
+
 #else
 
 int GhoDexCEFExecuteProcessIfNeeded(void) {
@@ -1612,6 +1758,14 @@ BOOL GhoDexCEFBuildHasRuntime(void) {
 
 BOOL GhoDexCEFIsInitialized(void) {
   return NO;
+}
+
+BOOL GhoDexCEFIsInitializing(void) {
+  return NO;
+}
+
+NSString * _Nullable GhoDexCEFLastInitializationError(void) {
+  return nil;
 }
 
 @interface GhoDexCEFView ()
