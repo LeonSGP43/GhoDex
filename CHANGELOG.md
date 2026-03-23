@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(android): request camera permission before qr scan
+
+- What changed: Added an explicit Android runtime permission flow for `CAMERA` before launching the embedded QR scanner, and routed granted/denied outcomes into the app status line instead of falling straight into the scanner path.
+- Why: On the connected Honor device the app's `android.permission.CAMERA` runtime permission was `granted=false`, and the previous implementation launched the scanner without requesting it first. That made tapping `Scan Pairing QR` crash instead of opening the permission dialog.
+- Impact: First-use QR scanning now prompts for camera access, and denied permission fails gracefully with a readable status instead of a process crash.
+- Verification: `adb shell dumpsys package com.leongong.ghodex.androidapp`; `git diff --check`; `cd android && ANDROID_SDK_ROOT="$HOME/Library/Android/sdk" ./gradlew :app:assembleDebug`
+- Files: `android/app/src/main/java/com/leongong/ghodex/androidapp/MainActivity.java`, `CHANGELOG.md`
+- Decision trail: Keep the embedded scanner approach, but add the missing runtime permission gate that Android 6+ requires. This is the smallest fix that addresses the real crash on current hardware.
+
 ### fix(android): use embedded camera qr scanner fallback
 
 - What changed: Replaced the Play-Services-based QR scanner path with an embedded ZXing camera scanner, added camera permission to the Android manifest, and kept the existing QR payload parsing / exchange flow unchanged.

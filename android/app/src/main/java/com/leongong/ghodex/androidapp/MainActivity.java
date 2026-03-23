@@ -1,7 +1,9 @@
 package com.leongong.ghodex.androidapp;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.View;
@@ -25,6 +27,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class MainActivity extends Activity {
+    private static final int REQUEST_CAMERA_PERMISSION = 0x0A10;
     private static final int REQUEST_SCAN_QR = 0x0A11;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -291,6 +294,19 @@ public final class MainActivity extends Activity {
     }
 
     private void startQrScan() {
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            setStatus("Requesting camera permission...");
+            requestPermissions(
+                new String[] { Manifest.permission.CAMERA },
+                REQUEST_CAMERA_PERMISSION
+            );
+            return;
+        }
+
+        launchQrScanner();
+    }
+
+    private void launchQrScanner() {
         setStatus("Opening camera scanner...");
 
         IntentIntegrator integrator = new IntentIntegrator(this);
@@ -383,6 +399,21 @@ public final class MainActivity extends Activity {
         }
 
         super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        if (requestCode == REQUEST_CAMERA_PERMISSION) {
+            boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            if (granted) {
+                launchQrScanner();
+            } else {
+                setStatus("Camera permission denied");
+            }
+            return;
+        }
+
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
     }
 
     private TextView addLabel(LinearLayout root, String text) {
