@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### refactor(macos): scale and expand todo sidebar content
+
+- What changed: Taught the in-window todo sidebar to derive its typography scale from the focused terminal surface font so `Cmd +`, `Cmd -`, and reset-size actions refresh the sidebar text proportionally, and made todo card content tappable so truncated titles and notes can expand to their full height on demand instead of staying hard-clamped.
+- Why: The sidebar still felt visually detached from the rest of the app because its semantic text styles were fixed at one scale even when the user changed terminal text size. At the same time, long todo notes could only be partially read because the rows had no disclosure state beyond fixed line limits.
+- Impact: Todo content now stays closer to the active terminal's visual rhythm after font-size adjustments, and long task messages can be opened inline without forcing edit mode or losing the compact default card height.
+- Verification: `git diff --check`; `cd macos && nu build.nu --configuration Debug --action build`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Features/Terminal/BaseTerminalController.swift`, `macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift`, `CHANGELOG.md`
+- Decision trail: Keep the sidebar aligned to the user's active reading scale by sampling the focused surface's real quicklook font instead of inventing a separate zoom preference. For dense task rows, preserve a compact default layout but let the content surface itself disclose fully on tap rather than requiring a mode switch.
+
 ### feat(control): add todo control harness commands
 
 - What changed: Extended the native control harness and `ghodex +control` CLI with todo-oriented commands for snapshot, add, update, completion toggle, workspace assignment, and stale-pointer sync. Added typed todo snapshot/mutation responses in the Swift core and wrote a dedicated `TODO_CONTROL_API.md` with CLI examples, raw JSON payloads, response fields, and error behavior.
