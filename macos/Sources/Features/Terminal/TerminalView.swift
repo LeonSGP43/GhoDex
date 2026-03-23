@@ -1108,10 +1108,7 @@ private struct TodoWorkspaceSidebar: View {
         let bodyPointSize = NSFont.preferredFont(forTextStyle: .body).pointSize
         guard bodyPointSize > 0,
               let focusedPointSize = terminalController.focusedSurface?.quicklookFontPointSize
-        else {
-            sidebarTypographyScale = 1
-            return
-        }
+        else { return }
 
         let nextScale = min(
             max(focusedPointSize / bodyPointSize, Self.minimumTypographyScale),

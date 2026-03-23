@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(macos): avoid resetting todo sidebar scale on invalid samples
+
+- What changed: Tightened the todo sidebar typography refresh so it only updates the scale when the focused surface exposes a valid quicklook font sample, instead of falling back to `1x` during transient nil reads.
+- Why: During focus transitions or surface rebuild timing, a temporary missing font sample could incorrectly snap the sidebar back to its base size even though the terminal font had not really reset.
+- Impact: The sidebar now keeps the last known-good scale until a fresh valid terminal font sample arrives, which removes spurious size jumps during refresh churn.
+- Verification: `git diff --check`; `cd macos && nu build.nu --configuration Debug --action build`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
+- Decision trail: For UI sync based on asynchronously exposed runtime state, stale-but-valid is safer than replacing it with a guessed default on missing data. Missing samples should defer updates, not rewrite the scale.
+
 ### fix(macos): keep todo sidebar font scaling responsive
 
 - What changed: Reworked the todo sidebar font-scale refresh path so each terminal font-size change starts a new refresh session and cancels stale pending retries, instead of relying on one short fixed retry chain.
