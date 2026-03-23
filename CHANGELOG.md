@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(macos): keep todo sidebar font scaling responsive
+
+- What changed: Reworked the todo sidebar font-scale refresh path so each terminal font-size change starts a new refresh session and cancels stale pending retries, instead of relying on one short fixed retry chain.
+- Why: Repeated `Cmd +` or `Cmd -` presses could outlast the old retry window, which meant the sidebar sometimes sampled the terminal font before the new size fully applied and then stopped updating.
+- Impact: The todo sidebar now keeps tracking repeated font-size changes more reliably instead of appearing to freeze after several quick adjustments.
+- Verification: `git diff --check`; `cd macos && nu build.nu --configuration Debug --action build`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
+- Decision trail: Treat font-size sync as a short-lived session keyed to the latest user action. Cancelling stale retries is safer than stacking overlapping delayed refreshes when the underlying terminal font updates asynchronously.
+
 ### refactor(macos): scale and expand todo sidebar content
 
 - What changed: Taught the in-window todo sidebar to derive its typography scale from the focused terminal surface font so `Cmd +`, `Cmd -`, and reset-size actions refresh the sidebar text proportionally, and made todo card content tappable so truncated titles and notes can expand to their full height on demand instead of staying hard-clamped.

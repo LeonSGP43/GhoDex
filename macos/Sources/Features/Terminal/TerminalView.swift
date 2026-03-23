@@ -342,6 +342,7 @@ private struct TodoWorkspaceSidebar: View {
     @State private var syncableStaleTodoCount = 0
     @State private var expandedTodoItems: Set<UUID> = []
     @State private var sidebarTypographyScale: CGFloat = 1
+    @State private var sidebarTypographyRefreshID = UUID()
     @FocusState private var composerFocusField: ComposerFocusField?
 
     private static let sidebarAnimation = Animation.spring(response: 0.24, dampingFraction: 0.9)
@@ -1080,11 +1081,26 @@ private struct TodoWorkspaceSidebar: View {
         composerFocusRequestID = UUID()
     }
 
-    private func scheduleSidebarTypographyRefresh(remainingAttempts: Int = 4) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+    private func scheduleSidebarTypographyRefresh(remainingAttempts: Int = 10) {
+        let refreshID = UUID()
+        sidebarTypographyRefreshID = refreshID
+        performSidebarTypographyRefresh(refreshID: refreshID, remainingAttempts: remainingAttempts)
+    }
+
+    private func performSidebarTypographyRefresh(
+        refreshID: UUID,
+        remainingAttempts: Int
+    ) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+            guard sidebarTypographyRefreshID == refreshID else { return }
+
             refreshSidebarTypographyScale()
+
             guard remainingAttempts > 0 else { return }
-            scheduleSidebarTypographyRefresh(remainingAttempts: remainingAttempts - 1)
+            performSidebarTypographyRefresh(
+                refreshID: refreshID,
+                remainingAttempts: remainingAttempts - 1
+            )
         }
     }
 
