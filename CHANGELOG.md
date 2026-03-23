@@ -174,7 +174,31 @@ All notable changes to this project are documented in this file.
 - Verification: `zig build -Demit-xcframework=true -Demit-macos-app=false`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild test -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' -skip-testing GhosttyUITests`
 - Files: `plan.md`, `ghodex-todo-picker-phase1-spec.md`, `ghodex-todo-picker-phase1-doc.md`, `src/config/Config.zig`, `macos/Sources/Ghostty/Ghostty.Config.swift`, `macos/Sources/Ghostty/GhosttyPackage.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/App/macOS/AppDelegate+SSHConnections.swift`, `macos/Sources/Features/AI Terminal Manager/AITerminalManagerModels.swift`, `macos/Sources/Features/AI Terminal Manager/AITerminalManagerStore.swift`, `macos/Sources/Features/SSH Connections/SSHConnectionsController.swift`, `macos/Sources/Features/SSH Connections/SSHConnectionsView.swift`, `macos/Sources/Features/Terminal/Window Styles/TerminalWindow.swift`, `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Features/New Tab Picker/NewTabPickerController.swift`, `macos/Sources/Features/New Tab Picker/NewTabPickerView.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`, `CHANGELOG.md`
 - Decision trail: Keep todo state separate from learning/task-queue automation and require explicit UI-driven mutation for item status. Use the app config as the source of truth for settings, but store day documents as user-visible date files under a normal workspace folder. Use the stable top-level workspace/tab UUID as the assignment key so task ownership survives tab reuse/restoration. For quick access, keep the Settings Panel as the durable settings surface, but use an in-window side panel for `Cmd+Shift+M` so task review/updates stay inside the current tab context. For the picker, preserve search and keyboard behavior and change only window geometry and list density.
+### docs(readme): document the recommended Ctrl+U disable override
 
+- What changed: Added a README note that this fork's recommended local macOS setup disables `Ctrl+U` in the terminal surface via `keybind = ctrl+u=ignore`.
+- Why: `Ctrl+U` clears the shell input line by default in many terminal/shell combinations, which is easy to trigger accidentally during normal editing.
+- Impact: Users and future agents now have one durable repo-level explanation for the local override instead of relying on chat history or ad hoc shell tweaks.
+- Verification: `rg -n "Ctrl\\+U|ctrl\\+u=ignore" README.md CHANGELOG.md`
+- Files: `README.md`, `CHANGELOG.md`
+
+### chore(build): add a shared GhoDex build-artifact prune workflow
+
+- What changed: Added a dedicated `scripts/prune-build-artifacts.sh` cleanup tool, expanded `make clean` to cover the current checkout's missed Zig/Xcode artifact directories, and added `make prune-build-artifacts` plus `make prune-build-artifacts-dry-run` to scan and clean the main GhoDex checkout alongside sibling `GhoDex-wt-*` worktrees.
+- Why: Large `.zig-cache`, `macos/.zig-cache`, and `macos/build` directories were accumulating across the main repo and stale worktree folders, while the previous `make clean` target only removed a subset of local outputs and offered no reusable way to reclaim space from sibling worktrees.
+- Impact: Build-cache cleanup is now a one-command workflow with a safe dry-run default, broader local coverage, and explicit support for reclaiming space from abandoned or still-registered GhoDex worktrees without touching tracked files.
+- Verification: `bash ./scripts/prune-build-artifacts.sh`; `bash ./scripts/prune-build-artifacts.sh --current-only`; `make prune-build-artifacts-dry-run`
+- Files: `scripts/prune-build-artifacts.sh`, `Makefile`, `HACKING.md`, `CHANGELOG.md`
+- Decision trail: Keep normal build commands unchanged and add a separate prune path instead of making regular builds auto-delete caches. The prune script deletes only known generated directories, defaults to dry-run, and combines Git worktree discovery with sibling-folder scanning so stale or broken worktree directories are still reclaimable.
+
+### docs(agents): add GhoDex cache cleanup note and local skill
+
+- What changed: Added `clenGhodexCache.md` at the repo root as the durable note for the GhoDex cache-prune workflow, and added a project-local Codex skill at `.codex/skills/clenGhodexCache/SKILL.md` so future agents can discover and reuse the same safe cleanup procedure.
+- Why: The cache-prune command is operational repo knowledge that should stay easy to find for both humans and agents instead of living only in recent chat history.
+- Impact: Future cleanup requests can point to one stable repo document or trigger the local skill directly, reducing repeated explanation and lowering the chance of an agent improvising a broader deletion command.
+- Verification: `test -f clenGhodexCache.md`; `test -f .codex/skills/clenGhodexCache/SKILL.md`
+- Files: `clenGhodexCache.md`, `.codex/skills/clenGhodexCache/SKILL.md`, `CHANGELOG.md`
+- Decision trail: Store the human-readable note at the repo root for visibility, and keep the agent-facing workflow in a minimal local skill so the cleanup path remains reusable without adding broader repo tooling.
 ### fix(build): isolate Zig-driven Xcode test state
 
 - What changed: Updated the Zig macOS test step to pass `HOME` through to `xcodebuild`, pin the destination to the host macOS architecture, and route `-derivedDataPath` into an isolated `/tmp` location instead of sharing Xcode's default global state, while excluding the macOS `.zig-cache` helper directory from SwiftLint so generated artifacts do not poison app-hosted test runs.
