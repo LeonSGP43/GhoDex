@@ -810,6 +810,7 @@ enum AppLocalization {
         "Close All Windows?": "关闭所有窗口？",
         "Quit GhoDex?": "退出 GhoDex？",
         "All terminal sessions will be terminated.": "所有终端会话都将被终止。",
+        "All open tabs and terminal sessions will be closed.": "所有打开的标签页和终端会话都将被关闭。",
         "Close GhoDex": "关闭 GhoDex",
         "Failed to Set Default Terminal": "设置默认终端失败",
         "Warning: Potentially Unsafe Paste": "警告：可能存在风险的粘贴",
@@ -1175,6 +1176,7 @@ enum L10n {
         nonisolated static var quitGhostty: String { AppLocalization.localizedText("Quit GhoDex?") }
         nonisolated static var closeAllWindows: String { AppLocalization.localizedText("Close All Windows") }
         nonisolated static var allSessionsTerminated: String { AppLocalization.localizedText("All terminal sessions will be terminated.") }
+        nonisolated static var allTabsAndSessionsClosed: String { AppLocalization.localizedText("All open tabs and terminal sessions will be closed.") }
         nonisolated static var leaveBlankRestoreDefault: String { AppLocalization.localizedText("Leave blank to restore the default.") }
         nonisolated static var cannotCreateNewTab: String { AppLocalization.localizedText("Cannot Create New Tab") }
         nonisolated static var closeTerminal: String { AppLocalization.localizedText("Close Terminal?") }

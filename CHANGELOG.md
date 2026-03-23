@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(macos): make app quit an explicit choice on macOS
+
+- What changed: Changed the Darwin default keybinding for `Cmd+Q` from immediate quit to `ignore`, added a regression test that asserts the default serialized config includes `keybind = super+q=ignore`, and updated the quit confirmation copy so closing the app warns about all open tabs and terminal sessions when visible UI is still present.
+- Why: GhoDex now contains more non-terminal workflow surfaces than upstream Ghostty, so accidental muscle-memory quits are more costly than before. The app should not silently disappear just because the user brushed `Cmd+Q`, and the quit dialog should describe the full scope of what will close.
+- Impact: macOS users now have stronger protection against accidental app termination by default, while intentional quits remain possible through explicit configuration or confirmation. The quit alert also better matches the actual UI state that will be dismissed.
+- Verification: `zig build test -Dtest-filter="formatEntry includes super+q ignore on darwin defaults"`; `git diff --check`
+- Files: `src/config/Config.zig`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `CHANGELOG.md`
+- Decision trail: Treat app termination as a higher-risk action than shell line editing in this fork. Preventing accidental quits at the default keybinding layer and keeping the modal copy honest are both part of the same explicit-quit contract.
+
 ### docs(readme): document the recommended Ctrl+U disable override
 
 - What changed: Added a README note that this fork's recommended local macOS setup disables `Ctrl+U` in the terminal surface via `keybind = ctrl+u=ignore`.

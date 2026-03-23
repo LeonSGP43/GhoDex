@@ -6739,10 +6739,13 @@ pub const Keybinds = struct {
 
         // Mac-specific keyboard bindings.
         if (comptime builtin.target.os.tag.isDarwin()) {
+            // GhoDex intentionally black holes Cmd+Q by default so the app
+            // can't be terminated accidentally from muscle memory. Users can
+            // still assign a quit shortcut explicitly in their config.
             try self.set.put(
                 alloc,
                 .{ .key = .{ .unicode = 'q' }, .mods = .{ .super = true } },
-                .{ .quit = {} },
+                .{ .ignore = {} },
             );
             try self.set.putFlags(
                 alloc,
@@ -7754,6 +7757,24 @@ pub const Keybinds = struct {
         const output = buf.written();
         try testing.expect(std.mem.indexOf(u8, output, "keybind = shift+b=csi:world\n") != null);
         try testing.expect(std.mem.indexOf(u8, output, "keybind = foo/shift+a=csi:hello\n") != null);
+    }
+
+    test "formatEntry includes super+q ignore on darwin defaults" {
+        if (comptime !builtin.target.os.tag.isDarwin()) return error.SkipZigTest;
+
+        const testing = std.testing;
+        var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer buf.deinit();
+
+        var arena = ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        var keybinds: Keybinds = .{};
+        try keybinds.init(alloc);
+        try keybinds.formatEntry(formatterpkg.entryFormatter("keybind", &buf.writer));
+
+        try testing.expect(std.mem.indexOf(u8, buf.written(), "keybind = super+q=ignore\n") != null);
     }
 
     test "parseCLI clear clears tables" {

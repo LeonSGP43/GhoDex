@@ -446,13 +446,14 @@ class AppDelegate: NSObject,
             }
         }
 
-        // If our app says we don't need to confirm, we can exit now.
-        if !ghostty.needsConfirmQuit { return .terminateNow }
-
         // We have some visible window. Show an app-wide modal to confirm quitting.
+        // GhoDex contains more than terminal surfaces, so quitting the app should
+        // always be an explicit choice when the user still has visible UI open.
         let alert = NSAlert()
         alert.messageText = L10n.App.quitGhostty
-        alert.informativeText = L10n.App.allSessionsTerminated
+        alert.informativeText = ghostty.needsConfirmQuit
+            ? L10n.App.allSessionsTerminated
+            : L10n.App.allTabsAndSessionsClosed
         alert.addButton(withTitle: L10n.App.closeGhostty)
         alert.addButton(withTitle: L10n.App.cancel)
         alert.alertStyle = .warning
