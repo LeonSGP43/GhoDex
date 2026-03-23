@@ -89,6 +89,18 @@ final class BrowserWindowRestoration: NSObject, NSWindowRestoration {
             return
         }
 
+        let configuredExternalProfile =
+            ProcessInfo.processInfo.environment[BrowserPaths.envProfilePath]
+            ?? UserDefaults.standard.string(forKey: BrowserPaths.profileDefaultsKey)
+        if let configuredExternalProfile, !configuredExternalProfile.isEmpty {
+            // Real external Chrome profiles should not auto-restore previously
+            // embedded browser windows. Restoring stale browser pages before the
+            // first explicit open can destabilize the profile-backed Chromium
+            // services and interfere with command-driven control.
+            completionHandler(nil, nil)
+            return
+        }
+
         guard let state = BrowserRestorableState(coder: state) else {
             completionHandler(nil, BrowserRestoreError.stateDecodeFailed)
             return

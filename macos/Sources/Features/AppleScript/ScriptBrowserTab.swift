@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 
 /// AppleScript-facing wrapper around one Browser tab controller.
@@ -567,18 +568,42 @@ final class ScriptBrowserTab: NSObject {
         NSApp.activate(ignoringOtherApps: true)
         controller?.model.ensureRuntimeActivationForExternalControl()
 
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if page.isControlBridgeReady {
-                return .success(())
-            }
-            if let initializationError = GhoDexCEFLastInitializationError(), !initializationError.isEmpty {
-                return .failure(.bridgeUnavailable(initializationError))
-            }
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
+        let gate = BrowserControlAwaitGate()
+        var readinessCancellable: AnyCancellable?
+        var monitorTask: Task<Void, Never>?
 
-        return .failure(.bridgeUnavailable("The browser page bridge did not become ready in time."))
+        return await withCheckedContinuation { continuation in
+            func finish(_ result: Result<Void, BrowserControlError>) {
+                guard gate.tryFinish() else { return }
+                readinessCancellable?.cancel()
+                monitorTask?.cancel()
+                continuation.resume(returning: result)
+            }
+
+            readinessCancellable = page.$isControlBridgeReady
+                .removeDuplicates()
+                .filter { $0 }
+                .sink { _ in
+                    finish(.success(()))
+                }
+
+            monitorTask = Task { @MainActor in
+                let deadline = Date().addingTimeInterval(timeout)
+                while Date() < deadline {
+                    if page.isControlBridgeReady {
+                        finish(.success(()))
+                        return
+                    }
+                    if let initializationError = GhoDexCEFLastInitializationError(), !initializationError.isEmpty {
+                        finish(.failure(.bridgeUnavailable(initializationError)))
+                        return
+                    }
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+
+                finish(.failure(.bridgeUnavailable("The browser page bridge did not become ready in time.")))
+            }
+        }
     }
 
     private func waitForPageBridgeSynchronously(

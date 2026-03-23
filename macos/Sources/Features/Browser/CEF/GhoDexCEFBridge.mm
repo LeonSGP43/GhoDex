@@ -22,6 +22,7 @@ NSString * const GhoDexCEFControlErrorDomain = @"com.leongong.ghodex.browser.cef
              receivedContentLength:(int64_t)receivedContentLength
                        isMainFrame:(BOOL)isMainFrame
                          frameName:(NSString *)frameName;
+- (void)loadPendingBootstrapURLIfNeeded;
 @end
 
 #if GHODEX_CEF_ENABLED
@@ -74,6 +75,8 @@ void SetLastInitializationError(NSString * _Nullable error) {
 NSString * _Nullable CopyLastInitializationError(void) {
   return [g_cef_last_initialization_error copy];
 }
+
+NSString *ConfiguredExternalProfilePath(void);
 
 NSString *ConsoleLevelString(cef_log_severity_t level) {
   switch (level) {
@@ -473,6 +476,7 @@ public:
     if (owner_) {
       dispatch_async(dispatch_get_main_queue(), ^{
         [owner_ notifyBridgeReady];
+        [owner_ loadPendingBootstrapURLIfNeeded];
       });
     }
     EmitState(browser->IsLoading(), browser->CanGoBack(), browser->CanGoForward());
@@ -535,9 +539,14 @@ private:
 CefRefPtr<GhoDexCEFApp> g_cef_app;
 }  // namespace
 
+@interface GhoDexCEFView (BootstrapInternal)
+- (void)loadPendingBootstrapURLIfNeeded;
+@end
+
 @interface GhoDexCEFView () {
   CefRefPtr<GhoDexCEFClient> _client;
   NSString *_initialURLString;
+  NSString *_pendingBootstrapURLString;
   int64_t _nextEvaluationRequestID;
   NSMutableDictionary<NSString *, GhoDexCEFJavaScriptEvaluationCompletion> *_pendingEvaluationCompletions;
 }
@@ -547,6 +556,7 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
                               error:(NSError * _Nullable)error;
 - (void)failPendingEvaluationRequestsWithCode:(GhoDexCEFControlErrorCode)code
                                   description:(NSString *)description;
+- (void)loadPendingBootstrapURLIfNeeded;
 @end
 
 @implementation GhoDexCEFView
@@ -555,6 +565,7 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
   self = [super initWithFrame:NSZeroRect];
   if (self) {
     _initialURLString = [initialURLString copy];
+    _pendingBootstrapURLString = nil;
     _pendingEvaluationCompletions = [NSMutableDictionary dictionary];
     self.wantsLayer = YES;
   }
@@ -603,7 +614,14 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
 
   CefBrowserSettings settings;
   _client = new GhoDexCEFClient(self);
-  std::string initial_url(_initialURLString.UTF8String ?: "about:blank");
+  NSString *initial_url_string = _initialURLString.length > 0 ? _initialURLString : @"about:blank";
+  if (ConfiguredExternalProfilePath().length > 0 && ![initial_url_string isEqualToString:@"about:blank"]) {
+    _pendingBootstrapURLString = [initial_url_string copy];
+    initial_url_string = @"about:blank";
+  } else {
+    _pendingBootstrapURLString = nil;
+  }
+  std::string initial_url(initial_url_string.UTF8String ?: "about:blank");
   BOOL created =
       CefBrowserHost::CreateBrowser(window_info, _client, initial_url, settings, nullptr, nullptr)
           ? YES
@@ -614,6 +632,16 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
   } else {
     NSLog(@"[CEF] CreateBrowser requested for %@", _initialURLString);
   }
+}
+
+- (void)loadPendingBootstrapURLIfNeeded {
+  if (_pendingBootstrapURLString.length == 0) {
+    return;
+  }
+
+  NSString *target_url = _pendingBootstrapURLString;
+  _pendingBootstrapURLString = nil;
+  [self loadURLString:target_url];
 }
 
 - (void)loadURLString:(NSString *)urlString {
@@ -1400,7 +1428,29 @@ NSString *SanitizedPathComponent(NSString *value) {
 NSString *ConfiguredProfileRootPath(void) {
   NSString *external_profile = ConfiguredExternalProfilePath();
   if (external_profile.length > 0) {
-    return external_profile.stringByDeletingLastPathComponent;
+    NSURL *base =
+        [NSFileManager.defaultManager.homeDirectoryForCurrentUser
+            URLByAppendingPathComponent:@"Library"
+                           isDirectory:YES];
+    base = [base URLByAppendingPathComponent:@"Application Support" isDirectory:YES];
+    base = [base URLByAppendingPathComponent:@"GhoDex" isDirectory:YES];
+    base = [base URLByAppendingPathComponent:@"CEF" isDirectory:YES];
+    base = [base URLByAppendingPathComponent:@"Profiles" isDirectory:YES];
+    base = [base URLByAppendingPathComponent:@"external" isDirectory:YES];
+
+    NSString *profile_slug = SanitizedPathComponent(external_profile);
+    base = [base URLByAppendingPathComponent:profile_slug isDirectory:YES];
+
+    NSError *error = nil;
+    [NSFileManager.defaultManager createDirectoryAtURL:base
+                           withIntermediateDirectories:YES
+                                            attributes:nil
+                                                 error:&error];
+    if (error != nil) {
+      return nil;
+    }
+
+    return base.path;
   }
 
   NSURL *base =
@@ -1430,14 +1480,6 @@ NSString *ConfiguredProfileRootPath(void) {
 }
 
 NSString *ConfiguredProfileCachePath(void) {
-  NSString *external_profile = ConfiguredExternalProfilePath();
-  if (external_profile.length > 0) {
-    // When reusing an existing Chromium-style user-data dir, keep CEF rooted at
-    // the shared user-data directory and select the concrete profile via a
-    // command-line switch instead of forcing CEF's managed "default" child.
-    return external_profile.stringByDeletingLastPathComponent;
-  }
-
   return [ConfiguredProfileRootPath() stringByAppendingPathComponent:@"Cache"];
 }
 
@@ -1489,6 +1531,24 @@ void GhoDexCEFApp::OnBeforeCommandLineProcessing(
 
   command_line->AppendSwitchWithValue("user-data-dir", user_data_dir.UTF8String);
   command_line->AppendSwitchWithValue("profile-directory", profile_directory.UTF8String);
+  // Real Chrome profiles carry background services that are useful in Chrome
+  // itself but not required for GhoDex's embedded page shell. Disabling the
+  // most failure-prone services keeps first-page activation usable when the
+  // external profile's metrics/password databases are busy or partially
+  // incompatible with CEF.
+  command_line->AppendSwitch("disable-background-networking");
+  command_line->AppendSwitch("disable-component-update");
+  command_line->AppendSwitch("disable-default-apps");
+  command_line->AppendSwitch("disable-extensions");
+  command_line->AppendSwitch("disable-sync");
+  command_line->AppendSwitch("disable-gpu");
+  command_line->AppendSwitch("disable-gpu-compositing");
+  command_line->AppendSwitch("in-process-gpu");
+  command_line->AppendSwitchWithValue("use-gl", "swiftshader");
+  command_line->AppendSwitch("use-mock-keychain");
+  command_line->AppendSwitchWithValue(
+      "disable-features",
+      "SegmentationPlatformFeature,OptimizationGuideModelDownloading,MediaRouter,VizDisplayCompositor");
   NSLog(@"[CEF] Using external Chrome profile %@ (user-data-dir=%@ profile-directory=%@)",
         external_profile,
         user_data_dir,
