@@ -23,6 +23,7 @@ class AppDelegate: NSObject,
     @IBOutlet private var menuCheckForUpdates: NSMenuItem?
     @IBOutlet private var menuOpenConfig: NSMenuItem?
     @IBOutlet private var menuSettingsPanel: NSMenuItem?
+    private var menuTodoWorkspace: NSMenuItem?
     @IBOutlet private var menuReloadConfig: NSMenuItem?
     @IBOutlet private var menuSecureInput: NSMenuItem?
     @IBOutlet private var menuQuit: NSMenuItem?
@@ -139,9 +140,23 @@ class AppDelegate: NSObject,
         updateController.viewModel
     }
 
-    @MainActor lazy var aiTerminalManagerStore = AITerminalManagerStore(
-        appDelegateProvider: { [weak self] in self }
-    )
+    @MainActor private var _aiTerminalManagerStore: AITerminalManagerStore?
+
+    @MainActor var aiTerminalManagerStore: AITerminalManagerStore {
+        if let store = _aiTerminalManagerStore {
+            return store
+        }
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { [weak self] in self }
+        )
+        _aiTerminalManagerStore = store
+        return store
+    }
+
+    @MainActor var existingAITerminalManagerStore: AITerminalManagerStore? {
+        _aiTerminalManagerStore
+    }
 
     @MainActor lazy var controlHarnessAuditLogger = ControlHarnessAuditLogger(
         bundleID: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex"
@@ -623,6 +638,8 @@ class AppDelegate: NSObject,
     /// Setup localized titles for menu items that are created in xib but need
     /// to track our runtime language selection.
     private func setupMenuLocalization() {
+        installTodoWorkspaceMenuItemIfNeeded()
+        menuTodoWorkspace?.title = L10n.SSHConnections.todoPanelTitle
         menuSaveWorkspace?.title = L10n.AITerminalManager.saveWorkspaceAction
     }
 
@@ -634,6 +651,7 @@ class AppDelegate: NSObject,
         self.menuCheckForUpdates?.setImageIfDesired(systemSymbolName: "square.and.arrow.down")
         self.menuOpenConfig?.setImageIfDesired(systemSymbolName: "gear")
         self.menuSettingsPanel?.setImageIfDesired(systemSymbolName: "slider.horizontal.3")
+        self.menuTodoWorkspace?.setImageIfDesired(systemSymbolName: "checklist")
         self.menuReloadConfig?.setImageIfDesired(systemSymbolName: "arrow.trianglehead.2.clockwise.rotate.90")
         self.menuSecureInput?.setImageIfDesired(systemSymbolName: "lock.display")
         self.menuNewWindow?.setImageIfDesired(systemSymbolName: "macwindow.badge.plus")
@@ -760,6 +778,24 @@ class AppDelegate: NSObject,
         guard let menuItem else { return }
         menuItem.keyEquivalent = ""
         menuItem.keyEquivalentModifierMask = []
+    }
+
+    private func installTodoWorkspaceMenuItemIfNeeded() {
+        guard menuTodoWorkspace == nil,
+              let settingsItem = menuSettingsPanel,
+              let menu = settingsItem.menu else { return }
+
+        let item = NSMenuItem(
+            title: L10n.SSHConnections.todoPanelTitle,
+            action: #selector(showTodoWorkspace(_:)),
+            keyEquivalent: "m"
+        )
+        item.target = self
+        item.keyEquivalentModifierMask = [.command, .shift]
+
+        let insertionIndex = menu.index(of: settingsItem) + 1
+        menu.insertItem(item, at: max(insertionIndex, 0))
+        menuTodoWorkspace = item
     }
 
     // MARK: Notifications and Events

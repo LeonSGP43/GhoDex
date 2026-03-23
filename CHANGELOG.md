@@ -12,7 +12,176 @@ All notable changes to this project are documented in this file.
 - Verification: `zig build test -Dtest-filter="formatEntry includes super+q ignore on darwin defaults"`; `git diff --check`
 - Files: `src/config/Config.zig`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `CHANGELOG.md`
 - Decision trail: Treat app termination as a higher-risk action than shell line editing in this fork. Preventing accidental quits at the default keybinding layer and keeping the modal copy honest are both part of the same explicit-quit contract.
+### docs(control): expand todo api usage guide
 
+- What changed: Expanded `/Users/leongong/Desktop/LeonProjects/gho_workspace/wt-macos-todolist-picker-opus-20260320/TODO_CONTROL_API.md` into a fuller operator guide that now covers transport options, socket resolution, request and response envelopes, workspace ID discovery, carry-forward pointer semantics, detailed command usage for every todo control action, mutation and snapshot fields, error handling, and end-to-end automation flows.
+- Why: The first version documented the command surface but still left too much implicit for another program to integrate safely, especially around pointer behavior, idempotent mutations, workspace assignment, and how to discover the right identifiers from the running app.
+- Impact: External callers now have one durable reference that explains how to add todos, update notes, assign workspaces, toggle completion state, and sync stale unfinished items through the app's real control harness without reverse-engineering payloads from source.
+- Verification: `git diff --check`
+- Files: `TODO_CONTROL_API.md`, `CHANGELOG.md`
+- Decision trail: For automation surfaces, completeness matters more than brevity. A concise command list is not enough when the underlying model includes pointer rows, idempotency rules, and app-owned identifiers that external callers can misuse without explicit guidance.
+
+### fix(macos): avoid resetting todo sidebar scale on invalid samples
+
+- What changed: Tightened the todo sidebar typography refresh so it only updates the scale when the focused surface exposes a valid quicklook font sample, instead of falling back to `1x` during transient nil reads.
+- Why: During focus transitions or surface rebuild timing, a temporary missing font sample could incorrectly snap the sidebar back to its base size even though the terminal font had not really reset.
+- Impact: The sidebar now keeps the last known-good scale until a fresh valid terminal font sample arrives, which removes spurious size jumps during refresh churn.
+- Verification: `git diff --check`; `cd macos && nu build.nu --configuration Debug --action build`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
+- Decision trail: For UI sync based on asynchronously exposed runtime state, stale-but-valid is safer than replacing it with a guessed default on missing data. Missing samples should defer updates, not rewrite the scale.
+
+### fix(macos): keep todo sidebar font scaling responsive
+
+- What changed: Reworked the todo sidebar font-scale refresh path so each terminal font-size change starts a new refresh session and cancels stale pending retries, instead of relying on one short fixed retry chain.
+- Why: Repeated `Cmd +` or `Cmd -` presses could outlast the old retry window, which meant the sidebar sometimes sampled the terminal font before the new size fully applied and then stopped updating.
+- Impact: The todo sidebar now keeps tracking repeated font-size changes more reliably instead of appearing to freeze after several quick adjustments.
+- Verification: `git diff --check`; `cd macos && nu build.nu --configuration Debug --action build`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
+- Decision trail: Treat font-size sync as a short-lived session keyed to the latest user action. Cancelling stale retries is safer than stacking overlapping delayed refreshes when the underlying terminal font updates asynchronously.
+
+### refactor(macos): scale and expand todo sidebar content
+
+- What changed: Taught the in-window todo sidebar to derive its typography scale from the focused terminal surface font so `Cmd +`, `Cmd -`, and reset-size actions refresh the sidebar text proportionally, and made todo card content tappable so truncated titles and notes can expand to their full height on demand instead of staying hard-clamped.
+- Why: The sidebar still felt visually detached from the rest of the app because its semantic text styles were fixed at one scale even when the user changed terminal text size. At the same time, long todo notes could only be partially read because the rows had no disclosure state beyond fixed line limits.
+- Impact: Todo content now stays closer to the active terminal's visual rhythm after font-size adjustments, and long task messages can be opened inline without forcing edit mode or losing the compact default card height.
+- Verification: `git diff --check`; `cd macos && nu build.nu --configuration Debug --action build`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Features/Terminal/BaseTerminalController.swift`, `macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift`, `CHANGELOG.md`
+- Decision trail: Keep the sidebar aligned to the user's active reading scale by sampling the focused surface's real quicklook font instead of inventing a separate zoom preference. For dense task rows, preserve a compact default layout but let the content surface itself disclose fully on tap rather than requiring a mode switch.
+
+### feat(control): add todo control harness commands
+
+- What changed: Extended the native control harness and `ghodex +control` CLI with todo-oriented commands for snapshot, add, update, completion toggle, workspace assignment, and stale-pointer sync. Added typed todo snapshot/mutation responses in the Swift core and wrote a dedicated `TODO_CONTROL_API.md` with CLI examples, raw JSON payloads, response fields, and error behavior.
+- Why: The todo system was only operable from the macOS UI, which blocked automation and made it hard for external programs to add tasks, mark them done, or sync stale unfinished pointers into today using the app's real data model.
+- Impact: Programs can now drive the existing todo feature set through the same native control harness that already powers tab and terminal automation, without inventing a parallel todo storage format or bypassing pointer-resolution rules.
+- Verification: `git diff --check`; `zig build -Demit-macos-app=false`; `cd macos && nu build.nu --configuration Debug --action build`
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `macos/Sources/Features/Control Harness/ControlHarnessSupport.swift`, `src/cli/control.zig`, `TODO_CONTROL_API.md`, `CHANGELOG.md`
+- Decision trail: Reuse the existing control harness instead of adding a second automation entry point. That keeps todo mutations on the same app-owned store, preserves carry-forward pointer semantics, and makes the CLI and raw socket JSON behave as two skins over one protocol.
+
+### refactor(macos): streamline todo timeline rendering
+
+- What changed: Replaced the todo timeline's default SwiftUI scroll container with an AppKit-backed scroll view that fully disables visible scrollers, and moved the sidebar's timeline items, workspace assignment targets, and active-workspace completion counts onto local derived snapshots instead of recomputing them on every unrelated body refresh.
+- Why: The timeline scrollbar still looked out of place under macOS scroll settings that force indicator visibility, and the sidebar felt sticky because typing into the composer kept re-filtering todo rows, re-sorting workspace targets, and re-deriving summary counts even when the timeline data itself had not changed.
+- Impact: The timeline now stays visually cleaner with no visible scrollbar chrome, and the todo sidebar does less repeated work while typing or toggling controls, which reduces the "卡卡的" feel without changing todo behavior.
+- Verification: `git diff --check`; `cd macos && nu build.nu --configuration Debug --action build`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
+- Decision trail: Treat the timeline as a focused reading surface, not a generic system scroll region. Hiding the scroller needed an AppKit-level container, and smoothing interaction required cutting repeated derived work at the sidebar boundary instead of trying to mask the lag with animation tuning.
+
+### fix(macos): keep todo notes focus and newline behavior plain
+
+- What changed: Hardened the todo quick-add notes editor so focus requests retry across the notes field's animated mount, and changed `Shift+Enter` newline insertion to write a raw line break instead of routing through AppKit text insertion. The notes text view now also disables automatic dash, quote, link, replacement, and completion behaviors that were leaking rich-text style edits into plain task notes.
+- Why: Expanding from the title field with `Shift+Enter` could still miss the real caret because the notes editor was not always attached to a window on the first focus attempt. When the notes text began with list-like prefixes such as `-`, AppKit could auto-continue that formatting on newline, which is wrong for this plain-text todo capture flow.
+- Impact: `Shift+Enter` from the title field now lands the insertion caret in notes more reliably, and line breaks inside notes stay plain instead of auto-inserting extra bullet prefixes.
+- Verification: `git diff --check`; `cd macos && nu build.nu --configuration Debug --action build`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
+- Decision trail: The notes composer should behave like a focused plain-text capture surface, not a smart document editor. Retrying focus at the AppKit boundary is safer than assuming the animated mount is ready on the first pass, and raw newline insertion is more reliable than letting `NSTextView` reinterpret note content as a list.
+
+### fix(macos): restore isolated debug test builds in worktrees
+
+- What changed: Fixed `macos/build.nu` to target the `GhoDex` Xcode project and scheme by default, auto-bootstrap `macos/GhoDexKit.xcframework` when a clean worktree does not have the linked library yet, and pin Xcode `DerivedData` to `macos/build/DerivedData` so build caches stay local to the current worktree. Updated `macos/AGENTS.md` to document the corrected app name, output path, xcframework bootstrap behavior, and the intended `Debug` test-build workflow.
+- Why: The previous script still referenced `Ghostty` paths and reused global Xcode cache state, which made clean worktree builds brittle and could produce the wrong app bundle for local testing. Using `ReleaseLocal` also collided with the installed app identity and made the output look like it “wouldn’t open”.
+- Impact: A fresh worktree can now produce the intended debug test app directly from `macos/build.nu`, with isolated caches and a bundle that does not conflict with the installed release app.
+- Verification: `nu macos/build.nu --help`; `rm -rf macos/build`; `cd macos && nu build.nu --configuration Debug --action build`
+- Files: `macos/build.nu`, `macos/AGENTS.md`, `CHANGELOG.md`
+- Decision trail: Treat the worktree build script as the source of truth for local app testing. If the script points at the wrong Xcode target or shares stale DerivedData across worktrees, every downstream verification step becomes noisy and misleading, so fixing the build entrypoint and cache isolation takes priority over patching individual broken outputs.
+
+### feat(macos): sync stale unfinished todo pointers into today
+
+- What changed: Added a `Sync Unfinished` action for today's todo panel that scans older day files, brings unresolved tasks into today as pointer rows instead of cloning them as new tasks, marks those rows as stale carry-forwards in the UI, and routes edit/complete/assignment changes from the pointer row back to the original source task.
+- Why: Older unfinished tasks should stay visible in today's working list, but duplicating them as brand-new items would corrupt the task history and make completion drift across days.
+- Impact: Today's list can now surface stale work with one click while preserving the original task as the single source of truth. Carry-forward rows stay visually distinct and keep source-day context.
+- Verification: `git diff --check`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild test -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' -only-testing:'GhosttyTests/AITerminalManagerTests'`
+- Files: `macos/Sources/Features/AI Terminal Manager/AITerminalManagerModels.swift`, `macos/Sources/Features/AI Terminal Manager/AITerminalManagerStore.swift`, `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`, `CHANGELOG.md`
+- Decision trail: Treat stale carry-forward rows as references with their own placement in today's list, but always resolve state and mutations against the original task. That preserves history and prevents the same unfinished work from splitting into diverging copies across multiple day files.
+
+### fix(macos): restore todo notes focus after shift-return
+
+- What changed: Added an explicit composer focus-request token so the todo sidebar can re-issue focus even when the target field has not changed, and wired the quick-add title, notes, validation, empty-state CTA, and notes toggle through that shared focus path.
+- Why: `Shift+Enter` could expand the notes area without actually moving the insertion caret into the notes editor because the focus state was already `.notes` before the AppKit text view finished mounting.
+- Impact: Expanding notes from the title field now lands the real cursor inside the notes editor consistently instead of forcing an extra click.
+- Verification: `git diff --check`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
+- Decision trail: SwiftUI focus state alone was not enough once the notes editor appeared through an animated conditional mount. A separate focus-request identity lets the AppKit bridge treat repeated focus requests as real work instead of ignoring them as unchanged state.
+
+### fix(macos): tighten todo composer keyboard flow
+
+- What changed: Switched the todo quick-add composer onto AppKit-backed title and notes inputs so the panel can place a real insertion caret in the title field when `Cmd+Shift+M` opens it, submit the title with `Enter`, expand into notes with `Shift+Enter`, keep `Shift+Enter` as a newline inside notes, and block save with a red validation state when notes exist without a title.
+- Why: The previous SwiftUI-only quick-add flow could not reliably distinguish the title vs notes keyboard behaviors, and opening the panel did not guarantee that the caret was ready in the title field for immediate typing.
+- Impact: The todo sidebar now matches the intended keyboard-first capture loop: open panel, type title, press `Enter` to save or `Shift+Enter` to continue into notes, then confirm from notes with `Enter` without accidentally creating untitled tasks.
+- Verification: `git diff --check`; `zig build -Demit-xcframework=true -Demit-macos-app=false`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration ReleaseLocal -destination 'platform=macOS,arch=arm64' SYMROOT=macos/build`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `CHANGELOG.md`
+- Decision trail: Keyboard capture is the primary value of the sidebar, so command handling had to move to controls that can intercept the actual AppKit newline selectors and explicitly restore the insertion point instead of relying on generic SwiftUI submit hooks.
+
+### refactor(macos): align todo sidebar with system typography
+
+- What changed: Reworked the todo sidebar typography to use semantic system text styles instead of hard-coded point sizes, tightened the overall panel spacing, upgraded the header controls into cleaner circular affordances, moved the quick-add container onto a softer grouped surface, and reduced the card/border treatment so task rows rely more on spacing, native text hierarchy, and restrained status color instead of heavy fixed-size chrome.
+- Why: The previous panel looked visually cheap because it mixed many fixed font sizes with layered rounded rectangles and strong strokes. That made the sidebar feel detached from the rest of macOS and caused type proportions to stop matching the user's system text scale.
+- Impact: The todo sidebar now tracks system typography more naturally, reads less like a custom sketch and more like a native macOS panel, and the hierarchy between title, task content, metadata, and controls is cleaner.
+- Verification: `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
+- Decision trail: Prefer semantic text styles and calmer surface treatment over hand-tuned pixel sizes. When a panel has to live beside native app chrome, matching the system's proportional rhythm matters more than squeezing for a specific screenshot.
+
+### refactor(macos): tighten todo quick-add hit areas
+
+- What changed: Shrunk the todo sidebar quick-add title field back to a compact fixed-height control, kept the optional notes field bounded, aligned the add button to the top row, and moved the add button's capsule chrome into the button label itself so the whole visible blue surface becomes the real hit target instead of only the label text area.
+- Why: The previous quick-add bar let the title field stretch into an oversized block and the add button still felt fiddly because the visible chrome was larger than the reliably clickable region.
+- Impact: The capture area now reads like a compact input row again, and adding a task feels much more direct because the whole button body is clickable.
+- Verification: `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
+- Decision trail: In the capture row, visible size and interactive size need to match exactly. Favor explicit control heights and a true button-sized hit region over flexible layout that looks larger than it behaves.
+
+### refactor(macos): smooth todo sidebar interactions
+
+- What changed: Reduced repeated todo-sidebar work during render by caching the ordered day items in view state, deriving workspace progress from that cached list, reusing shared date/time formatters, and trimming the sidebar's always-on animation surface down to the actual entrance transition; also made the quick-add title and notes regions fully tappable so clicking anywhere inside their rounded input areas focuses the field instead of only the text glyph area.
+- Why: The panel still felt sticky during typing and repeated status changes because each refresh was doing unnecessary re-sorting, formatter creation, and broad animation work. On top of that, the quick-add hit target felt wrong because the visible input surface was larger than the actual focusable area.
+- Impact: Todo capture and row updates feel more fluid, the sidebar spends less time doing avoidable per-render work, and the quick-add inputs now behave like proper full-surface fields.
+- Verification: `git diff --check`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild test -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' -derivedDataPath /tmp/ghodex-todo-panel-20260322-0952 -only-testing:'GhosttyTests/AITerminalManagerTests'`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
+- Decision trail: Favor local cheap state for the panel over repeated derived work from the store during every body recomputation, and make visible interaction surfaces match their actual focus behavior so the UI feels native instead of fiddly.
+
+### refactor(macos): speed up todo sidebar capture and motion
+
+- What changed: Reworked the todo sidebar into an always-ready quick-add flow with a persistent title field, return-to-add submission, optional inline notes, a larger primary add button, larger completion hit targets, a direct complete/reset pill on every row, and a unified sidebar content entrance animation; also changed the default tab quick-look card setting to off so the main tab view stays clean until explicitly enabled.
+- Why: The previous panel still made fast capture feel too modal because adding a task required opening a composer first, and marking completion relied too heavily on a smaller icon target. The tab quick-look card also started visible by default even though the side panel is now the primary task-management surface.
+- Impact: Opening the todo panel now lands directly in a ready-to-type state, repeated task entry is faster, completion toggles are easier to hit, and the sidebar content enters with a more coherent motion rhythm. New configs and default-state reloads also no longer show the in-tab quick-look card unless the user turns it on.
+- Verification: `git diff --check`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild test -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' -only-testing:'GhosttyTests/AITerminalManagerTests'`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Features/AI Terminal Manager/AITerminalManagerModels.swift`, `macos/Sources/Ghostty/Ghostty.Config.swift`, `src/config/Config.zig`, `macos/Sources/Helpers/AppLocalization.swift`, `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`, `CHANGELOG.md`
+- Decision trail: Treat the side panel as the default capture surface and optimize for the loop of `open -> type -> return -> repeat`. Reduce visual and interaction indirection first, then let secondary details such as notes remain expandable. Keep the quick-look card opt-in because duplicated task chrome across the tab and the side panel hurts focus more than it helps.
+
+### fix(macos): keep rapid todo completion toggles responsive
+
+- What changed: Added an in-memory per-day todo document cache and moved app-mode todo file persistence onto a coalescing background coordinator so rapid completion toggles update UI state immediately without forcing synchronous `load -> mutate -> save` work on the main actor for every click.
+- Why: The todo panel was mutating daily JSON files directly on the main actor. Rapidly clicking the completion control could stack repeated disk IO and whole-panel refreshes on the UI thread, which made the panel appear frozen.
+- Impact: Fast completion toggles now stay responsive in the panel and quick-look surfaces. The latest document state is still persisted, but repeated writes for the same day are coalesced off the main thread instead of blocking interaction.
+- Verification: `git diff --check`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild test -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' -only-testing:'GhosttyTests/AITerminalManagerTests'`
+- Files: `macos/Sources/Features/AI Terminal Manager/AITerminalManagerStore.swift`, `CHANGELOG.md`
+- Decision trail: Keep tests deterministic by preserving synchronous writes under the existing test-mode path, but switch real app interactions to cache-first mutation plus serialized background saves so UX stays snappy without weakening file-backed state.
+
+### refactor(macos): make the todo side panel content-first
+
+- What changed: Flattened the in-window todo panel into a list-first layout, removed the oversized top summary card, moved day/progress status into a slim footer, hid the visible scroll indicator, promoted `Add Task` into a full-width primary action, enlarged task title/notes typography, localized the created/completed timeline copy, and replaced the per-row overflow menu with direct visible edit/reset controls plus a visible assignment control.
+- Why: The previous side-panel pass still spent too much visual weight on summary chrome, date controls, and nested rounded surfaces. In practice the task list itself needs to dominate the panel, and common actions cannot require an extra overflow-menu click.
+- Impact: Opening the todo panel now lands the user directly in the task list. Tasks read larger, done vs undone cards are visually distinct, the footer carries low-priority progress state, and editing/resetting/assigning a task is available directly from the card without drilling into a hidden menu.
+- Verification: `git diff --check`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration ReleaseLocal -destination 'platform=macOS,arch=arm64' SYMROOT=macos/build`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `ghodex-todo-picker-phase1-doc.md`, `CHANGELOG.md`
+- Decision trail: Treat the side panel as a fast reading and manipulation surface, not a dashboard. Summary state still matters, but it belongs at the edge of the panel. The main body should spend its space on large task content, direct status affordances, and one-tap row actions instead of nested containers and overflow menus.
+
+### refactor(macos): simplify the todo side-panel hierarchy
+
+- What changed: Reworked the in-window todo side panel so the selected day and timeline become the visual anchor, moved secondary actions into a compact control bar and overflow menu, collapsed task creation into a cleaner quick-add composer, and replaced per-row button clusters with quieter metadata pills plus a trailing actions menu.
+- Why: The first side-panel MVP exposed too many equal-weight controls at once, which pulled attention away from the task list itself and made quick capture feel heavier than it needed to be.
+- Impact: The todo panel now defaults to a more focused reading flow: open panel, see today, scan timeline, then optionally expand quick add. Navigation and filtering remain available, but they no longer compete visually with the main task content.
+- Verification: `git diff --check`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild test -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' -skip-testing GhosttyUITests`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `ghodex-todo-picker-phase1-doc.md`, `CHANGELOG.md`
+- Decision trail: Keep the side panel as a management surface, but make the timeline the first-class visual object. Secondary controls should stay discoverable without dominating the panel, and task creation should start from one intentional entry point instead of two always-open text fields.
+
+### feat(macos): add todo workspace quick access and denser new-tab picker
+
+- What changed: Added a manual-first `Todo` tab to the Settings Panel with config-backed settings, workspace bootstrap for date-based todo files, day navigation, completion summaries, inline add/edit/complete/reset actions, task-to-workspace assignment, focused-workspace summaries, an app-wide `Cmd+Shift+M` todo side panel, titlebar progress badges for tabs with assigned tasks, and a configurable in-tab quick-look card for completing or resetting today's assigned tasks; also enlarged the new-tab picker window and tightened row spacing so more options remain visible without changing picker behavior.
+- Why: The existing learning settings flow already proved the value of lightweight workflow tooling inside GhoDex, but task tracking needs a separate manual-first domain with explicit state changes. Once todo items can be assigned to top-level tabs, the user also needs a fast path to open todo management globally without being bounced into the Settings Panel, plus a way to see tab-specific progress from inside the tab itself. In parallel, the new-tab picker interaction was already good, but the viewport exposed too few options at once.
+- Impact: Users can now configure a visible todo workspace rooted at a normal folder path, persist todo settings through `config.ghodex`, manage daily todo items from the panel, assign them to specific top-level tabs, toggle an in-window todo side panel from anywhere in the app, inspect a tab's assigned-task progress directly from that tab, choose which side the panel appears on, control or hide the quick-look card, and see more picker entries per screen without relearning shortcuts or selection flow.
+- Verification: `zig build -Demit-xcframework=true -Demit-macos-app=false`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild test -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' -skip-testing GhosttyUITests`
+- Files: `plan.md`, `ghodex-todo-picker-phase1-spec.md`, `ghodex-todo-picker-phase1-doc.md`, `src/config/Config.zig`, `macos/Sources/Ghostty/Ghostty.Config.swift`, `macos/Sources/Ghostty/GhosttyPackage.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/App/macOS/AppDelegate+SSHConnections.swift`, `macos/Sources/Features/AI Terminal Manager/AITerminalManagerModels.swift`, `macos/Sources/Features/AI Terminal Manager/AITerminalManagerStore.swift`, `macos/Sources/Features/SSH Connections/SSHConnectionsController.swift`, `macos/Sources/Features/SSH Connections/SSHConnectionsView.swift`, `macos/Sources/Features/Terminal/Window Styles/TerminalWindow.swift`, `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Features/New Tab Picker/NewTabPickerController.swift`, `macos/Sources/Features/New Tab Picker/NewTabPickerView.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`, `CHANGELOG.md`
+- Decision trail: Keep todo state separate from learning/task-queue automation and require explicit UI-driven mutation for item status. Use the app config as the source of truth for settings, but store day documents as user-visible date files under a normal workspace folder. Use the stable top-level workspace/tab UUID as the assignment key so task ownership survives tab reuse/restoration. For quick access, keep the Settings Panel as the durable settings surface, but use an in-window side panel for `Cmd+Shift+M` so task review/updates stay inside the current tab context. For the picker, preserve search and keyboard behavior and change only window geometry and list density.
 ### docs(readme): document the recommended Ctrl+U disable override
 
 - What changed: Added a README note that this fork's recommended local macOS setup disables `Ctrl+U` in the terminal surface via `keybind = ctrl+u=ignore`.
@@ -29,7 +198,6 @@ All notable changes to this project are documented in this file.
 - Verification: `bash ./scripts/prune-build-artifacts.sh`; `bash ./scripts/prune-build-artifacts.sh --current-only`; `make prune-build-artifacts-dry-run`
 - Files: `scripts/prune-build-artifacts.sh`, `Makefile`, `HACKING.md`, `CHANGELOG.md`
 - Decision trail: Keep normal build commands unchanged and add a separate prune path instead of making regular builds auto-delete caches. The prune script deletes only known generated directories, defaults to dry-run, and combines Git worktree discovery with sibling-folder scanning so stale or broken worktree directories are still reclaimable.
-
 ### fix(build): isolate Zig-driven Xcode test state
 
 - What changed: Updated the Zig macOS test step to pass `HOME` through to `xcodebuild`, pin the destination to the host macOS architecture, and route `-derivedDataPath` into an isolated `/tmp` location instead of sharing Xcode's default global state, while excluding the macOS `.zig-cache` helper directory from SwiftLint so generated artifacts do not poison app-hosted test runs.

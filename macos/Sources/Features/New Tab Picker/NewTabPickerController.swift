@@ -15,7 +15,7 @@ final class NewTabPickerController: NSWindowController {
         self.hostingView = NSHostingView(rootView: AnyView(EmptyView()))
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 520),
+            contentRect: NSRect(x: 0, y: 0, width: 860, height: 640),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -26,7 +26,7 @@ final class NewTabPickerController: NSWindowController {
         window.isMovableByWindowBackground = true
         window.standardWindowButton(.zoomButton)?.isHidden = true
         window.standardWindowButton(.miniaturizeButton)?.isHidden = true
-        window.minSize = NSSize(width: 560, height: 460)
+        window.minSize = NSSize(width: 760, height: 560)
         window.contentView = hostingView
 
         super.init(window: window)

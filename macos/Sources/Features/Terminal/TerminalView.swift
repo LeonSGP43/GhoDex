@@ -66,7 +66,7 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
     @FocusedValue(\.ghosttySurfacePwd) private var surfacePwd
     @FocusedValue(\.ghosttySurfaceCellSize) private var cellSize
 
-    // The pwd of the focused surface as a URL
+        // The pwd of the focused surface as a URL
     private var pwdURL: URL? {
         guard let surfacePwd, surfacePwd != "" else { return nil }
         return URL(fileURLWithPath: surfacePwd)
@@ -74,6 +74,9 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
 
     var body: some View {
         let paneTabModel = viewModel as? any TerminalPaneTabModel
+        let terminalController = viewModel as? BaseTerminalController
+        let appDelegate = NSApp.delegate as? AppDelegate
+        let todoSidebarSafeAreaEdge = (appDelegate?.existingAITerminalManagerStore?.todoSettings.sidebarEdge ?? .leading).safeAreaEdge
         switch ghostty.readiness {
         case .loading:
             Text(AppLocalization.localizedText("Loading"))
@@ -130,12 +133,1429 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                     }
                 }
 
+                if let terminalController, let store = appDelegate?.aiTerminalManagerStore {
+                    TodoWorkspaceOverlay(
+                        store: store,
+                        workspaceID: terminalController.workspaceID,
+                        workspaceTitle: terminalController.titleOverride?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                            ? terminalController.titleOverride!
+                            : (terminalController.window?.title ?? "Tab"),
+                        parentWindow: terminalController.window,
+                        isSidebarPresented: terminalController.todoSidebarIsPresented
+                    )
+                }
+
                 // Show update information above all else.
                 if viewModel.updateOverlayIsVisible {
                     UpdateOverlay()
                 }
             }
+            .safeAreaInset(edge: todoSidebarSafeAreaEdge, spacing: 0) {
+                if let terminalController,
+                   let store = appDelegate?.aiTerminalManagerStore,
+                   terminalController.todoSidebarIsPresented {
+                    TodoWorkspaceSidebar(
+                        store: store,
+                        terminalController: terminalController,
+                        parentWindow: terminalController.window,
+                        sidebarEdge: store.todoSettings.sidebarEdge
+                    )
+                    .transition(
+                        .move(edge: todoSidebarSafeAreaEdge == .leading ? .leading : .trailing)
+                        .combined(with: .opacity)
+                    )
+                }
+            }
+            .animation(.spring(response: 0.28, dampingFraction: 0.88), value: terminalController?.todoSidebarIsPresented ?? false)
             .frame(maxWidth: .greatestFiniteMagnitude, maxHeight: .greatestFiniteMagnitude)
+        }
+    }
+}
+
+private struct TodoWorkspaceOverlay: View {
+    @ObservedObject var store: AITerminalManagerStore
+
+    let workspaceID: UUID
+    let workspaceTitle: String
+    weak var parentWindow: NSWindow?
+    let isSidebarPresented: Bool
+
+    @State private var expanded = true
+
+    private let rowLimit = 3
+
+    private var summary: AITerminalTodoWorkspaceProgressSummary {
+        store.todoWorkspaceSummary(for: workspaceID)
+    }
+
+    private var items: [AITerminalTodoItem] {
+        store.todoItems(assignedTo: workspaceID, includeCompleted: true)
+    }
+
+    private var visibleItems: ArraySlice<AITerminalTodoItem> {
+        items.prefix(expanded ? rowLimit : 0)
+    }
+
+    var body: some View {
+        if store.todoSettings.enabled,
+           store.todoSettings.workspaceOverlayVisible,
+           !isSidebarPresented,
+           summary.totalCount > 0 {
+            overlayCard
+                .padding(12)
+                .frame(
+                    maxWidth: .greatestFiniteMagnitude,
+                    maxHeight: .greatestFiniteMagnitude,
+                    alignment: store.todoSettings.workspaceOverlayCorner.alignment
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topLeading)))
+        }
+    }
+
+    private var overlayCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L10n.SSHConnections.todoQuickLookTitle)
+                        .font(.headline)
+
+                    Text(workspaceTitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+
+                    Text(L10n.SSHConnections.todoQuickLookSummary(
+                        summary.completedCount,
+                        summary.totalCount,
+                        summary.remainingCount
+                    ))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 12)
+
+                Button {
+                    expanded.toggle()
+                } label: {
+                    Image(systemName: expanded ? "chevron.down.circle.fill" : "chevron.up.circle.fill")
+                        .imageScale(.large)
+                }
+                .buttonStyle(.borderless)
+                .help(L10n.SSHConnections.todoQuickLookTitle)
+
+                Button(L10n.SSHConnections.todoQuickLookManage) {
+                    guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
+                    _ = appDelegate.toggleTodoSidebar(
+                        focusedWorkspaceID: workspaceID,
+                        from: parentWindow
+                    )
+                }
+                .buttonStyle(.borderless)
+            }
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(visibleItems), id: \.id) { item in
+                        todoItemRow(item)
+                    }
+
+                    if items.count > rowLimit {
+                        Text(L10n.SSHConnections.todoQuickLookMore(items.count - rowLimit))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: 320, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08))
+        )
+    }
+
+    private func todoItemRow(_ item: AITerminalTodoItem) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Button {
+                _ = store.setTodoItemCompleted(
+                    id: item.id,
+                    isCompleted: !item.isCompleted,
+                    for: .now
+                )
+            } label: {
+                Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(item.isCompleted ? Color.green : Color.secondary)
+                    .font(.body)
+            }
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title)
+                    .font(.callout)
+                    .strikethrough(item.isCompleted)
+                    .foregroundStyle(item.isCompleted ? .secondary : .primary)
+                    .lineLimit(2)
+
+                if !item.notes.isEmpty {
+                    Text(item.notes)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+        }
+    }
+}
+
+private struct TodoWorkspaceSidebar: View {
+    private enum ComposerFocusField: Hashable {
+        case title
+        case notes
+    }
+
+    @ObservedObject var store: AITerminalManagerStore
+    @ObservedObject var terminalController: BaseTerminalController
+
+    weak var parentWindow: NSWindow?
+    let sidebarEdge: AITerminalTodoSidebarEdge
+
+    @State private var selectedDate = Date.now
+    @State private var showCompletedItems = true
+    @State private var todoDocument = AITerminalTodoDayDocument()
+    @State private var orderedTodoItems: [AITerminalTodoItem] = []
+    @State private var visibleTodoItemsSnapshot: [AITerminalTodoItem] = []
+    @State private var workspaceTargetsSnapshot: [AITerminalTodoWorkspaceTarget] = []
+    @State private var workspaceCompletedCount = 0
+    @State private var workspaceTotalCount = 0
+    @State private var draftTitle = ""
+    @State private var draftNotes = ""
+    @State private var composerShowsNotes = false
+    @State private var editingItemID: UUID?
+    @State private var editingTitle = ""
+    @State private var editingNotes = ""
+    @State private var statusMessage: String?
+    @State private var contentIsVisible = false
+    @State private var composerFocusRequestID = UUID()
+    @State private var syncableStaleTodoCount = 0
+    @State private var expandedTodoItems: Set<UUID> = []
+    @State private var sidebarTypographyScale: CGFloat = 1
+    @State private var sidebarTypographyRefreshID = UUID()
+    @FocusState private var composerFocusField: ComposerFocusField?
+
+    private static let sidebarAnimation = Animation.spring(response: 0.24, dampingFraction: 0.9)
+    private static let weekdayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.setLocalizedDateFormatFromTemplate("EEEE")
+        return formatter
+    }()
+    private static let daySubtitleFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.setLocalizedDateFormatFromTemplate("MMM d, yyyy")
+        return formatter
+    }()
+    private static let timelineFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter
+    }()
+    private static let surfaceCornerRadius: CGFloat = 20
+    private static let minimumTypographyScale: CGFloat = 0.9
+    private static let maximumTypographyScale: CGFloat = 1.45
+
+    private var workspaceTitle: String {
+        let trimmed = terminalController.titleOverride?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+        return terminalController.window?.title ?? "Tab"
+    }
+
+    private var workspaceRemainingCount: Int {
+        max(workspaceTotalCount - workspaceCompletedCount, 0)
+    }
+
+    private var composerNeedsTitle: Bool {
+        draftTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            !draftNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var selectedDateIsToday: Bool {
+        Calendar.current.isDateInToday(selectedDate)
+    }
+
+    private var selectedDateTitle: String {
+        if Calendar.current.isDateInToday(selectedDate) {
+            return L10n.SSHConnections.todoDateToday
+        }
+
+        return Self.weekdayFormatter.string(from: selectedDate).capitalized
+    }
+
+    private var selectedDateSubtitle: String {
+        return Self.daySubtitleFormatter.string(from: selectedDate)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            header
+            quickAddBar
+            controlBar
+            timelinePanel
+            footer
+        }
+        .padding(18)
+        .frame(width: 424)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: sidebarEdge == .leading ? .trailing : .leading) {
+            Rectangle()
+                .fill(Color.primary.opacity(0.08))
+                .frame(width: 1)
+        }
+        .opacity(contentIsVisible ? 1 : 0.001)
+        .offset(x: contentIsVisible ? 0 : (sidebarEdge == .leading ? -14 : 14))
+        .animation(Self.sidebarAnimation, value: contentIsVisible)
+        .onAppear {
+            syncFromSettings()
+            refreshWorkspaceTargets()
+            scheduleSidebarTypographyRefresh()
+            withAnimation(Self.sidebarAnimation) {
+                contentIsVisible = true
+            }
+            requestComposerFocus(.title)
+        }
+        .onDisappear {
+            contentIsVisible = false
+        }
+        .onChange(of: store.configurationRevision) { _ in
+            syncFromSettings()
+            refreshWorkspaceTargets()
+        }
+        .onChange(of: store.todoRevision) { _ in
+            refreshDocument()
+        }
+        .onChange(of: showCompletedItems) { _ in
+            refreshDerivedTodoState()
+        }
+        .onChange(of: draftTitle) { _ in
+            clearComposerValidationIfNeeded()
+        }
+        .onChange(of: draftNotes) { _ in
+            clearComposerValidationIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            refreshWorkspaceTargets()
+            scheduleSidebarTypographyRefresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
+            refreshWorkspaceTargets()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .ghodexTerminalFontSizeDidChange, object: terminalController)) { _ in
+            scheduleSidebarTypographyRefresh()
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L10n.SSHConnections.todoPanelTitle)
+                    .font(sidebarFont(.title3, weight: .semibold))
+
+                Text(workspaceTitle)
+                    .font(sidebarFont(.subheadline))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            Button {
+                guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
+                appDelegate.openTodoSettings(from: parentWindow)
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(sidebarFont(.headline, weight: .medium))
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .background(Color.white.opacity(0.03), in: Circle())
+            .help(L10n.SSHConnections.todoPanelOpenSettings)
+
+            Button {
+                terminalController.todoSidebarIsPresented = false
+            } label: {
+                Image(systemName: "xmark")
+                    .font(sidebarFont(.headline, weight: .medium))
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .background(Color.white.opacity(0.03), in: Circle())
+            .help(L10n.SSHConnections.todoPanelClose)
+        }
+    }
+
+    private var quickAddBar: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                quickAddTitleField
+
+                Button(action: addDraftItem) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.accentColor.opacity(0.16))
+
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(Color.accentColor.opacity(0.3), lineWidth: 1)
+
+                        Label(L10n.SSHConnections.todoAddAction, systemImage: "plus")
+                            .font(sidebarFont(.headline, weight: .semibold))
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    .frame(width: 132, height: 52)
+                    .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(draftTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            if composerShowsNotes {
+                quickAddNotesField
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
+            HStack(alignment: .center, spacing: 10) {
+                Text(L10n.SSHConnections.todoSelectedDay(AITerminalTodoSettings.dayString(from: selectedDate)))
+                    .font(sidebarFont(.footnote, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 8)
+
+                Button {
+                    let willShowNotes = !composerShowsNotes
+                    withAnimation(Self.sidebarAnimation) {
+                        composerShowsNotes.toggle()
+                    }
+                    requestComposerFocus(willShowNotes ? .notes : .title)
+                } label: {
+                    Label(L10n.SSHConnections.todoAddNotes, systemImage: composerShowsNotes ? "text.justify" : "note.text.badge.plus")
+                        .font(sidebarFont(.footnote, weight: .semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(composerShowsNotes ? Color.accentColor : .secondary)
+                .background((composerShowsNotes ? Color.accentColor.opacity(0.12) : Color.white.opacity(0.045)), in: Capsule())
+            }
+
+            if composerNeedsTitle {
+                Text(L10n.SSHConnections.todoTitleRequired)
+                    .font(sidebarFont(.footnote, weight: .medium))
+                    .foregroundStyle(.red)
+            }
+        }
+        .padding(14)
+        .todoPanelSurface(cornerRadius: Self.surfaceCornerRadius)
+    }
+
+    private var quickAddTitleField: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.white.opacity(0.045))
+
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(composerNeedsTitle ? Color.red.opacity(0.85) : Color.clear, lineWidth: 1.5)
+
+            TodoComposerTitleField(
+                placeholder: L10n.SSHConnections.todoAddTitle,
+                text: $draftTitle,
+                fontSize: sidebarPointSize(for: .title2),
+                isFocused: composerFocusField == .title,
+                focusRequestID: composerFocusRequestID,
+                onSubmit: addDraftItem,
+                onShiftEnter: {
+                    withAnimation(Self.sidebarAnimation) {
+                        composerShowsNotes = true
+                    }
+                    requestComposerFocus(.notes)
+                }
+            )
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(height: 52)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onTapGesture {
+            requestComposerFocus(.title)
+        }
+    }
+
+    private var quickAddNotesField: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.white.opacity(0.045))
+
+            if draftNotes.isEmpty {
+                Text(L10n.SSHConnections.todoAddNotes)
+                    .font(sidebarFont(.body))
+                    .foregroundStyle(.secondary.opacity(0.72))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 14)
+                    .allowsHitTesting(false)
+            }
+
+            TodoComposerNotesField(
+                text: $draftNotes,
+                fontSize: sidebarPointSize(for: .body),
+                isFocused: composerFocusField == .notes,
+                focusRequestID: composerFocusRequestID,
+                onSubmit: addDraftItem
+            )
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+        }
+        .frame(minHeight: 76)
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onTapGesture {
+            requestComposerFocus(.notes)
+        }
+    }
+
+    private var controlBar: some View {
+        HStack(spacing: 8) {
+            Button {
+                selectedDate = Calendar.current.date(byAdding: .day, value: -1, to: selectedDate) ?? selectedDate
+                persistSelection()
+            } label: {
+                Image(systemName: "chevron.left")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .controlCapsule()
+
+            Button(L10n.SSHConnections.todoDateToday) {
+                selectedDate = .now
+                persistSelection()
+            }
+            .buttonStyle(.plain)
+            .font(sidebarFont(.footnote, weight: .semibold))
+            .foregroundStyle(selectedDateIsToday ? Color.accentColor : Color.primary)
+            .controlCapsule(isEmphasized: selectedDateIsToday)
+
+            if selectedDateIsToday {
+                Button(action: syncStaleTodoPointersIntoToday) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.down.circle")
+                        Text(L10n.SSHConnections.todoSyncStaleAction)
+                        if syncableStaleTodoCount > 0 {
+                            Text("\(syncableStaleTodoCount)")
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .font(sidebarFont(.footnote, weight: .semibold))
+                .foregroundStyle(syncableStaleTodoCount > 0 ? Color.primary : .secondary)
+                .controlCapsule(isEmphasized: syncableStaleTodoCount > 0)
+                .disabled(syncableStaleTodoCount == 0)
+            }
+
+            Button {
+                selectedDate = Calendar.current.date(byAdding: .day, value: 1, to: selectedDate) ?? selectedDate
+                persistSelection()
+            } label: {
+                Image(systemName: "chevron.right")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .controlCapsule()
+
+            Spacer(minLength: 8)
+
+            DatePicker("", selection: $selectedDate, displayedComponents: [.date])
+                .labelsHidden()
+                .datePickerStyle(.compact)
+                .scaleEffect(0.94, anchor: .trailing)
+                .onChange(of: selectedDate) { _ in
+                    persistSelection()
+                }
+
+            Button {
+                showCompletedItems.toggle()
+                persistSelection()
+            } label: {
+                Image(systemName: showCompletedItems ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                    .font(sidebarFont(.title3))
+                    .foregroundStyle(showCompletedItems ? Color.accentColor : .secondary)
+            }
+            .buttonStyle(.plain)
+                .help(showCompletedItems ? L10n.SSHConnections.todoHideCompletedItems : L10n.SSHConnections.todoShowCompletedItems)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var timelinePanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(L10n.SSHConnections.todoTimelineTitle)
+                    .font(sidebarFont(.footnote, weight: .semibold))
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 8)
+
+                Text("\(visibleTodoItemsSnapshot.count)")
+                    .font(sidebarFont(.footnote, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            if visibleTodoItemsSnapshot.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Image(systemName: "checklist")
+                        .font(sidebarFont(.title3))
+                        .foregroundStyle(.secondary)
+
+                    Text(L10n.SSHConnections.todoEmpty)
+                        .foregroundStyle(.secondary)
+
+                    Button(L10n.SSHConnections.todoAddAction) {
+                        requestComposerFocus(.title)
+                    }
+                    .buttonStyle(.borderless)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                TodoTimelineScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        ForEach(visibleTodoItemsSnapshot, id: \.id) { item in
+                            todoItemRow(item)
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var footer: some View {
+        let percentage = Int((todoDocument.completionRate * 100).rounded())
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Rectangle()
+                .fill(Color.primary.opacity(0.08))
+                .frame(height: 1)
+
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(selectedDateTitle)
+                        .font(sidebarFont(.headline, weight: .semibold))
+
+                    Text(selectedDateSubtitle)
+                        .font(sidebarFont(.footnote))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 8)
+
+                Text(L10n.SSHConnections.todoQuickLookSummary(
+                    workspaceCompletedCount,
+                    workspaceTotalCount,
+                    workspaceRemainingCount
+                ))
+                .font(sidebarFont(.footnote))
+                .foregroundStyle(.secondary)
+
+                Text("\(percentage)%")
+                    .font(sidebarFont(.headline, weight: .bold))
+            }
+
+            ProgressView(value: todoDocument.completionRate)
+                .progressViewStyle(.linear)
+                .tint(.accentColor)
+
+            if let statusMessage, !statusMessage.isEmpty {
+                Text(statusMessage)
+                    .font(sidebarFont(.footnote))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func todoItemRow(_ item: AITerminalTodoItem) -> some View {
+        let isExpanded = expandedTodoItems.contains(item.id)
+
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 14) {
+                Button(
+                    action: { toggleCompletion(for: item, isCompleted: !item.isCompleted) },
+                    label: {
+                        Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(item.isCompleted ? Color.green : Color.accentColor)
+                            .font(sidebarFont(.title2, weight: .semibold))
+                            .frame(width: 48, height: 48)
+                            .background(
+                                Circle()
+                                    .fill((item.isCompleted ? Color.green : Color.accentColor).opacity(0.12))
+                            )
+                    }
+                )
+                .buttonStyle(.plain)
+                .contentShape(Circle())
+
+                VStack(alignment: .leading, spacing: 10) {
+                    if editingItemID == item.id {
+                        TextField(L10n.SSHConnections.todoAddTitle, text: $editingTitle, axis: .vertical)
+                            .textFieldStyle(.plain)
+                            .font(sidebarFont(.title3, weight: .semibold))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                        TextField(L10n.SSHConnections.todoAddNotes, text: $editingNotes, axis: .vertical)
+                            .textFieldStyle(.plain)
+                            .font(sidebarFont(.body))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    } else {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(item.title)
+                                .font(sidebarFont(.title3, weight: .semibold))
+                                .strikethrough(item.isCompleted, color: .secondary)
+                                .foregroundStyle(item.isCompleted ? Color.primary.opacity(0.62) : .primary)
+                                .fixedSize(horizontal: false, vertical: isExpanded)
+                                .lineLimit(isExpanded ? nil : 3)
+
+                            if !item.notes.isEmpty {
+                                Text(item.notes)
+                                    .font(sidebarFont(.body))
+                                    .foregroundStyle(item.isCompleted ? Color.secondary.opacity(0.85) : Color.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .lineLimit(isExpanded ? nil : 4)
+                            }
+
+                            if let stalePointerLabel = todoStalePointerLabel(for: item) {
+                                metadataText(stalePointerLabel, systemImage: "arrow.turn.down.right")
+                            }
+
+                            HStack(alignment: .center, spacing: 8) {
+                                metadataText(todoTimelineLabel(for: item), systemImage: "clock")
+
+                                Spacer(minLength: 4)
+
+                                Image(systemName: isExpanded ? "arrow.up.left.and.arrow.down.right" : "arrow.down.right.and.arrow.up.left")
+                                    .font(sidebarFont(.footnote, weight: .semibold))
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            toggleTodoExpansion(for: item)
+                        }
+                    }
+                }
+            }
+
+            if editingItemID == item.id {
+                HStack(spacing: 8) {
+                    Button(L10n.AITerminalManager.cancelEdit) {
+                        editingItemID = nil
+                        editingTitle = ""
+                        editingNotes = ""
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button(L10n.SSHConnections.todoActionSave) {
+                        guard let document = store.updateTodoItem(
+                            id: item.id,
+                            title: editingTitle,
+                            notes: editingNotes,
+                            for: selectedDate
+                        ) else {
+                            statusMessage = store.lastError
+                            return
+                        }
+                        todoDocument = document
+                        editingItemID = nil
+                        editingTitle = ""
+                        editingNotes = ""
+                        statusMessage = nil
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            } else {
+                HStack(alignment: .center, spacing: 8) {
+                    todoInlineActionButton(
+                        title: item.isCompleted ? L10n.SSHConnections.todoActionReset : L10n.SSHConnections.todoActionComplete,
+                        systemImage: item.isCompleted ? "arrow.counterclockwise" : "checkmark",
+                        isEmphasized: true
+                    ) {
+                        toggleCompletion(for: item, isCompleted: !item.isCompleted)
+                    }
+
+                    todoInlineActionButton(title: L10n.SSHConnections.todoActionEdit, systemImage: "square.and.pencil") {
+                        editingItemID = item.id
+                        editingTitle = item.title
+                        editingNotes = item.notes
+                    }
+
+                    todoAssignmentMenu(for: item)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(todoCardBackground(for: item), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(todoCardBorder(for: item), lineWidth: item.isCompleted ? 1 : 1.5)
+        )
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(todoCardBorder(for: item))
+                .frame(width: 4)
+                .padding(.vertical, 10)
+        }
+    }
+
+    private func todoAssignmentMenu(for item: AITerminalTodoItem) -> some View {
+        Menu {
+            Button(L10n.SSHConnections.todoAssignmentClear) {
+                assignTodoItem(item.id, to: nil)
+            }
+
+            if workspaceTargetsSnapshot.isEmpty {
+                Text(L10n.SSHConnections.todoAssignmentNoTabs)
+            } else {
+                ForEach(workspaceTargetsSnapshot) { target in
+                    Button(target.title) {
+                        assignTodoItem(item.id, to: target.workspaceID)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "rectangle.stack.badge.person.crop")
+                    .font(sidebarFont(.footnote))
+                Text(todoAssignmentTitle(for: item))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "chevron.down")
+                    .font(sidebarFont(.footnote, weight: .bold))
+            }
+            .font(sidebarFont(.footnote, weight: .medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(Color.white.opacity(0.045), in: Capsule())
+        }
+        .menuStyle(.borderlessButton)
+    }
+
+    private func todoAssignmentTitle(for item: AITerminalTodoItem) -> String {
+        guard let workspaceID = item.assignedWorkspaceID else {
+            return L10n.SSHConnections.todoAssignmentUnassigned
+        }
+        return workspaceTargetsSnapshot.first(where: { $0.workspaceID == workspaceID })?.title
+            ?? L10n.SSHConnections.todoAssignmentUnavailable
+    }
+
+    private func todoTimelineLabel(for item: AITerminalTodoItem) -> String {
+        let created = Self.timelineFormatter.string(from: item.createdAt)
+        if let completedAt = item.completedAt {
+            return L10n.SSHConnections.todoTimelineCreatedCompleted(
+                created,
+                Self.timelineFormatter.string(from: completedAt)
+            )
+        }
+        return L10n.SSHConnections.todoTimelineCreated(created)
+    }
+
+    private func todoStalePointerLabel(for item: AITerminalTodoItem) -> String? {
+        guard let sourceReference = item.sourceItem else { return nil }
+        guard let sourceDate = AITerminalTodoSettings.date(fromDayString: sourceReference.day) else {
+            return L10n.SSHConnections.todoStalePointer(sourceReference.day)
+        }
+        return L10n.SSHConnections.todoStalePointer(Self.daySubtitleFormatter.string(from: sourceDate))
+    }
+
+    private func syncFromSettings() {
+        let settings = store.todoSettings
+        showCompletedItems = settings.showCompletedItems
+        selectedDate = AITerminalTodoSettings.date(fromDayString: settings.selectedDateAnchor) ?? .now
+        refreshDocument()
+    }
+
+    private func refreshDocument() {
+        let document = store.todoDocument(for: selectedDate)
+        todoDocument = document
+        orderedTodoItems = document.orderedItems
+        expandedTodoItems.formIntersection(Set(orderedTodoItems.map(\.id)))
+        refreshDerivedTodoState()
+        refreshStaleTodoSyncState()
+    }
+
+    private func refreshDerivedTodoState() {
+        visibleTodoItemsSnapshot = showCompletedItems
+            ? orderedTodoItems
+            : orderedTodoItems.filter { !$0.isCompleted }
+
+        var completedCount = 0
+        var totalCount = 0
+        for item in orderedTodoItems where item.assignedWorkspaceID == terminalController.workspaceID {
+            totalCount += 1
+            if item.isCompleted {
+                completedCount += 1
+            }
+        }
+
+        workspaceCompletedCount = completedCount
+        workspaceTotalCount = totalCount
+    }
+
+    private func refreshWorkspaceTargets() {
+        workspaceTargetsSnapshot = store.liveTodoWorkspaceTargets()
+    }
+
+    private func addDraftItem() {
+        if draftTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            statusMessage = L10n.SSHConnections.todoTitleRequired
+            requestComposerFocus(.title)
+            return
+        }
+
+        guard let document = store.addTodoItem(
+            title: draftTitle,
+            notes: draftNotes,
+            for: selectedDate
+        ) else {
+            statusMessage = store.lastError
+            return
+        }
+
+        todoDocument = document
+        draftTitle = ""
+        draftNotes = ""
+        composerShowsNotes = false
+        statusMessage = nil
+        requestComposerFocus(.title)
+    }
+
+    private func persistSelection() {
+        let settings = store.todoSettings
+        store.saveTodoSettings(.init(
+            enabled: settings.enabled,
+            workspaceRootPath: settings.workspaceRootPath,
+            showCompletedItems: showCompletedItems,
+            selectedDateAnchor: AITerminalTodoSettings.dayString(from: selectedDate),
+            sidebarEdge: settings.sidebarEdge,
+            workspaceOverlayVisible: settings.workspaceOverlayVisible,
+            workspaceOverlayCorner: settings.workspaceOverlayCorner
+        ))
+        statusMessage = store.lastError
+        refreshDocument()
+    }
+
+    private func clearComposerValidationIfNeeded() {
+        if !composerNeedsTitle && statusMessage == L10n.SSHConnections.todoTitleRequired {
+            statusMessage = nil
+        }
+    }
+
+    private func refreshStaleTodoSyncState() {
+        syncableStaleTodoCount = selectedDateIsToday ? store.syncableStaleTodoPointerCount(into: selectedDate) : 0
+    }
+
+    private func requestComposerFocus(_ field: ComposerFocusField) {
+        composerFocusField = field
+        composerFocusRequestID = UUID()
+    }
+
+    private func scheduleSidebarTypographyRefresh(remainingAttempts: Int = 10) {
+        let refreshID = UUID()
+        sidebarTypographyRefreshID = refreshID
+        performSidebarTypographyRefresh(refreshID: refreshID, remainingAttempts: remainingAttempts)
+    }
+
+    private func performSidebarTypographyRefresh(
+        refreshID: UUID,
+        remainingAttempts: Int
+    ) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+            guard sidebarTypographyRefreshID == refreshID else { return }
+
+            refreshSidebarTypographyScale()
+
+            guard remainingAttempts > 0 else { return }
+            performSidebarTypographyRefresh(
+                refreshID: refreshID,
+                remainingAttempts: remainingAttempts - 1
+            )
+        }
+    }
+
+    private func refreshSidebarTypographyScale() {
+        let bodyPointSize = NSFont.preferredFont(forTextStyle: .body).pointSize
+        guard bodyPointSize > 0,
+              let focusedPointSize = terminalController.focusedSurface?.quicklookFontPointSize
+        else { return }
+
+        let nextScale = min(
+            max(focusedPointSize / bodyPointSize, Self.minimumTypographyScale),
+            Self.maximumTypographyScale
+        )
+        guard abs(nextScale - sidebarTypographyScale) > 0.01 else { return }
+        sidebarTypographyScale = nextScale
+    }
+
+    private func sidebarPointSize(for textStyle: NSFont.TextStyle) -> CGFloat {
+        NSFont.preferredFont(forTextStyle: textStyle).pointSize * sidebarTypographyScale
+    }
+
+    private func sidebarFont(_ textStyle: NSFont.TextStyle, weight: Font.Weight = .regular) -> Font {
+        .system(size: sidebarPointSize(for: textStyle), weight: weight)
+    }
+
+    private func toggleTodoExpansion(for item: AITerminalTodoItem) {
+        if expandedTodoItems.contains(item.id) {
+            expandedTodoItems.remove(item.id)
+        } else {
+            expandedTodoItems.insert(item.id)
+        }
+    }
+
+    private func syncStaleTodoPointersIntoToday() {
+        guard let syncedCount = store.syncIncompleteTodoPointers(into: selectedDate) else {
+            statusMessage = store.lastError
+            return
+        }
+
+        statusMessage = syncedCount > 0
+            ? L10n.SSHConnections.todoSyncStaleSuccess(syncedCount)
+            : L10n.SSHConnections.todoSyncStaleEmpty
+        refreshDocument()
+    }
+
+    private func assignTodoItem(_ id: UUID, to workspaceID: UUID?) {
+        guard let document = store.assignTodoItem(id: id, to: workspaceID, for: selectedDate) else {
+            statusMessage = store.lastError
+            return
+        }
+        todoDocument = document
+        statusMessage = nil
+    }
+
+    private func toggleCompletion(for item: AITerminalTodoItem, isCompleted: Bool) {
+        guard let document = store.setTodoItemCompleted(
+            id: item.id,
+            isCompleted: isCompleted,
+            for: selectedDate
+        ) else {
+            statusMessage = store.lastError
+            return
+        }
+        todoDocument = document
+        statusMessage = nil
+    }
+
+    private func metadataText(_ title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(sidebarFont(.footnote))
+            .foregroundStyle(.secondary)
+    }
+
+    private func todoInlineActionButton(
+        title: String,
+        systemImage: String,
+        isEmphasized: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(sidebarFont(.footnote, weight: .semibold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isEmphasized ? Color.accentColor : .secondary)
+        .background(
+            (isEmphasized ? Color.accentColor.opacity(0.12) : Color.white.opacity(0.045)),
+            in: Capsule()
+        )
+    }
+
+    private func todoCardBackground(for item: AITerminalTodoItem) -> Color {
+        if item.isCompleted {
+            return Color.green.opacity(0.06)
+        }
+        if item.isCarryForwardPointer {
+            return Color.orange.opacity(0.045)
+        }
+        return Color.white.opacity(0.025)
+    }
+
+    private func todoCardBorder(for item: AITerminalTodoItem) -> Color {
+        if item.isCompleted {
+            return Color.green.opacity(0.32)
+        }
+        if item.isCarryForwardPointer {
+            return Color.orange.opacity(0.2)
+        }
+        return Color.white.opacity(0.08)
+    }
+}
+
+private struct TodoComposerTitleField: NSViewRepresentable {
+    let placeholder: String
+    @Binding var text: String
+    let fontSize: CGFloat
+    let isFocused: Bool
+    let focusRequestID: UUID
+    let onSubmit: () -> Void
+    let onShiftEnter: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, onSubmit: onSubmit, onShiftEnter: onShiftEnter)
+    }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField(frame: .zero)
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = .systemFont(ofSize: fontSize, weight: .semibold)
+        field.placeholderString = placeholder
+        field.textColor = .labelColor
+        field.lineBreakMode = .byTruncatingTail
+        field.maximumNumberOfLines = 1
+        field.cell?.usesSingleLineMode = true
+        field.delegate = context.coordinator
+        context.coordinator.textField = field
+        return field
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        context.coordinator.text = $text
+        context.coordinator.onSubmit = onSubmit
+        context.coordinator.onShiftEnter = onShiftEnter
+        context.coordinator.focusRequestID = focusRequestID
+
+        let nextFont = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+        if nsView.font?.pointSize != nextFont.pointSize {
+            nsView.font = nextFont
+        }
+
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+
+        guard isFocused else { return }
+        DispatchQueue.main.async {
+            guard context.coordinator.lastAppliedFocusRequestID != focusRequestID else { return }
+            guard let window = nsView.window else { return }
+            if window.firstResponder !== nsView.currentEditor() {
+                window.makeFirstResponder(nsView)
+            }
+            guard let editor = nsView.currentEditor() as? NSTextView else { return }
+            let insertionPoint = NSRange(location: nsView.stringValue.count, length: 0)
+            if editor.selectedRange() != insertionPoint {
+                editor.setSelectedRange(insertionPoint)
+            }
+            context.coordinator.lastAppliedFocusRequestID = focusRequestID
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var text: Binding<String>
+        var onSubmit: () -> Void
+        var onShiftEnter: () -> Void
+        var focusRequestID = UUID()
+        var lastAppliedFocusRequestID: UUID?
+        weak var textField: NSTextField?
+
+        init(
+            text: Binding<String>,
+            onSubmit: @escaping () -> Void,
+            onShiftEnter: @escaping () -> Void
+        ) {
+            self.text = text
+            self.onSubmit = onSubmit
+            self.onShiftEnter = onShiftEnter
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField else { return }
+            text.wrappedValue = field.stringValue
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard control === textField else { return false }
+
+            if commandSelector == #selector(NSResponder.insertLineBreak(_:)) {
+                onShiftEnter()
+                return true
+            }
+
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+                    onShiftEnter()
+                } else {
+                    onSubmit()
+                }
+                return true
+            }
+
+            return false
+        }
+    }
+}
+
+private struct TodoTimelineScrollView<Content: View>: NSViewRepresentable {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(hostingView: NSHostingView(rootView: content))
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView(frame: .zero)
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.scrollerStyle = .overlay
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+
+        let hostingView = context.coordinator.hostingView
+        hostingView.frame = NSRect(origin: .zero, size: .zero)
+        scrollView.documentView = hostingView
+        return scrollView
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        let hostingView = context.coordinator.hostingView
+        hostingView.rootView = content
+
+        let targetWidth = max(nsView.contentSize.width, 1)
+        if hostingView.frame.width != targetWidth {
+            hostingView.setFrameSize(NSSize(width: targetWidth, height: hostingView.frame.height))
+        }
+
+        let fittingSize = hostingView.fittingSize
+        let targetSize = NSSize(width: targetWidth, height: fittingSize.height)
+        if hostingView.frame.size != targetSize {
+            hostingView.setFrameSize(targetSize)
+        }
+    }
+
+    final class Coordinator {
+        let hostingView: NSHostingView<Content>
+
+        init(hostingView: NSHostingView<Content>) {
+            self.hostingView = hostingView
+        }
+    }
+}
+
+private struct TodoComposerNotesField: NSViewRepresentable {
+    @Binding var text: String
+    let fontSize: CGFloat
+    let isFocused: Bool
+    let focusRequestID: UUID
+    let onSubmit: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, onSubmit: onSubmit)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView(frame: .zero)
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+
+        let textView = NSTextView(frame: .zero)
+        textView.drawsBackground = false
+        textView.isRichText = false
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.importsGraphics = false
+        textView.allowsUndo = true
+        textView.font = .systemFont(ofSize: fontSize)
+        textView.textColor = .labelColor
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticDataDetectionEnabled = false
+        textView.isAutomaticLinkDetectionEnabled = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isAutomaticTextCompletionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isContinuousSpellCheckingEnabled = false
+        textView.textContainerInset = NSSize(width: 0, height: 4)
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.delegate = context.coordinator
+
+        scrollView.documentView = textView
+        context.coordinator.textView = textView
+        return scrollView
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        context.coordinator.text = $text
+        context.coordinator.onSubmit = onSubmit
+        context.coordinator.focusRequestID = focusRequestID
+
+        guard let textView = context.coordinator.textView else { return }
+
+        let nextFont = NSFont.systemFont(ofSize: fontSize)
+        if textView.font?.pointSize != nextFont.pointSize {
+            textView.font = nextFont
+        }
+
+        if textView.string != text {
+            textView.string = text
+        }
+
+        guard isFocused else { return }
+        context.coordinator.scheduleFocusAttempt()
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var text: Binding<String>
+        var onSubmit: () -> Void
+        var focusRequestID = UUID()
+        var lastAppliedFocusRequestID: UUID?
+        weak var textView: NSTextView?
+
+        init(text: Binding<String>, onSubmit: @escaping () -> Void) {
+            self.text = text
+            self.onSubmit = onSubmit
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            text.wrappedValue = textView.string
+        }
+
+        func scheduleFocusAttempt(remainingAttempts: Int = 8) {
+            DispatchQueue.main.async { [weak self] in
+                self?.applyFocus(remainingAttempts: remainingAttempts)
+            }
+        }
+
+        private func applyFocus(remainingAttempts: Int) {
+            guard lastAppliedFocusRequestID != focusRequestID else { return }
+            guard let textView else { return }
+            guard let window = textView.window else {
+                if remainingAttempts > 0 {
+                    scheduleFocusAttempt(remainingAttempts: remainingAttempts - 1)
+                }
+                return
+            }
+            if window.firstResponder !== textView && !window.makeFirstResponder(textView) {
+                if remainingAttempts > 0 {
+                    scheduleFocusAttempt(remainingAttempts: remainingAttempts - 1)
+                }
+                return
+            }
+            let insertionPoint = NSRange(location: textView.string.count, length: 0)
+            if textView.selectedRange() != insertionPoint {
+                textView.setSelectedRange(insertionPoint)
+            }
+            lastAppliedFocusRequestID = focusRequestID
+        }
+
+        private func insertPlainNewline(into textView: NSTextView) {
+            let selectedRange = textView.selectedRange()
+            guard textView.shouldChangeText(in: selectedRange, replacementString: "\n") else { return }
+            textView.textStorage?.replaceCharacters(in: selectedRange, with: "\n")
+            let nextLocation = selectedRange.location + 1
+            textView.setSelectedRange(NSRange(location: nextLocation, length: 0))
+            textView.didChangeText()
+        }
+
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertLineBreak(_:)) {
+                insertPlainNewline(into: textView)
+                return true
+            }
+
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+                    insertPlainNewline(into: textView)
+                } else {
+                    onSubmit()
+                }
+                return true
+            }
+
+            return false
+        }
+    }
+}
+
+private extension View {
+    func todoPanelSurface(cornerRadius: CGFloat) -> some View {
+        self
+            .background(Color.white.opacity(0.026), in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.05), lineWidth: 1)
+            )
+    }
+
+    func controlCapsule(isEmphasized: Bool = false) -> some View {
+        self
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                (isEmphasized ? Color.accentColor.opacity(0.14) : Color.white.opacity(0.038)),
+                in: Capsule()
+            )
+    }
+}
+
+private extension AITerminalTodoSidebarEdge {
+    var safeAreaEdge: HorizontalEdge {
+        switch self {
+        case .leading:
+            return .leading
+        case .trailing:
+            return .trailing
+        }
+    }
+}
+
+private extension AITerminalTodoOverlayCorner {
+    var alignment: Alignment {
+        switch self {
+        case .topLeading:
+            return .topLeading
+        case .topTrailing:
+            return .topTrailing
+        case .bottomLeading:
+            return .bottomLeading
+        case .bottomTrailing:
+            return .bottomTrailing
         }
     }
 }

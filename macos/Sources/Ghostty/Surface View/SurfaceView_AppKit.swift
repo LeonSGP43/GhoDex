@@ -2877,6 +2877,16 @@ extension Ghostty.SurfaceView {
 
 }
 
+extension Ghostty.SurfaceView {
+    var quicklookFontPointSize: CGFloat? {
+        guard let surface, let fontRaw = ghostty_surface_quicklook_font(surface) else { return nil }
+        let font = Unmanaged<CTFont>.fromOpaque(fontRaw)
+        let pointSize = CTFontGetSize(font.takeUnretainedValue())
+        font.release()
+        return pointSize > 0 ? pointSize : nil
+    }
+}
+
 /// Caches a value for some period of time, evicting it automatically when that time expires.
 /// We use this to cache our surface content. This probably should be extracted some day
 /// to a more generic helper.
