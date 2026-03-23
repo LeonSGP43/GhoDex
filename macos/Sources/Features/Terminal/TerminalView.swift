@@ -326,6 +326,10 @@ private struct TodoWorkspaceSidebar: View {
     @State private var showCompletedItems = true
     @State private var todoDocument = AITerminalTodoDayDocument()
     @State private var orderedTodoItems: [AITerminalTodoItem] = []
+    @State private var visibleTodoItemsSnapshot: [AITerminalTodoItem] = []
+    @State private var workspaceTargetsSnapshot: [AITerminalTodoWorkspaceTarget] = []
+    @State private var workspaceCompletedCount = 0
+    @State private var workspaceTotalCount = 0
     @State private var draftTitle = ""
     @State private var draftNotes = ""
     @State private var composerShowsNotes = false
@@ -367,22 +371,8 @@ private struct TodoWorkspaceSidebar: View {
         return terminalController.window?.title ?? "Tab"
     }
 
-    private var workspaceTargets: [AITerminalTodoWorkspaceTarget] {
-        store.liveTodoWorkspaceTargets()
-    }
-
-    private var summary: AITerminalTodoWorkspaceProgressSummary {
-        let assigned = orderedTodoItems.filter { $0.assignedWorkspaceID == terminalController.workspaceID }
-        return .init(
-            workspaceID: terminalController.workspaceID,
-            completedCount: assigned.filter(\.isCompleted).count,
-            totalCount: assigned.count
-        )
-    }
-
-    private var visibleTodoItems: [AITerminalTodoItem] {
-        guard !showCompletedItems else { return orderedTodoItems }
-        return orderedTodoItems.filter { !$0.isCompleted }
+    private var workspaceRemainingCount: Int {
+        max(workspaceTotalCount - workspaceCompletedCount, 0)
     }
 
     private var composerNeedsTitle: Bool {
@@ -428,6 +418,7 @@ private struct TodoWorkspaceSidebar: View {
         .animation(Self.sidebarAnimation, value: contentIsVisible)
         .onAppear {
             syncFromSettings()
+            refreshWorkspaceTargets()
             withAnimation(Self.sidebarAnimation) {
                 contentIsVisible = true
             }
@@ -438,15 +429,25 @@ private struct TodoWorkspaceSidebar: View {
         }
         .onChange(of: store.configurationRevision) { _ in
             syncFromSettings()
+            refreshWorkspaceTargets()
         }
         .onChange(of: store.todoRevision) { _ in
             refreshDocument()
+        }
+        .onChange(of: showCompletedItems) { _ in
+            refreshDerivedTodoState()
         }
         .onChange(of: draftTitle) { _ in
             clearComposerValidationIfNeeded()
         }
         .onChange(of: draftNotes) { _ in
             clearComposerValidationIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            refreshWorkspaceTargets()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
+            refreshWorkspaceTargets()
         }
     }
 
@@ -700,12 +701,12 @@ private struct TodoWorkspaceSidebar: View {
 
                 Spacer(minLength: 8)
 
-                Text("\(visibleTodoItems.count)")
+                Text("\(visibleTodoItemsSnapshot.count)")
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(.secondary)
             }
 
-            if visibleTodoItems.isEmpty {
+            if visibleTodoItemsSnapshot.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
                     Image(systemName: "checklist")
                         .font(.title3)
@@ -721,14 +722,13 @@ private struct TodoWorkspaceSidebar: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
-                ScrollView {
+                TodoTimelineScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(visibleTodoItems, id: \.id) { item in
+                        ForEach(visibleTodoItemsSnapshot, id: \.id) { item in
                             todoItemRow(item)
                         }
                     }
                 }
-                .scrollIndicators(.hidden)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -755,9 +755,9 @@ private struct TodoWorkspaceSidebar: View {
                 Spacer(minLength: 8)
 
                 Text(L10n.SSHConnections.todoQuickLookSummary(
-                    summary.completedCount,
-                    summary.totalCount,
-                    summary.remainingCount
+                    workspaceCompletedCount,
+                    workspaceTotalCount,
+                    workspaceRemainingCount
                 ))
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -905,10 +905,10 @@ private struct TodoWorkspaceSidebar: View {
                 assignTodoItem(item.id, to: nil)
             }
 
-            if workspaceTargets.isEmpty {
+            if workspaceTargetsSnapshot.isEmpty {
                 Text(L10n.SSHConnections.todoAssignmentNoTabs)
             } else {
-                ForEach(workspaceTargets) { target in
+                ForEach(workspaceTargetsSnapshot) { target in
                     Button(target.title) {
                         assignTodoItem(item.id, to: target.workspaceID)
                     }
@@ -937,7 +937,7 @@ private struct TodoWorkspaceSidebar: View {
         guard let workspaceID = item.assignedWorkspaceID else {
             return L10n.SSHConnections.todoAssignmentUnassigned
         }
-        return workspaceTargets.first(where: { $0.workspaceID == workspaceID })?.title
+        return workspaceTargetsSnapshot.first(where: { $0.workspaceID == workspaceID })?.title
             ?? L10n.SSHConnections.todoAssignmentUnavailable
     }
 
@@ -971,7 +971,30 @@ private struct TodoWorkspaceSidebar: View {
         let document = store.todoDocument(for: selectedDate)
         todoDocument = document
         orderedTodoItems = document.orderedItems
+        refreshDerivedTodoState()
         refreshStaleTodoSyncState()
+    }
+
+    private func refreshDerivedTodoState() {
+        visibleTodoItemsSnapshot = showCompletedItems
+            ? orderedTodoItems
+            : orderedTodoItems.filter { !$0.isCompleted }
+
+        var completedCount = 0
+        var totalCount = 0
+        for item in orderedTodoItems where item.assignedWorkspaceID == terminalController.workspaceID {
+            totalCount += 1
+            if item.isCompleted {
+                completedCount += 1
+            }
+        }
+
+        workspaceCompletedCount = completedCount
+        workspaceTotalCount = totalCount
+    }
+
+    private func refreshWorkspaceTargets() {
+        workspaceTargetsSnapshot = store.liveTodoWorkspaceTargets()
     }
 
     private func addDraftItem() {
@@ -1207,6 +1230,59 @@ private struct TodoComposerTitleField: NSViewRepresentable {
             }
 
             return false
+        }
+    }
+}
+
+private struct TodoTimelineScrollView<Content: View>: NSViewRepresentable {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(hostingView: NSHostingView(rootView: content))
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView(frame: .zero)
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.scrollerStyle = .overlay
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+
+        let hostingView = context.coordinator.hostingView
+        hostingView.frame = NSRect(origin: .zero, size: .zero)
+        scrollView.documentView = hostingView
+        return scrollView
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        let hostingView = context.coordinator.hostingView
+        hostingView.rootView = content
+
+        let targetWidth = max(nsView.contentSize.width, 1)
+        if hostingView.frame.width != targetWidth {
+            hostingView.setFrameSize(NSSize(width: targetWidth, height: hostingView.frame.height))
+        }
+
+        let fittingSize = hostingView.fittingSize
+        let targetSize = NSSize(width: targetWidth, height: fittingSize.height)
+        if hostingView.frame.size != targetSize {
+            hostingView.setFrameSize(targetSize)
+        }
+    }
+
+    final class Coordinator {
+        let hostingView: NSHostingView<Content>
+
+        init(hostingView: NSHostingView<Content>) {
+            self.hostingView = hostingView
         }
     }
 }

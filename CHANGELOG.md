@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### refactor(macos): streamline todo timeline rendering
+
+- What changed: Replaced the todo timeline's default SwiftUI scroll container with an AppKit-backed scroll view that fully disables visible scrollers, and moved the sidebar's timeline items, workspace assignment targets, and active-workspace completion counts onto local derived snapshots instead of recomputing them on every unrelated body refresh.
+- Why: The timeline scrollbar still looked out of place under macOS scroll settings that force indicator visibility, and the sidebar felt sticky because typing into the composer kept re-filtering todo rows, re-sorting workspace targets, and re-deriving summary counts even when the timeline data itself had not changed.
+- Impact: The timeline now stays visually cleaner with no visible scrollbar chrome, and the todo sidebar does less repeated work while typing or toggling controls, which reduces the "卡卡的" feel without changing todo behavior.
+- Verification: `git diff --check`; `cd macos && nu build.nu --configuration Debug --action build`
+- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
+- Decision trail: Treat the timeline as a focused reading surface, not a generic system scroll region. Hiding the scroller needed an AppKit-level container, and smoothing interaction required cutting repeated derived work at the sidebar boundary instead of trying to mask the lag with animation tuning.
+
 ### fix(macos): keep todo notes focus and newline behavior plain
 
 - What changed: Hardened the todo quick-add notes editor so focus requests retry across the notes field's animated mount, and changed `Shift+Enter` newline insertion to write a raw line break instead of routing through AppKit text insertion. The notes text view now also disables automatic dash, quote, link, replacement, and completion behaviors that were leaking rich-text style edits into plain task notes.
