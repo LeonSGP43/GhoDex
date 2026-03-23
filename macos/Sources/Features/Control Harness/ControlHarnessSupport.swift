@@ -10,7 +10,16 @@ enum ControlHarnessCommandKind {
 extension ControlHarnessRequest {
     var commandKind: ControlHarnessCommandKind {
         switch command {
-        case "new-tab", "close-tab", "send-text", "run-command", "close-terminal":
+        case "new-tab",
+            "close-tab",
+            "send-text",
+            "run-command",
+            "close-terminal",
+            "todo-add",
+            "todo-update",
+            "todo-complete",
+            "todo-assign",
+            "todo-sync-stale":
             return .mutation
         case "events.subscribe":
             return .subscription

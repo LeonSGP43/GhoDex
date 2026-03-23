@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(control): add todo control harness commands
+
+- What changed: Extended the native control harness and `ghodex +control` CLI with todo-oriented commands for snapshot, add, update, completion toggle, workspace assignment, and stale-pointer sync. Added typed todo snapshot/mutation responses in the Swift core and wrote a dedicated `TODO_CONTROL_API.md` with CLI examples, raw JSON payloads, response fields, and error behavior.
+- Why: The todo system was only operable from the macOS UI, which blocked automation and made it hard for external programs to add tasks, mark them done, or sync stale unfinished pointers into today using the app's real data model.
+- Impact: Programs can now drive the existing todo feature set through the same native control harness that already powers tab and terminal automation, without inventing a parallel todo storage format or bypassing pointer-resolution rules.
+- Verification: `git diff --check`; `zig build -Demit-macos-app=false`; `cd macos && nu build.nu --configuration Debug --action build`
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `macos/Sources/Features/Control Harness/ControlHarnessSupport.swift`, `src/cli/control.zig`, `TODO_CONTROL_API.md`, `CHANGELOG.md`
+- Decision trail: Reuse the existing control harness instead of adding a second automation entry point. That keeps todo mutations on the same app-owned store, preserves carry-forward pointer semantics, and makes the CLI and raw socket JSON behave as two skins over one protocol.
+
 ### refactor(macos): streamline todo timeline rendering
 
 - What changed: Replaced the todo timeline's default SwiftUI scroll container with an AppKit-backed scroll view that fully disables visible scrollers, and moved the sidebar's timeline items, workspace assignment targets, and active-workspace completion counts onto local derived snapshots instead of recomputing them on every unrelated body refresh.

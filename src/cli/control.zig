@@ -31,15 +31,21 @@ const Request = struct {
     request_id: []const u8,
     protocol_version: ?[]const u8 = null,
     command: []const u8,
+    date: ?[]const u8 = null,
     tab_id: ?[]const u8 = null,
     parent_tab_id: ?[]const u8 = null,
     terminal_id: ?[]const u8 = null,
+    todo_id: ?[]const u8 = null,
     scope: ?[]const u8 = null,
     text: ?[]const u8 = null,
     command_text: ?[]const u8 = null,
     working_directory: ?[]const u8 = null,
     title: ?[]const u8 = null,
+    notes: ?[]const u8 = null,
     force: bool = false,
+    completed: ?bool = null,
+    workspace_id: ?[]const u8 = null,
+    include_completed: ?bool = null,
     client: []const u8 = "ghodex-cli",
     idempotency_key: ?[]const u8 = null,
     expected_generation: ?i64 = null,
@@ -75,6 +81,12 @@ const ParsedCommand = struct {
 ///   * `run-command --terminal-id=<id> --command=<text>`
 ///   * `read-terminal --terminal-id=<id> [--scope=visible|screen] [--mode=snapshot|delta] [--since-frame-id=<id>] [--max-lines=<n>] [--max-chars=<n>] [--cursor=<cursor>] [--read-after-write-id=<id>]`
 ///   * `close-terminal --terminal-id=<id>`
+///   * `todo-snapshot [--date=YYYY-MM-DD] [--include-completed=true|false]`
+///   * `todo-add --title=<text> [--notes=<text>] [--date=YYYY-MM-DD]`
+///   * `todo-update --todo-id=<uuid> [--title=<text>] [--notes=<text>] [--date=YYYY-MM-DD]`
+///   * `todo-complete --todo-id=<uuid> --completed=true|false [--date=YYYY-MM-DD]`
+///   * `todo-assign --todo-id=<uuid> [--workspace-id=<uuid>] [--date=YYYY-MM-DD]`
+///   * `todo-sync-stale [--date=YYYY-MM-DD]`
 ///   * `events.subscribe [--since-sequence=<n>] [--event-limit=<n>]`
 ///
 /// The command prints the control harness response JSON to stdout.
@@ -207,12 +219,16 @@ fn parseCommand(alloc: Allocator, args_list: []const [:0]const u8) !ParsedComman
             result.socket_path = try alloc.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "protocol-version")) {
             result.request.protocol_version = try alloc.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "date")) {
+            result.request.date = try alloc.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "tab-id")) {
             result.request.tab_id = try alloc.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "parent-tab-id")) {
             result.request.parent_tab_id = try alloc.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "terminal-id")) {
             result.request.terminal_id = try alloc.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "todo-id")) {
+            result.request.todo_id = try alloc.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "scope")) {
             result.request.scope = try alloc.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "text")) {
@@ -223,6 +239,14 @@ fn parseCommand(alloc: Allocator, args_list: []const [:0]const u8) !ParsedComman
             result.request.working_directory = try alloc.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "title")) {
             result.request.title = try alloc.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "notes")) {
+            result.request.notes = try alloc.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "completed")) {
+            result.request.completed = try parseBool(value);
+        } else if (std.mem.eql(u8, key, "workspace-id")) {
+            result.request.workspace_id = try alloc.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "include-completed")) {
+            result.request.include_completed = try parseBool(value);
         } else if (std.mem.eql(u8, key, "client")) {
             result.request.client = try alloc.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "idempotency-key")) {
@@ -297,6 +321,30 @@ fn validateCommand(request: Request) !void {
         if (request.terminal_id == null) return error.MissingTerminalId;
         return;
     }
+    if (std.mem.eql(u8, request.command, "todo-snapshot")) {
+        return;
+    }
+    if (std.mem.eql(u8, request.command, "todo-add")) {
+        if (request.title == null) return error.MissingTitle;
+        return;
+    }
+    if (std.mem.eql(u8, request.command, "todo-update")) {
+        if (request.todo_id == null) return error.MissingTodoId;
+        if (request.title == null and request.notes == null) return error.MissingTodoPatch;
+        return;
+    }
+    if (std.mem.eql(u8, request.command, "todo-complete")) {
+        if (request.todo_id == null) return error.MissingTodoId;
+        if (request.completed == null) return error.MissingCompletedState;
+        return;
+    }
+    if (std.mem.eql(u8, request.command, "todo-assign")) {
+        if (request.todo_id == null) return error.MissingTodoId;
+        return;
+    }
+    if (std.mem.eql(u8, request.command, "todo-sync-stale")) {
+        return;
+    }
     return error.UnknownSubcommand;
 }
 
@@ -306,6 +354,12 @@ fn parseSignedInt(value: []const u8) !i64 {
 
 fn parseUnsignedInt(value: []const u8) !u32 {
     return std.fmt.parseInt(u32, value, 10);
+}
+
+fn parseBool(value: []const u8) !bool {
+    if (std.ascii.eqlIgnoreCase(value, "true")) return true;
+    if (std.ascii.eqlIgnoreCase(value, "false")) return false;
+    return error.InvalidBoolean;
 }
 
 fn resolveSocketPath(alloc: Allocator, override_path: ?[]const u8) ![]const u8 {
@@ -659,6 +713,65 @@ test "parse control read-terminal delta arguments" {
     try testing.expectEqual(@as(?u32, 4096), parsed.request.max_chars);
     try testing.expectEqualStrings("120", parsed.request.cursor.?);
     try testing.expectEqualStrings("seq_42", parsed.request.read_after_write_id.?);
+}
+
+test "parse control todo-add arguments" {
+    const testing = std.testing;
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const argv = [_][:0]const u8{
+        "todo-add",
+        "--title",
+        "Ship control API",
+        "--notes",
+        "Document request and response fields",
+        "--date=2026-03-23",
+    };
+
+    const parsed = try parseCommand(alloc, &argv);
+    try testing.expectEqualStrings("todo-add", parsed.request.command);
+    try testing.expectEqualStrings("Ship control API", parsed.request.title.?);
+    try testing.expectEqualStrings("Document request and response fields", parsed.request.notes.?);
+    try testing.expectEqualStrings("2026-03-23", parsed.request.date.?);
+}
+
+test "parse control todo-complete arguments" {
+    const testing = std.testing;
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const argv = [_][:0]const u8{
+        "todo-complete",
+        "--todo-id=01234567-89AB-CDEF-0123-456789ABCDEF",
+        "--completed=false",
+        "--date=2026-03-23",
+    };
+
+    const parsed = try parseCommand(alloc, &argv);
+    try testing.expectEqualStrings("todo-complete", parsed.request.command);
+    try testing.expectEqualStrings(
+        "01234567-89AB-CDEF-0123-456789ABCDEF",
+        parsed.request.todo_id.?,
+    );
+    try testing.expectEqual(@as(?bool, false), parsed.request.completed);
+    try testing.expectEqualStrings("2026-03-23", parsed.request.date.?);
+}
+
+test "parse control todo-update requires a patch field" {
+    const testing = std.testing;
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const argv = [_][:0]const u8{
+        "todo-update",
+        "--todo-id=01234567-89AB-CDEF-0123-456789ABCDEF",
+    };
+
+    try testing.expectError(error.MissingTodoPatch, parseCommand(alloc, &argv));
 }
 
 test "resolveSocketPath returns the single reachable bundle socket" {
