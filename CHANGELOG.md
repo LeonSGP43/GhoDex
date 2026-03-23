@@ -21,15 +21,6 @@ All notable changes to this project are documented in this file.
 - Files: `scripts/prune-build-artifacts.sh`, `Makefile`, `HACKING.md`, `CHANGELOG.md`
 - Decision trail: Keep normal build commands unchanged and add a separate prune path instead of making regular builds auto-delete caches. The prune script deletes only known generated directories, defaults to dry-run, and combines Git worktree discovery with sibling-folder scanning so stale or broken worktree directories are still reclaimable.
 
-### docs(agents): add GhoDex cache cleanup note and local skill
-
-- What changed: Added `clenGhodexCache.md` at the repo root as the durable note for the GhoDex cache-prune workflow, and added a project-local Codex skill at `.codex/skills/clenGhodexCache/SKILL.md` so future agents can discover and reuse the same safe cleanup procedure.
-- Why: The cache-prune command is operational repo knowledge that should stay easy to find for both humans and agents instead of living only in recent chat history.
-- Impact: Future cleanup requests can point to one stable repo document or trigger the local skill directly, reducing repeated explanation and lowering the chance of an agent improvising a broader deletion command.
-- Verification: `test -f clenGhodexCache.md`; `test -f .codex/skills/clenGhodexCache/SKILL.md`
-- Files: `clenGhodexCache.md`, `.codex/skills/clenGhodexCache/SKILL.md`, `CHANGELOG.md`
-- Decision trail: Store the human-readable note at the repo root for visibility, and keep the agent-facing workflow in a minimal local skill so the cleanup path remains reusable without adding broader repo tooling.
-
 ### fix(build): isolate Zig-driven Xcode test state
 
 - What changed: Updated the Zig macOS test step to pass `HOME` through to `xcodebuild`, pin the destination to the host macOS architecture, and route `-derivedDataPath` into an isolated `/tmp` location instead of sharing Xcode's default global state, while excluding the macOS `.zig-cache` helper directory from SwiftLint so generated artifacts do not poison app-hosted test runs.
