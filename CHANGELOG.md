@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(macos): restore isolated debug test builds in worktrees
+
+- What changed: Fixed `macos/build.nu` to target the `GhoDex` Xcode project and scheme by default, auto-bootstrap `macos/GhoDexKit.xcframework` when a clean worktree does not have the linked library yet, and pin Xcode `DerivedData` to `macos/build/DerivedData` so build caches stay local to the current worktree. Updated `macos/AGENTS.md` to document the corrected app name, output path, xcframework bootstrap behavior, and the intended `Debug` test-build workflow.
+- Why: The previous script still referenced `Ghostty` paths and reused global Xcode cache state, which made clean worktree builds brittle and could produce the wrong app bundle for local testing. Using `ReleaseLocal` also collided with the installed app identity and made the output look like it “wouldn’t open”.
+- Impact: A fresh worktree can now produce the intended debug test app directly from `macos/build.nu`, with isolated caches and a bundle that does not conflict with the installed release app.
+- Verification: `nu macos/build.nu --help`; `rm -rf macos/build`; `cd macos && nu build.nu --configuration Debug --action build`
+- Files: `macos/build.nu`, `macos/AGENTS.md`, `CHANGELOG.md`
+- Decision trail: Treat the worktree build script as the source of truth for local app testing. If the script points at the wrong Xcode target or shares stale DerivedData across worktrees, every downstream verification step becomes noisy and misleading, so fixing the build entrypoint and cache isolation takes priority over patching individual broken outputs.
+
 ### feat(macos): sync stale unfinished todo pointers into today
 
 - What changed: Added a `Sync Unfinished` action for today's todo panel that scans older day files, brings unresolved tasks into today as pointer rows instead of cloning them as new tasks, marks those rows as stale carry-forwards in the UI, and routes edit/complete/assignment changes from the pointer row back to the original source task.
