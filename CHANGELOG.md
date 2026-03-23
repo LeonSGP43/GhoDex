@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### docs(control): expand todo api usage guide
+
+- What changed: Expanded `/Users/leongong/Desktop/LeonProjects/gho_workspace/wt-macos-todolist-picker-opus-20260320/TODO_CONTROL_API.md` into a fuller operator guide that now covers transport options, socket resolution, request and response envelopes, workspace ID discovery, carry-forward pointer semantics, detailed command usage for every todo control action, mutation and snapshot fields, error handling, and end-to-end automation flows.
+- Why: The first version documented the command surface but still left too much implicit for another program to integrate safely, especially around pointer behavior, idempotent mutations, workspace assignment, and how to discover the right identifiers from the running app.
+- Impact: External callers now have one durable reference that explains how to add todos, update notes, assign workspaces, toggle completion state, and sync stale unfinished items through the app's real control harness without reverse-engineering payloads from source.
+- Verification: `git diff --check`
+- Files: `TODO_CONTROL_API.md`, `CHANGELOG.md`
+- Decision trail: For automation surfaces, completeness matters more than brevity. A concise command list is not enough when the underlying model includes pointer rows, idempotency rules, and app-owned identifiers that external callers can misuse without explicit guidance.
+
 ### fix(macos): avoid resetting todo sidebar scale on invalid samples
 
 - What changed: Tightened the todo sidebar typography refresh so it only updates the scale when the focused surface exposes a valid quicklook font sample, instead of falling back to `1x` during transient nil reads.
