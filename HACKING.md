@@ -37,6 +37,21 @@ here:
 | `zig build update-translations` | Updates GhoDex's translation strings (see the [Contributor's Guide on Localizing GhoDex](po/README_CONTRIBUTORS.md)) |
 | `zig build dist`                | Builds a source tarball                                                                                                |
 | `zig build distcheck`           | Builds and validates a source tarball                                                                                  |
+| `make clean`                    | Removes the current checkout's known Zig/Xcode build outputs and caches                                               |
+| `make prune-build-artifacts`    | Deletes known build outputs and caches for this checkout plus sibling GhoDex worktrees                                |
+| `make prune-build-artifacts-dry-run` | Shows what `make prune-build-artifacts` would delete without removing anything                                   |
+
+## Build Artifact Cleanup
+
+Heavy Zig and Xcode iterations can leave behind large `.zig-cache`,
+`macos/.zig-cache`, and `macos/build` directories, and each GhoDex worktree
+keeps its own copies.
+
+Use `make prune-build-artifacts-dry-run` first to inspect reclaimable space,
+then run `make prune-build-artifacts` when you want to delete those generated
+artifacts across the main checkout and sibling `GhoDex-wt-*` directories. The
+prune script only removes known build outputs; it does not touch source files,
+tracked git files, or git metadata.
 
 ## Extra Dependencies
 
