@@ -26,7 +26,19 @@ export default function AppLayout() {
             <Stack.Screen
                 name="index"
                 options={{
-                    headerTitle: 'GhoDex Remote',
+                    headerTitle: 'Workspace',
+                }}
+            />
+            <Stack.Screen
+                name="pairing"
+                options={{
+                    headerTitle: 'Pair Device',
+                }}
+            />
+            <Stack.Screen
+                name="gateway"
+                options={{
+                    headerTitle: 'Gateway',
                 }}
             />
         </Stack>

@@ -1,4 +1,3 @@
-import { AgentContentView } from '@/components/AgentContentView';
 import { AgentInput } from '@/components/AgentInput';
 import { layout } from '@/components/layout';
 import {
@@ -30,14 +29,14 @@ import { t } from '@/text';
 import { tracking, trackMessageSent } from '@/track';
 import { isRunningOnMac } from '@/utils/platform';
 import { useDeviceType, useHeaderHeight, useIsLandscape, useIsTablet } from '@/utils/responsive';
-import { formatPathRelativeToHome, getResumeCommand, getSessionAvatarId, getSessionName, useSessionStatus } from '@/utils/sessionUtils';
+import { formatLastSeen, formatPathRelativeToHome, getResumeCommand, getSessionAvatarId, getSessionName, useSessionStatus } from '@/utils/sessionUtils';
 import { isVersionSupported, MINIMUM_CLI_VERSION } from '@/utils/versionUtils';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as React from 'react';
 import { useMemo } from 'react';
-import { ActivityIndicator, Platform, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUnistyles } from 'react-native-unistyles';
 import type { ModelMode, PermissionMode } from '@/components/PermissionModeSelector';
@@ -238,8 +237,11 @@ function SessionViewLoaded({ sessionId, session }: { sessionId: string, session:
     const expResumeSession = useSetting('expResumeSession');
     const resumeCommand = getResumeCommand(session);
     const {
+        canCopySessionMetadata,
         canResume,
         canShowResume,
+        copySessionMetadata,
+        openDetails,
         resumeSession,
         resumeSessionSubtitle,
         resumingSession,
@@ -268,17 +270,6 @@ function SessionViewLoaded({ sessionId, session }: { sessionId: string, session:
     const updateModelMode = React.useCallback((mode: ModelMode) => {
         storage.getState().updateSessionModelMode(sessionId, mode.key);
     }, [sessionId]);
-
-    // Memoize header-dependent styles to prevent re-renders
-    const headerDependentStyles = React.useMemo(() => ({
-        contentContainer: {
-            flex: 1
-        },
-        flatListStyle: {
-            marginTop: 0 // No marginTop needed since header is handled by parent
-        },
-    }), []);
-
 
     // Handle microphone button press - memoized to prevent button flashing
     const handleMicrophonePress = React.useCallback(async () => {
@@ -325,7 +316,7 @@ function SessionViewLoaded({ sessionId, session }: { sessionId: string, session:
         <>
             <Deferred>
                 {messages.length > 0 && (
-                    <ChatList session={session} />
+                    <ChatList session={session} topInset={12} bottomInset={8} />
                 )}
             </Deferred>
         </>
@@ -444,51 +435,339 @@ function SessionViewLoaded({ sessionId, session }: { sessionId: string, session:
         </CenteredInputWidth>
     ) : null;
 
+    const showContextRail = isTablet || Platform.OS === 'web' || isRunningOnMac();
+    const usageSnapshot = sessionUsage ?? session.latestUsage ?? null;
+    const sessionPath = session.metadata?.path
+        ? formatPathRelativeToHome(session.metadata.path, session.metadata.homeDir)
+        : null;
+    const workspaceFlavor = session.metadata?.flavor ?? 'unknown';
+    const updatedLabel = formatLastSeen(session.updatedAt, sessionStatus.isConnected);
+    const createdLabel = new Date(session.createdAt).toLocaleString();
+    const primaryStatusColor = sessionStatus.isConnected ? sessionStatus.statusDotColor : theme.colors.textSecondary;
+
+    const conversationBody = messages.length > 0 ? (
+        content
+    ) : (
+        <View style={{
+            flex: 1,
+            alignItems: 'center',
+            justifyContent: 'center',
+            paddingHorizontal: 24,
+        }}>
+            {placeholder}
+        </View>
+    );
 
     return (
         <>
-            {/* CLI Version Warning Overlay - Subtle centered pill */}
-            {shouldShowCliWarning && !(isLandscape && deviceType === 'phone') && (
-                <Pressable
-                    onPress={handleDismissCliWarning}
-                    style={{
-                        position: 'absolute',
-                        top: 8, // Position at top of content area (padding handled by parent)
-                        alignSelf: 'center',
-                        backgroundColor: '#FFF3CD',
-                        borderRadius: 100, // Fully rounded pill
+            <View style={{
+                flexBasis: 0,
+                flexGrow: 1,
+                paddingBottom: safeArea.bottom + ((isRunningOnMac() || Platform.OS === 'web') ? 8 : 0),
+                paddingHorizontal: showContextRail ? 14 : 10,
+                paddingTop: 8,
+            }}>
+                {!showContextRail && (
+                    <View style={{
+                        borderRadius: 22,
+                        backgroundColor: theme.colors.surface,
+                        borderWidth: 1,
+                        borderColor: theme.colors.divider,
                         paddingHorizontal: 14,
-                        paddingVertical: 7,
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        zIndex: 998, // Below voice bar but above content
-                        shadowColor: '#000',
-                        shadowOffset: { width: 0, height: 2 },
-                        shadowOpacity: 0.15,
-                        shadowRadius: 4,
-                        elevation: 4,
-                    }}
-                >
-                    <Ionicons name="warning-outline" size={14} color="#FF9500" style={{ marginRight: 6 }} />
-                    <Text style={{
-                        fontSize: 12,
-                        color: '#856404',
-                        fontWeight: '600'
+                        paddingTop: 14,
+                        paddingBottom: 12,
+                        marginBottom: 10,
+                        gap: 12,
                     }}>
-                        {t('sessionInfo.cliVersionOutdated')}
-                    </Text>
-                    <Ionicons name="close" size={14} color="#856404" style={{ marginLeft: 8 }} />
-                </Pressable>
-            )}
+                        <View style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: 12,
+                        }}>
+                            <View style={{ flex: 1, gap: 4 }}>
+                                <Text style={{
+                                    color: theme.colors.text,
+                                    fontSize: 18,
+                                    fontWeight: '700',
+                                }}>
+                                    {session.metadata?.summary?.text ?? getSessionName(session)}
+                                </Text>
+                                <Text style={{
+                                    color: theme.colors.textSecondary,
+                                    fontSize: 13,
+                                    lineHeight: 18,
+                                }} numberOfLines={2}>
+                                    {sessionPath ?? 'No workspace path'}
+                                </Text>
+                            </View>
+                            <SessionStatusBadge
+                                color={primaryStatusColor}
+                                text={sessionStatus.statusText}
+                            />
+                        </View>
 
-            {/* Main content area - no padding since header is overlay */}
-            <View style={{ flexBasis: 0, flexGrow: 1, paddingBottom: safeArea.bottom + ((isRunningOnMac() || Platform.OS === 'web') ? 8 : 0) }}>
-                <AgentContentView
-                    content={content}
-                    input={input}
-                    placeholder={placeholder}
-                />
-            </View >
+                        <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={{ gap: 8, paddingRight: 12 }}
+                        >
+                            <SessionInfoPill icon="hardware-chip-outline" label={`Model ${modelMode?.name ?? 'Auto'}`} />
+                            <SessionInfoPill icon="shield-outline" label={`Mode ${permissionMode?.name ?? 'Default'}`} />
+                            <SessionInfoPill icon="sparkles-outline" label={workspaceFlavor} />
+                            {session.metadata?.host ? <SessionInfoPill icon="desktop-outline" label={session.metadata.host} /> : null}
+                            {session.metadata?.version ? <SessionInfoPill icon="code-slash-outline" label={`CLI ${session.metadata.version}`} /> : null}
+                            {usageSnapshot?.contextSize ? <SessionInfoPill icon="layers-outline" label={`${formatCompactNumber(usageSnapshot.contextSize)} ctx`} /> : null}
+                        </ScrollView>
+
+                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+                            <SessionActionChip
+                                icon="information-circle-outline"
+                                label="Details"
+                                onPress={openDetails}
+                            />
+                            {experiments ? (
+                                <SessionActionChip
+                                    icon="folder-open-outline"
+                                    label="Files"
+                                    onPress={() => router.push(`/session/${sessionId}/files`)}
+                                />
+                            ) : null}
+                            {canShowResume && expResumeSession ? (
+                                <SessionActionChip
+                                    disabled={!canResume || resumingSession}
+                                    icon={resumingSession ? undefined : 'play-circle-outline'}
+                                    label={resumingSession ? 'Resuming…' : 'Resume'}
+                                    onPress={resumeSession}
+                                />
+                            ) : null}
+                        </View>
+                    </View>
+                )}
+
+                <View style={{
+                    flex: 1,
+                    flexDirection: showContextRail ? 'row' : 'column',
+                    gap: 12,
+                    minHeight: 0,
+                }}>
+                    <View style={{
+                        flex: 1,
+                        minWidth: 0,
+                        borderRadius: 26,
+                        backgroundColor: theme.colors.surface,
+                        borderWidth: 1,
+                        borderColor: theme.colors.divider,
+                        overflow: 'hidden',
+                    }}>
+                        <View style={{
+                            paddingHorizontal: 16,
+                            paddingTop: 14,
+                            paddingBottom: 12,
+                            borderBottomWidth: 1,
+                            borderBottomColor: theme.colors.divider,
+                            gap: 12,
+                        }}>
+                            <View style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: 12,
+                            }}>
+                                <View style={{ flex: 1, gap: 5 }}>
+                                    <Text style={{
+                                        color: theme.colors.text,
+                                        fontSize: 17,
+                                        fontWeight: '700',
+                                    }}>
+                                        Conversation
+                                    </Text>
+                                    <Text style={{
+                                        color: theme.colors.textSecondary,
+                                        fontSize: 13,
+                                        lineHeight: 18,
+                                    }} numberOfLines={1}>
+                                        {sessionPath ?? 'Waiting for workspace metadata'}
+                                    </Text>
+                                </View>
+                                <SessionStatusBadge
+                                    color={primaryStatusColor}
+                                    text={sessionStatus.statusText}
+                                />
+                            </View>
+
+                            <View style={{
+                                flexDirection: 'row',
+                                flexWrap: 'wrap',
+                                gap: 8,
+                            }}>
+                                <SessionInfoPill icon="shield-outline" label={permissionMode?.name ?? 'Default mode'} />
+                                <SessionInfoPill icon="hardware-chip-outline" label={modelMode?.name ?? 'Auto model'} />
+                                <SessionInfoPill icon="time-outline" label={`Updated ${updatedLabel}`} />
+                                {session.metadata?.host ? <SessionInfoPill icon="desktop-outline" label={session.metadata.host} /> : null}
+                            </View>
+
+                            {shouldShowCliWarning && !(isLandscape && deviceType === 'phone') && (
+                                <Pressable
+                                    onPress={handleDismissCliWarning}
+                                    style={{
+                                        backgroundColor: '#FFF3CD',
+                                        borderRadius: 16,
+                                        paddingHorizontal: 14,
+                                        paddingVertical: 10,
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
+                                        gap: 8,
+                                    }}
+                                >
+                                    <Ionicons name="warning-outline" size={16} color="#FF9500" />
+                                    <Text style={{
+                                        flex: 1,
+                                        fontSize: 12,
+                                        color: '#856404',
+                                        fontWeight: '600',
+                                    }}>
+                                        {t('sessionInfo.cliVersionOutdated')}
+                                    </Text>
+                                    <Ionicons name="close" size={14} color="#856404" />
+                                </Pressable>
+                            )}
+
+                            {!sessionStatus.isConnected && canShowResume && expResumeSession && (
+                                <View style={{
+                                    borderRadius: 18,
+                                    backgroundColor: theme.colors.groupped.background,
+                                    padding: 14,
+                                    gap: 10,
+                                }}>
+                                    <Text style={{
+                                        color: theme.colors.text,
+                                        fontSize: 15,
+                                        fontWeight: '700',
+                                    }}>
+                                        Resume this session
+                                    </Text>
+                                    <Text style={{
+                                        color: theme.colors.textSecondary,
+                                        fontSize: 13,
+                                        lineHeight: 18,
+                                    }}>
+                                        {resumeSessionSubtitle}
+                                    </Text>
+                                    <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
+                                        <SessionActionChip
+                                            disabled={!canResume || resumingSession}
+                                            icon={resumingSession ? undefined : 'play-circle-outline'}
+                                            label={resumingSession ? 'Resuming…' : 'Resume'}
+                                            onPress={resumeSession}
+                                            primary
+                                        />
+                                        {resumeCommand ? (
+                                            <SessionActionChip
+                                                icon="copy-outline"
+                                                label="Copy Resume Cmd"
+                                                onPress={async () => Clipboard.setStringAsync(resumeCommand)}
+                                            />
+                                        ) : null}
+                                    </View>
+                                </View>
+                            )}
+                        </View>
+
+                        <View style={{ flex: 1, minHeight: 0 }}>
+                            {conversationBody}
+                        </View>
+
+                        {input ? (
+                            <View style={{
+                                borderTopWidth: 1,
+                                borderTopColor: theme.colors.divider,
+                                backgroundColor: theme.colors.surface,
+                            }}>
+                                {input}
+                            </View>
+                        ) : null}
+                    </View>
+
+                    {showContextRail && (
+                        <ScrollView
+                            style={{
+                                width: 320,
+                                flexGrow: 0,
+                                flexShrink: 0,
+                                borderRadius: 26,
+                                backgroundColor: theme.colors.surface,
+                                borderWidth: 1,
+                                borderColor: theme.colors.divider,
+                            }}
+                            contentContainerStyle={{
+                                padding: 14,
+                                gap: 12,
+                            }}
+                            showsVerticalScrollIndicator={false}
+                        >
+                            <SessionRailCard title="Session">
+                                <SessionDataRow label="State" value={sessionStatus.statusText} />
+                                <SessionDataRow label="Flavor" value={workspaceFlavor} />
+                                <SessionDataRow label="Created" value={createdLabel} />
+                                <SessionDataRow label="Updated" value={updatedLabel} />
+                            </SessionRailCard>
+
+                            <SessionRailCard title="Quick Actions">
+                                <View style={{ gap: 10 }}>
+                                    <SessionActionChip
+                                        icon="information-circle-outline"
+                                        label="Session Details"
+                                        onPress={openDetails}
+                                        primary
+                                    />
+                                    {experiments ? (
+                                        <SessionActionChip
+                                            icon="folder-open-outline"
+                                            label="Open Files"
+                                            onPress={() => router.push(`/session/${sessionId}/files`)}
+                                        />
+                                    ) : null}
+                                    {canShowResume && expResumeSession ? (
+                                        <SessionActionChip
+                                            disabled={!canResume || resumingSession}
+                                            icon={resumingSession ? undefined : 'play-circle-outline'}
+                                            label={resumingSession ? 'Resuming…' : 'Resume Session'}
+                                            onPress={resumeSession}
+                                        />
+                                    ) : null}
+                                    {canCopySessionMetadata ? (
+                                        <SessionActionChip
+                                            icon="copy-outline"
+                                            label="Copy Metadata"
+                                            onPress={copySessionMetadata}
+                                        />
+                                    ) : null}
+                                </View>
+                            </SessionRailCard>
+
+                            <SessionRailCard title="Workspace">
+                                {sessionPath ? <SessionDataRow label="Path" mono value={sessionPath} /> : null}
+                                {session.metadata?.host ? <SessionDataRow label="Host" value={session.metadata.host} /> : null}
+                                {session.metadata?.os ? <SessionDataRow label="OS" value={session.metadata.os} /> : null}
+                                {session.metadata?.version ? <SessionDataRow label="CLI" value={session.metadata.version} /> : null}
+                                <SessionDataRow label="Model" value={modelMode?.name ?? 'Auto'} />
+                                <SessionDataRow label="Mode" value={permissionMode?.name ?? 'Default'} />
+                            </SessionRailCard>
+
+                            {usageSnapshot ? (
+                                <SessionRailCard title="Usage">
+                                    <SessionDataRow label="Input" value={formatCompactNumber(usageSnapshot.inputTokens)} />
+                                    <SessionDataRow label="Output" value={formatCompactNumber(usageSnapshot.outputTokens)} />
+                                    <SessionDataRow label="Cache Read" value={formatCompactNumber(usageSnapshot.cacheRead)} />
+                                    <SessionDataRow label="Cache Create" value={formatCompactNumber(usageSnapshot.cacheCreation)} />
+                                    <SessionDataRow label="Context" value={formatCompactNumber(usageSnapshot.contextSize)} />
+                                </SessionRailCard>
+                            ) : null}
+                        </ScrollView>
+                    )}
+                </View>
+            </View>
 
             {/* Back button for landscape phone mode when header is hidden */}
             {
@@ -529,6 +808,171 @@ function SessionViewLoaded({ sessionId, session }: { sessionId: string, session:
             }
         </>
     )
+}
+
+function SessionStatusBadge(props: {
+    color: string;
+    text: string;
+}) {
+    return (
+        <View style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
+            paddingHorizontal: 10,
+            paddingVertical: 8,
+            borderRadius: 999,
+            backgroundColor: `${props.color}18`,
+        }}>
+            <View style={{
+                width: 8,
+                height: 8,
+                borderRadius: 999,
+                backgroundColor: props.color,
+            }} />
+            <Text style={{
+                color: props.color,
+                fontSize: 12,
+                fontWeight: '700',
+            }}>
+                {props.text}
+            </Text>
+        </View>
+    );
+}
+
+function SessionInfoPill(props: {
+    icon: keyof typeof Ionicons.glyphMap;
+    label: string;
+}) {
+    return (
+        <View style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 6,
+            paddingHorizontal: 11,
+            paddingVertical: 8,
+            borderRadius: 999,
+            backgroundColor: 'rgba(127,127,127,0.12)',
+        }}>
+            <Ionicons name={props.icon} size={14} color="#7a7a7a" />
+            <Text style={{
+                color: '#666',
+                fontSize: 12,
+                fontWeight: '600',
+            }}>
+                {props.label}
+            </Text>
+        </View>
+    );
+}
+
+function SessionActionChip(props: {
+    disabled?: boolean;
+    icon?: keyof typeof Ionicons.glyphMap;
+    label: string;
+    onPress: () => void;
+    primary?: boolean;
+}) {
+    return (
+        <Pressable
+            disabled={props.disabled}
+            onPress={props.onPress}
+            style={({ pressed }) => ({
+                minHeight: 42,
+                paddingHorizontal: 14,
+                paddingVertical: 10,
+                borderRadius: 14,
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+                backgroundColor: props.primary ? '#161616' : 'rgba(127,127,127,0.12)',
+                opacity: props.disabled ? 0.5 : pressed ? 0.78 : 1,
+            })}
+        >
+            {props.icon ? (
+                <Ionicons
+                    name={props.icon}
+                    size={16}
+                    color={props.primary ? '#fff' : '#444'}
+                />
+            ) : null}
+            <Text style={{
+                color: props.primary ? '#fff' : '#222',
+                fontSize: 13,
+                fontWeight: '700',
+            }}>
+                {props.label}
+            </Text>
+        </Pressable>
+    );
+}
+
+function SessionRailCard(props: {
+    children: React.ReactNode;
+    title: string;
+}) {
+    return (
+        <View style={{
+            borderRadius: 18,
+            backgroundColor: 'rgba(127,127,127,0.08)',
+            padding: 14,
+            gap: 12,
+        }}>
+            <Text style={{
+                color: '#202020',
+                fontSize: 14,
+                fontWeight: '800',
+            }}>
+                {props.title}
+            </Text>
+            <View style={{ gap: 10 }}>
+                {props.children}
+            </View>
+        </View>
+    );
+}
+
+function SessionDataRow(props: {
+    label: string;
+    mono?: boolean;
+    value: string;
+}) {
+    return (
+        <View style={{ gap: 4 }}>
+            <Text style={{
+                color: '#7a7a7a',
+                fontSize: 11,
+                fontWeight: '700',
+                letterSpacing: 0.4,
+                textTransform: 'uppercase',
+            }}>
+                {props.label}
+            </Text>
+            <Text style={{
+                color: '#202020',
+                fontSize: 13,
+                lineHeight: 18,
+                fontFamily: props.mono ? (Platform.OS === 'ios' ? 'Menlo' : 'monospace') : undefined,
+            }}>
+                {props.value}
+            </Text>
+        </View>
+    );
+}
+
+function formatCompactNumber(value: number): string {
+    if (!Number.isFinite(value)) {
+        return '0';
+    }
+    if (value >= 1_000_000) {
+        return `${(value / 1_000_000).toFixed(1)}M`;
+    }
+    if (value >= 1_000) {
+        return `${(value / 1_000).toFixed(1)}k`;
+    }
+    return String(value);
 }
 
 function ResumeCommandHint({ command }: { command: string }) {
