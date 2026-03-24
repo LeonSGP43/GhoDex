@@ -2,13 +2,14 @@ import * as React from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
-import { clearStoredSession, loadStoredSession, saveStoredSession } from '@/ghodex/storage';
+import { clearStoredSession, loadStoredSession, saveStoredSession, type StoredSession } from '@/ghodex/storage';
 import { INITIAL_GATEWAY_SESSION, sanitizePort } from '@/ghodex/sessionState';
 import { ActionButton, InfoPill, SectionValue, SurfaceCard } from '@/ghodex/ui';
 
 export default function GhoDexGatewayScreen() {
     const router = useRouter();
     const [loaded, setLoaded] = React.useState(false);
+    const [session, setSession] = React.useState<StoredSession>(INITIAL_GATEWAY_SESSION);
     const [host, setHost] = React.useState(INITIAL_GATEWAY_SESSION.host);
     const [portText, setPortText] = React.useState(String(INITIAL_GATEWAY_SESSION.port));
 
@@ -19,6 +20,7 @@ export default function GhoDexGatewayScreen() {
             if (!active) {
                 return;
             }
+            setSession(stored);
             setHost(stored.host);
             setPortText(String(stored.port));
             setLoaded(true);
@@ -29,15 +31,20 @@ export default function GhoDexGatewayScreen() {
         };
     }, []));
 
+    const resolvedPort = sanitizePort(portText);
+    const paired = !!session.authToken.trim();
+
     const handleApply = React.useCallback(async () => {
         const current = await loadStoredSession();
-        await saveStoredSession({
+        const nextSession = {
             ...current,
             host: host.trim() || INITIAL_GATEWAY_SESSION.host,
-            port: sanitizePort(portText),
-        });
+            port: resolvedPort,
+        };
+        await saveStoredSession(nextSession);
+        setSession(nextSession);
         router.replace('/');
-    }, [host, portText, router]);
+    }, [host, resolvedPort, router]);
 
     const handleClear = React.useCallback(async () => {
         await clearStoredSession();
@@ -48,23 +55,21 @@ export default function GhoDexGatewayScreen() {
         return (
             <View style={styles.loadingScreen}>
                 <ActivityIndicator size="large" color="#8a4b2a" />
-                <Text style={styles.loadingText}>Loading gateway settings…</Text>
+                <Text style={styles.loadingText}>Loading settings…</Text>
             </View>
         );
     }
 
     return (
         <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-            <SurfaceCard
-                title="Gateway Settings"
-                subtitle="This screen owns the connection endpoint. The workspace screen only consumes the saved endpoint."
-            >
+            <SurfaceCard title="Settings" subtitle="Connection, pairing status, and reset actions stay here. The workspace stays focused on the terminal only.">
                 <View style={styles.pillRow}>
-                    <InfoPill icon="radio-outline" label={`${host || INITIAL_GATEWAY_SESSION.host}:${sanitizePort(portText)}`} />
+                    <InfoPill icon="radio-outline" label={`${host || INITIAL_GATEWAY_SESSION.host}:${resolvedPort}`} />
+                    <InfoPill icon="key-outline" label={paired ? 'Paired' : 'Unpaired'} />
                 </View>
             </SurfaceCard>
 
-            <SurfaceCard title="Endpoint" subtitle="Use 127.0.0.1 with adb reverse, or your desktop LAN IP when the phone connects directly.">
+            <SurfaceCard title="Gateway Endpoint" subtitle="Use 127.0.0.1 with adb reverse, or the desktop LAN IP when the phone connects directly.">
                 <TextInput
                     autoCapitalize="none"
                     autoCorrect={false}
@@ -85,14 +90,22 @@ export default function GhoDexGatewayScreen() {
                     style={styles.input}
                     value={portText}
                 />
-                <SectionValue label="Resolved port" mono value={String(sanitizePort(portText))} />
+                <SectionValue label="Resolved port" mono value={String(resolvedPort)} />
                 <View style={styles.actions}>
-                    <ActionButton label="Apply And Return" onPress={handleApply} />
-                    <ActionButton kind="secondary" label="Open Pairing" onPress={() => router.push('/pairing')} />
+                    <ActionButton label="Save And Return" onPress={handleApply} />
                 </View>
             </SurfaceCard>
 
-            <SurfaceCard title="Session State" subtitle="Use this only when you want to fully reset the mobile side.">
+            <SurfaceCard title="Authorization" subtitle="Handle QR pairing here when you need to bind or replace the phone session.">
+                <SectionValue label="Token" mono value={paired ? 'issued' : 'not issued'} />
+                <SectionValue label="Token id" mono value={session.tokenId || 'not issued yet'} />
+                <SectionValue label="Scopes" mono value={session.scopes.length ? session.scopes.join(', ') : 'none'} />
+                <View style={styles.actions}>
+                    <ActionButton label={paired ? 'Re-open Pairing' : 'Open Pairing'} onPress={() => router.push('/pairing')} />
+                </View>
+            </SurfaceCard>
+
+            <SurfaceCard title="Reset" subtitle="Clear the saved mobile-side session if you want to fully re-pair this phone.">
                 <View style={styles.actions}>
                     <ActionButton kind="secondary" label="Clear Saved Session" onPress={handleClear} />
                 </View>

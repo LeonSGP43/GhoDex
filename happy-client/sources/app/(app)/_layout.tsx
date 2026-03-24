@@ -26,7 +26,7 @@ export default function AppLayout() {
             <Stack.Screen
                 name="index"
                 options={{
-                    headerTitle: 'Workspace',
+                    headerShown: false,
                 }}
             />
             <Stack.Screen
@@ -38,7 +38,7 @@ export default function AppLayout() {
             <Stack.Screen
                 name="gateway"
                 options={{
-                    headerTitle: 'Gateway',
+                    headerTitle: 'Settings',
                 }}
             />
         </Stack>
