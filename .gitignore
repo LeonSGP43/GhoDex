@@ -15,6 +15,12 @@ zig-out/
 /.nixos-test-history
 /android/.gradle/
 /android/app/build/
+/happy-client/node_modules/
+/happy-client/.expo/
+/happy-client/.expo-shared/
+/happy-client/android/
+/happy-client/dist/
+/happy-client/ios/
 example/*.wasm
 test/ghostty
 test/cases/**/*.actual.png

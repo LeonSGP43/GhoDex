@@ -1,0 +1,97 @@
+diff --git a/node_modules/expo-updates/android/build.gradle b/node_modules/expo-updates/android/build.gradle
+index 0994c5f..8245ca0 100644
+--- a/node_modules/expo-updates/android/build.gradle
++++ b/node_modules/expo-updates/android/build.gradle
+@@ -25,6 +25,7 @@ buildscript {
+   }
+ 
+   repositories {
++    mavenLocal()
+     mavenCentral()
+   }
+ 
+diff --git a/node_modules/expo-updates/expo-updates-gradle-plugin/.gradle/8.10.2/executionHistory/executionHistory.bin b/node_modules/expo-updates/expo-updates-gradle-plugin/.gradle/8.10.2/executionHistory/executionHistory.bin
+new file mode 100644
+index 0000000..b4c9e5c
+Binary files /dev/null and b/node_modules/expo-updates/expo-updates-gradle-plugin/.gradle/8.10.2/executionHistory/executionHistory.bin differ
+diff --git a/node_modules/expo-updates/expo-updates-gradle-plugin/.gradle/8.10.2/executionHistory/executionHistory.lock b/node_modules/expo-updates/expo-updates-gradle-plugin/.gradle/8.10.2/executionHistory/executionHistory.lock
+new file mode 100644
+index 0000000..bd77046
+Binary files /dev/null and b/node_modules/expo-updates/expo-updates-gradle-plugin/.gradle/8.10.2/executionHistory/executionHistory.lock differ
+diff --git a/node_modules/expo-updates/expo-updates-gradle-plugin/.gradle/buildOutputCleanup/buildOutputCleanup.lock b/node_modules/expo-updates/expo-updates-gradle-plugin/.gradle/buildOutputCleanup/buildOutputCleanup.lock
+new file mode 100644
+index 0000000..5aa2bbf
+Binary files /dev/null and b/node_modules/expo-updates/expo-updates-gradle-plugin/.gradle/buildOutputCleanup/buildOutputCleanup.lock differ
+diff --git a/node_modules/expo-updates/expo-updates-gradle-plugin/.gradle/buildOutputCleanup/cache.properties b/node_modules/expo-updates/expo-updates-gradle-plugin/.gradle/buildOutputCleanup/cache.properties
+new file mode 100644
+index 0000000..48a415b
+--- /dev/null
++++ b/node_modules/expo-updates/expo-updates-gradle-plugin/.gradle/buildOutputCleanup/cache.properties
+@@ -0,0 +1,2 @@
++#Mon Mar 23 12:45:01 CST 2026
++gradle.version=8.10.2
+diff --git a/node_modules/expo-updates/expo-updates-gradle-plugin/.gradle/buildOutputCleanup/outputFiles.bin b/node_modules/expo-updates/expo-updates-gradle-plugin/.gradle/buildOutputCleanup/outputFiles.bin
+new file mode 100644
+index 0000000..18f079a
+Binary files /dev/null and b/node_modules/expo-updates/expo-updates-gradle-plugin/.gradle/buildOutputCleanup/outputFiles.bin differ
+diff --git a/node_modules/expo-updates/expo-updates-gradle-plugin/.gradle/file-system.probe b/node_modules/expo-updates/expo-updates-gradle-plugin/.gradle/file-system.probe
+new file mode 100644
+index 0000000..bc3792c
+Binary files /dev/null and b/node_modules/expo-updates/expo-updates-gradle-plugin/.gradle/file-system.probe differ
+diff --git a/node_modules/expo-updates/expo-updates-gradle-plugin/build.gradle.kts b/node_modules/expo-updates/expo-updates-gradle-plugin/build.gradle.kts
+index 52cb353..88459a3 100644
+--- a/node_modules/expo-updates/expo-updates-gradle-plugin/build.gradle.kts
++++ b/node_modules/expo-updates/expo-updates-gradle-plugin/build.gradle.kts
+@@ -1,18 +1,21 @@
+ import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+ 
++val localM2 = "${System.getProperty("user.home")}/.m2/repository"
++
+ plugins {
+   kotlin("jvm") version("2.0.21")
+   id("java-gradle-plugin")
+ }
+ 
+ repositories {
++  mavenLocal()
+   google()
+   mavenCentral()
+ }
+ 
+ dependencies {
+   implementation(gradleApi())
+-  compileOnly("com.android.tools.build:gradle:8.5.0")
++  compileOnly("com.android.tools.build:gradle:8.5.2")
+   implementation("com.facebook.react:react-native-gradle-plugin")
+ }
+ 
+diff --git a/node_modules/expo-updates/expo-updates-gradle-plugin/build/pluginDescriptors/expo-updates-gradle-plugin.properties b/node_modules/expo-updates/expo-updates-gradle-plugin/build/pluginDescriptors/expo-updates-gradle-plugin.properties
+new file mode 100644
+index 0000000..67a5f32
+--- /dev/null
++++ b/node_modules/expo-updates/expo-updates-gradle-plugin/build/pluginDescriptors/expo-updates-gradle-plugin.properties
+@@ -0,0 +1 @@
++implementation-class=expo.modules.updates.ExpoUpdatesPlugin
+diff --git a/node_modules/expo-updates/expo-updates-gradle-plugin/build/resources/main/META-INF/gradle-plugins/expo-updates-gradle-plugin.properties b/node_modules/expo-updates/expo-updates-gradle-plugin/build/resources/main/META-INF/gradle-plugins/expo-updates-gradle-plugin.properties
+new file mode 100644
+index 0000000..67a5f32
+--- /dev/null
++++ b/node_modules/expo-updates/expo-updates-gradle-plugin/build/resources/main/META-INF/gradle-plugins/expo-updates-gradle-plugin.properties
+@@ -0,0 +1 @@
++implementation-class=expo.modules.updates.ExpoUpdatesPlugin
+diff --git a/node_modules/expo-updates/expo-updates-gradle-plugin/settings.gradle.kts b/node_modules/expo-updates/expo-updates-gradle-plugin/settings.gradle.kts
+new file mode 100644
+index 0000000..b832f84
+--- /dev/null
++++ b/node_modules/expo-updates/expo-updates-gradle-plugin/settings.gradle.kts
+@@ -0,0 +1,10 @@
++pluginManagement {
++  repositories {
++    mavenLocal()
++    google()
++    mavenCentral()
++    gradlePluginPortal()
++  }
++}
++
++rootProject.name = "expo-updates-gradle-plugin"

@@ -1,0 +1,19 @@
+diff --git a/node_modules/react-native-enriched/android/build.gradle b/node_modules/react-native-enriched/android/build.gradle
+index eae1bd0..b6c62a5 100644
+--- a/node_modules/react-native-enriched/android/build.gradle
++++ b/node_modules/react-native-enriched/android/build.gradle
+@@ -4,12 +4,13 @@ buildscript {
+   }
+ 
+   repositories {
++    mavenLocal()
+     google()
+     mavenCentral()
+   }
+ 
+   dependencies {
+-    classpath "com.android.tools.build:gradle:8.7.2"
++    classpath "com.android.tools.build:gradle:8.5.2"
+     // noinspection DifferentKotlinGradleVersion
+     classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:${getExtOrDefault('kotlinVersion')}"
+   }

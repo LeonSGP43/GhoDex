@@ -14,7 +14,7 @@ final class ControlHarnessGateway {
         case metricsReset
     }
 
-    struct Configuration: Sendable {
+    struct Configuration: Sendable, Equatable {
         var isEnabled = false
         var listenHost = "127.0.0.1"
         var listenPort: UInt16 = 0
@@ -117,8 +117,8 @@ final class ControlHarnessGateway {
     private let authManager: ControlHarnessAuth?
     private let requestHandler: (@MainActor (ControlHarnessRequest, String) -> ControlHarnessServiceReply)?
     private let requestAuthorizer: (@MainActor (ControlHarnessRequest) -> RequestAuthorization)?
-    private let rateLimiter: ControlHarnessGatewayRateLimiter
-    private let sessionRegistry: ControlHarnessGatewaySessionRegistry
+    private var rateLimiter: ControlHarnessGatewayRateLimiter
+    private var sessionRegistry: ControlHarnessGatewaySessionRegistry
     private let performanceMonitor: ControlHarnessPerformanceMonitor?
     private let logger: Logger
     private let lifecycleQueue = DispatchQueue(
@@ -147,6 +147,7 @@ final class ControlHarnessGateway {
 
     private(set) var configuration: Configuration
     private(set) var listenerPort: UInt16?
+    private(set) var lastStartupError: String?
 
     private var listenerFD: Int32 = -1
     private var acceptSource: DispatchSourceRead?
@@ -219,6 +220,7 @@ final class ControlHarnessGateway {
 
     func startIfNeeded() {
         guard configuration.isEnabled else {
+            lastStartupError = nil
             logger.debug("control harness gateway transport is disabled")
             return
         }
@@ -228,6 +230,7 @@ final class ControlHarnessGateway {
             let listener = try makeListener(host: configuration.listenHost, port: configuration.listenPort)
             listenerFD = listener.fd
             listenerPort = listener.port
+            lastStartupError = nil
             let source = DispatchSource.makeReadSource(fileDescriptor: listener.fd, queue: acceptQueue)
             source.setEventHandler { [weak self] in
                 self?.acceptAvailableConnections()
@@ -243,9 +246,21 @@ final class ControlHarnessGateway {
                 "control harness gateway listening at \(self.configuration.listenHost, privacy: .public):\(listener.port)"
             )
         } catch {
+            lastStartupError = error.localizedDescription
             logger.error("failed to start control harness gateway: \(error.localizedDescription, privacy: .public)")
             stop()
         }
+    }
+
+    func applyConfiguration(_ configuration: Configuration) {
+        stop()
+        self.configuration = configuration
+        self.rateLimiter = ControlHarnessGatewayRateLimiter(configuration: configuration)
+        self.sessionRegistry = ControlHarnessGatewaySessionRegistry(
+            maxConcurrentSessionsPerIdentity: configuration.maxConcurrentSessionsPerIdentity
+        )
+        self.lastStartupError = nil
+        startIfNeeded()
     }
 
     func stop() {
@@ -385,10 +400,11 @@ final class ControlHarnessGateway {
     ) throws {
         let started = DispatchTime.now()
         let handshake = try Self.readHTTPHeaders(from: clientFD)
-        let key = try Self.parseWebSocketKey(from: handshake)
+        let key = try Self.parseWebSocketKey(from: handshake.headers)
         try Self.writeAll(Self.webSocketHandshakeResponse(for: key), to: clientFD)
 
-        let requestData = try Self.readWebSocketFrame(from: clientFD)
+        var bufferedBytes = handshake.remainder
+        let requestData = try Self.readWebSocketFrame(from: clientFD, bufferedBytes: &bufferedBytes)
         let request = try JSONDecoder().decode(ControlHarnessRequest.self, from: requestData)
         var requestRecorded = false
 
@@ -523,16 +539,9 @@ final class ControlHarnessGateway {
         sessionIdentity: String?
     ) -> AuthorizationResult {
         guard let requestAuthorizer else { return .allow(sessionIdentity: sessionIdentity) }
-
-        let semaphore = DispatchSemaphore(value: 0)
-        var authorization: RequestAuthorization?
-
-        Task { @MainActor in
-            authorization = requestAuthorizer(request)
-            semaphore.signal()
+        let authorization = syncMainActor {
+            requestAuthorizer(request)
         }
-
-        semaphore.wait()
 
         switch authorization ?? .allow {
         case .allow:
@@ -961,16 +970,9 @@ final class ControlHarnessGateway {
                 errorMessage: "The control harness gateway has no request handler"
             ))
         }
-
-        let semaphore = DispatchSemaphore(value: 0)
-        var reply: ControlHarnessServiceReply?
-
-        Task { @MainActor in
-            reply = requestHandler(request, listenerPathDescription())
-            semaphore.signal()
+        let reply = syncMainActor { [self] in
+            requestHandler(request, listenerPathDescription())
         }
-
-        semaphore.wait()
         return reply ?? .single(ControlHarnessResponse(
             requestID: request.requestID,
             status: "error",
@@ -978,6 +980,22 @@ final class ControlHarnessGateway {
             errorCode: "internal_failure",
             errorMessage: "The control harness gateway failed to produce a response"
         ))
+    }
+
+    private func syncMainActor<T>(
+        _ body: @escaping @MainActor () -> T
+    ) -> T? {
+        if Thread.isMainThread {
+            return MainActor.assumeIsolated {
+                body()
+            }
+        }
+
+        return DispatchQueue.main.sync {
+            MainActor.assumeIsolated {
+                body()
+            }
+        }
     }
 
     private func listenerPathDescription() -> String {
@@ -1108,17 +1126,24 @@ final class ControlHarnessGateway {
         return prefix.hasPrefix("GET ")
     }
 
-    private static func readHTTPHeaders(from fd: Int32) throws -> Data {
+    private static func readHTTPHeaders(from fd: Int32) throws -> (headers: Data, remainder: Data) {
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 1024)
         let terminator = Data("\r\n\r\n".utf8)
 
-        while data.range(of: terminator) == nil {
+        while true {
             let count = Darwin.read(fd, &buffer, buffer.count)
             if count > 0 {
                 data.append(buffer, count: count)
                 if data.count > 16_384 {
                     throw ControlHarnessGatewayError.invalidWebSocketHandshake
+                }
+                if let range = data.range(of: terminator) {
+                    let headerEnd = range.upperBound
+                    return (
+                        headers: Data(data[..<headerEnd]),
+                        remainder: Data(data[headerEnd...])
+                    )
                 }
                 continue
             }
@@ -1131,7 +1156,6 @@ final class ControlHarnessGateway {
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
 
-        return data
     }
 
     private static func parseWebSocketKey(from handshake: Data) throws -> String {
@@ -1157,19 +1181,20 @@ final class ControlHarnessGateway {
         let acceptSeed = Data("\(key)258EAFA5-E914-47DA-95CA-C5AB0DC85B11".utf8)
         let digest = Insecure.SHA1.hash(data: acceptSeed)
         let accept = Data(digest).base64EncodedString()
-        return Data(
-            """
-            HTTP/1.1 101 Switching Protocols\r
-            Upgrade: websocket\r
-            Connection: Upgrade\r
-            Sec-WebSocket-Accept: \(accept)\r
-            \r
-            """.utf8
-        )
+        let response =
+            "HTTP/1.1 101 Switching Protocols\r\n" +
+            "Upgrade: websocket\r\n" +
+            "Connection: Upgrade\r\n" +
+            "Sec-WebSocket-Accept: \(accept)\r\n" +
+            "\r\n"
+        return Data(response.utf8)
     }
 
-    private static func readWebSocketFrame(from fd: Int32) throws -> Data {
-        let header = try readExact(from: fd, count: 2)
+    private static func readWebSocketFrame(
+        from fd: Int32,
+        bufferedBytes: inout Data
+    ) throws -> Data {
+        let header = try readExact(from: fd, count: 2, bufferedBytes: &bufferedBytes)
         let firstByte = header[0]
         let secondByte = header[1]
         let opcode = firstByte & 0x0F
@@ -1187,17 +1212,17 @@ final class ControlHarnessGateway {
 
         var payloadLength = Int(secondByte & 0x7F)
         if payloadLength == 126 {
-            let extended = try readExact(from: fd, count: 2)
+            let extended = try readExact(from: fd, count: 2, bufferedBytes: &bufferedBytes)
             payloadLength = Int(UInt16(extended[0]) << 8 | UInt16(extended[1]))
         } else if payloadLength == 127 {
-            let extended = try readExact(from: fd, count: 8)
+            let extended = try readExact(from: fd, count: 8, bufferedBytes: &bufferedBytes)
             payloadLength = extended.reduce(0) { (partial, byte) in
                 (partial << 8) | Int(byte)
             }
         }
 
-        let mask = try readExact(from: fd, count: 4)
-        var payload = try readExact(from: fd, count: payloadLength)
+        let mask = try readExact(from: fd, count: 4, bufferedBytes: &bufferedBytes)
+        var payload = try readExact(from: fd, count: payloadLength, bufferedBytes: &bufferedBytes)
         for index in payload.indices {
             payload[index] ^= mask[payload.distance(from: payload.startIndex, to: index) % 4]
         }
@@ -1246,6 +1271,32 @@ final class ControlHarnessGateway {
                 throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
         }
+        return data
+    }
+
+    private static func readExact(
+        from fd: Int32,
+        count: Int,
+        bufferedBytes: inout Data
+    ) throws -> Data {
+        guard count > 0 else { return Data() }
+
+        if bufferedBytes.count >= count {
+            let prefix = bufferedBytes.prefix(count)
+            bufferedBytes.removeFirst(count)
+            return Data(prefix)
+        }
+
+        var data = Data()
+        if !bufferedBytes.isEmpty {
+            data.append(bufferedBytes)
+            bufferedBytes.removeAll(keepingCapacity: false)
+        }
+
+        if data.count < count {
+            data.append(try readExact(from: fd, count: count - data.count))
+        }
+
         return data
     }
 

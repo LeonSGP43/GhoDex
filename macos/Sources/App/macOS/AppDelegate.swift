@@ -145,6 +145,9 @@ class AppDelegate: NSObject,
         appDelegateProvider: { [weak self] in self }
     )
 
+    @Published private(set) var controlHarnessGatewaySettings = ControlHarnessGatewayAppSettings.load()
+    @Published private(set) var controlHarnessGatewayStatusMessage = ""
+
     @MainActor lazy var controlHarnessAuditLogger = ControlHarnessAuditLogger(
         bundleID: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex"
     )
@@ -211,7 +214,15 @@ class AppDelegate: NSObject,
                     errorCode: "approval_required",
                     errorMessage: "Remote \(request.command) requires desktop approval for terminal_id=\(rawTerminalID)"
                 )
-            case .manual, .managedPaused, .managedCompleted, .managedFailed:
+            case .manual:
+                if request.command == "close-terminal" {
+                    return .deny(
+                        errorCode: "remote_policy_blocked",
+                        errorMessage: "Remote \(request.command) is disabled for terminal state \(managedState.rawValue)"
+                    )
+                }
+                return .allow
+            case .managedPaused, .managedCompleted, .managedFailed:
                 return .deny(
                     errorCode: "remote_policy_blocked",
                     errorMessage: "Remote \(request.command) is disabled for terminal state \(managedState.rawValue)"
@@ -256,7 +267,7 @@ class AppDelegate: NSObject,
 
     lazy var controlHarnessGateway = ControlHarnessGateway(
         bundleID: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
-        configuration: .environment(),
+        configuration: controlHarnessGatewaySettings.resolvedConfiguration(),
         authManager: controlHarnessAuth,
         requestHandler: { [weak self] request, socketPath in
             guard let self else {
@@ -309,6 +320,10 @@ class AppDelegate: NSObject,
     @Published private(set) var appIcon: NSImage?
 
     private var remotePairingQRMenuItem: NSMenuItem?
+    private var remotePairingQRCodeWindow: NSWindow?
+    private var remotePairingQRCodeWindowCloseObserver: NSObjectProtocol?
+    private var remotePairingQRCodePayloadJSON: String?
+    private var remotePairingQRCodePairingCode: String?
 
     override init() {
 #if DEBUG
@@ -324,6 +339,7 @@ class AppDelegate: NSObject,
     // MARK: - NSApplicationDelegate
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        ControlHarnessGatewayAppSettings.registerDefaults()
         UserDefaults.standard.register(defaults: [
             // Disable the automatic full screen menu item because we handle
             // it manually.
@@ -362,6 +378,7 @@ class AppDelegate: NSObject,
         controlHarnessReadSampler.start()
         controlHarnessService.startIfNeeded()
         controlHarnessGateway.startIfNeeded()
+        refreshControlHarnessGatewayStatus()
 
         // Start our update checker.
         updateController.startUpdater()
@@ -750,7 +767,7 @@ class AppDelegate: NSObject,
 
     private func installRemotePairingQRMenuItemIfNeeded() {
         guard remotePairingQRMenuItem == nil,
-              let appMenu = NSApp.mainMenu?.item(at: 0)?.submenu else {
+              let appMenu = resolveApplicationMenu() else {
             return
         }
 
@@ -773,17 +790,21 @@ class AppDelegate: NSObject,
         remotePairingQRMenuItem = menuItem
     }
 
-    private func shouldShowRemotePairingQROnLaunch() -> Bool {
-        guard let rawValue = ProcessInfo.processInfo.environment["GHODEX_CONTROL_HARNESS_PAIRING_QR_ON_LAUNCH"] else {
-            return false
+    private func resolveApplicationMenu() -> NSMenu? {
+        if let menu = menuSettingsPanel?.menu ?? menuAbout?.menu {
+            return menu
         }
 
-        switch rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "1", "true", "yes", "on":
-            return true
-        default:
-            return false
+        let bundleMenuTitle = (Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? "GhoDex"
+        if let matchedMenu = NSApp.mainMenu?.items.first(where: { $0.title == bundleMenuTitle })?.submenu {
+            return matchedMenu
         }
+
+        return NSApp.mainMenu?.item(at: 1)?.submenu
+    }
+
+    private func shouldShowRemotePairingQROnLaunch() -> Bool {
+        controlHarnessGatewaySettings.showPairingQrOnLaunch
     }
 
     @objc
@@ -823,33 +844,162 @@ class AppDelegate: NSObject,
             scopes: pairing.scopes
         )
         let payloadJSON = try payload.serialized()
-
-        let alert = NSAlert()
-        alert.messageText = "Scan Remote Pairing QR"
-        alert.informativeText = "Scan this QR code in GhoDex Remote. It will fill the host, port, and short-lived pairing code, then exchange and refresh automatically."
-        alert.addButton(withTitle: "Close")
-        alert.addButton(withTitle: "Copy Pairing JSON")
-        alert.addButton(withTitle: "Copy Pairing Code")
-        alert.accessoryView = makeRemotePairingAccessoryView(
+        presentRemotePairingQRCodeWindow(
             payloadJSON: payloadJSON,
             host: host,
             port: port,
             pairingCode: pairing.pairingCode,
             expiresAt: pairing.expiresAt
         )
+    }
 
-        NSApp.activate(ignoringOtherApps: true)
-        let response = alert.runModal()
-        switch response {
-        case .alertSecondButtonReturn:
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(payloadJSON, forType: .string)
-        case .alertThirdButtonReturn:
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(pairing.pairingCode, forType: .string)
-        default:
-            break
+    @MainActor
+    private func presentRemotePairingQRCodeWindow(
+        payloadJSON: String,
+        host: String,
+        port: UInt16,
+        pairingCode: String,
+        expiresAt: String
+    ) {
+        closeRemotePairingQRCodeWindow(nil)
+        remotePairingQRCodePayloadJSON = payloadJSON
+        remotePairingQRCodePairingCode = pairingCode
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: 478),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Remote Pairing QR"
+        window.isReleasedWhenClosed = false
+        window.level = .floating
+        window.center()
+        window.contentView = makeRemotePairingWindowContentView(
+            payloadJSON: payloadJSON,
+            host: host,
+            port: port,
+            pairingCode: pairingCode,
+            expiresAt: expiresAt
+        )
+
+        remotePairingQRCodeWindowCloseObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak self, weak window] _ in
+            guard let self else { return }
+            if self.remotePairingQRCodeWindow === window {
+                self.remotePairingQRCodeWindow = nil
+                self.remotePairingQRCodePayloadJSON = nil
+                self.remotePairingQRCodePairingCode = nil
+            }
+            if let observer = self.remotePairingQRCodeWindowCloseObserver {
+                NotificationCenter.default.removeObserver(observer)
+                self.remotePairingQRCodeWindowCloseObserver = nil
+            }
         }
+
+        remotePairingQRCodeWindow = window
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    @MainActor
+    private func makeRemotePairingWindowContentView(
+        payloadJSON: String,
+        host: String,
+        port: UInt16,
+        pairingCode: String,
+        expiresAt: String
+    ) -> NSView {
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: 478))
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.spacing = 12
+        stack.alignment = .centerX
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let titleLabel = NSTextField(labelWithString: "Scan this QR code in GhoDex Remote.")
+        titleLabel.alignment = .center
+        titleLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        titleLabel.maximumNumberOfLines = 2
+        titleLabel.lineBreakMode = .byWordWrapping
+        stack.addArrangedSubview(titleLabel)
+
+        let subtitleLabel = NSTextField(labelWithString: "It fills host, port, and a short-lived pairing code automatically.")
+        subtitleLabel.alignment = .center
+        subtitleLabel.textColor = .secondaryLabelColor
+        subtitleLabel.maximumNumberOfLines = 2
+        subtitleLabel.lineBreakMode = .byWordWrapping
+        stack.addArrangedSubview(subtitleLabel)
+
+        let accessoryView = makeRemotePairingAccessoryView(
+            payloadJSON: payloadJSON,
+            host: host,
+            port: port,
+            pairingCode: pairingCode,
+            expiresAt: expiresAt
+        )
+        accessoryView.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(accessoryView)
+
+        let buttonStack = NSStackView()
+        buttonStack.orientation = .horizontal
+        buttonStack.spacing = 8
+        buttonStack.distribution = .fillEqually
+        buttonStack.translatesAutoresizingMaskIntoConstraints = false
+
+        let closeButton = NSButton(title: "Close", target: self, action: #selector(closeRemotePairingQRCodeWindow(_:)))
+        let copyJSONButton = NSButton(title: "Copy Pairing JSON", target: self, action: #selector(copyRemotePairingQRCodePayloadJSON(_:)))
+        let copyCodeButton = NSButton(title: "Copy Pairing Code", target: self, action: #selector(copyRemotePairingQRCodePairingCode(_:)))
+        [closeButton, copyJSONButton, copyCodeButton].forEach { button in
+            button.bezelStyle = .rounded
+            button.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+            buttonStack.addArrangedSubview(button)
+        }
+        stack.addArrangedSubview(buttonStack)
+
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 18),
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 18),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -18),
+            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -18),
+            accessoryView.widthAnchor.constraint(equalToConstant: 340),
+            buttonStack.widthAnchor.constraint(equalTo: stack.widthAnchor),
+        ])
+
+        return container
+    }
+
+    @MainActor
+    @objc
+    private func closeRemotePairingQRCodeWindow(_ sender: Any?) {
+        if let observer = remotePairingQRCodeWindowCloseObserver {
+            NotificationCenter.default.removeObserver(observer)
+            remotePairingQRCodeWindowCloseObserver = nil
+        }
+        remotePairingQRCodeWindow?.close()
+        remotePairingQRCodeWindow = nil
+        remotePairingQRCodePayloadJSON = nil
+        remotePairingQRCodePairingCode = nil
+    }
+
+    @MainActor
+    @objc
+    private func copyRemotePairingQRCodePayloadJSON(_ sender: Any?) {
+        guard let payloadJSON = remotePairingQRCodePayloadJSON else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(payloadJSON, forType: .string)
+    }
+
+    @MainActor
+    @objc
+    private func copyRemotePairingQRCodePairingCode(_ sender: Any?) {
+        guard let pairingCode = remotePairingQRCodePairingCode else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(pairingCode, forType: .string)
     }
 
     @MainActor
@@ -924,20 +1074,16 @@ class AppDelegate: NSObject,
         case "127.0.0.1", "localhost", "::1":
             throw RemotePairingQRCodeError.loopbackOnlyListener
         case "0.0.0.0", "::", "":
-            if let override = ProcessInfo.processInfo.environment["GHODEX_CONTROL_HARNESS_PAIRING_QR_HOST"]?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-               override.isEmpty == false {
-                return override
+            if let stored = controlHarnessGatewaySettings.normalizedPairingAdvertiseHost {
+                return stored
             }
             guard let address = firstNonLoopbackIPv4Address() else {
                 throw RemotePairingQRCodeError.noAdvertisableAddress
             }
             return address
         default:
-            if let override = ProcessInfo.processInfo.environment["GHODEX_CONTROL_HARNESS_PAIRING_QR_HOST"]?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-               override.isEmpty == false {
-                return override
+            if let stored = controlHarnessGatewaySettings.normalizedPairingAdvertiseHost {
+                return stored
             }
             return listenHost
         }
@@ -1036,15 +1182,47 @@ class AppDelegate: NSObject,
         var errorDescription: String? {
             switch self {
             case .gatewayDisabled:
-                return "The control gateway is disabled. Relaunch GhoDex with GHODEX_CONTROL_HARNESS_GATEWAY_ENABLED=1 first."
+                return "The control gateway is disabled. Enable it in Settings > Gateway first."
             case .gatewayListenerUnavailable:
                 return "The control gateway listener port is not available yet."
             case .loopbackOnlyListener:
-                return "The control gateway is bound to loopback only. Use GHODEX_CONTROL_HARNESS_GATEWAY_HOST=0.0.0.0 or a specific LAN IP before generating a pairing QR."
+                return "The control gateway is bound to loopback only. Change the listen host or pairing QR host in Settings > Gateway before generating a pairing QR."
             case .noAdvertisableAddress:
                 return "No non-loopback IPv4 address was found for the pairing QR."
             }
         }
+    }
+
+    @MainActor
+    func saveControlHarnessGatewaySettings(_ settings: ControlHarnessGatewayAppSettings) {
+        let sanitized = settings.sanitized()
+        sanitized.save()
+        controlHarnessGatewaySettings = sanitized
+        controlHarnessGateway.applyConfiguration(sanitized.resolvedConfiguration())
+        refreshControlHarnessGatewayStatus()
+    }
+
+    @MainActor
+    func refreshControlHarnessGatewayStatus() {
+        if !controlHarnessGateway.configuration.isEnabled {
+            controlHarnessGatewayStatusMessage = L10n.Settings.gatewayStatusDisabled
+            return
+        }
+
+        if let port = controlHarnessGateway.listenerPort, port > 0 {
+            controlHarnessGatewayStatusMessage = L10n.Settings.gatewayStatusListening(
+                controlHarnessGateway.configuration.listenHost,
+                Int(port)
+            )
+            return
+        }
+
+        if let error = controlHarnessGateway.lastStartupError, error.isEmpty == false {
+            controlHarnessGatewayStatusMessage = L10n.Settings.gatewayStatusFailed(error)
+            return
+        }
+
+        controlHarnessGatewayStatusMessage = L10n.Settings.gatewayStatusPending
     }
 
     /// Setup all the images for our menu items.

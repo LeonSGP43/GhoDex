@@ -304,6 +304,8 @@ enum AppLocalization {
         "about.github": "GitHub",
         "settings.title": "Settings",
         "settings.body": "Language can be configured here. For advanced terminal settings, edit $HOME/.config/ghodex/config.ghodex and restart GhoDex.",
+        "settings.general.tab": "General",
+        "settings.gateway.tab": "Gateway",
         "settings.language.title": "App Language",
         "AI Terminal Manager…": "AI Terminal Manager…",
         "Settings Panel…": "Settings Panel…",
@@ -314,6 +316,25 @@ enum AppLocalization {
         "settings.language.option.simplified_chinese": "简体中文",
         "settings.language.restart_required": "Restart GhoDex to apply the language change everywhere.",
         "settings.language.restart_now": "Restart Now",
+        "settings.gateway.title": "Control Gateway",
+        "settings.gateway.description": "Run the mobile pairing gateway directly inside GhoDex. Changes apply immediately and persist across launches.",
+        "settings.gateway.enabled": "Enable gateway on app launch",
+        "settings.gateway.show_qr_on_launch": "Show pairing QR when GhoDex launches",
+        "settings.gateway.listen_host": "Listen Host",
+        "settings.gateway.listen_host.help": "Use 127.0.0.1 for USB plus adb reverse, or 0.0.0.0 / a reachable LAN IP for direct phone access.",
+        "settings.gateway.port": "Port",
+        "settings.gateway.port.help": "The fixed port keeps one active gateway per machine. If another instance already owns it, this instance stays passive.",
+        "settings.gateway.pairing_host": "Pairing QR Host",
+        "settings.gateway.pairing_host.placeholder": "Auto-detect from current LAN address",
+        "settings.gateway.pairing_host.help": "Optional override for the host embedded in the pairing QR. Leave blank to auto-detect.",
+        "settings.gateway.status": "Status",
+        "settings.gateway.status.disabled": "Disabled",
+        "settings.gateway.status.pending": "Applying settings...",
+        "settings.gateway.status.listening": "Listening on %@:%d",
+        "settings.gateway.status.failed": "Failed to start: %@",
+        "settings.gateway.apply": "Apply Gateway Settings",
+        "settings.gateway.show_qr": "Show Pairing QR",
+        "settings.gateway.pending_changes": "Unsaved gateway changes are waiting to be applied.",
         "app.allow_execute": "Allow GhoDex to execute \"%@\"?",
         "app.undo_action": "Undo %@",
         "app.redo_action": "Redo %@",
@@ -620,6 +641,8 @@ enum AppLocalization {
         "about.github": "GitHub",
         "settings.title": "设置",
         "settings.body": "这里目前可配置应用语言。若要修改高级终端配置，请编辑 $HOME/.config/ghodex/config.ghodex，然后重启 GhoDex。",
+        "settings.general.tab": "通用",
+        "settings.gateway.tab": "网关",
         "settings.language.title": "应用语言",
         "AI Terminal Manager…": "AI 终端管理器…",
         "Settings Panel…": "设置面板…",
@@ -630,6 +653,25 @@ enum AppLocalization {
         "settings.language.option.simplified_chinese": "简体中文",
         "settings.language.restart_required": "需要重启 GhoDex，语言变更才会完整应用到所有界面。",
         "settings.language.restart_now": "立即重启",
+        "settings.gateway.title": "控制网关",
+        "settings.gateway.description": "直接在 GhoDex 内运行移动端配对网关。修改会立即生效，并在下次启动时继续保留。",
+        "settings.gateway.enabled": "启动应用时自动启用网关",
+        "settings.gateway.show_qr_on_launch": "启动 GhoDex 时自动显示配对二维码",
+        "settings.gateway.listen_host": "监听地址",
+        "settings.gateway.listen_host.help": "USB 调试配合 adb reverse 时用 127.0.0.1；手机直连时用 0.0.0.0 或可达的局域网 IP。",
+        "settings.gateway.port": "端口",
+        "settings.gateway.port.help": "固定端口可以保证一台机器只保留一个活动网关。如果端口已被别的实例占用，这个实例会保持被动状态。",
+        "settings.gateway.pairing_host": "配对二维码主机地址",
+        "settings.gateway.pairing_host.placeholder": "默认自动探测当前局域网地址",
+        "settings.gateway.pairing_host.help": "可选。覆盖二维码里编码的主机地址；留空时自动探测。",
+        "settings.gateway.status": "状态",
+        "settings.gateway.status.disabled": "已禁用",
+        "settings.gateway.status.pending": "正在应用设置...",
+        "settings.gateway.status.listening": "正在监听 %@:%d",
+        "settings.gateway.status.failed": "启动失败：%@",
+        "settings.gateway.apply": "应用网关设置",
+        "settings.gateway.show_qr": "显示配对二维码",
+        "settings.gateway.pending_changes": "还有未应用的网关变更。",
         "app.allow_execute": "允许 GhoDex 执行“%@”吗？",
         "app.undo_action": "撤销 %@",
         "app.redo_action": "重做 %@",
@@ -1153,6 +1195,8 @@ enum L10n {
     enum Settings {
         nonisolated static var title: String { AppLocalization.localizedString("settings.title") }
         nonisolated static var body: String { AppLocalization.localizedString("settings.body") }
+        nonisolated static var generalTab: String { AppLocalization.localizedString("settings.general.tab") }
+        nonisolated static var gatewayTab: String { AppLocalization.localizedString("settings.gateway.tab") }
         nonisolated static var languageTitle: String { AppLocalization.localizedString("settings.language.title") }
         nonisolated static var languageDescription: String { AppLocalization.localizedString("settings.language.description") }
         nonisolated static var languageOptionSystem: String { AppLocalization.localizedString("settings.language.option.system") }
@@ -1160,6 +1204,25 @@ enum L10n {
         nonisolated static var languageOptionSimplifiedChinese: String { AppLocalization.localizedString("settings.language.option.simplified_chinese") }
         nonisolated static var languageRestartRequired: String { AppLocalization.localizedString("settings.language.restart_required") }
         nonisolated static var restartNow: String { AppLocalization.localizedString("settings.language.restart_now") }
+        nonisolated static var gatewayTitle: String { AppLocalization.localizedString("settings.gateway.title") }
+        nonisolated static var gatewayDescription: String { AppLocalization.localizedString("settings.gateway.description") }
+        nonisolated static var gatewayEnabled: String { AppLocalization.localizedString("settings.gateway.enabled") }
+        nonisolated static var gatewayShowQrOnLaunch: String { AppLocalization.localizedString("settings.gateway.show_qr_on_launch") }
+        nonisolated static var gatewayListenHost: String { AppLocalization.localizedString("settings.gateway.listen_host") }
+        nonisolated static var gatewayListenHostHelp: String { AppLocalization.localizedString("settings.gateway.listen_host.help") }
+        nonisolated static var gatewayPort: String { AppLocalization.localizedString("settings.gateway.port") }
+        nonisolated static var gatewayPortHelp: String { AppLocalization.localizedString("settings.gateway.port.help") }
+        nonisolated static var gatewayPairingHost: String { AppLocalization.localizedString("settings.gateway.pairing_host") }
+        nonisolated static var gatewayPairingHostPlaceholder: String { AppLocalization.localizedString("settings.gateway.pairing_host.placeholder") }
+        nonisolated static var gatewayPairingHostHelp: String { AppLocalization.localizedString("settings.gateway.pairing_host.help") }
+        nonisolated static var gatewayStatus: String { AppLocalization.localizedString("settings.gateway.status") }
+        nonisolated static var gatewayStatusDisabled: String { AppLocalization.localizedString("settings.gateway.status.disabled") }
+        nonisolated static var gatewayStatusPending: String { AppLocalization.localizedString("settings.gateway.status.pending") }
+        nonisolated static func gatewayStatusListening(_ host: String, _ port: Int) -> String { AppLocalization.localizedString("settings.gateway.status.listening", host, port) }
+        nonisolated static func gatewayStatusFailed(_ error: String) -> String { AppLocalization.localizedString("settings.gateway.status.failed", error) }
+        nonisolated static var gatewayApply: String { AppLocalization.localizedString("settings.gateway.apply") }
+        nonisolated static var gatewayShowQr: String { AppLocalization.localizedString("settings.gateway.show_qr") }
+        nonisolated static var gatewayPendingChanges: String { AppLocalization.localizedString("settings.gateway.pending_changes") }
     }
 
     enum App {

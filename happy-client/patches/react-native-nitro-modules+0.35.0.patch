@@ -1,0 +1,19 @@
+diff --git a/node_modules/react-native-nitro-modules/android/build.gradle b/node_modules/react-native-nitro-modules/android/build.gradle
+index bd6d6e3..aaa3817 100644
+--- a/node_modules/react-native-nitro-modules/android/build.gradle
++++ b/node_modules/react-native-nitro-modules/android/build.gradle
+@@ -2,12 +2,13 @@ import groovy.json.JsonSlurper
+ 
+ buildscript {
+   repositories {
++    mavenLocal()
+     google()
+     mavenCentral()
+   }
+ 
+   dependencies {
+-    classpath "com.android.tools.build:gradle:9.0.1"
++    classpath "com.android.tools.build:gradle:8.5.2"
+   }
+ }
+ 
