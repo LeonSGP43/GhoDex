@@ -1,9 +1,9 @@
 import * as React from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { clearStoredSession, loadStoredSession, saveStoredSession, type StoredSession } from '@/ghodex/storage';
-import { INITIAL_GATEWAY_SESSION, sanitizePort } from '@/ghodex/sessionState';
+import { INITIAL_GATEWAY_SESSION, POLL_INTERVAL_OPTIONS, sanitizePollInterval, sanitizePort } from '@/ghodex/sessionState';
 import { ActionButton, InfoPill, SectionValue, SurfaceCard } from '@/ghodex/ui';
 
 export default function GhoDexGatewayScreen() {
@@ -12,6 +12,8 @@ export default function GhoDexGatewayScreen() {
     const [session, setSession] = React.useState<StoredSession>(INITIAL_GATEWAY_SESSION);
     const [host, setHost] = React.useState(INITIAL_GATEWAY_SESSION.host);
     const [portText, setPortText] = React.useState(String(INITIAL_GATEWAY_SESSION.port));
+    const [liveUpdatesEnabled, setLiveUpdatesEnabled] = React.useState(INITIAL_GATEWAY_SESSION.liveUpdatesEnabled);
+    const [pollIntervalMs, setPollIntervalMs] = React.useState(INITIAL_GATEWAY_SESSION.pollIntervalMs);
 
     useFocusEffect(React.useCallback(() => {
         let active = true;
@@ -23,6 +25,8 @@ export default function GhoDexGatewayScreen() {
             setSession(stored);
             setHost(stored.host);
             setPortText(String(stored.port));
+            setLiveUpdatesEnabled(stored.liveUpdatesEnabled);
+            setPollIntervalMs(stored.pollIntervalMs);
             setLoaded(true);
         })();
 
@@ -40,11 +44,13 @@ export default function GhoDexGatewayScreen() {
             ...current,
             host: host.trim() || INITIAL_GATEWAY_SESSION.host,
             port: resolvedPort,
+            liveUpdatesEnabled,
+            pollIntervalMs: sanitizePollInterval(pollIntervalMs),
         };
         await saveStoredSession(nextSession);
         setSession(nextSession);
         router.replace('/');
-    }, [host, resolvedPort, router]);
+    }, [host, liveUpdatesEnabled, pollIntervalMs, resolvedPort, router]);
 
     const handleClear = React.useCallback(async () => {
         await clearStoredSession();
@@ -93,6 +99,59 @@ export default function GhoDexGatewayScreen() {
                 <SectionValue label="Resolved port" mono value={String(resolvedPort)} />
                 <View style={styles.actions}>
                     <ActionButton label="Save And Return" onPress={handleApply} />
+                </View>
+            </SurfaceCard>
+
+            <SurfaceCard title="Display Sync" subtitle="Realtime uses the gateway subscription stream. Polling stays available for debugging or battery-sensitive cases.">
+                <View style={styles.optionRow}>
+                    <Pressable
+                        onPress={() => setLiveUpdatesEnabled(true)}
+                        style={({ pressed }) => [
+                            styles.optionChip,
+                            liveUpdatesEnabled ? styles.optionChipActive : null,
+                            pressed ? styles.optionChipPressed : null,
+                        ]}
+                    >
+                        <Text style={[styles.optionChipText, liveUpdatesEnabled ? styles.optionChipTextActive : null]}>
+                            Realtime Stream
+                        </Text>
+                    </Pressable>
+                    <Pressable
+                        onPress={() => setLiveUpdatesEnabled(false)}
+                        style={({ pressed }) => [
+                            styles.optionChip,
+                            !liveUpdatesEnabled ? styles.optionChipActive : null,
+                            pressed ? styles.optionChipPressed : null,
+                        ]}
+                    >
+                        <Text style={[styles.optionChipText, !liveUpdatesEnabled ? styles.optionChipTextActive : null]}>
+                            Polling Only
+                        </Text>
+                    </Pressable>
+                </View>
+
+                <SectionValue
+                    label="Current sync"
+                    value={liveUpdatesEnabled ? 'Subscription stream for active terminal' : 'Timer-based polling only'}
+                />
+
+                <Text style={styles.optionLabel}>Fallback / polling interval</Text>
+                <View style={styles.optionRow}>
+                    {POLL_INTERVAL_OPTIONS.map((value) => (
+                        <Pressable
+                            key={value}
+                            onPress={() => setPollIntervalMs(value)}
+                            style={({ pressed }) => [
+                                styles.intervalChip,
+                                pollIntervalMs === value ? styles.intervalChipActive : null,
+                                pressed ? styles.optionChipPressed : null,
+                            ]}
+                        >
+                            <Text style={[styles.intervalChipText, pollIntervalMs === value ? styles.intervalChipTextActive : null]}>
+                                {value}ms
+                            </Text>
+                        </Pressable>
+                    ))}
                 </View>
             </SurfaceCard>
 
@@ -152,5 +211,57 @@ const styles = StyleSheet.create({
     actions: {
         flexDirection: 'row',
         gap: 12,
+    },
+    optionLabel: {
+        color: '#6a5f53',
+        fontSize: 12,
+        fontWeight: '700',
+        textTransform: 'uppercase',
+        letterSpacing: 0.6,
+    },
+    optionRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 10,
+    },
+    optionChip: {
+        borderRadius: 14,
+        paddingHorizontal: 14,
+        paddingVertical: 11,
+        backgroundColor: '#ede2d5',
+    },
+    optionChipActive: {
+        backgroundColor: '#8a4b2a',
+    },
+    optionChipPressed: {
+        opacity: 0.84,
+    },
+    optionChipText: {
+        color: '#4e4337',
+        fontSize: 14,
+        fontWeight: '700',
+    },
+    optionChipTextActive: {
+        color: '#fff8ef',
+    },
+    intervalChip: {
+        borderRadius: 999,
+        paddingHorizontal: 12,
+        paddingVertical: 9,
+        backgroundColor: '#fffaf4',
+        borderWidth: 1,
+        borderColor: '#ded2c4',
+    },
+    intervalChipActive: {
+        backgroundColor: '#1f1a16',
+        borderColor: '#1f1a16',
+    },
+    intervalChipText: {
+        color: '#4e4337',
+        fontSize: 13,
+        fontWeight: '700',
+    },
+    intervalChipTextActive: {
+        color: '#fff6eb',
     },
 });

@@ -38,6 +38,8 @@ interface GatewayRequest {
     max_chars?: number;
     max_lines?: number;
     read_after_write_id?: string;
+    since_sequence?: number;
+    event_limit?: number;
 }
 
 function buildGatewayUrl(connection: GatewayConnection): string {
@@ -112,6 +114,10 @@ function readChangedRows(object: Record<string, unknown>, key: string): Terminal
 function parseEnvelope(rawText: string): GatewayEnvelope {
     const parsed = ensureObject(JSON.parse(rawText), 'envelope');
     return parsed as GatewayEnvelope;
+}
+
+export function parseGatewayEnvelope(rawText: string): GatewayEnvelope {
+    return parseEnvelope(rawText);
 }
 
 async function sendRequest(connection: GatewayConnection, request: GatewayRequest): Promise<GatewayEnvelope> {
@@ -472,4 +478,71 @@ export async function sendTerminalText(input: GatewayConnection & {
         },
     );
     return parseTerminalMutationResult(envelope);
+}
+
+export function subscribeToGatewayEvents(input: GatewayConnection & {
+    authToken: string;
+    sinceSequence: number;
+    eventLimit?: number;
+    onEnvelope: (envelope: GatewayEnvelope) => void;
+    onError?: (error: Error) => void;
+}): () => void {
+    const authToken = input.authToken.trim();
+    if (!authToken) {
+        throw new GatewayProtocolError('Auth token is empty');
+    }
+
+    const socket = new WebSocket(buildGatewayUrl(input));
+    let closedByClient = false;
+
+    socket.onopen = () => {
+        const request: GatewayRequest = {
+            request_id: nextRequestId('subscribe'),
+            command: 'events.subscribe',
+            auth_token: authToken,
+            since_sequence: Math.max(0, Math.trunc(input.sinceSequence)),
+            event_limit: input.eventLimit ?? 128,
+        };
+        socket.send(JSON.stringify(request));
+    };
+
+    socket.onmessage = (event) => {
+        try {
+            const rawText = typeof event.data === 'string' ? event.data : String(event.data ?? '');
+            const envelope = parseEnvelope(rawText);
+            if (envelope.status === 'error') {
+                throw new GatewayProtocolError(
+                    envelope.error_message ?? envelope.error_code ?? 'Gateway rejected subscription',
+                    envelope.error_code,
+                );
+            }
+            input.onEnvelope(envelope);
+        } catch (error) {
+            input.onError?.(error instanceof Error ? error : new GatewayProtocolError('Invalid subscription payload'));
+        }
+    };
+
+    socket.onerror = () => {
+        if (closedByClient) {
+            return;
+        }
+        input.onError?.(new GatewayProtocolError('Gateway subscription socket failed'));
+    };
+
+    socket.onclose = (event) => {
+        if (closedByClient) {
+            return;
+        }
+        if (event.code === 1000) {
+            return;
+        }
+        input.onError?.(new GatewayProtocolError(
+            event.reason || `Gateway subscription closed unexpectedly (code ${event.code})`,
+        ));
+    };
+
+    return () => {
+        closedByClient = true;
+        socket.close();
+    };
 }

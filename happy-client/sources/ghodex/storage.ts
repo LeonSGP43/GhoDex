@@ -11,6 +11,8 @@ export interface StoredSession {
     tokenId: string;
     scopes: string[];
     requestedScopes: string[];
+    liveUpdatesEnabled: boolean;
+    pollIntervalMs: number;
 }
 
 const DEFAULT_SESSION: StoredSession = {
@@ -21,6 +23,8 @@ const DEFAULT_SESSION: StoredSession = {
     tokenId: '',
     scopes: [],
     requestedScopes: ['observe', 'mutate'],
+    liveUpdatesEnabled: true,
+    pollIntervalMs: 120,
 };
 
 function cloneDefaultSession(): StoredSession {
@@ -52,6 +56,10 @@ function sanitizeStoredSession(value: unknown): StoredSession {
         requestedScopes: Array.isArray(object.requestedScopes)
             ? object.requestedScopes.filter((item): item is string => typeof item === 'string')
             : [...DEFAULT_SESSION.requestedScopes],
+        liveUpdatesEnabled: object.liveUpdatesEnabled !== false,
+        pollIntervalMs: typeof object.pollIntervalMs === 'number' && Number.isFinite(object.pollIntervalMs)
+            ? Math.max(30, Math.min(Math.trunc(object.pollIntervalMs), 2000))
+            : DEFAULT_SESSION.pollIntervalMs,
     };
 }
 

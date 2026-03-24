@@ -9,7 +9,11 @@ export const INITIAL_GATEWAY_SESSION: StoredSession = {
     tokenId: '',
     scopes: [],
     requestedScopes: [...DEFAULT_REQUESTED_SCOPES],
+    liveUpdatesEnabled: true,
+    pollIntervalMs: 120,
 };
+
+export const POLL_INTERVAL_OPTIONS = [30, 60, 120, 250, 500, 1000] as const;
 
 export function sanitizePort(raw: string | number): number {
     const normalized = typeof raw === 'number' ? String(raw) : raw;
@@ -22,4 +26,12 @@ export function sanitizePort(raw: string | number): number {
         return INITIAL_GATEWAY_SESSION.port;
     }
     return Math.min(next, 65535);
+}
+
+export function sanitizePollInterval(raw: string | number): number {
+    const normalized = typeof raw === 'number' ? raw : Number.parseInt(raw.replace(/[^0-9]/g, ''), 10);
+    if (!Number.isFinite(normalized)) {
+        return INITIAL_GATEWAY_SESSION.pollIntervalMs;
+    }
+    return Math.max(30, Math.min(Math.trunc(normalized), 2000));
 }

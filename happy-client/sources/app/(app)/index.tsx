@@ -14,16 +14,25 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { renderAnsiText } from '@/ghodex/ansi';
 import {
     fetchSnapshot,
     readTerminal,
     runTerminalCommand,
     sendTerminalText,
+    subscribeToGatewayEvents,
 } from '@/ghodex/gateway';
-import { loadStoredSession, type StoredSession } from '@/ghodex/storage';
 import { INITIAL_GATEWAY_SESSION } from '@/ghodex/sessionState';
+import { loadStoredSession, type StoredSession } from '@/ghodex/storage';
 import { ActionButton, SurfaceCard } from '@/ghodex/ui';
-import type { SnapshotResult, TerminalChangedRow, TerminalReadResult, TerminalRow } from '@/ghodex/types';
+import type {
+    GatewayEnvelope,
+    SnapshotResult,
+    TerminalChangedRow,
+    TerminalMutationResult,
+    TerminalReadResult,
+    TerminalRow,
+} from '@/ghodex/types';
 
 type BusyAction =
     | 'snapshot'
@@ -32,7 +41,22 @@ type BusyAction =
     | 'terminal-send-text'
     | null;
 
-const DELTA_POLL_INTERVAL_MS = 350;
+type LoadTerminalViewFn = (
+    terminal: TerminalRow,
+    authToken: string,
+    options?: {
+        expectedGeneration?: number;
+        mode?: 'snapshot' | 'delta';
+        sinceFrameId?: string;
+        readAfterWriteId?: string;
+    },
+) => Promise<TerminalReadResult>;
+
+type RefreshSnapshotFn = (
+    authToken: string,
+    preferredTerminalId: string | null,
+) => Promise<SnapshotResult>;
+
 const WRITE_SETTLE_ATTEMPTS = 6;
 const WRITE_SETTLE_INTERVAL_MS = 250;
 
@@ -76,6 +100,30 @@ function applyTerminalDelta(content: string, changedRows: TerminalChangedRow[]):
     return nextLines.join('\n');
 }
 
+function pickPreferredTerminal(terminals: TerminalRow[], preferredTerminalId: string | null): TerminalRow | null {
+    if (!terminals.length) {
+        return null;
+    }
+    if (preferredTerminalId) {
+        const matched = terminals.find((terminal) => terminal.terminalId === preferredTerminalId);
+        if (matched) {
+            return matched;
+        }
+    }
+    return terminals.find((terminal) => terminal.focused) ?? terminals[0] ?? null;
+}
+
+function isStructuralTerminalEvent(event: string | null | undefined): boolean {
+    if (!event) {
+        return false;
+    }
+    return event !== 'terminal.input.sent' && event !== 'terminal.command.sent';
+}
+
+function nextSequenceFromEnvelope(envelope: GatewayEnvelope): number | null {
+    return typeof envelope.sequence === 'number' && Number.isFinite(envelope.sequence) ? envelope.sequence : null;
+}
+
 export default function GhoDexWorkspaceScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
@@ -84,21 +132,54 @@ export default function GhoDexWorkspaceScreen() {
     const [busyAction, setBusyAction] = React.useState<BusyAction>(null);
     const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
     const [sidebarVisible, setSidebarVisible] = React.useState(false);
+    const [subscriptionOpen, setSubscriptionOpen] = React.useState(false);
     const [session, setSession] = React.useState<StoredSession>(INITIAL_GATEWAY_SESSION);
     const [snapshot, setSnapshot] = React.useState<SnapshotResult | null>(null);
     const [selectedTerminalId, setSelectedTerminalId] = React.useState<string | null>(null);
     const [terminalView, setTerminalView] = React.useState<TerminalReadResult | null>(null);
     const [terminalContent, setTerminalContent] = React.useState('');
     const [terminalCommand, setTerminalCommand] = React.useState('');
-    const terminalPollInFlightRef = React.useRef(false);
-
-    const paired = !!session.authToken.trim();
     const sidebarWidth = Math.min(width * 0.84, 360);
 
     const selectedTerminal = React.useMemo(
         () => snapshot?.terminals.find((terminal) => terminal.terminalId === selectedTerminalId) ?? null,
         [selectedTerminalId, snapshot],
     );
+    const paired = !!session.authToken.trim();
+    const syncLabel = session.liveUpdatesEnabled
+        ? (subscriptionOpen ? 'Live stream' : `Live reconnecting, ${session.pollIntervalMs}ms fallback`)
+        : `${session.pollIntervalMs}ms polling`;
+
+    const sessionRef = React.useRef(session);
+    const snapshotRef = React.useRef<SnapshotResult | null>(snapshot);
+    const selectedTerminalRef = React.useRef<TerminalRow | null>(selectedTerminal);
+    const selectedTerminalIdRef = React.useRef<string | null>(selectedTerminalId);
+    const terminalViewRef = React.useRef<TerminalReadResult | null>(terminalView);
+    const subscriptionSequenceRef = React.useRef(0);
+    const liveReadInFlightRef = React.useRef(false);
+    const liveReadPendingRef = React.useRef(false);
+    const snapshotRefreshTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const loadTerminalViewRef = React.useRef<LoadTerminalViewFn | null>(null);
+    const refreshSnapshotRef = React.useRef<RefreshSnapshotFn | null>(null);
+
+    React.useEffect(() => {
+        sessionRef.current = session;
+    }, [session]);
+
+    React.useEffect(() => {
+        snapshotRef.current = snapshot;
+        subscriptionSequenceRef.current = Math.max(subscriptionSequenceRef.current, snapshot?.lastSequence ?? 0);
+    }, [snapshot]);
+
+    React.useEffect(() => {
+        selectedTerminalRef.current = selectedTerminal;
+        selectedTerminalIdRef.current = selectedTerminalId;
+    }, [selectedTerminal, selectedTerminalId]);
+
+    React.useEffect(() => {
+        terminalViewRef.current = terminalView;
+        subscriptionSequenceRef.current = Math.max(subscriptionSequenceRef.current, terminalView?.lastSequence ?? 0);
+    }, [terminalView]);
 
     const runAction = React.useCallback(async (action: BusyAction, task: () => Promise<void>) => {
         setBusyAction(action);
@@ -151,7 +232,7 @@ export default function GhoDexWorkspaceScreen() {
         });
     }, []);
 
-    const loadTerminalView = React.useCallback(async (
+    const loadTerminalViewImpl = React.useCallback(async (
         terminal: TerminalRow,
         authToken: string,
         options?: {
@@ -161,9 +242,10 @@ export default function GhoDexWorkspaceScreen() {
             readAfterWriteId?: string;
         },
     ) => {
+        const activeSession = sessionRef.current;
         const result = await readTerminal({
-            host: session.host,
-            port: session.port,
+            host: activeSession.host,
+            port: activeSession.port,
             authToken,
             terminalId: terminal.terminalId,
             expectedGeneration: options?.expectedGeneration ?? terminal.generation,
@@ -174,8 +256,9 @@ export default function GhoDexWorkspaceScreen() {
             readAfterWriteId: options?.readAfterWriteId,
         });
 
+        const currentTerminalView = terminalViewRef.current;
         const expectsDelta = options?.mode === 'delta';
-        const sameTerminal = terminalView?.terminalId === result.terminalId;
+        const sameTerminal = currentTerminalView?.terminalId === result.terminalId;
         const canMergeDelta = expectsDelta
             && !!options?.sinceFrameId
             && sameTerminal
@@ -190,8 +273,8 @@ export default function GhoDexWorkspaceScreen() {
 
         if (deltaNeedsSnapshotFallback) {
             const snapshotResult = await readTerminal({
-                host: session.host,
-                port: session.port,
+                host: activeSession.host,
+                port: activeSession.port,
                 authToken,
                 terminalId: terminal.terminalId,
                 expectedGeneration: options?.expectedGeneration ?? result.generation,
@@ -206,50 +289,20 @@ export default function GhoDexWorkspaceScreen() {
 
         applyTerminalResult(result, { mergeDelta: expectsDelta });
         return result;
-    }, [applyTerminalResult, session.host, session.port, terminalView?.terminalId]);
+    }, [applyTerminalResult]);
 
-    const settleTerminalAfterWrite = React.useCallback(async (
-        terminal: TerminalRow,
-        authToken: string,
-        generation: number,
-        writeId?: string,
-    ) => {
-        let sinceFrameId = terminalView?.terminalId === terminal.terminalId ? terminalView.frameId ?? undefined : undefined;
+    React.useEffect(() => {
+        loadTerminalViewRef.current = loadTerminalViewImpl;
+    }, [loadTerminalViewImpl]);
 
-        for (let attempt = 0; attempt < WRITE_SETTLE_ATTEMPTS; attempt += 1) {
-            if (attempt > 0) {
-                await sleep(WRITE_SETTLE_INTERVAL_MS);
-            }
-
-            const result = await loadTerminalView(terminal, authToken, {
-                expectedGeneration: generation,
-                mode: sinceFrameId ? 'delta' : 'snapshot',
-                sinceFrameId,
-                readAfterWriteId: writeId,
-            });
-
-            sinceFrameId = result.frameId ?? sinceFrameId;
-            const writeSettled = writeId
-                ? result.readAfterReady === true
-                : result.hasChanges;
-            if (writeSettled) {
-                return result;
-            }
-        }
-
-        return loadTerminalView(terminal, authToken, {
-            expectedGeneration: generation,
-            readAfterWriteId: writeId,
-        });
-    }, [loadTerminalView, terminalView?.frameId, terminalView?.terminalId]);
-
-    const refreshSnapshot = React.useCallback(async (
+    const refreshSnapshotImpl = React.useCallback(async (
         authToken: string,
         preferredTerminalId: string | null,
     ) => {
+        const activeSession = sessionRef.current;
         const result = await fetchSnapshot({
-            host: session.host,
-            port: session.port,
+            host: activeSession.host,
+            port: activeSession.port,
             authToken,
         });
         setSnapshot(result);
@@ -257,13 +310,162 @@ export default function GhoDexWorkspaceScreen() {
         const nextTerminal = pickPreferredTerminal(result.terminals, preferredTerminalId);
         setSelectedTerminalId(nextTerminal?.terminalId ?? null);
         if (nextTerminal) {
-            await loadTerminalView(nextTerminal, authToken);
+            await loadTerminalViewImpl(nextTerminal, authToken);
         } else {
             setTerminalView(null);
             setTerminalContent('');
         }
         return result;
-    }, [loadTerminalView, session.host, session.port]);
+    }, [loadTerminalViewImpl]);
+
+    React.useEffect(() => {
+        refreshSnapshotRef.current = refreshSnapshotImpl;
+    }, [refreshSnapshotImpl]);
+
+    const settleTerminalAfterWrite = React.useCallback(async (
+        terminal: TerminalRow,
+        authToken: string,
+        mutation: TerminalMutationResult,
+    ) => {
+        let sinceFrameId = terminalViewRef.current?.terminalId === terminal.terminalId
+            ? terminalViewRef.current.frameId ?? undefined
+            : undefined;
+
+        for (let attempt = 0; attempt < WRITE_SETTLE_ATTEMPTS; attempt += 1) {
+            if (attempt > 0) {
+                await sleep(WRITE_SETTLE_INTERVAL_MS);
+            }
+
+            const result = await loadTerminalViewImpl(terminal, authToken, {
+                expectedGeneration: mutation.generation,
+                mode: sinceFrameId ? 'delta' : 'snapshot',
+                sinceFrameId,
+                readAfterWriteId: mutation.writeId ?? undefined,
+            });
+
+            sinceFrameId = result.frameId ?? sinceFrameId;
+            const writeSettled = mutation.writeId
+                ? result.readAfterReady === true
+                : result.hasChanges;
+            if (writeSettled) {
+                return result;
+            }
+        }
+
+        return loadTerminalViewImpl(terminal, authToken, {
+            expectedGeneration: mutation.generation,
+            readAfterWriteId: mutation.writeId ?? undefined,
+        });
+    }, [loadTerminalViewImpl]);
+
+    const scheduleSnapshotRefresh = React.useCallback((reason?: string) => {
+        if (snapshotRefreshTimerRef.current) {
+            clearTimeout(snapshotRefreshTimerRef.current);
+        }
+        snapshotRefreshTimerRef.current = setTimeout(() => {
+            snapshotRefreshTimerRef.current = null;
+            const activeSession = sessionRef.current;
+            const authToken = activeSession.authToken.trim();
+            if (!authToken) {
+                return;
+            }
+            void refreshSnapshotRef.current?.(authToken, selectedTerminalIdRef.current);
+        }, reason === 'resync' ? 0 : 120);
+    }, []);
+
+    const driveSelectedTerminalFromSubscription = React.useCallback(() => {
+        if (liveReadInFlightRef.current) {
+            liveReadPendingRef.current = true;
+            return;
+        }
+
+        const activeSession = sessionRef.current;
+        const authToken = activeSession.authToken.trim();
+        const currentTerminal = selectedTerminalRef.current;
+        if (!authToken || !currentTerminal) {
+            return;
+        }
+
+        liveReadInFlightRef.current = true;
+        void (async () => {
+            try {
+                do {
+                    liveReadPendingRef.current = false;
+                    const currentView = terminalViewRef.current;
+                    await loadTerminalViewRef.current?.(currentTerminal, authToken, {
+                        expectedGeneration: currentView?.terminalId === currentTerminal.terminalId
+                            ? currentView.generation
+                            : currentTerminal.generation,
+                        mode: currentView?.terminalId === currentTerminal.terminalId && currentView.frameId
+                            ? 'delta'
+                            : 'snapshot',
+                        sinceFrameId: currentView?.terminalId === currentTerminal.terminalId
+                            ? currentView.frameId ?? undefined
+                            : undefined,
+                    });
+                } while (liveReadPendingRef.current);
+            } catch (error) {
+                console.warn('Failed to live-refresh terminal', error);
+                scheduleSnapshotRefresh('resync');
+            } finally {
+                liveReadInFlightRef.current = false;
+            }
+        })();
+    }, [scheduleSnapshotRefresh]);
+
+    const handleSubscriptionEnvelope = React.useCallback((envelope: GatewayEnvelope) => {
+        const result = envelope.result;
+        if (envelope.status === 'ok' && result && typeof result === 'object') {
+            const lastSequence = typeof result.last_sequence === 'number' ? result.last_sequence : null;
+            if (lastSequence !== null) {
+                subscriptionSequenceRef.current = Math.max(subscriptionSequenceRef.current, lastSequence);
+            }
+            setSubscriptionOpen(true);
+            return;
+        }
+
+        const nextSequence = nextSequenceFromEnvelope(envelope);
+        if (nextSequence !== null) {
+            subscriptionSequenceRef.current = Math.max(subscriptionSequenceRef.current, nextSequence);
+        }
+
+        if (envelope.requires_snapshot_resync || envelope.gap) {
+            scheduleSnapshotRefresh('resync');
+            return;
+        }
+
+        const resource = envelope.resource;
+        if (resource?.type !== 'terminal' || !resource.id) {
+            return;
+        }
+
+        setSnapshot((current) => {
+            if (!current) {
+                return current;
+            }
+            return {
+                ...current,
+                lastSequence: Math.max(current.lastSequence, nextSequence ?? current.lastSequence),
+                terminals: current.terminals.map((item) => (
+                    item.terminalId === resource.id
+                        ? {
+                            ...item,
+                            generation: Math.max(item.generation, resource.generation ?? item.generation),
+                        }
+                        : item
+                )),
+            };
+        });
+
+        if (resource.id === selectedTerminalIdRef.current) {
+            driveSelectedTerminalFromSubscription();
+            return;
+        }
+
+        if (isStructuralTerminalEvent(envelope.event)) {
+            scheduleSnapshotRefresh('structure');
+        }
+    }, [driveSelectedTerminalFromSubscription, scheduleSnapshotRefresh]);
 
     const hydrateSession = React.useCallback(async () => {
         const stored = await loadStoredSession();
@@ -276,17 +478,21 @@ export default function GhoDexWorkspaceScreen() {
             setSelectedTerminalId(null);
             setTerminalView(null);
             setTerminalContent('');
+            setSubscriptionOpen(false);
             return;
         }
 
-        void runAction('snapshot', async () => {
-            await refreshSnapshot(authToken, selectedTerminalId);
-        });
-    }, [refreshSnapshot, runAction, selectedTerminalId]);
+        await refreshSnapshotImpl(authToken, selectedTerminalIdRef.current);
+    }, [refreshSnapshotImpl]);
 
     useFocusEffect(React.useCallback(() => {
         void hydrateSession();
-        return undefined;
+        return () => {
+            if (snapshotRefreshTimerRef.current) {
+                clearTimeout(snapshotRefreshTimerRef.current);
+                snapshotRefreshTimerRef.current = null;
+            }
+        };
     }, [hydrateSession]));
 
     const handleRefreshSnapshot = React.useCallback(() => {
@@ -297,9 +503,9 @@ export default function GhoDexWorkspaceScreen() {
         }
 
         void runAction('snapshot', async () => {
-            await refreshSnapshot(authToken, selectedTerminalId);
+            await refreshSnapshotImpl(authToken, selectedTerminalIdRef.current);
         });
-    }, [refreshSnapshot, runAction, selectedTerminalId, session.authToken]);
+    }, [refreshSnapshotImpl, runAction, session.authToken]);
 
     const handleSelectTerminal = React.useCallback((terminal: TerminalRow) => {
         const authToken = session.authToken.trim();
@@ -311,9 +517,9 @@ export default function GhoDexWorkspaceScreen() {
         setSelectedTerminalId(terminal.terminalId);
         setTerminalContent('');
         void runAction('terminal-read', async () => {
-            await loadTerminalView(terminal, authToken);
+            await loadTerminalViewImpl(terminal, authToken);
         });
-    }, [loadTerminalView, runAction, session.authToken]);
+    }, [loadTerminalViewImpl, runAction, session.authToken]);
 
     const handleRefreshTerminal = React.useCallback(() => {
         if (!selectedTerminal) {
@@ -322,7 +528,7 @@ export default function GhoDexWorkspaceScreen() {
         }
 
         void runAction('terminal-read', async () => {
-            await loadTerminalView(
+            await loadTerminalViewImpl(
                 selectedTerminal,
                 session.authToken,
                 terminalView?.terminalId === selectedTerminal.terminalId
@@ -330,78 +536,114 @@ export default function GhoDexWorkspaceScreen() {
                     : undefined,
             );
         });
-    }, [loadTerminalView, runAction, selectedTerminal, session.authToken, terminalView]);
+    }, [loadTerminalViewImpl, runAction, selectedTerminal, session.authToken, terminalView]);
 
-    const handleRunTerminalCommand = React.useCallback(() => {
+    const handleSubmitInput = React.useCallback(() => {
         if (!selectedTerminal) {
             setErrorMessage('Select a terminal first.');
             return;
         }
 
-        const commandText = terminalCommand.trim();
-        if (!commandText) {
-            setErrorMessage('Command input is empty.');
-            return;
-        }
-
-        void runAction('terminal-command', async () => {
-            const expectedGeneration = terminalView?.terminalId === selectedTerminal.terminalId
-                ? terminalView.generation
-                : selectedTerminal.generation;
-            const mutation = await runTerminalCommand({
-                host: session.host,
-                port: session.port,
-                authToken: session.authToken,
-                terminalId: selectedTerminal.terminalId,
-                commandText,
-                expectedGeneration,
-            });
-            setTerminalCommand('');
-            await settleTerminalAfterWrite(
-                selectedTerminal,
-                session.authToken,
-                mutation.generation,
-                mutation.writeId ?? undefined,
-            );
-        });
-    }, [runAction, selectedTerminal, session.authToken, session.host, session.port, settleTerminalAfterWrite, terminalCommand, terminalView]);
-
-    const handleSendTerminalText = React.useCallback(() => {
-        if (!selectedTerminal) {
-            setErrorMessage('Select a terminal first.');
-            return;
-        }
-
-        if (!terminalCommand) {
+        const rawInput = terminalCommand;
+        const normalizedInput = rawInput.replace(/\r\n/g, '\n');
+        if (!normalizedInput.trim()) {
             setErrorMessage('Input is empty.');
             return;
         }
 
-        void runAction('terminal-send-text', async () => {
+        const expectsRawSend = normalizedInput.includes('\n');
+        const action: BusyAction = expectsRawSend ? 'terminal-send-text' : 'terminal-command';
+
+        void runAction(action, async () => {
             const expectedGeneration = terminalView?.terminalId === selectedTerminal.terminalId
                 ? terminalView.generation
                 : selectedTerminal.generation;
-            const mutation = await sendTerminalText({
-                host: session.host,
-                port: session.port,
-                authToken: session.authToken,
-                terminalId: selectedTerminal.terminalId,
-                text: terminalCommand,
-                expectedGeneration,
-            });
+            const mutation = expectsRawSend
+                ? await sendTerminalText({
+                    host: session.host,
+                    port: session.port,
+                    authToken: session.authToken,
+                    terminalId: selectedTerminal.terminalId,
+                    text: rawInput,
+                    expectedGeneration,
+                })
+                : await runTerminalCommand({
+                    host: session.host,
+                    port: session.port,
+                    authToken: session.authToken,
+                    terminalId: selectedTerminal.terminalId,
+                    commandText: normalizedInput.trim(),
+                    expectedGeneration,
+                });
             setTerminalCommand('');
-            await settleTerminalAfterWrite(
-                selectedTerminal,
-                session.authToken,
-                mutation.generation,
-                mutation.writeId ?? undefined,
-            );
+            await settleTerminalAfterWrite(selectedTerminal, session.authToken, mutation);
         });
     }, [runAction, selectedTerminal, session.authToken, session.host, session.port, settleTerminalAfterWrite, terminalCommand, terminalView]);
 
     React.useEffect(() => {
         const authToken = session.authToken.trim();
+        if (!loaded || !authToken || !session.liveUpdatesEnabled) {
+            setSubscriptionOpen(false);
+            return;
+        }
+
+        let cancelled = false;
+        let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+        let unsubscribe: (() => void) | null = null;
+
+        const openSubscription = () => {
+            if (cancelled) {
+                return;
+            }
+
+            try {
+                unsubscribe = subscribeToGatewayEvents({
+                    host: session.host,
+                    port: session.port,
+                    authToken,
+                    sinceSequence: subscriptionSequenceRef.current,
+                    eventLimit: 128,
+                    onEnvelope: (envelope) => {
+                        if (cancelled) {
+                            return;
+                        }
+                        handleSubscriptionEnvelope(envelope);
+                    },
+                    onError: (error) => {
+                        if (cancelled) {
+                            return;
+                        }
+                        console.warn('Gateway subscription dropped', error);
+                        setSubscriptionOpen(false);
+                        reconnectTimer = setTimeout(openSubscription, Math.max(500, session.pollIntervalMs * 4));
+                    },
+                });
+            } catch (error) {
+                const message = error instanceof Error ? error.message : 'Failed to open gateway subscription';
+                console.warn(message);
+                setSubscriptionOpen(false);
+                reconnectTimer = setTimeout(openSubscription, Math.max(500, session.pollIntervalMs * 4));
+            }
+        };
+
+        openSubscription();
+
+        return () => {
+            cancelled = true;
+            setSubscriptionOpen(false);
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer);
+            }
+            unsubscribe?.();
+        };
+    }, [handleSubscriptionEnvelope, loaded, session.authToken, session.host, session.liveUpdatesEnabled, session.pollIntervalMs, session.port]);
+
+    React.useEffect(() => {
+        const authToken = session.authToken.trim();
         if (!loaded || !authToken || !selectedTerminal) {
+            return;
+        }
+        if (session.liveUpdatesEnabled && subscriptionOpen) {
             return;
         }
 
@@ -412,21 +654,21 @@ export default function GhoDexWorkspaceScreen() {
             if (cancelled) {
                 return;
             }
-            timer = setTimeout(tick, DELTA_POLL_INTERVAL_MS);
+            timer = setTimeout(tick, session.pollIntervalMs);
         };
 
         const tick = async () => {
             if (cancelled) {
                 return;
             }
-            if (busyAction || terminalPollInFlightRef.current) {
+            if (busyAction || liveReadInFlightRef.current) {
                 schedule();
                 return;
             }
 
-            terminalPollInFlightRef.current = true;
+            liveReadInFlightRef.current = true;
             try {
-                await loadTerminalView(selectedTerminal, authToken, {
+                await loadTerminalViewImpl(selectedTerminal, authToken, {
                     expectedGeneration: terminalView?.terminalId === selectedTerminal.terminalId
                         ? terminalView.generation
                         : selectedTerminal.generation,
@@ -440,7 +682,7 @@ export default function GhoDexWorkspaceScreen() {
             } catch (error) {
                 console.warn('Failed to refresh terminal view', error);
             } finally {
-                terminalPollInFlightRef.current = false;
+                liveReadInFlightRef.current = false;
                 schedule();
             }
         };
@@ -453,7 +695,7 @@ export default function GhoDexWorkspaceScreen() {
                 clearTimeout(timer);
             }
         };
-    }, [busyAction, loadTerminalView, loaded, selectedTerminal, session.authToken, terminalView]);
+    }, [busyAction, loadTerminalViewImpl, loaded, selectedTerminal, session.authToken, session.liveUpdatesEnabled, session.pollIntervalMs, subscriptionOpen, terminalView]);
 
     const openPairing = React.useCallback(() => {
         setSidebarVisible(false);
@@ -474,6 +716,10 @@ export default function GhoDexWorkspaceScreen() {
         );
     }
 
+    const terminalDisplayText = selectedTerminal
+        ? (terminalContent || 'No terminal text captured yet. Refresh the terminal to fetch the visible surface.')
+        : 'Open the left sidebar and choose a terminal session.';
+
     return (
         <>
             <View style={styles.screen}>
@@ -484,7 +730,7 @@ export default function GhoDexWorkspaceScreen() {
                             {selectedTerminal?.title || (paired ? 'Choose terminal' : 'GhoDex Remote')}
                         </Text>
                         <Text numberOfLines={1} style={styles.headerSubtitle}>
-                            {selectedTerminal?.workingDirectory || (paired ? 'Open the sidebar to switch terminal sessions.' : 'Pair your desktop gateway from the sidebar.')}
+                            {selectedTerminal?.workingDirectory || syncLabel}
                         </Text>
                     </View>
                     <WorkspaceIconButton
@@ -504,7 +750,7 @@ export default function GhoDexWorkspaceScreen() {
                 <View style={styles.workspaceStage}>
                     {!paired ? (
                         <View style={styles.emptyStage}>
-                            <SurfaceCard title="Pair your desktop first" subtitle="The main screen stays terminal-first. Connection and authorization now live behind the sidebar and settings.">
+                            <SurfaceCard title="Pair your desktop first" subtitle="The home screen now stays focused on the terminal panel. Pairing and sync settings moved into the left sidebar.">
                                 <View style={styles.emptyActions}>
                                     <ActionButton label="Open Pairing" onPress={openPairing} />
                                     <ActionButton kind="secondary" label="Settings" onPress={openSettings} />
@@ -518,6 +764,7 @@ export default function GhoDexWorkspaceScreen() {
                                     {selectedTerminal?.workingDirectory || 'Select a terminal from the sidebar'}
                                 </Text>
                                 <View style={styles.terminalToolbarActions}>
+                                    <SyncBadge live={session.liveUpdatesEnabled} open={subscriptionOpen} pollIntervalMs={session.pollIntervalMs} />
                                     <WorkspaceMiniAction
                                         busy={busyAction === 'terminal-read'}
                                         icon="sync-outline"
@@ -530,9 +777,7 @@ export default function GhoDexWorkspaceScreen() {
                             <View style={styles.terminalViewport}>
                                 <ScrollView nestedScrollEnabled style={styles.terminalScroll}>
                                     <Text selectable style={styles.terminalContent}>
-                                        {selectedTerminal
-                                            ? (terminalContent || 'No terminal text captured yet. Refresh the terminal to fetch the visible surface.')
-                                            : 'Open the sidebar and choose a terminal session.'}
+                                        {renderAnsiText(terminalDisplayText)}
                                     </Text>
                                 </ScrollView>
                             </View>
@@ -547,14 +792,22 @@ export default function GhoDexWorkspaceScreen() {
                             autoCorrect={false}
                             multiline
                             onChangeText={setTerminalCommand}
-                            placeholder="Type shell input or a full command"
+                            placeholder="Single line executes. Multiline text sends raw input."
                             placeholderTextColor="#8f867a"
                             style={styles.commandInput}
                             value={terminalCommand}
                         />
-                        <View style={styles.commandActions}>
-                            <ActionButton busy={busyAction === 'terminal-send-text'} kind="secondary" label="Send" onPress={handleSendTerminalText} />
-                            <ActionButton busy={busyAction === 'terminal-command'} label="Run" onPress={handleRunTerminalCommand} />
+                        <View style={styles.commandFooter}>
+                            <Text style={styles.commandHint}>
+                                Single-line input runs as a command. Multi-line input is pasted as raw terminal text.
+                            </Text>
+                            <View style={styles.commandActions}>
+                                <ActionButton
+                                    busy={busyAction === 'terminal-command' || busyAction === 'terminal-send-text'}
+                                    label={terminalCommand.includes('\n') ? 'Paste Raw' : 'Send'}
+                                    onPress={handleSubmitInput}
+                                />
+                            </View>
                         </View>
                     </View>
                 ) : null}
@@ -567,7 +820,6 @@ export default function GhoDexWorkspaceScreen() {
                 visible={sidebarVisible}
             >
                 <View style={styles.sidebarOverlay}>
-                    <Pressable onPress={() => setSidebarVisible(false)} style={styles.sidebarBackdrop} />
                     <View style={[styles.sidebarPanel, { paddingTop: insets.top + 12, paddingBottom: Math.max(insets.bottom, 16), width: sidebarWidth }]}>
                         <View style={styles.sidebarHeader}>
                             <View style={styles.sidebarHeaderCopy}>
@@ -620,36 +872,22 @@ export default function GhoDexWorkspaceScreen() {
                         <View style={styles.sidebarFooter}>
                             <SidebarLink icon="qr-code-outline" label="Pair Device" onPress={openPairing} />
                             <SidebarLink icon="settings-outline" label="Settings" onPress={openSettings} />
-                            {paired ? (
-                                <SidebarLink icon="refresh-outline" label="Refresh Sessions" onPress={() => {
-                                    setSidebarVisible(false);
-                                    handleRefreshSnapshot();
-                                }}
-                                />
-                            ) : null}
+                            <SidebarLink icon="refresh-outline" label="Refresh Sessions" onPress={() => {
+                                setSidebarVisible(false);
+                                handleRefreshSnapshot();
+                            }}
+                            />
                             <View style={styles.sidebarStatus}>
                                 <Text style={styles.sidebarStatusLine}>{session.host}:{session.port}</Text>
-                                <Text style={styles.sidebarStatusLine}>{paired ? 'Paired' : 'Unpaired'}</Text>
+                                <Text style={styles.sidebarStatusLine}>{syncLabel}</Text>
                             </View>
                         </View>
                     </View>
+                    <Pressable onPress={() => setSidebarVisible(false)} style={styles.sidebarBackdrop} />
                 </View>
             </Modal>
         </>
     );
-}
-
-function pickPreferredTerminal(terminals: TerminalRow[], preferredTerminalId: string | null): TerminalRow | null {
-    if (!terminals.length) {
-        return null;
-    }
-    if (preferredTerminalId) {
-        const matched = terminals.find((terminal) => terminal.terminalId === preferredTerminalId);
-        if (matched) {
-            return matched;
-        }
-    }
-    return terminals.find((terminal) => terminal.focused) ?? terminals[0] ?? null;
 }
 
 function WorkspaceIconButton(props: {
@@ -705,6 +943,24 @@ function SidebarLink(props: {
             <Text style={styles.sidebarLinkText}>{props.label}</Text>
             <Ionicons color="#c6b39b" name="chevron-forward-outline" size={18} />
         </Pressable>
+    );
+}
+
+function SyncBadge(props: {
+    live: boolean;
+    open: boolean;
+    pollIntervalMs: number;
+}) {
+    const label = props.live
+        ? (props.open ? 'Live' : 'Reconnecting')
+        : `${props.pollIntervalMs}ms`;
+    return (
+        <View style={[
+            styles.syncBadge,
+            props.live && props.open ? styles.syncBadgeLive : null,
+        ]}>
+            <Text style={styles.syncBadgeText}>{label}</Text>
+        </View>
     );
 }
 
@@ -775,6 +1031,12 @@ const styles = StyleSheet.create({
         alignItems: 'flex-start',
         gap: 8,
     },
+    errorText: {
+        flex: 1,
+        color: '#f0c0b6',
+        fontSize: 13,
+        lineHeight: 18,
+    },
     workspaceStage: {
         flex: 1,
         minHeight: 0,
@@ -819,6 +1081,7 @@ const styles = StyleSheet.create({
     },
     terminalToolbarActions: {
         flexDirection: 'row',
+        alignItems: 'center',
         gap: 8,
     },
     miniAction: {
@@ -834,6 +1097,22 @@ const styles = StyleSheet.create({
         color: '#d9b68f',
         fontSize: 12,
         fontWeight: '700',
+    },
+    syncBadge: {
+        borderRadius: 999,
+        paddingHorizontal: 10,
+        paddingVertical: 7,
+        backgroundColor: '#251d18',
+    },
+    syncBadgeLive: {
+        backgroundColor: '#173225',
+    },
+    syncBadgeText: {
+        color: '#d8c6b2',
+        fontSize: 11,
+        fontWeight: '700',
+        textTransform: 'uppercase',
+        letterSpacing: 0.5,
     },
     terminalViewport: {
         flex: 1,
@@ -855,7 +1134,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#171210',
         borderTopWidth: 1,
         borderTopColor: '#2a211b',
-        gap: 12,
+        gap: 10,
     },
     commandInput: {
         minHeight: 86,
@@ -871,23 +1150,24 @@ const styles = StyleSheet.create({
         textAlignVertical: 'top',
         fontFamily: 'monospace',
     },
-    commandActions: {
+    commandFooter: {
         flexDirection: 'row',
+        alignItems: 'flex-start',
         gap: 12,
     },
-    errorText: {
+    commandHint: {
         flex: 1,
-        color: '#f0c0b6',
-        fontSize: 13,
-        lineHeight: 18,
+        color: '#a8937d',
+        fontSize: 12,
+        lineHeight: 17,
+    },
+    commandActions: {
+        minWidth: 132,
     },
     sidebarOverlay: {
         flex: 1,
         flexDirection: 'row',
         backgroundColor: 'rgba(0, 0, 0, 0.45)',
-    },
-    sidebarBackdrop: {
-        flex: 1,
     },
     sidebarPanel: {
         backgroundColor: '#191411',
@@ -895,6 +1175,9 @@ const styles = StyleSheet.create({
         borderRightColor: '#2d241d',
         paddingHorizontal: 14,
         gap: 14,
+    },
+    sidebarBackdrop: {
+        flex: 1,
     },
     sidebarHeader: {
         flexDirection: 'row',
