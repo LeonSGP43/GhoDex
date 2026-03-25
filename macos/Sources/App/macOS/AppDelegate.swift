@@ -2046,6 +2046,7 @@ class AppDelegate: NSObject,
         return nil
     }
 
+    @MainActor
     func controlHarnessReadableSurface(for terminalID: UUID) -> (any ControlHarnessReadableSurface)? {
         findSurface(forUUID: terminalID)
     }

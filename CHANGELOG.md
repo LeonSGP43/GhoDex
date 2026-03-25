@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(test): align control-harness surface access with main-actor overrides
+
+- What changed: Marked `AppDelegate.controlHarnessReadableSurface(for:)` as `@MainActor` so the test-only `RecordingAppDelegate` override in `ControlHarnessTests` matches the base declaration's actor isolation model.
+- Why: `GhosttyTests` could no longer compile the targeted Browser popup tests because Swift treated the test override as main-actor isolated while the base declaration was still nonisolated.
+- Impact: The `GhosttyTests/BrowserPopupEventTests` target builds and runs again, so popup event stream changes now have real test-target acceptance instead of build-only confidence.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' -only-testing:GhosttyTests/BrowserPopupEventTests test`
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `CHANGELOG.md`
+- Decision trail: The control-harness surface resolver was already injected as an `@MainActor` closure and sibling control-harness accessors on `AppDelegate` were main-actor isolated. Aligning the base declaration is the smallest truthful fix because surface lookup walks live AppKit controller state.
+
 ### feat(browser): expose popup routing through the external event stream
 
 - What changed: Added a public `popupRequest` event kind to `browser.tab.v1`, taught `BrowserExternalEventBroker` to forward popup/open-window requests instead of dropping them, and enriched the emitted payload with route outcome fields such as `routingTarget`, `resultPageID`, `resultBrowserTabID`, `resultIsActive`, and `resultVisibilityState`. Added `macos/Tests/Browser/BrowserPopupEventTests.swift` to lock the payload contract for page-tab and new-window routing.
