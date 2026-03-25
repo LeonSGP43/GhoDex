@@ -1,4 +1,9 @@
 #import "GhoDexCEFBridge.h"
+#import <CommonCrypto/CommonCryptor.h>
+#import <CommonCrypto/CommonKeyDerivation.h>
+#import <Security/Security.h>
+
+#include <sqlite3.h>
 
 NSString * const GhoDexCEFControlErrorDomain = @"com.leongong.ghodex.browser.cef.control";
 
@@ -30,8 +35,10 @@ NSString * const GhoDexCEFControlErrorDomain = @"com.leongong.ghodex.browser.cef
 #include <algorithm>
 #include <atomic>
 #include <errno.h>
+#include <limits.h>
 #include <libproc.h>
 #include <signal.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 #include <string>
 #include <vector>
@@ -77,6 +84,8 @@ NSString * _Nullable CopyLastInitializationError(void) {
 }
 
 NSString *ConfiguredExternalProfilePath(void);
+NSString *ConfiguredProfileRootPath(void);
+NSString * _Nullable CanonicalCEFPath(NSString *path);
 
 NSString *ConsoleLevelString(cef_log_severity_t level) {
   switch (level) {
@@ -1176,6 +1185,26 @@ void GhoDexCEFClient::EmitState(bool isLoading, bool canGoBack, bool canGoForwar
 
 NSString *ValidatedDirectoryPath(NSString *candidate);
 
+NSString *ConfiguredAppSupportRootPath(void) {
+  NSString *override_path = NSProcessInfo.processInfo.environment[@"GHODEX_BROWSER_APP_SUPPORT_ROOT"];
+  NSString *validated_override = ValidatedDirectoryPath(override_path);
+  if (validated_override.length > 0) {
+    return validated_override;
+  }
+
+  NSURL *base =
+      [NSFileManager.defaultManager.homeDirectoryForCurrentUser
+          URLByAppendingPathComponent:@"Library"
+                         isDirectory:YES];
+  base = [base URLByAppendingPathComponent:@"Application Support" isDirectory:YES];
+  base = [base URLByAppendingPathComponent:@"GhoDex" isDirectory:YES];
+  return base.path;
+}
+
+NSString *ConfiguredCEFRootPath(void) {
+  return [ConfiguredAppSupportRootPath() stringByAppendingPathComponent:@"CEF"];
+}
+
 NSString *ConfiguredRuntimeRootPath(void) {
   NSString *override_path = NSProcessInfo.processInfo.environment[@"GHODEX_CEF_ROOT"];
   if (override_path.length > 0) {
@@ -1188,15 +1217,7 @@ NSString *ConfiguredRuntimeRootPath(void) {
     return validated_defaults;
   }
 
-  NSURL *base =
-      [NSFileManager.defaultManager.homeDirectoryForCurrentUser
-          URLByAppendingPathComponent:@"Library"
-                         isDirectory:YES];
-  base = [base URLByAppendingPathComponent:@"Application Support" isDirectory:YES];
-  base = [base URLByAppendingPathComponent:@"GhoDex" isDirectory:YES];
-  base = [base URLByAppendingPathComponent:@"CEF" isDirectory:YES];
-  base = [base URLByAppendingPathComponent:@"current" isDirectory:YES];
-  return base.path;
+  return [ConfiguredCEFRootPath() stringByAppendingPathComponent:@"current"];
 }
 
 NSString *ConfiguredFrameworkDirectoryPath(void) {
@@ -1260,10 +1281,12 @@ NSString *ConfiguredHelperExecutablePath(void) {
 }
 
 NSString *ConfiguredCEFLogPath(void) {
-  NSURL *base =
-      [NSFileManager.defaultManager.homeDirectoryForCurrentUser
-          URLByAppendingPathComponent:@"Library"
-                         isDirectory:YES];
+  NSString *app_support_root = ConfiguredAppSupportRootPath();
+  if (app_support_root.length == 0) {
+    return nil;
+  }
+
+  NSURL *base = [[NSURL fileURLWithPath:app_support_root isDirectory:YES] URLByDeletingLastPathComponent];
   base = [base URLByAppendingPathComponent:@"Logs" isDirectory:YES];
   base = [base URLByAppendingPathComponent:@"GhoDex" isDirectory:YES];
 
@@ -1304,6 +1327,1053 @@ NSString *ConfiguredExternalProfilePath(void) {
   NSString *defaults_path =
       [NSUserDefaults.standardUserDefaults stringForKey:@"BrowserCEFProfilePath"];
   return ValidatedDirectoryPath(defaults_path);
+}
+
+NSString *ExternalProfileSourceUserDataDir(NSString *external_profile) {
+  if (external_profile.length == 0) {
+    return nil;
+  }
+
+  NSString *user_data_dir = external_profile.stringByDeletingLastPathComponent;
+  return user_data_dir.length > 0 ? user_data_dir : nil;
+}
+
+NSString *ExternalProfileRuntimeStatePath(NSString *runtime_root) {
+  if (runtime_root.length == 0) {
+    return nil;
+  }
+
+  return [runtime_root stringByAppendingPathComponent:@".ghodex-external-profile-state.plist"];
+}
+
+NSDictionary *ExternalProfileRuntimeState(NSString *runtime_root) {
+  NSString *state_path = ExternalProfileRuntimeStatePath(runtime_root);
+  if (state_path.length == 0) {
+    return @{};
+  }
+
+  NSDictionary *state = [NSDictionary dictionaryWithContentsOfFile:state_path];
+  return [state isKindOfClass:NSDictionary.class] ? state : @{};
+}
+
+BOOL WriteExternalProfileRuntimeState(NSString *runtime_root, NSDictionary *state) {
+  NSString *state_path = ExternalProfileRuntimeStatePath(runtime_root);
+  if (state_path.length == 0) {
+    return NO;
+  }
+
+  return [state writeToFile:state_path atomically:YES];
+}
+
+BOOL HasOsCryptPrefix(NSData *value) {
+  if (value.length < 4) {
+    return NO;
+  }
+
+  const unsigned char *bytes = static_cast<const unsigned char *>(value.bytes);
+  return bytes[0] == 'v' && bytes[1] == '1' && bytes[2] == '0';
+}
+
+NSData * _Nullable CopyKeychainSecret(NSString *service, NSString *account) {
+  if (service.length == 0 || account.length == 0) {
+    return nil;
+  }
+
+  NSTask *task = [[NSTask alloc] init];
+  task.launchPath = @"/usr/bin/security";
+  task.arguments = @[ @"find-generic-password", @"-w", @"-s", service, @"-a", account ];
+  NSPipe *stdout_pipe = [NSPipe pipe];
+  NSPipe *stderr_pipe = [NSPipe pipe];
+  task.standardOutput = stdout_pipe;
+  task.standardError = stderr_pipe;
+
+  @try {
+    [task launch];
+  } @catch (NSException *exception) {
+    return nil;
+  }
+
+  [task waitUntilExit];
+  if (task.terminationStatus != 0) {
+    return nil;
+  }
+
+  NSData *output = [stdout_pipe.fileHandleForReading readDataToEndOfFile];
+  NSString *secret_string = [[NSString alloc] initWithData:output encoding:NSUTF8StringEncoding];
+  secret_string = [secret_string stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+  return [secret_string dataUsingEncoding:NSUTF8StringEncoding];
+}
+
+NSData * _Nullable DerivedSafeStorageKey(NSData *secret) {
+  if (secret.length == 0) {
+    return nil;
+  }
+
+  const char salt[] = "saltysalt";
+  NSMutableData *derived = [NSMutableData dataWithLength:kCCKeySizeAES128];
+  int status = CCKeyDerivationPBKDF(kCCPBKDF2,
+                                   static_cast<const char *>(secret.bytes),
+                                   secret.length,
+                                   reinterpret_cast<const uint8_t *>(salt),
+                                   strlen(salt),
+                                   kCCPRFHmacAlgSHA1,
+                                   1003,
+                                   static_cast<uint8_t *>(derived.mutableBytes),
+                                   derived.length);
+  return status == kCCSuccess ? derived : nil;
+}
+
+NSData *MockSafeStorageSecret(void) {
+  // Chromium's `--use-mock-keychain` path derives the runtime encryption key
+  // from the mock password returned by MockAppleKeychain/MockKeychain.
+  return [@"mock_password" dataUsingEncoding:NSUTF8StringEncoding];
+}
+
+NSData * _Nullable AESCBCCryptRaw(NSData *input, NSData *key, CCOperation operation) {
+  if (input.length == 0 || key.length != kCCKeySizeAES128) {
+    return nil;
+  }
+
+  char iv[kCCBlockSizeAES128];
+  memset(iv, ' ', sizeof(iv));
+
+  size_t output_capacity = input.length + kCCBlockSizeAES128;
+  NSMutableData *output = [NSMutableData dataWithLength:output_capacity];
+  size_t output_length = 0;
+  CCCryptorStatus status = CCCrypt(operation,
+                                   kCCAlgorithmAES,
+                                   0,
+                                   key.bytes,
+                                   key.length,
+                                   iv,
+                                   input.bytes,
+                                   input.length,
+                                   output.mutableBytes,
+                                   output.length,
+                                   &output_length);
+  if (status != kCCSuccess) {
+    return nil;
+  }
+
+  output.length = output_length;
+  return output;
+}
+
+NSData * _Nullable DecryptOsCryptValue(NSData *encrypted_value, NSData *key) {
+  if (!HasOsCryptPrefix(encrypted_value) || key.length == 0) {
+    return nil;
+  }
+
+  NSData *ciphertext = [encrypted_value subdataWithRange:NSMakeRange(3, encrypted_value.length - 3)];
+  NSData *padded_plaintext = AESCBCCryptRaw(ciphertext, key, kCCDecrypt);
+  if (padded_plaintext.length == 0) {
+    return nil;
+  }
+
+  const uint8_t *bytes = static_cast<const uint8_t *>(padded_plaintext.bytes);
+  uint8_t pad_length = bytes[padded_plaintext.length - 1];
+  if (pad_length == 0 || pad_length > kCCBlockSizeAES128 || pad_length > padded_plaintext.length) {
+    return nil;
+  }
+
+  for (NSUInteger index = padded_plaintext.length - pad_length; index < padded_plaintext.length; index++) {
+    if (bytes[index] != pad_length) {
+      return nil;
+    }
+  }
+
+  return [padded_plaintext subdataWithRange:NSMakeRange(0, padded_plaintext.length - pad_length)];
+}
+
+NSData * _Nullable EncryptOsCryptValue(NSData *plaintext, NSData *key) {
+  if (plaintext.length == 0 || key.length == 0) {
+    return nil;
+  }
+
+  uint8_t pad_length = kCCBlockSizeAES128 - (plaintext.length % kCCBlockSizeAES128);
+  if (pad_length == 0) {
+    pad_length = kCCBlockSizeAES128;
+  }
+
+  NSMutableData *padded_plaintext = [plaintext mutableCopy];
+  uint8_t padding[kCCBlockSizeAES128];
+  memset(padding, pad_length, sizeof(padding));
+  [padded_plaintext appendBytes:padding length:pad_length];
+
+  NSData *ciphertext = AESCBCCryptRaw(padded_plaintext, key, kCCEncrypt);
+  if (ciphertext.length == 0) {
+    return nil;
+  }
+
+  NSMutableData *wrapped = [NSMutableData dataWithBytes:"v10" length:3];
+  [wrapped appendData:ciphertext];
+  return wrapped;
+}
+
+struct ExternalProfileCryptoContext {
+  NSData *chromeKey = nil;
+  NSData *chromiumKey = nil;
+};
+
+ExternalProfileCryptoContext LoadExternalProfileCryptoContext(void) {
+  ExternalProfileCryptoContext context;
+  context.chromeKey = DerivedSafeStorageKey(CopyKeychainSecret(@"Chrome Safe Storage", @"Chrome"));
+  context.chromiumKey = DerivedSafeStorageKey(MockSafeStorageSecret());
+  return context;
+}
+
+struct ExternalProfileMigrationStats {
+  NSUInteger cookiesRewrapped = 0;
+  NSUInteger tokenServiceRewrapped = 0;
+  NSUInteger loginPasswordsRewrapped = 0;
+  NSUInteger skippedAlreadyChromium = 0;
+  NSUInteger skippedUnknown = 0;
+};
+
+BOOL OpenSQLiteDatabase(NSString *path, sqlite3 **db, NSString **error_message) {
+  int status = sqlite3_open_v2(path.fileSystemRepresentation,
+                               db,
+                               SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+                               nullptr);
+  if (status != SQLITE_OK || *db == nullptr) {
+    if (error_message != nullptr) {
+      *error_message = [NSString stringWithFormat:@"Failed to open %@: %s",
+                                                  path,
+                                                  *db != nullptr ? sqlite3_errmsg(*db) : sqlite3_errstr(status)];
+    }
+    if (*db != nullptr) {
+      sqlite3_close(*db);
+      *db = nullptr;
+    }
+    return NO;
+  }
+
+  sqlite3_busy_timeout(*db, 5000);
+  return YES;
+}
+
+BOOL SQLiteExec(sqlite3 *db, const char *sql, NSString **error_message) {
+  char *raw_error = nullptr;
+  int status = sqlite3_exec(db, sql, nullptr, nullptr, &raw_error);
+  if (status == SQLITE_OK) {
+    return YES;
+  }
+
+  if (error_message != nullptr) {
+    NSString *message =
+        [NSString stringWithFormat:@"SQLite error %d: %s", status, raw_error != nullptr ? raw_error : sqlite3_errmsg(db)];
+    *error_message = message;
+  }
+  if (raw_error != nullptr) {
+    sqlite3_free(raw_error);
+  }
+  return NO;
+}
+
+NSData *SQLiteBlobColumn(sqlite3_stmt *statement, int column) {
+  const void *bytes = sqlite3_column_blob(statement, column);
+  int length = sqlite3_column_bytes(statement, column);
+  if (bytes == nullptr || length <= 0) {
+    return nil;
+  }
+  return [NSData dataWithBytes:bytes length:(NSUInteger)length];
+}
+
+BOOL RewrapEncryptedRows(sqlite3 *db,
+                         const char *select_sql,
+                         const char *update_sql,
+                         BOOL bind_rowid,
+                         NSData *source_key,
+                         NSData *target_key,
+                         NSUInteger *rewrapped_count,
+                         NSUInteger *already_target_count,
+                         NSUInteger *unknown_count,
+                         NSString **error_message) {
+  sqlite3_stmt *select_statement = nullptr;
+  if (sqlite3_prepare_v2(db, select_sql, -1, &select_statement, nullptr) != SQLITE_OK) {
+    if (error_message != nullptr) {
+      *error_message = [NSString stringWithFormat:@"Failed to prepare select: %s", sqlite3_errmsg(db)];
+    }
+    return NO;
+  }
+
+  sqlite3_stmt *update_statement = nullptr;
+  if (sqlite3_prepare_v2(db, update_sql, -1, &update_statement, nullptr) != SQLITE_OK) {
+    sqlite3_finalize(select_statement);
+    if (error_message != nullptr) {
+      *error_message = [NSString stringWithFormat:@"Failed to prepare update: %s", sqlite3_errmsg(db)];
+    }
+    return NO;
+  }
+
+  while (sqlite3_step(select_statement) == SQLITE_ROW) {
+    NSData *current_value = SQLiteBlobColumn(select_statement, 1);
+    if (current_value.length == 0 || !HasOsCryptPrefix(current_value)) {
+      continue;
+    }
+
+    if (target_key.length > 0) {
+      NSData *target_plaintext = DecryptOsCryptValue(current_value, target_key);
+      if (target_plaintext.length > 0) {
+        if (already_target_count != nullptr) {
+          *already_target_count += 1;
+        }
+        continue;
+      }
+    }
+
+    NSData *source_plaintext = source_key.length > 0 ? DecryptOsCryptValue(current_value, source_key) : nil;
+    if (source_plaintext.length == 0) {
+      if (unknown_count != nullptr) {
+        *unknown_count += 1;
+      }
+      continue;
+    }
+
+    NSData *rewrapped_value = EncryptOsCryptValue(source_plaintext, target_key);
+    if (rewrapped_value.length == 0) {
+      sqlite3_finalize(update_statement);
+      sqlite3_finalize(select_statement);
+      if (error_message != nullptr) {
+        *error_message = @"Failed to re-encrypt an os_crypt value for the runtime profile.";
+      }
+      return NO;
+    }
+
+    sqlite3_reset(update_statement);
+    sqlite3_clear_bindings(update_statement);
+    sqlite3_bind_blob(update_statement,
+                      1,
+                      rewrapped_value.bytes,
+                      (int)rewrapped_value.length,
+                      SQLITE_TRANSIENT);
+    if (bind_rowid) {
+      sqlite3_bind_int64(update_statement, 2, sqlite3_column_int64(select_statement, 0));
+    } else {
+      const unsigned char *text = sqlite3_column_text(select_statement, 0);
+      if (text == nullptr) {
+        if (unknown_count != nullptr) {
+          *unknown_count += 1;
+        }
+        continue;
+      }
+      sqlite3_bind_text(update_statement, 2, reinterpret_cast<const char *>(text), -1, SQLITE_TRANSIENT);
+    }
+
+    if (sqlite3_step(update_statement) != SQLITE_DONE) {
+      sqlite3_finalize(update_statement);
+      sqlite3_finalize(select_statement);
+      if (error_message != nullptr) {
+        *error_message = [NSString stringWithFormat:@"Failed to update runtime profile data: %s", sqlite3_errmsg(db)];
+      }
+      return NO;
+    }
+
+    if (rewrapped_count != nullptr) {
+      *rewrapped_count += 1;
+    }
+  }
+
+  sqlite3_finalize(update_statement);
+  sqlite3_finalize(select_statement);
+  return YES;
+}
+
+BOOL RewrapDatabaseAtPath(NSString *path,
+                          const char *select_sql,
+                          const char *update_sql,
+                          BOOL bind_rowid,
+                          NSData *source_key,
+                          NSData *target_key,
+                          NSUInteger *rewrapped_count,
+                          NSUInteger *already_target_count,
+                          NSUInteger *unknown_count,
+                          NSString **error_message) {
+  if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+    return YES;
+  }
+
+  sqlite3 *db = nullptr;
+  if (!OpenSQLiteDatabase(path, &db, error_message)) {
+    return NO;
+  }
+
+  BOOL ok = SQLiteExec(db, "BEGIN IMMEDIATE TRANSACTION", error_message) &&
+            RewrapEncryptedRows(db,
+                                select_sql,
+                                update_sql,
+                                bind_rowid,
+                                source_key,
+                                target_key,
+                                rewrapped_count,
+                                already_target_count,
+                                unknown_count,
+                                error_message);
+  if (ok) {
+    ok = SQLiteExec(db, "COMMIT TRANSACTION", error_message);
+  } else {
+    SQLiteExec(db, "ROLLBACK TRANSACTION", nullptr);
+  }
+
+  sqlite3_close(db);
+  return ok;
+}
+
+BOOL RewrapRuntimeProfileData(NSString *runtime_profile_path,
+                              const ExternalProfileCryptoContext &crypto_context,
+                              ExternalProfileMigrationStats *stats,
+                              NSString **error_message) {
+  if (runtime_profile_path.length == 0 || crypto_context.chromiumKey.length == 0) {
+    return YES;
+  }
+
+  BOOL ok =
+      RewrapDatabaseAtPath([runtime_profile_path stringByAppendingPathComponent:@"Network/Cookies"],
+                           "SELECT rowid, encrypted_value FROM cookies WHERE length(encrypted_value) > 3",
+                           "UPDATE cookies SET encrypted_value = ? WHERE rowid = ?",
+                           YES,
+                           crypto_context.chromeKey,
+                           crypto_context.chromiumKey,
+                           &stats->cookiesRewrapped,
+                           &stats->skippedAlreadyChromium,
+                           &stats->skippedUnknown,
+                           error_message) &&
+      RewrapDatabaseAtPath([runtime_profile_path stringByAppendingPathComponent:@"Cookies"],
+                           "SELECT rowid, encrypted_value FROM cookies WHERE length(encrypted_value) > 3",
+                           "UPDATE cookies SET encrypted_value = ? WHERE rowid = ?",
+                           YES,
+                           crypto_context.chromeKey,
+                           crypto_context.chromiumKey,
+                           &stats->cookiesRewrapped,
+                           &stats->skippedAlreadyChromium,
+                           &stats->skippedUnknown,
+                           error_message) &&
+      RewrapDatabaseAtPath([runtime_profile_path stringByAppendingPathComponent:@"Login Data"],
+                           "SELECT rowid, password_value FROM logins WHERE length(password_value) > 3",
+                           "UPDATE logins SET password_value = ? WHERE rowid = ?",
+                           YES,
+                           crypto_context.chromeKey,
+                           crypto_context.chromiumKey,
+                           &stats->loginPasswordsRewrapped,
+                           &stats->skippedAlreadyChromium,
+                           &stats->skippedUnknown,
+                           error_message) &&
+      RewrapDatabaseAtPath([runtime_profile_path stringByAppendingPathComponent:@"Web Data"],
+                           "SELECT service, encrypted_token FROM token_service WHERE length(encrypted_token) > 3",
+                           "UPDATE token_service SET encrypted_token = ? WHERE service = ?",
+                           NO,
+                           crypto_context.chromeKey,
+                           crypto_context.chromiumKey,
+                           &stats->tokenServiceRewrapped,
+                           &stats->skippedAlreadyChromium,
+                           &stats->skippedUnknown,
+                           error_message);
+  return ok;
+}
+
+BOOL CopyChromeUserDataRoot(NSString *source_root,
+                            NSString *target_root,
+                            NSString *profile_directory,
+                            BOOL overwrite_existing,
+                            NSString **error_message) {
+  NSFileManager *file_manager = NSFileManager.defaultManager;
+  NSString *resolved_source_root = CanonicalCEFPath(source_root) ?: source_root.stringByStandardizingPath;
+  NSError *directory_error = nil;
+  [file_manager createDirectoryAtPath:target_root
+          withIntermediateDirectories:YES
+                           attributes:nil
+                                error:&directory_error];
+  if (directory_error != nil) {
+    if (error_message != nullptr) {
+      *error_message = [NSString stringWithFormat:@"Failed to create runtime profile root %@: %@",
+                                                  target_root,
+                                                  directory_error.localizedDescription];
+    }
+    return NO;
+  }
+
+  NSSet<NSString *> *excluded_exact_names =
+      [NSSet setWithArray:@[ @"SingletonCookie", @"SingletonLock", @"SingletonSocket" ]];
+  NSSet<NSString *> *excluded_directory_names = [NSSet
+      setWithArray:@[ @"Crashpad",
+                      @"Code Cache",
+                      @"component_crx_cache",
+                      @"DawnCache",
+                      @"Extension Rules",
+                      @"Extension Scripts",
+                      @"Extension State",
+                      @"Extensions",
+                      @"GPUCache",
+                      @"GrShaderCache",
+                      @"GraphiteDawnCache",
+                      @"ShaderCache" ]];
+  NSSet<NSString *> *excluded_selected_profile_entries =
+      [NSSet setWithArray:@[ @"Sync App Settings" ]];
+  NSSet<NSString *> *allowed_top_level_names =
+      [NSSet setWithArray:@[ profile_directory, @"Local State", @"Last Version", @"First Run" ]];
+  // The staged mirror can stay broad, but the runtime seed should stay narrow:
+  // copy the selected profile subtree in full, preserve only the minimum
+  // Chrome-wide metadata needed beside it, and continue excluding ephemeral
+  // crash/cache/lock state. Keep profile-owned auth/web-app state intact so
+  // Chromium can reuse the mirrored Google session without Secure Preferences
+  // / Web Data drift from hand-edited runtime sanitization.
+  NSURL *source_root_url = [NSURL fileURLWithPath:resolved_source_root isDirectory:YES];
+  NSString *source_root_prefix = [source_root_url.path stringByAppendingString:@"/"];
+  NSDirectoryEnumerator<NSURL *> *enumerator =
+      [file_manager enumeratorAtURL:source_root_url
+          includingPropertiesForKeys:@[
+            NSURLIsDirectoryKey,
+            NSURLContentModificationDateKey,
+            NSURLFileSizeKey,
+            NSURLIsSymbolicLinkKey,
+          ]
+                             options:NSDirectoryEnumerationSkipsHiddenFiles
+                        errorHandler:^BOOL(NSURL *url, NSError *error) {
+                          NSLog(@"[CEF] Failed to enumerate %@ while seeding runtime profile: %@",
+                                url.path,
+                                error.localizedDescription);
+                          return YES;
+                        }];
+  if (enumerator == nil) {
+    return YES;
+  }
+
+  while (NSURL *source_url = enumerator.nextObject) {
+    if (![source_url.path hasPrefix:source_root_prefix]) {
+      continue;
+    }
+    NSString *relative_path =
+        [source_url.path stringByReplacingOccurrencesOfString:source_root_prefix withString:@""];
+    NSString *name = source_url.lastPathComponent;
+    NSArray<NSString *> *path_components = relative_path.pathComponents;
+    NSString *top_level_name = path_components.firstObject;
+    NSDictionary<NSURLResourceKey, id> *values =
+        [source_url resourceValuesForKeys:@[
+          NSURLIsDirectoryKey,
+          NSURLContentModificationDateKey,
+          NSURLFileSizeKey,
+          NSURLIsSymbolicLinkKey,
+        ]
+                                    error:nil];
+    BOOL is_directory = [values[NSURLIsDirectoryKey] boolValue];
+    BOOL is_symbolic_link = [values[NSURLIsSymbolicLinkKey] boolValue];
+
+    if (top_level_name.length == 0) {
+      if (is_directory) {
+        [enumerator skipDescendants];
+      }
+      continue;
+    }
+
+    if (path_components.count == 1) {
+      BOOL is_selected_profile_root = [top_level_name isEqualToString:profile_directory];
+      BOOL is_other_profile_root =
+          ([top_level_name hasPrefix:@"Profile "] ||
+           [top_level_name isEqualToString:@"Default"] ||
+           [top_level_name isEqualToString:@"Guest Profile"] ||
+           [top_level_name isEqualToString:@"System Profile"]) &&
+          !is_selected_profile_root;
+      if (is_other_profile_root) {
+        if (is_directory) {
+          [enumerator skipDescendants];
+        }
+        continue;
+      }
+
+      if (!is_selected_profile_root && ![allowed_top_level_names containsObject:top_level_name]) {
+        if (is_directory) {
+          [enumerator skipDescendants];
+        }
+        continue;
+      }
+    }
+
+    if ([excluded_exact_names containsObject:name]) {
+      if (is_directory) {
+        [enumerator skipDescendants];
+      }
+      continue;
+    }
+
+    if ([top_level_name isEqualToString:profile_directory] &&
+        [excluded_selected_profile_entries containsObject:name]) {
+      if (is_directory) {
+        [enumerator skipDescendants];
+      }
+      continue;
+    }
+
+    if (is_directory && [excluded_directory_names containsObject:name]) {
+      [enumerator skipDescendants];
+      continue;
+    }
+
+    NSString *target_path = [target_root stringByAppendingPathComponent:relative_path];
+    if (is_directory) {
+      NSError *create_error = nil;
+      [file_manager createDirectoryAtPath:target_path
+              withIntermediateDirectories:YES
+                               attributes:nil
+                                    error:&create_error];
+      if (create_error != nil) {
+        if (error_message != nullptr) {
+          *error_message = [NSString stringWithFormat:@"Failed to create %@: %@",
+                                                      target_path,
+                                                      create_error.localizedDescription];
+        }
+        return NO;
+      }
+      continue;
+    }
+
+    if (is_symbolic_link) {
+      NSError *remove_error = nil;
+      if ([file_manager fileExistsAtPath:target_path]) {
+        [file_manager removeItemAtPath:target_path error:&remove_error];
+      }
+      if (remove_error != nil) {
+        if (error_message != nullptr) {
+          *error_message = [NSString stringWithFormat:@"Failed to replace symlink %@: %@",
+                                                      target_path,
+                                                      remove_error.localizedDescription];
+        }
+        return NO;
+      }
+      NSString *destination = [file_manager destinationOfSymbolicLinkAtPath:source_url.path error:nil];
+      NSError *link_error = nil;
+      [file_manager createSymbolicLinkAtPath:target_path
+                    withDestinationPath:destination ?: @""
+                                  error:&link_error];
+      if (link_error != nil) {
+        if (error_message != nullptr) {
+          *error_message = [NSString stringWithFormat:@"Failed to copy symlink %@: %@",
+                                                      source_url.path,
+                                                      link_error.localizedDescription];
+        }
+        return NO;
+      }
+      continue;
+    }
+
+    BOOL should_copy = ![file_manager fileExistsAtPath:target_path];
+    if (!should_copy && overwrite_existing) {
+      NSDictionary<NSFileAttributeKey, id> *source_attributes =
+          [file_manager attributesOfItemAtPath:source_url.path error:nil];
+      NSDictionary<NSFileAttributeKey, id> *target_attributes =
+          [file_manager attributesOfItemAtPath:target_path error:nil];
+      should_copy =
+          ![source_attributes[NSFileSize] isEqual:target_attributes[NSFileSize]] ||
+          ![source_attributes[NSFileModificationDate] isEqual:target_attributes[NSFileModificationDate]];
+    }
+
+    if (!should_copy) {
+      continue;
+    }
+
+    NSError *parent_error = nil;
+    [file_manager createDirectoryAtPath:target_path.stringByDeletingLastPathComponent
+            withIntermediateDirectories:YES
+                             attributes:nil
+                                  error:&parent_error];
+    if (parent_error != nil) {
+      if (error_message != nullptr) {
+        *error_message = [NSString stringWithFormat:@"Failed to create parent for %@: %@",
+                                                    target_path,
+                                                    parent_error.localizedDescription];
+      }
+      return NO;
+    }
+
+    NSError *remove_error = nil;
+    if ([file_manager fileExistsAtPath:target_path]) {
+      [file_manager removeItemAtPath:target_path error:&remove_error];
+    }
+    if (remove_error != nil) {
+      if (error_message != nullptr) {
+        *error_message = [NSString stringWithFormat:@"Failed to replace %@: %@",
+                                                    target_path,
+                                                    remove_error.localizedDescription];
+      }
+      return NO;
+    }
+
+    NSError *copy_error = nil;
+    [file_manager copyItemAtPath:source_url.path toPath:target_path error:&copy_error];
+    if (copy_error != nil) {
+      if (error_message != nullptr) {
+        *error_message = [NSString stringWithFormat:@"Failed to copy %@ into %@: %@",
+                                                    source_url.path,
+                                                    target_path,
+                                                    copy_error.localizedDescription];
+      }
+      return NO;
+    }
+  }
+
+  return YES;
+}
+
+BOOL StripExternalProfileJSONKeys(NSString *path,
+                                  NSArray<NSString *> *top_level_keys,
+                                  NSString **error_message) {
+  if (path.length == 0 || top_level_keys.count == 0) {
+    return YES;
+  }
+
+  NSFileManager *file_manager = NSFileManager.defaultManager;
+  if (![file_manager fileExistsAtPath:path]) {
+    return YES;
+  }
+
+  NSData *data = [NSData dataWithContentsOfFile:path];
+  if (data.length == 0) {
+    return YES;
+  }
+
+  NSError *json_error = nil;
+  id object = [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingMutableContainers error:&json_error];
+  if (![object isKindOfClass:NSMutableDictionary.class]) {
+    if (error_message != nullptr) {
+      *error_message = [NSString stringWithFormat:@"Failed to parse %@ as a mutable JSON dictionary: %@",
+                                                  path,
+                                                  json_error.localizedDescription ?: @"invalid JSON"];
+    }
+    return NO;
+  }
+
+  NSMutableDictionary *dictionary = object;
+  BOOL changed = NO;
+  for (NSString *key in top_level_keys) {
+    if (dictionary[key] != nil) {
+      [dictionary removeObjectForKey:key];
+      changed = YES;
+    }
+  }
+
+  if (!changed) {
+    return YES;
+  }
+
+  NSData *serialized =
+      [NSJSONSerialization dataWithJSONObject:dictionary options:0 error:&json_error];
+  if (serialized.length == 0) {
+    if (error_message != nullptr) {
+      *error_message = [NSString stringWithFormat:@"Failed to serialize sanitized JSON for %@: %@",
+                                                  path,
+                                                  json_error.localizedDescription ?: @"serialization failed"];
+    }
+    return NO;
+  }
+
+  NSError *write_error = nil;
+  [serialized writeToFile:path options:NSDataWritingAtomic error:&write_error];
+  if (write_error != nil) {
+    if (error_message != nullptr) {
+      *error_message = [NSString stringWithFormat:@"Failed to write sanitized JSON to %@: %@",
+                                                  path,
+                                                  write_error.localizedDescription];
+    }
+    return NO;
+  }
+
+  return YES;
+}
+
+NSMutableDictionary * _Nullable LoadMutableJSONDictionary(NSString *path, NSString **error_message) {
+  if (path.length == 0) {
+    return nil;
+  }
+
+  NSFileManager *file_manager = NSFileManager.defaultManager;
+  if (![file_manager fileExistsAtPath:path]) {
+    return nil;
+  }
+
+  NSData *data = [NSData dataWithContentsOfFile:path];
+  if (data.length == 0) {
+    return nil;
+  }
+
+  NSError *json_error = nil;
+  id object = [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingMutableContainers error:&json_error];
+  if (![object isKindOfClass:NSMutableDictionary.class]) {
+    if (error_message != nullptr) {
+      *error_message = [NSString stringWithFormat:@"Failed to parse %@ as a mutable JSON dictionary: %@",
+                                                  path,
+                                                  json_error.localizedDescription ?: @"invalid JSON"];
+    }
+    return nil;
+  }
+
+  return object;
+}
+
+BOOL WriteMutableJSONDictionary(NSMutableDictionary *dictionary,
+                                NSString *path,
+                                NSString **error_message) {
+  if (dictionary == nil || path.length == 0) {
+    return YES;
+  }
+
+  NSError *json_error = nil;
+  NSData *serialized =
+      [NSJSONSerialization dataWithJSONObject:dictionary options:0 error:&json_error];
+  if (serialized.length == 0) {
+    if (error_message != nullptr) {
+      *error_message = [NSString stringWithFormat:@"Failed to serialize sanitized JSON for %@: %@",
+                                                  path,
+                                                  json_error.localizedDescription ?: @"serialization failed"];
+    }
+    return NO;
+  }
+
+  NSError *write_error = nil;
+  [serialized writeToFile:path options:NSDataWritingAtomic error:&write_error];
+  if (write_error != nil) {
+    if (error_message != nullptr) {
+      *error_message = [NSString stringWithFormat:@"Failed to write sanitized JSON to %@: %@",
+                                                  path,
+                                                  write_error.localizedDescription];
+    }
+    return NO;
+  }
+
+  return YES;
+}
+
+BOOL ClearBrowserSigninTokenService(NSString *web_data_path, NSString **error_message) {
+  if (![[NSFileManager defaultManager] fileExistsAtPath:web_data_path]) {
+    return YES;
+  }
+
+  sqlite3 *db = nullptr;
+  if (!OpenSQLiteDatabase(web_data_path, &db, error_message)) {
+    return NO;
+  }
+
+  BOOL ok = SQLiteExec(db, "BEGIN IMMEDIATE TRANSACTION", error_message) &&
+            SQLiteExec(db, "DELETE FROM token_service", error_message) &&
+            SQLiteExec(db, "COMMIT TRANSACTION", error_message);
+  if (!ok) {
+    SQLiteExec(db, "ROLLBACK TRANSACTION", nullptr);
+  }
+
+  sqlite3_close(db);
+  return ok;
+}
+
+BOOL RemoveBrowserSigninRuntimeArtifacts(NSString *runtime_profile, NSString **error_message) {
+  NSFileManager *file_manager = NSFileManager.defaultManager;
+  NSArray<NSString *> *paths_to_remove = @[
+    [runtime_profile stringByAppendingPathComponent:@"Accounts"],
+    [runtime_profile stringByAppendingPathComponent:@"Account Web Data"],
+    [runtime_profile stringByAppendingPathComponent:@"Account Web Data-journal"],
+    [runtime_profile stringByAppendingPathComponent:@"Google Profile Picture.png"],
+    [runtime_profile stringByAppendingPathComponent:@"Login Data For Account"],
+    [runtime_profile stringByAppendingPathComponent:@"Login Data For Account-journal"],
+    [runtime_profile stringByAppendingPathComponent:@"Sync Data"],
+    [runtime_profile stringByAppendingPathComponent:@"trusted_vault.pb"],
+  ];
+
+  for (NSString *path in paths_to_remove) {
+    if (path.length == 0 || ![file_manager fileExistsAtPath:path]) {
+      continue;
+    }
+
+    NSError *remove_error = nil;
+    [file_manager removeItemAtPath:path error:&remove_error];
+    if (remove_error != nil) {
+      if (error_message != nullptr) {
+        *error_message = [NSString stringWithFormat:@"Failed to remove browser-signin runtime artifact %@: %@",
+                                                    path,
+                                                    remove_error.localizedDescription];
+      }
+      return NO;
+    }
+  }
+
+  return YES;
+}
+
+BOOL SanitizeExternalProfileBrowserSigninState(NSString *runtime_root,
+                                               NSString *runtime_profile,
+                                               NSString *profile_directory,
+                                               NSString **error_message) {
+  NSString *preferences_path = [runtime_profile stringByAppendingPathComponent:@"Preferences"];
+  NSMutableDictionary *preferences = LoadMutableJSONDictionary(preferences_path, error_message);
+  if (preferences != nil) {
+    [preferences removeObjectForKey:@"account_info"];
+    [preferences removeObjectForKey:@"account_tracker_service_last_update"];
+    [preferences removeObjectForKey:@"signin"];
+
+    NSMutableDictionary *google =
+        [preferences[@"google"] isKindOfClass:NSMutableDictionary.class] ? preferences[@"google"] : nil;
+    NSMutableDictionary *services =
+        [google[@"services"] isKindOfClass:NSMutableDictionary.class] ? google[@"services"] : nil;
+    [preferences removeObjectForKey:@"gaia_cookie"];
+    if (services != nil) {
+      [services removeObjectForKey:@"account_id"];
+      [services removeObjectForKey:@"last_gaia_id"];
+      [services removeObjectForKey:@"last_username"];
+      [services removeObjectForKey:@"last_signed_in_username"];
+      [services removeObjectForKey:@"signin_scoped_device_id"];
+      [services removeObjectForKey:@"syncing_gaia_id_migrated_to_signed_in"];
+      [services removeObjectForKey:@"syncing_username_migrated_to_signed_in"];
+      [services removeObjectForKey:@"syncing_user_migration_type"];
+      [services removeObjectForKey:@"signin"];
+      services[@"consented_to_sync"] = @NO;
+    }
+
+    if (!WriteMutableJSONDictionary(preferences, preferences_path, error_message)) {
+      return NO;
+    }
+  }
+
+  NSString *local_state_path = [runtime_root stringByAppendingPathComponent:@"Local State"];
+  NSMutableDictionary *local_state = LoadMutableJSONDictionary(local_state_path, error_message);
+  if (local_state != nil) {
+    NSMutableDictionary *profile =
+        [local_state[@"profile"] isKindOfClass:NSMutableDictionary.class] ? local_state[@"profile"] : nil;
+    NSMutableDictionary *info_cache =
+        [profile[@"info_cache"] isKindOfClass:NSMutableDictionary.class] ? profile[@"info_cache"] : nil;
+    NSMutableDictionary *entry =
+        [info_cache[profile_directory] isKindOfClass:NSMutableDictionary.class] ? info_cache[profile_directory] : nil;
+    if (entry != nil) {
+      entry[@"gaia_id"] = @"";
+      entry[@"gaia_name"] = @"";
+      entry[@"gaia_given_name"] = @"";
+      entry[@"user_name"] = @"";
+      entry[@"is_consented_primary_account"] = @NO;
+      [entry removeObjectForKey:@"gaia_picture_file_name"];
+      [entry removeObjectForKey:@"last_downloaded_gaia_picture_url_with_size"];
+    }
+
+    if (!WriteMutableJSONDictionary(local_state, local_state_path, error_message)) {
+      return NO;
+    }
+  }
+
+  return ClearBrowserSigninTokenService([runtime_profile stringByAppendingPathComponent:@"Web Data"], error_message) &&
+         RemoveBrowserSigninRuntimeArtifacts(runtime_profile, error_message);
+}
+
+BOOL RemoveExternalProfileRuntimeArtifacts(NSString *runtime_root,
+                                           NSString *runtime_profile,
+                                           NSString **error_message) {
+  NSFileManager *file_manager = NSFileManager.defaultManager;
+  NSArray<NSString *> *paths_to_remove = @[
+    [runtime_root stringByAppendingPathComponent:@"App Shims"],
+  ];
+
+  for (NSString *path in paths_to_remove) {
+    if (path.length == 0 || ![file_manager fileExistsAtPath:path]) {
+      continue;
+    }
+
+    NSError *remove_error = nil;
+    [file_manager removeItemAtPath:path error:&remove_error];
+    if (remove_error != nil) {
+      if (error_message != nullptr) {
+        *error_message = [NSString stringWithFormat:@"Failed to remove Chrome-only runtime artifact %@: %@",
+                                                    path,
+                                                    remove_error.localizedDescription];
+      }
+      return NO;
+    }
+  }
+
+  return YES;
+}
+
+BOOL PrepareExternalProfileRuntimeState(NSString **error_message) {
+  NSString *external_profile = ConfiguredExternalProfilePath();
+  if (external_profile.length == 0) {
+    return YES;
+  }
+
+  NSString *source_root = ExternalProfileSourceUserDataDir(external_profile);
+  NSString *profile_directory = external_profile.lastPathComponent;
+  NSString *runtime_root = ConfiguredProfileRootPath();
+  NSString *runtime_profile = runtime_root.length > 0 ? [runtime_root stringByAppendingPathComponent:profile_directory] : nil;
+  if (source_root.length == 0 || runtime_root.length == 0 || runtime_profile.length == 0) {
+    if (error_message != nullptr) {
+      *error_message = @"GhoDex could not resolve the runtime path for the configured external Chrome profile.";
+    }
+    return NO;
+  }
+
+  NSMutableDictionary *state = ExternalProfileRuntimeState(runtime_root).mutableCopy;
+  if (state == nil) {
+    state = [NSMutableDictionary dictionary];
+  }
+  static const NSInteger kExternalProfileSeedVersion = 2;
+  static const NSInteger kExternalProfileMigrationVersion = 3;
+  NSInteger seed_version = [state[@"seedVersion"] integerValue];
+  NSInteger migration_version = [state[@"migrationVersion"] integerValue];
+  BOOL runtime_profile_exists = [[NSFileManager defaultManager] fileExistsAtPath:runtime_profile];
+
+  if (seed_version < kExternalProfileSeedVersion || !runtime_profile_exists) {
+    if (!CopyChromeUserDataRoot(source_root, runtime_root, profile_directory, YES, error_message)) {
+      return NO;
+    }
+    runtime_profile_exists = [[NSFileManager defaultManager] fileExistsAtPath:runtime_profile];
+    if (!runtime_profile_exists) {
+      if (error_message != nullptr) {
+        *error_message = [NSString stringWithFormat:@"Seeded runtime profile is missing %@ after copy.", runtime_profile];
+      }
+      return NO;
+    }
+
+    if (!RemoveExternalProfileRuntimeArtifacts(runtime_root, runtime_profile, error_message)) {
+      return NO;
+    }
+
+    state[@"seedVersion"] = @(kExternalProfileSeedVersion);
+    state[@"seededAt"] = NSDate.date;
+    state[@"sourceProfile"] = external_profile;
+    state[@"sourceUserDataDir"] = source_root;
+    [state removeObjectForKey:@"migrationVersion"];
+    [state removeObjectForKey:@"migrationSummary"];
+    migration_version = 0;
+  }
+
+  if (migration_version < kExternalProfileMigrationVersion) {
+    ExternalProfileCryptoContext crypto_context = LoadExternalProfileCryptoContext();
+    ExternalProfileMigrationStats stats;
+    if (!RewrapRuntimeProfileData(runtime_profile, crypto_context, &stats, error_message)) {
+      return NO;
+    }
+    if (!SanitizeExternalProfileBrowserSigninState(runtime_root,
+                                                   runtime_profile,
+                                                   profile_directory,
+                                                   error_message)) {
+      return NO;
+    }
+
+    NSDictionary *summary = @{
+      @"cookiesRewrapped" : @(stats.cookiesRewrapped),
+      @"tokenServiceRewrapped" : @(stats.tokenServiceRewrapped),
+      @"loginPasswordsRewrapped" : @(stats.loginPasswordsRewrapped),
+      @"skippedAlreadyChromium" : @(stats.skippedAlreadyChromium),
+      @"skippedUnknown" : @(stats.skippedUnknown),
+      @"hasChromeKey" : @(crypto_context.chromeKey.length > 0),
+      @"hasChromiumKey" : @(crypto_context.chromiumKey.length > 0),
+    };
+    state[@"migrationVersion"] = @(kExternalProfileMigrationVersion);
+    state[@"migrationAt"] = NSDate.date;
+    state[@"migrationSummary"] = summary;
+    NSLog(@"[CEF] Prepared runtime profile %@ from %@ with os_crypt migration %@",
+          runtime_profile,
+          external_profile,
+          summary);
+  }
+
+  if (!WriteExternalProfileRuntimeState(runtime_root, state)) {
+    NSLog(@"[CEF] Failed to persist runtime-profile state marker at %@",
+          ExternalProfileRuntimeStatePath(runtime_root) ?: @"<none>");
+  }
+
+  return YES;
 }
 
 pid_t ParsedPIDFromSingletonLockTarget(NSString *target) {
@@ -1425,20 +2495,72 @@ NSString *SanitizedPathComponent(NSString *value) {
   return sanitized;
 }
 
+BOOL ExternalProfileUsesManagedMirror(NSString *external_profile) {
+  return [external_profile containsString:@"/Library/Application Support/GhoDex/CEF/ProfileMirrors/"];
+}
+
+NSString * _Nullable ExternalProfileRuntimeRevision(NSString *external_profile) {
+  if (external_profile.length == 0) {
+    return nil;
+  }
+
+  NSFileManager *file_manager = NSFileManager.defaultManager;
+  NSString *user_data_dir = ExternalProfileSourceUserDataDir(external_profile);
+  NSString *local_state = [user_data_dir stringByAppendingPathComponent:@"Local State"];
+  NSDictionary<NSFileAttributeKey, id> *attributes =
+      [file_manager attributesOfItemAtPath:local_state error:nil];
+  if (attributes.count == 0) {
+    attributes = [file_manager attributesOfItemAtPath:user_data_dir error:nil];
+  }
+
+  NSDate *modified_at = attributes[NSFileModificationDate];
+  NSNumber *file_size = attributes[NSFileSize];
+  if (modified_at == nil) {
+    return nil;
+  }
+
+  return [NSString stringWithFormat:@"%@-%llu-%.6f",
+                                    ExternalProfileUsesManagedMirror(external_profile) ? @"mirror" : @"external",
+                                    file_size.unsignedLongLongValue,
+                                    modified_at.timeIntervalSince1970];
+}
+
+NSString * _Nullable CanonicalCEFPath(NSString *path) {
+  if (path.length == 0) {
+    return nil;
+  }
+
+  NSString *standardized = path.stringByStandardizingPath;
+  if (standardized.length == 0) {
+    return nil;
+  }
+
+  char resolved_path[PATH_MAX];
+  if (realpath(standardized.fileSystemRepresentation, resolved_path) != nullptr) {
+    return [NSString stringWithUTF8String:resolved_path];
+  }
+
+  return standardized;
+}
+
 NSString *ConfiguredProfileRootPath(void) {
   NSString *external_profile = ConfiguredExternalProfilePath();
+  NSString *cef_root = ConfiguredCEFRootPath();
+  if (cef_root.length == 0) {
+    return nil;
+  }
+
   if (external_profile.length > 0) {
-    NSURL *base =
-        [NSFileManager.defaultManager.homeDirectoryForCurrentUser
-            URLByAppendingPathComponent:@"Library"
-                           isDirectory:YES];
-    base = [base URLByAppendingPathComponent:@"Application Support" isDirectory:YES];
-    base = [base URLByAppendingPathComponent:@"GhoDex" isDirectory:YES];
-    base = [base URLByAppendingPathComponent:@"CEF" isDirectory:YES];
+    NSURL *base = [NSURL fileURLWithPath:cef_root isDirectory:YES];
     base = [base URLByAppendingPathComponent:@"Profiles" isDirectory:YES];
     base = [base URLByAppendingPathComponent:@"external" isDirectory:YES];
 
     NSString *profile_slug = SanitizedPathComponent(external_profile);
+    NSString *runtime_revision = ExternalProfileRuntimeRevision(external_profile);
+    if (runtime_revision.length > 0) {
+      profile_slug = [profile_slug stringByAppendingFormat:@"_%@",
+                                                             SanitizedPathComponent(runtime_revision)];
+    }
     base = [base URLByAppendingPathComponent:profile_slug isDirectory:YES];
 
     NSError *error = nil;
@@ -1450,16 +2572,10 @@ NSString *ConfiguredProfileRootPath(void) {
       return nil;
     }
 
-    return base.path;
+    return CanonicalCEFPath(base.path);
   }
 
-  NSURL *base =
-      [NSFileManager.defaultManager.homeDirectoryForCurrentUser
-          URLByAppendingPathComponent:@"Library"
-                         isDirectory:YES];
-  base = [base URLByAppendingPathComponent:@"Application Support" isDirectory:YES];
-  base = [base URLByAppendingPathComponent:@"GhoDex" isDirectory:YES];
-  base = [base URLByAppendingPathComponent:@"CEF" isDirectory:YES];
+  NSURL *base = [NSURL fileURLWithPath:cef_root isDirectory:YES];
   base = [base URLByAppendingPathComponent:@"Profiles" isDirectory:YES];
   base = [base URLByAppendingPathComponent:@"managed" isDirectory:YES];
 
@@ -1476,11 +2592,16 @@ NSString *ConfiguredProfileRootPath(void) {
     return nil;
   }
 
-  return base.path;
+  return CanonicalCEFPath(base.path);
 }
 
 NSString *ConfiguredProfileCachePath(void) {
-  return [ConfiguredProfileRootPath() stringByAppendingPathComponent:@"Cache"];
+  NSString *profile_root = ConfiguredProfileRootPath();
+  if (profile_root.length == 0) {
+    return nil;
+  }
+
+  return [profile_root stringByAppendingPathComponent:@"Cache"];
 }
 
 NSString *ConfiguredProfileDirectoryName(void) {
@@ -1523,7 +2644,7 @@ void GhoDexCEFApp::OnBeforeCommandLineProcessing(
     return;
   }
 
-  NSString *user_data_dir = external_profile.stringByDeletingLastPathComponent;
+  NSString *user_data_dir = ConfiguredProfileRootPath();
   NSString *profile_directory = external_profile.lastPathComponent;
   if (user_data_dir.length == 0 || profile_directory.length == 0) {
     return;
@@ -1533,9 +2654,16 @@ void GhoDexCEFApp::OnBeforeCommandLineProcessing(
   command_line->AppendSwitchWithValue("profile-directory", profile_directory.UTF8String);
   // Real Chrome profiles carry background services that are useful in Chrome
   // itself but not required for GhoDex's embedded page shell. Disabling the
-  // most failure-prone services keeps first-page activation usable when the
-  // external profile's metrics/password databases are busy or partially
-  // incompatible with CEF.
+  // most failure-prone services keeps first-page activation usable. We also
+  // force Chromium onto its mock-keychain path because the runtime profile data
+  // has already been rewrapped for that derived key during
+  // PrepareExternalProfileRuntimeState(); this avoids per-app keychain ACL
+  // prompts/failures while preserving copied Chrome auth state inside GhoDex's
+  // runtime-owned profile. GhoDex builds do not ship Chrome's OAuth client
+  // credentials, so browser-signin services must stay disabled even when the
+  // mirrored profile contains Google web cookies and browser-account metadata.
+  command_line->AppendSwitch("use-mock-keychain");
+  command_line->AppendSwitchWithValue("allow-browser-signin", "false");
   command_line->AppendSwitch("disable-background-networking");
   command_line->AppendSwitch("disable-component-update");
   command_line->AppendSwitch("disable-default-apps");
@@ -1545,11 +2673,10 @@ void GhoDexCEFApp::OnBeforeCommandLineProcessing(
   command_line->AppendSwitch("disable-gpu-compositing");
   command_line->AppendSwitch("in-process-gpu");
   command_line->AppendSwitchWithValue("use-gl", "swiftshader");
-  command_line->AppendSwitch("use-mock-keychain");
   command_line->AppendSwitchWithValue(
       "disable-features",
       "SegmentationPlatformFeature,OptimizationGuideModelDownloading,MediaRouter,VizDisplayCompositor");
-  NSLog(@"[CEF] Using external Chrome profile %@ (user-data-dir=%@ profile-directory=%@)",
+  NSLog(@"[CEF] Using external Chrome profile %@ (runtime-user-data-dir=%@ profile-directory=%@)",
         external_profile,
         user_data_dir,
         profile_directory);
@@ -1599,6 +2726,16 @@ BOOL GhoDexCEFInitializeGlobal(void) {
     return NO;
   }
 
+  NSString *runtime_prepare_error = nil;
+  if (!PrepareExternalProfileRuntimeState(&runtime_prepare_error)) {
+    NSString *failure =
+        runtime_prepare_error ?: @"Chromium could not prepare the configured external Chrome profile for launch.";
+    SetLastInitializationError(failure);
+    clear_initializing();
+    NSLog(@"[CEF] External profile runtime preparation failed: %@", failure);
+    return NO;
+  }
+
   ScopedMainArgs args;
   if (!g_cef_app) {
     g_cef_app = new GhoDexCEFApp();
@@ -1632,7 +2769,7 @@ BOOL GhoDexCEFInitializeGlobal(void) {
 
   NSString *profile_root = ConfiguredProfileRootPath();
   if (profile_root.length > 0) {
-    NSString *cache_path = ConfiguredProfileCachePath();
+    NSString *cache_path = [profile_root stringByAppendingPathComponent:@"Cache"];
     CefString(&settings.root_cache_path) = profile_root.UTF8String;
     CefString(&settings.cache_path) = cache_path.UTF8String;
     settings.persist_session_cookies = true;
@@ -1641,7 +2778,7 @@ BOOL GhoDexCEFInitializeGlobal(void) {
   NSLog(@"[CEF] Initializing framework=%@ profile=%@ cache=%@ external_profile=%@ bundle=%@ remote_debug_port=%d",
         framework_path ?: @"<none>",
         profile_root ?: @"<none>",
-        ConfiguredProfileCachePath() ?: @"<none>",
+        (profile_root.length > 0 ? [profile_root stringByAppendingPathComponent:@"Cache"] : nil) ?: @"<none>",
         ConfiguredExternalProfilePath() ?: @"<none>",
         bundle_path ?: @"<none>",
         remote_debugging_port);

@@ -34,14 +34,31 @@ Managed profile mode:
 - CEF enables `persist_session_cookies = true`, so session cookies are intended
   to survive app restarts within the selected profile root
 
-External profile mode:
+External profile source mode:
 
 - env override: `GHODEX_CEF_PROFILE_PATH`
-- mirrored defaults key: `BrowserCEFProfilePath`
-- config key: `ghodex-browser-profile-path`
-- when present, GhoDex treats the override as a concrete Chromium profile
-  directory and passes its parent as `user-data-dir` plus the leaf name as
-  `profile-directory`
+- mirrored defaults keys: `BrowserCEFProfilePath`, `BrowserCEFProfileMode`,
+  `BrowserCEFProfileSourcePath`
+- config keys: `ghodex-browser-profile-path`, `ghodex-browser-profile-mode`
+- when a profile source is present, GhoDex resolves one of four consumption
+  modes before CEF starts and then passes the effective profile directory as
+  `user-data-dir` + `profile-directory`
+
+### External profile consumption modes
+
+When `ghodex-browser-profile-path` points at an existing Chrome/Chromium profile
+directory, Browser currently supports these modes:
+
+| Mode | Effective profile path | Sync behavior | Locked Chrome behavior |
+| --- | --- | --- | --- |
+| `direct` | The selected source profile itself | No mirror copy | Refuses to refresh anything; Browser uses the source path exactly as configured. |
+| `mirror-latest` | `~/Library/Application Support/GhoDex/CEF/ProfileMirrors/<sanitized-source>/<leaf-profile>` | Re-copies the full Chrome user-data root into GhoDex's mirror container before each resolution | Falls back to the last successful mirror snapshot if Chrome still owns the source root. |
+| `mirror-once` | Same managed mirror path as above | Creates the mirror only if it does not already exist | Reuses the existing mirror snapshot when Chrome is live. |
+| `mirror-manual` | Same managed mirror path as above | Reuses the current mirror snapshot until the user explicitly refreshes it | Keeps the last mirror; manual refresh fails until the source root is no longer live-locked. |
+
+The mirror implementation intentionally copies the full Chrome user-data root
+around the selected profile so shared files like `Local State` stay aligned with
+the mirrored profile leaf that CEF actually opens.
 
 Concrete evidence from the current workspace:
 
@@ -53,6 +70,20 @@ Concrete evidence from the current workspace:
   `/Users/leongong/Desktop/LeonProjects/gho_workspace/smoke-cef-browser-20260319/app-launch.log`
 - restart-based cookie persistence proof for both managed and external modes:
   `/tmp/ghodex-browser-cookie-persistence-acceptance-rerun.json`
+- isolated per-mode profile acceptance proofs recorded on March 23, 2026:
+  `/tmp/ghx-direct-acceptance.json`,
+  `/tmp/ghx-mirror-latest-acceptance.json`,
+  `/tmp/ghx-mirror-once-acceptance.json`,
+  `/tmp/ghx-mirror-manual-acceptance.json`
+- aggregate all-mode acceptance proof using isolated `HOME` plus dedicated
+  source profiles:
+  `/tmp/ghx-profile-mode-acceptance.json`
+- March 24, 2026 macOS keychain root-cause artifact for Google-login mirror
+  false negatives:
+  `/tmp/ghx-google-keychain-root-cause.json`
+- March 25, 2026 copied-`Profile 10` Google/Gmail mirror acceptance using an
+  isolated `GHODEX_BROWSER_APP_SUPPORT_ROOT`:
+  `/tmp/ghxgm7-ahignfzj/result.json`
 
 ### 2. Cookie control surface
 
@@ -77,12 +108,62 @@ that page at that moment.
 
 ### External profile lifecycle
 
-1. Browser startup resolves `ghodex-browser-profile-path`, `BrowserCEFProfilePath`,
-   or `GHODEX_CEF_PROFILE_PATH`.
-2. CEF launches against that existing Chromium-style user-data directory.
-3. Browser tabs reuse the cookie jar that already exists inside that profile.
-4. External cookie commands still only operate on `document.cookie`, even though
-   the underlying profile may also contain HTTPOnly or otherwise hidden cookies.
+1. Browser startup resolves `ghodex-browser-profile-path`,
+   `ghodex-browser-profile-mode`, `BrowserCEFProfilePath`,
+   `BrowserCEFProfileMode`, `BrowserCEFProfileSourcePath`, or
+   `GHODEX_CEF_PROFILE_PATH`.
+2. `BrowserPaths` validates the selected source profile and then resolves the
+   effective launch path according to the active mode.
+3. In direct mode, CEF launches against the source Chromium profile itself. In
+   any mirror mode, CEF launches against GhoDex's managed mirror snapshot.
+4. Browser tabs then reuse the cookie jar that exists inside that effective
+   launch path.
+5. External cookie commands still only operate on `document.cookie`, even when
+   the underlying profile also contains HTTPOnly or otherwise hidden cookies.
+
+### Browser-signin runtime sanitization boundary
+
+The current external-profile runtime path now treats Chrome browser-signin data
+as a different layer from reusable web-session state.
+
+When GhoDex prepares the runtime-owned copy of a mirrored/direct Chrome
+profile, it still preserves the profile's web state:
+
+- cookie databases after os_crypt rewrap
+- service-worker, IndexedDB, storage, and page-owned profile data
+- the Google/Gmail page session that those cookies and storage entries express
+
+But it intentionally strips Chrome-browser-signin-only artifacts from the
+runtime-owned copy:
+
+- `Web Data.token_service`
+- `gaia_cookie` and related browser-signin preference/account keys
+- `Accounts`
+- `Account Web Data`
+- `Login Data For Account`
+- `Sync Data`
+- `trusted_vault.pb`
+- copied Google profile avatar assets that belong to Chrome's browser-account UI
+
+Decision trail:
+
+- GhoDex needs the copied web session, not Chrome's browser-signin client
+- Chrome-browser-signin stores expect Chrome-owned OAuth/account plumbing that
+  GhoDex does not ship
+- preserving cookies/storage while removing those browser-account stores keeps
+  Google web login reusable without making the runtime-owned mirror depend on
+  Chrome-only account services
+
+Concrete restart behavior proven by the March 23, 2026 acceptance artifacts:
+
+- `direct`: the second launch sees the same cookie that the first launch wrote
+  into the selected source profile
+- `mirror-latest`: the second launch intentionally starts without the first
+  launch's cookie because the mirror is rebuilt from the updated source root
+- `mirror-once`: the second launch sees the first launch's cookie because the
+  existing mirror snapshot is reused
+- `mirror-manual`: the second launch sees the first launch's cookie because the
+  mirror stays frozen until the user explicitly refreshes it
 
 ### Invalid override behavior
 
@@ -95,6 +176,9 @@ Current behavior:
 - explicit empty config values still clear the override
 - invalid config-backed overrides are removed from the mirrored defaults entry
   and logged so the fallback is observable
+- live Chrome locks on mirrored sources do not destroy the last good mirror
+  snapshot; `mirror-latest` and `mirror-once` can still fall back to that
+  existing snapshot
 - the Browser runtime then continues with the remaining effective source,
   usually the managed defaults
 
@@ -104,7 +188,9 @@ Current behavior:
 Browser tab app-support root used for paths like the local IPC socket and the
 managed runtime location chosen by `BrowserPaths`.
 
-However, the current CEF bridge itself reads runtime/profile settings from:
+The current CEF bridge now resolves its own GhoDex-managed runtime/profile/log
+roots from that same app-support override, while still reading the active
+external-profile selection from:
 
 - `GHODEX_CEF_ROOT`
 - `GHODEX_CEF_PROFILE_PATH`
@@ -112,9 +198,56 @@ However, the current CEF bridge itself reads runtime/profile settings from:
 - `BrowserCEFProfilePath`
 - `BrowserCEFRemoteDebugPort`
 
-So an isolated app-support root by itself does not redefine active cookie
-storage unless the runtime/profile selection is also routed through those env or
-`UserDefaults` inputs.
+So an isolated app-support root cleanly relocates the GhoDex-owned CEF runtime
+and profile roots, but the caller still has to route the active external
+Chrome-profile selection through those env or `UserDefaults` inputs.
+
+For the current aggregate mirror/direct harness, each mode also gets its own
+isolated `HOME`, dedicated source profile tree, fresh local cookie test server,
+and a `Library/Keychains` symlink back to the host login keychain. That keeps
+one slow or wedged mode from contaminating the next mode's acceptance evidence
+while still preserving the macOS keychain view that Chrome-backed cookie
+decryption depends on.
+
+### macOS keychain constraint for real Chrome cookies
+
+Real Chrome Google-login cookies on macOS are not a plain "copy the SQLite file
+and you're done" case. The copied profile still depends on Chromium's os_crypt
+layer reaching a valid default keychain during Browser startup.
+
+Concrete false-negative evidence recorded on March 24, 2026:
+
+- `/tmp/ghx-google-direct-7mkio_j3/app.log` showed `Encryption is not available`
+  plus an invalid `cache_path` fallback while probing a detached copy of
+  `Profile 10`
+- unified system logs for that run showed `SecItemAdd` / `SecItemCopyMatching`
+  failures with macOS error `-25307`
+- `/tmp/ghx-google-keychain-root-cause.json` demonstrates why: an empty
+  isolated `HOME` has no default keychain, while the same isolated `HOME`
+  immediately regains a default keychain when `Library/Keychains` is linked back
+  to the user's real keychain directory
+
+Decision trail:
+
+- treat `Encryption is not available` from an isolated `HOME` as a harness bug
+  first, not as proof that mirror/direct can never reuse Chrome-authenticated
+  state
+- preserve the host keychain view in isolated acceptance before making any final
+  product-level claim about Google-login reuse
+- keep mirror behavior unchanged until the acceptance environment is no longer
+  failing earlier at macOS keychain discovery
+
+Follow-on evidence after those harness fixes:
+
+- `/tmp/ghxgm7-ahignfzj/result.json` now shows the copied logged-in `Profile 10`
+  opening `https://www.google.com/` with `signedInHint = true` and
+  `https://mail.google.com/mail/u/0/#inbox` with
+  `Inbox (18) - yuan80060@gmail.com - Gmail`
+- that acceptance ran under an isolated `GHODEX_BROWSER_APP_SUPPORT_ROOT`, so it
+  did not need to touch the user's live app-support tree or kill the user's app
+- the remaining Chrome warning in `cef.log` is about Desktop Identity
+  Consistency/browser-signin OAuth credentials; it is now non-blocking for the
+  copied web session reuse that Browser actually needs
 
 ## API Semantics
 
