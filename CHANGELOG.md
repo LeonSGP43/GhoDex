@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(browser): align popup disposition mapping with CEF
+
+- What changed: `BrowserPopupDisposition` in `BrowserTabModel.swift` now matches CEF's real `cef_window_open_disposition_t` raw values, including the leading `UNKNOWN = 0` slot and the newer picture-in-picture case. Popup routing now treats the incoming CEF `disposition = 3` path as `newForegroundTab`, not `newBackgroundTab`.
+- Why: The popup trace acceptance showed that follow-up opens were already flowing through the expected internal Browser path, but Swift was decoding the CEF disposition enum with an off-by-one mapping. That made real CEF foreground-tab opens look like background-tab opens, so `popup2` was appended with `activate = false` and stayed hidden even though the routing seam itself was correct.
+- Impact: Real popup and follow-up opens now activate the newly created Browser page when CEF asks for a foreground tab, so internal popup flows behave like a normal browser instead of silently burying the target page in the background tab list.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug SYMROOT=$PWD/macos/build GHODEX_CEF_ENABLED=1 GHODEX_CEF_ROOT=$PWD/macos/build/cef-runtime/current GHODEX_CEF_OTHER_LDFLAGS=-lsqlite3 GHODEX_CEF_WRAPPER_LIB=$PWD/macos/build/cef-runtime/current/lib/Debug/libcef_dll_wrapper.a build`, `bash scripts/stage_cef_helper_app.sh macos/build/Debug/GhoDex.app`, and isolated `HOME + remote debug` popup acceptance at `/tmp/ghx-popup-followup-visible-acceptance.json` now records `popup2_page.isActive = true`.
+- Files: `macos/Sources/Features/Browser/BrowserTabModel.swift`, `CHANGELOG.md`
+- Decision trail: The narrowest correct fix is to align the shared Swift enum with CEF once, instead of layering more popup-specific promotion logic on top of a misdecoded base disposition. After the enum alignment, the existing tab-activation path immediately started doing the right thing under real popup follow-up traffic.
+
 ### fix(browser): surface popup follow-up tabs
 
 - What changed: `GhoDexCEFPopupWindowController` now normalizes popup-host follow-up `newBackgroundTab` requests into visible foreground Browser pages before re-entering the source `GhoDexCEFView` delegate chain, and it explicitly raises the source Browser window when that routed page should be visible. This keeps popup-host follow-up opens inside GhoDex while also making the resulting page actually appear instead of hiding in the opener's background page list.

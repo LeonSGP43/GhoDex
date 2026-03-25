@@ -30,16 +30,19 @@ enum BrowserControlEventKind: String, Codable, Hashable {
 }
 
 enum BrowserPopupDisposition: Int, Codable, Hashable {
-    case currentTab = 0
-    case singletonTab = 1
-    case newForegroundTab = 2
-    case newBackgroundTab = 3
-    case newPopup = 4
-    case newWindow = 5
-    case saveToDisk = 6
-    case offTheRecord = 7
-    case ignoreAction = 8
-    case switchToTab = 9
+    // Keep these raw values aligned with CEF's cef_window_open_disposition_t.
+    case unknown = 0
+    case currentTab = 1
+    case singletonTab = 2
+    case newForegroundTab = 3
+    case newBackgroundTab = 4
+    case newPopup = 5
+    case newWindow = 6
+    case saveToDisk = 7
+    case offTheRecord = 8
+    case ignoreAction = 9
+    case switchToTab = 10
+    case newPictureInPicture = 11
 }
 
 enum BrowserControlErrorCode: String, Codable, Hashable {
@@ -845,6 +848,12 @@ final class BrowserTabModel: ObservableObject {
 
     func selectPage(_ pageID: UUID) {
         guard pages.contains(where: { $0.id == pageID }) else { return }
+        NSLog(
+            "[Browser][PopupTrace] select_page previousSelected=%@ nextSelected=%@ pageCount=%ld",
+            selectedPageID.uuidString,
+            pageID.uuidString,
+            pages.count
+        )
         selectedPageID = pageID
         syncActivePageState()
     }
@@ -960,6 +969,13 @@ final class BrowserTabModel: ObservableObject {
     func openURLInNewTab(_ rawURL: String, activate: Bool = true) {
         let normalized = normalizedURLString(rawURL, fallback: displayedURL)
         guard let url = URL(string: normalized) else { return }
+        NSLog(
+            "[Browser][PopupTrace] open_url_in_new_tab normalized=%@ activate=%d selectedPageID=%@ pageCountBefore=%ld",
+            normalized,
+            activate ? 1 : 0,
+            selectedPageID.uuidString,
+            pages.count
+        )
         appendPage(initialURL: url, activate: activate)
     }
 
@@ -1028,6 +1044,14 @@ final class BrowserTabModel: ObservableObject {
                     .flatMap(Int.init)
                     .flatMap(BrowserPopupDisposition.init(rawValue:))
                     ?? .newForegroundTab
+                NSLog(
+                    "[Browser][PopupTrace] handle_open_url sourcePageID=%@ targetPageID=%@ selectedPageID=%@ disposition=%@ url=%@",
+                    pageID.uuidString,
+                    event.target.pageID.uuidString,
+                    selectedPageID.uuidString,
+                    String(describing: disposition),
+                    url
+                )
                 routePopupRequest(url, disposition: disposition, from: pageID)
             }
         case .bridgeReady:
@@ -1161,8 +1185,21 @@ final class BrowserTabModel: ObservableObject {
         let page = BrowserPageState(initialURL: initialURL)
         register(page: page)
         pages.append(page)
+        NSLog(
+            "[Browser][PopupTrace] append_page newPageID=%@ url=%@ activate=%d selectedPageIDBefore=%@ pageCountAfter=%ld",
+            page.id.uuidString,
+            initialURL.absoluteString,
+            activate ? 1 : 0,
+            selectedPageID.uuidString,
+            pages.count
+        )
         if activate {
             selectedPageID = page.id
+            NSLog(
+                "[Browser][PopupTrace] append_page activated newPageID=%@ selectedPageIDNow=%@",
+                page.id.uuidString,
+                selectedPageID.uuidString
+            )
             syncActivePageState()
         }
     }
@@ -1178,8 +1215,15 @@ final class BrowserTabModel: ObservableObject {
     }
 
     private func routePopupRequest(_ rawURL: String, disposition: BrowserPopupDisposition, from pageID: UUID) {
+        NSLog(
+            "[Browser][PopupTrace] route_popup_request sourcePageID=%@ disposition=%@ selectedPageID=%@ url=%@",
+            pageID.uuidString,
+            String(describing: disposition),
+            selectedPageID.uuidString,
+            rawURL
+        )
         switch disposition {
-        case .currentTab, .singletonTab:
+        case .unknown, .currentTab, .singletonTab:
             loadURL(rawURL, in: pageID)
         case .newForegroundTab:
             openURLInNewTab(rawURL, activate: true)
@@ -1189,7 +1233,7 @@ final class BrowserTabModel: ObservableObject {
             if !selectExistingPage(matching: rawURL) {
                 openURLInNewTab(rawURL, activate: true)
             }
-        case .newPopup, .newWindow, .offTheRecord:
+        case .newPopup, .newWindow, .offTheRecord, .newPictureInPicture:
             openURLInNewWindow(rawURL)
         case .saveToDisk, .ignoreAction:
             openURLInNewTab(rawURL, activate: true)
