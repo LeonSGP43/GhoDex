@@ -19,6 +19,8 @@ It answers a narrower question than the full acceptance matrix:
 What is materially working now:
 
 - managed CEF runtime installation and activation
+- managed runtime supply is now descriptor-driven instead of being permanently
+  hardcoded to one Chromium-branded archive
 - managed, direct, and mirrored profile selection
 - mirrored Chrome web-session reuse, including the isolated Google/Gmail proof
 - runtime settings now explicitly describe the managed/custom runtime media
@@ -80,6 +82,10 @@ Conclusion:
 - the product now exposes this boundary in the Browser runtime settings UI, but
   the underlying codec gap is still real until a codec-enabled CEF runtime is
   supplied
+- that remaining supply step no longer requires another Browser code change:
+  GhoDex can now read a managed runtime descriptor from
+  `GHODEX_CEF_MANAGED_RUNTIME_DESCRIPTOR_PATH` or
+  `~/Library/Application Support/GhoDex/CEF/managed-runtime.json`
 
 ### Tier 1: Product Boundary Choices That Prevent Full Chrome Equivalence
 
@@ -241,11 +247,14 @@ If the target is:
 
 1. Supply and validate a codec-enabled CEF runtime for H.264/video support and
    other high-signal media parity surfaces.
-2. Add dedicated acceptance for the remaining permission/auth/dialog surfaces
+2. Stage that runtime through the managed runtime descriptor and rerun
+   `scripts/browser_media_debug_acceptance.py` so the media claim is backed by
+   a fresh isolated artifact.
+3. Add dedicated acceptance for the remaining permission/auth/dialog surfaces
    that are currently code-backed but not end-to-end proven.
-3. Decide explicitly whether external/mirror mode is meant to stay a
+4. Decide explicitly whether external/mirror mode is meant to stay a
    "web-session reuse" product or evolve toward fuller Chrome-service
    equivalence. That decision should control whether the current
    `disable-*`/`allow-browser-signin=false` launch policy stays in place.
-4. Add a fresh isolated verification lane proving the debug port stays closed
+5. Add a fresh isolated verification lane proving the debug port stays closed
    when unset, so the hardening work is runtime-backed and not only build-backed.

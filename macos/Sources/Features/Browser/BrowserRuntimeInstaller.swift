@@ -39,7 +39,11 @@ enum BrowserRuntimeInstallPhase: Equatable {
 private struct BrowserRuntimeManifest: Encodable {
     let installedAt: String
     let source: String
+    let downloadURL: String
     let archiveSHA256: String
+    let ffmpegBranding: String?
+    let proprietaryCodecs: Bool?
+    let mediaCapabilities: BrowserRuntimeMediaCapabilities?
     let framework: String
 }
 
@@ -98,7 +102,8 @@ enum BrowserRuntimeInstaller {
     }
 
     private static func downloadArchive(into workRoot: URL) async throws -> URL {
-        var request = URLRequest(url: BrowserPaths.managedRuntimeDownloadURL)
+        let descriptor = BrowserPaths.managedRuntimeDescriptor
+        var request = URLRequest(url: descriptor.downloadURL)
         request.timeoutInterval = 600
 
         let (temporaryURL, response) = try await URLSession.shared.download(for: request)
@@ -109,13 +114,13 @@ enum BrowserRuntimeInstaller {
         }
 
         let archiveURL = workRoot.appendingPathComponent(
-            BrowserPaths.managedRuntimeDownloadURL.lastPathComponent,
+            descriptor.downloadURL.lastPathComponent,
             isDirectory: false)
         if FileManager.default.fileExists(atPath: archiveURL.path) {
             try FileManager.default.removeItem(at: archiveURL)
         }
         try FileManager.default.moveItem(at: temporaryURL, to: archiveURL)
-        try validateArchiveChecksum(at: archiveURL)
+        try validateArchiveChecksum(at: archiveURL, expectedSHA256: descriptor.archiveSHA256)
         return archiveURL
     }
 
@@ -184,6 +189,7 @@ enum BrowserRuntimeInstaller {
 
     private static func installRuntime(from runtimeRoot: URL) throws {
         let fileManager = FileManager.default
+        let descriptor = BrowserPaths.managedRuntimeDescriptor
         let destinationRoot = BrowserPaths.defaultCEFRootDirectory()
         try fileManager.createDirectory(at: destinationRoot, withIntermediateDirectories: true)
 
@@ -191,7 +197,7 @@ enum BrowserRuntimeInstaller {
             throw BrowserRuntimeInstallerError.frameworkMissing
         }
 
-        let slug = runtimeRoot.lastPathComponent.replacingOccurrences(of: " ", with: "-")
+        let slug = descriptor.slug.replacingOccurrences(of: " ", with: "-")
         let installRoot = destinationRoot.appendingPathComponent(slug, isDirectory: true)
         let stagingRoot = destinationRoot.appendingPathComponent(".install-\(UUID().uuidString)", isDirectory: true)
         let frameworkDestination = stagingRoot
@@ -207,8 +213,12 @@ enum BrowserRuntimeInstaller {
 
         let manifest = BrowserRuntimeManifest(
             installedAt: ISO8601DateFormatter().string(from: Date()),
-            source: runtimeRoot.lastPathComponent,
-            archiveSHA256: BrowserPaths.managedRuntimeSHA256,
+            source: descriptor.source ?? descriptor.slug,
+            downloadURL: descriptor.downloadURL.absoluteString,
+            archiveSHA256: descriptor.archiveSHA256,
+            ffmpegBranding: descriptor.ffmpegBranding,
+            proprietaryCodecs: descriptor.proprietaryCodecs,
+            mediaCapabilities: descriptor.mediaCapabilities,
             framework: "Frameworks/Chromium Embedded Framework.framework")
         let manifestData = try JSONEncoder().encode(manifest)
         try manifestData.write(
@@ -239,9 +249,9 @@ enum BrowserRuntimeInstaller {
             withDestinationURL: URL(fileURLWithPath: "Resources/Info.plist"))
     }
 
-    private static func validateArchiveChecksum(at archiveURL: URL) throws {
+    private static func validateArchiveChecksum(at archiveURL: URL, expectedSHA256: String) throws {
         let actual = try sha256Hex(for: archiveURL)
-        let expected = BrowserPaths.managedRuntimeSHA256.lowercased()
+        let expected = expectedSHA256.lowercased()
         guard actual == expected else {
             throw BrowserRuntimeInstallerError.checksumMismatch(expected: expected, actual: actual)
         }

@@ -679,12 +679,12 @@ struct SSHConnectionsView: View {
 
                 Text(runtimeAssessmentMessage(runtimeAssessment))
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(runtimeAssessmentColor(runtimeAssessment))
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.orange.opacity(colorScheme == .dark ? 0.14 : 0.1))
+            .background(runtimeAssessmentColor(runtimeAssessment).opacity(colorScheme == .dark ? 0.14 : 0.1))
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
     }
@@ -693,12 +693,23 @@ struct SSHConnectionsView: View {
         switch assessment.reason {
         case .managedChromiumDistribution:
             return L10n.Settings.browserRuntimeMediaManagedWarning
+        case .codecEnabledRuntime:
+            return L10n.Settings.browserRuntimeMediaCodecEnabledHint
         case .chromiumBrandedRuntime:
             return L10n.Settings.browserRuntimeMediaChromiumWarning(
                 assessment.runtimeSource ?? assessment.runtimePath ?? L10n.Common.untitled
             )
         case .customRuntimeUnverified:
             return L10n.Settings.browserRuntimeMediaCustomHint
+        }
+    }
+
+    private func runtimeAssessmentColor(_ assessment: BrowserRuntimeMediaAssessment) -> Color {
+        switch assessment.reason {
+        case .codecEnabledRuntime:
+            return .green
+        case .managedChromiumDistribution, .chromiumBrandedRuntime, .customRuntimeUnverified:
+            return .orange
         }
     }
 
