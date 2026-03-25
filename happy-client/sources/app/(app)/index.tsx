@@ -4,6 +4,7 @@ import {
     Alert,
     Animated,
     Easing,
+    Modal,
     Platform,
     Pressable,
     ScrollView,
@@ -24,6 +25,7 @@ import {
     createTab as createGatewayTab,
     fetchSnapshot,
     readTerminal,
+    renameTab as renameGatewayTab,
     runTerminalCommand,
     sendTerminalText,
     subscribeToGatewayEvents,
@@ -45,6 +47,7 @@ type BusyAction =
     | 'snapshot'
     | 'tab-create'
     | 'tab-close'
+    | 'tab-rename'
     | 'terminal-read'
     | 'terminal-command'
     | 'terminal-send-text'
@@ -236,7 +239,7 @@ function isGatewayAuthError(error: unknown): boolean {
     );
 }
 
-function isRecoverableTabCloseError(error: unknown): boolean {
+function isRecoverableTabMutationError(error: unknown): boolean {
     return !!(
         error
         && typeof error === 'object'
@@ -259,6 +262,22 @@ function shouldPasteRawInput(input: string): boolean {
     return trimmed.includes('\n');
 }
 
+function renameTabErrorMessage(error: unknown): string {
+    if (isGatewayAuthError(error)) {
+        return 'Desktop authorization expired. Re-open Pairing in Settings and bind the phone again.';
+    }
+
+    if (
+        error
+        && typeof error === 'object'
+        && (error as { code?: unknown }).code === 'unsupported_command'
+    ) {
+        return 'The paired desktop app does not support tab rename yet. Restart or update that desktop GhoDex build first.';
+    }
+
+    return error instanceof Error ? error.message : 'Unexpected gateway error';
+}
+
 export default function GhoDexWorkspaceScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
@@ -275,6 +294,9 @@ export default function GhoDexWorkspaceScreen() {
     const [terminalView, setTerminalView] = React.useState<TerminalReadResult | null>(null);
     const [terminalContent, setTerminalContent] = React.useState('');
     const [terminalCommand, setTerminalCommand] = React.useState('');
+    const [renameTabTarget, setRenameTabTarget] = React.useState<TabRow | null>(null);
+    const [renameTabDraft, setRenameTabDraft] = React.useState('');
+    const [renameTabError, setRenameTabError] = React.useState<string | null>(null);
     const sidebarWidth = Math.min(width * 0.84, 360);
     const sidebarProgress = React.useRef(new Animated.Value(0)).current;
 
@@ -773,6 +795,61 @@ export default function GhoDexWorkspaceScreen() {
         });
     }, [refreshSnapshotImpl, runAction, selectedTab, selectedTerminal, session.authToken, session.host, session.port]);
 
+    const dismissRenameTab = React.useCallback(() => {
+        setRenameTabTarget(null);
+        setRenameTabDraft('');
+        setRenameTabError(null);
+    }, []);
+
+    const handleOpenRenameTab = React.useCallback((tab: TabRow) => {
+        setRenameTabTarget(tab);
+        setRenameTabDraft(tab.title?.trim() ?? '');
+        setRenameTabError(null);
+    }, []);
+
+    const handleSubmitRenameTab = React.useCallback(() => {
+        const authToken = session.authToken.trim();
+        if (!authToken || !renameTabTarget) {
+            setErrorMessage('No auth token yet. Open pairing first.');
+            return;
+        }
+
+        void runAction('tab-rename', async () => {
+            setRenameTabError(null);
+            try {
+                await renameGatewayTab({
+                    host: session.host,
+                    port: session.port,
+                    authToken,
+                    tabId: renameTabTarget.tabId,
+                    title: renameTabDraft,
+                    expectedGeneration: renameTabTarget.generation,
+                });
+            } catch (error) {
+                if (isRecoverableTabMutationError(error)) {
+                    await refreshSnapshotImpl(authToken, selectedTerminalIdRef.current);
+                    setErrorMessage('The tab changed on desktop before the phone finished renaming it. The phone view has been resynced.');
+                    dismissRenameTab();
+                    return;
+                }
+                setRenameTabError(renameTabErrorMessage(error));
+                throw error;
+            }
+
+            await refreshSnapshotImpl(authToken, selectedTerminalIdRef.current);
+            dismissRenameTab();
+        });
+    }, [
+        dismissRenameTab,
+        refreshSnapshotImpl,
+        renameTabDraft,
+        renameTabTarget,
+        runAction,
+        session.authToken,
+        session.host,
+        session.port,
+    ]);
+
     const handleCloseTab = React.useCallback((tab: TabRow) => {
         const authToken = session.authToken.trim();
         if (!authToken) {
@@ -800,7 +877,7 @@ export default function GhoDexWorkspaceScreen() {
                                     force: true,
                                 });
                             } catch (error) {
-                                if (isRecoverableTabCloseError(error)) {
+                                if (isRecoverableTabMutationError(error)) {
                                     await refreshSnapshotImpl(authToken, selectedTerminalIdRef.current);
                                     setErrorMessage('The tab changed on desktop before the phone finished closing it. The phone view has been resynced.');
                                     return;
@@ -1026,6 +1103,9 @@ export default function GhoDexWorkspaceScreen() {
     const terminalDisplayText = selectedTerminal
         ? (terminalContent || 'No terminal text captured yet. Refresh the terminal to fetch the visible surface.')
         : 'Open the left sidebar and choose a terminal session.';
+    const renameTabPlaceholder = renameTabTarget
+        ? tabPrimaryLabel(renameTabTarget, pickPreferredTerminalInTab(renameTabTarget))
+        : 'Tab title';
 
     return (
         <View style={styles.screen}>
@@ -1100,16 +1180,28 @@ export default function GhoDexWorkspaceScreen() {
                                             </Text>
                                         ) : null}
                                     </Pressable>
-                                    <Pressable
-                                        hitSlop={8}
-                                        onPress={() => handleCloseTab(tab)}
-                                        style={({ pressed }) => [
-                                            styles.sidebarTabCloseButton,
-                                            pressed ? styles.sidebarTerminalItemPressed : null,
-                                        ]}
-                                    >
-                                        <Ionicons color="#d8b18e" name="close-outline" size={18} />
-                                    </Pressable>
+                                    <View style={styles.sidebarTabHeaderActions}>
+                                        <Pressable
+                                            hitSlop={8}
+                                            onPress={() => handleOpenRenameTab(tab)}
+                                            style={({ pressed }) => [
+                                                styles.sidebarTabIconButton,
+                                                pressed ? styles.sidebarTerminalItemPressed : null,
+                                            ]}
+                                        >
+                                            <Ionicons color="#d8b18e" name="create-outline" size={16} />
+                                        </Pressable>
+                                        <Pressable
+                                            hitSlop={8}
+                                            onPress={() => handleCloseTab(tab)}
+                                            style={({ pressed }) => [
+                                                styles.sidebarTabIconButton,
+                                                pressed ? styles.sidebarTerminalItemPressed : null,
+                                            ]}
+                                        >
+                                            <Ionicons color="#d8b18e" name="close-outline" size={18} />
+                                        </Pressable>
+                                    </View>
                                 </View>
 
                                 {showTerminalList ? (
@@ -1268,6 +1360,54 @@ export default function GhoDexWorkspaceScreen() {
                     </Animated.View>
                 ) : null}
             </Animated.View>
+            <Modal
+                animationType="fade"
+                onRequestClose={dismissRenameTab}
+                transparent
+                visible={!!renameTabTarget}
+            >
+                <View style={styles.renameModalRoot}>
+                    <Pressable onPress={dismissRenameTab} style={styles.renameModalBackdrop} />
+                    <KeyboardAvoidingView
+                        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                        style={styles.renameModalKeyboard}
+                    >
+                        <View style={[styles.renameModalCard, { marginBottom: Math.max(insets.bottom, 16) }]}>
+                            <Text style={styles.renameModalTitle}>Rename Tab</Text>
+                            <Text style={styles.renameModalSubtitle}>
+                                Leave the field empty to restore the desktop-managed automatic title.
+                            </Text>
+                            <TextInput
+                                autoCapitalize="none"
+                                autoCorrect={false}
+                                autoFocus
+                                onChangeText={(value) => {
+                                    setRenameTabDraft(value);
+                                    if (renameTabError) {
+                                        setRenameTabError(null);
+                                    }
+                                }}
+                                placeholder={renameTabPlaceholder}
+                                placeholderTextColor="#8f867a"
+                                style={styles.renameModalInput}
+                                value={renameTabDraft}
+                            />
+                            {renameTabError ? (
+                                <Text style={styles.renameModalErrorText}>{renameTabError}</Text>
+                            ) : null}
+                            <View style={styles.renameModalActions}>
+                                <ActionButton compact kind="secondary" label="Cancel" onPress={dismissRenameTab} />
+                                <ActionButton
+                                    busy={busyAction === 'tab-rename'}
+                                    compact
+                                    label="Save"
+                                    onPress={handleSubmitRenameTab}
+                                />
+                            </View>
+                        </View>
+                    </KeyboardAvoidingView>
+                </View>
+            </Modal>
         </View>
     );
 }
@@ -1652,6 +1792,11 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: 10,
     },
+    sidebarTabHeaderActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
     sidebarTabInfo: {
         flex: 1,
         gap: 3,
@@ -1672,7 +1817,7 @@ const styles = StyleSheet.create({
     sidebarTabMetaActive: {
         color: '#f1cfb3',
     },
-    sidebarTabCloseButton: {
+    sidebarTabIconButton: {
         width: 30,
         height: 30,
         borderRadius: 10,
@@ -1766,5 +1911,58 @@ const styles = StyleSheet.create({
         fontSize: 12,
         lineHeight: 17,
         fontFamily: 'monospace',
+    },
+    renameModalRoot: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.42)',
+        justifyContent: 'flex-end',
+        paddingHorizontal: 16,
+        paddingTop: 24,
+    },
+    renameModalBackdrop: {
+        ...StyleSheet.absoluteFillObject,
+    },
+    renameModalKeyboard: {
+        justifyContent: 'flex-end',
+    },
+    renameModalCard: {
+        borderRadius: 22,
+        backgroundColor: '#191411',
+        borderWidth: 1,
+        borderColor: '#2d241d',
+        paddingHorizontal: 16,
+        paddingTop: 18,
+        paddingBottom: 16,
+        gap: 12,
+    },
+    renameModalTitle: {
+        color: '#fff4e7',
+        fontSize: 18,
+        fontWeight: '800',
+    },
+    renameModalSubtitle: {
+        color: '#b7a490',
+        fontSize: 13,
+        lineHeight: 19,
+    },
+    renameModalInput: {
+        minHeight: 48,
+        borderRadius: 14,
+        backgroundColor: '#221b16',
+        borderWidth: 1,
+        borderColor: '#342921',
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        color: '#fff7ed',
+        fontSize: 15,
+    },
+    renameModalErrorText: {
+        color: '#f0c0b6',
+        fontSize: 13,
+        lineHeight: 18,
+    },
+    renameModalActions: {
+        flexDirection: 'row',
+        gap: 10,
     },
 });

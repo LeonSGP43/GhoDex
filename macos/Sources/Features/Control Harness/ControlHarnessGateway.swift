@@ -743,7 +743,7 @@ final class ControlHarnessGateway {
         switch request.command {
         case "snapshot", "read-terminal", "events.subscribe":
             return .observe
-        case "new-tab", "close-tab", "send-text", "run-command", "close-terminal":
+        case "new-tab", "close-tab", "rename-tab", "send-text", "run-command", "close-terminal":
             return .mutate
         default:
             return nil
@@ -882,7 +882,10 @@ final class ControlHarnessGateway {
         }
 
         while true {
-            _ = clientSession.waitForBufferedData()
+            let hasBufferedData = clientSession.waitForBufferedData(timeout: .now() + .milliseconds(500))
+            if !hasBufferedData, Self.isClientStreamDisconnected(clientFD) {
+                return
+            }
             try flushClientSession(clientSession, to: clientFD)
             if clientSession.isClosed {
                 let drain = clientSession.drain()
@@ -925,7 +928,10 @@ final class ControlHarnessGateway {
         }
 
         while true {
-            _ = clientSession.waitForBufferedData()
+            let hasBufferedData = clientSession.waitForBufferedData(timeout: .now() + .milliseconds(500))
+            if !hasBufferedData, Self.isClientStreamDisconnected(clientFD) {
+                return
+            }
             try flushWebSocketClientSession(clientSession, to: clientFD)
             if clientSession.isClosed {
                 let drain = clientSession.drain()
@@ -957,6 +963,25 @@ final class ControlHarnessGateway {
         let drain = clientSession.drain()
         for payload in drain.payloads {
             try Self.writeAll(Self.encodeWebSocketTextFrame(Self.trimTrailingLineFeed(payload)), to: clientFD)
+        }
+    }
+
+    private static func isClientStreamDisconnected(_ clientFD: Int32) -> Bool {
+        var byte: UInt8 = 0
+        let count = Darwin.recv(clientFD, &byte, 1, MSG_PEEK | MSG_DONTWAIT)
+        if count == 0 {
+            return true
+        }
+        if count > 0 {
+            return true
+        }
+        switch errno {
+        case EAGAIN, EWOULDBLOCK:
+            return false
+        case EINTR:
+            return isClientStreamDisconnected(clientFD)
+        default:
+            return true
         }
     }
 
@@ -1469,7 +1494,7 @@ private final class ControlHarnessGatewayRateLimiter {
 
     private func category(for request: ControlHarnessRequest) -> Category? {
         switch request.command {
-        case "send-text", "run-command", "close-terminal", "new-tab", "close-tab":
+        case "send-text", "run-command", "close-terminal", "new-tab", "close-tab", "rename-tab":
             return .command
         case "snapshot":
             return .snapshot

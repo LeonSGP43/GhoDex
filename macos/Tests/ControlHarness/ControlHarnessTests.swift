@@ -2666,6 +2666,81 @@ struct ControlHarnessTests {
         }
     }
 
+    @Test func gatewayPolicyAllowsRemoteTabRename() async throws {
+        let delegate = await MainActor.run {
+            RecordingAppDelegate()
+        }
+
+        let decision = await MainActor.run {
+            delegate.controlHarnessGatewayAccessDecision(ControlHarnessRequest(
+                requestID: "req-rename-tab-allow",
+                protocolVersion: nil,
+                authToken: nil,
+                command: "rename-tab",
+                tabID: UUID().uuidString,
+                parentTabID: nil,
+                terminalID: nil,
+                scope: nil,
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: "Workspace",
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: 1,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: nil,
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil
+            ))
+        }
+
+        switch decision {
+        case .allow:
+            break
+        case .deny(let errorCode, let errorMessage):
+            Issue.record("rename-tab should be allowed for remote gateway use: \(errorCode) \(errorMessage)")
+        }
+    }
+
+    @Test func renameTabIsSupportedMutationCommand() {
+        #expect(ControlHarnessCore.supportedCommands.contains("rename-tab"))
+        let request = ControlHarnessRequest(
+            requestID: "req-rename-tab-kind",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "rename-tab",
+            tabID: UUID().uuidString,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: "Renamed",
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil
+        )
+        #expect(request.commandKind == .mutation)
+    }
+
     @Test func gatewayTcpSubscriptionStreamsReplayAndLiveEvents() async throws {
         let bundleID = "ghdx.tests.gateway-tcp-subscribe"
         let (eventHub, gateway) = await MainActor.run {

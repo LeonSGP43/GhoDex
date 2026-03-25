@@ -1098,6 +1098,7 @@ class AppDelegate: NSObject,
 
     private func preferredGatewayPairingHost() throws -> String {
         let listenHost = controlHarnessGateway.configuration.listenHost
+        let pairingAdvertiseHost = nonLoopbackPairingAdvertiseHost()
         switch listenHost {
         case "127.0.0.1", "localhost", "::1":
             throw RemotePairingQRCodeError.loopbackOnlyListener
@@ -1124,7 +1125,15 @@ class AppDelegate: NSObject,
             return override
         }
 
-        return controlHarnessGatewaySettings.normalizedPairingAdvertiseHost
+        guard let host = controlHarnessGatewaySettings.normalizedPairingAdvertiseHost else {
+            return nil
+        }
+        switch host {
+        case "127.0.0.1", "localhost", "::1":
+            return nil
+        default:
+            return host
+        }
     }
 
     private func firstNonLoopbackIPv4Address() -> String? {

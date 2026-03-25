@@ -14,24 +14,32 @@ void SplashScreen.preventAutoHideAsync().catch(() => {
 });
 
 export default function RootLayout() {
-    const [ready, setReady] = React.useState(false);
+    const splashHiddenRef = React.useRef(false);
 
-    React.useEffect(() => {
-        setReady(true);
-    }, []);
-
-    const onLayoutRootView = React.useCallback(() => {
-        if (!ready) {
+    const hideSplashScreen = React.useCallback(() => {
+        if (splashHiddenRef.current) {
             return;
         }
+        splashHiddenRef.current = true;
         void SplashScreen.hideAsync().catch(() => {
             // Ignore splash hide races during development.
+            splashHiddenRef.current = false;
         });
-    }, [ready]);
+    }, []);
 
-    if (!ready) {
-        return null;
-    }
+    React.useEffect(() => {
+        const frame = requestAnimationFrame(() => {
+            hideSplashScreen();
+        });
+
+        return () => {
+            cancelAnimationFrame(frame);
+        };
+    }, [hideSplashScreen]);
+
+    const onLayoutRootView = React.useCallback(() => {
+        hideSplashScreen();
+    }, [hideSplashScreen]);
 
     return (
         <SafeAreaProvider initialMetrics={initialWindowMetrics}>

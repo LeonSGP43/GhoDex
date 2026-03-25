@@ -106,6 +106,7 @@ export interface TabMutationResult {
     sequence: number;
     terminalId: string | null;
     terminalGeneration: number | null;
+    title: string | null;
     closed: boolean;
     requiresConfirmation: boolean;
     confirmationTitle: string | null;

@@ -12,6 +12,7 @@ extension ControlHarnessRequest {
         switch command {
         case "new-tab",
             "close-tab",
+            "rename-tab",
             "send-text",
             "run-command",
             "close-terminal",

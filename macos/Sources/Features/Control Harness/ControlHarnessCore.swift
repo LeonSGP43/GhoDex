@@ -324,6 +324,28 @@ private struct ControlTabCloseResult: Encodable {
     }
 }
 
+private struct ControlTabMutationResult: Encodable {
+    let tabID: String
+    let generation: Int
+    let sequence: Int64
+    let title: String?
+    let closed: Bool
+    let requiresConfirmation: Bool
+    let confirmationTitle: String?
+    let confirmationMessage: String?
+
+    enum CodingKeys: String, CodingKey {
+        case tabID = "tab_id"
+        case generation
+        case sequence
+        case title
+        case closed
+        case requiresConfirmation = "requires_confirmation"
+        case confirmationTitle = "confirmation_title"
+        case confirmationMessage = "confirmation_message"
+    }
+}
+
 struct ControlTabCloseConfirmation: Equatable {
     let title: String
     let message: String
@@ -467,6 +489,14 @@ private struct ControlTabCreatedEventPayload: Encodable {
     }
 }
 
+private struct ControlTabUpdatedEventPayload: Encodable {
+    let title: String?
+
+    enum CodingKeys: String, CodingKey {
+        case title
+    }
+}
+
 private struct ControlHarnessMutationFingerprint: Encodable {
     let protocolVersion: String?
     let command: String
@@ -605,6 +635,7 @@ final class ControlHarnessCore {
         "snapshot",
         "new-tab",
         "close-tab",
+        "rename-tab",
         "send-text",
         "run-command",
         "read-terminal",
@@ -1019,6 +1050,10 @@ final class ControlHarnessCore {
             let result = try closeTab(from: request)
             return (AnyEncodable(result), result.sequence)
 
+        case "rename-tab":
+            let result = try renameTab(from: request)
+            return (AnyEncodable(result), result.sequence)
+
         case "send-text":
             let result = try sendText(from: request)
             return (AnyEncodable(result), result.sequence)
@@ -1113,7 +1148,7 @@ final class ControlHarnessCore {
             throw ControlHarnessCoreError.operationFailed("Failed to create a new tab")
         }
 
-        if let title = request.title, !title.isEmpty {
+        if let title = normalizedTabTitleOverride(request.title) {
             controller.titleOverride = title
         }
 
@@ -1179,6 +1214,40 @@ final class ControlHarnessCore {
             generation: generation,
             sequence: sequence,
             closed: true,
+            requiresConfirmation: false,
+            confirmationTitle: nil,
+            confirmationMessage: nil
+        )
+    }
+
+    private func renameTab(from request: ControlHarnessRequest) throws -> ControlTabMutationResult {
+        let controller = try resolveTabController(tabID: request.tabID)
+        let tabID = controller.workspaceID.uuidString
+        let currentGeneration = generations.currentTabGeneration(for: tabID)
+        try generations.assertExpectedGeneration(
+            request.expectedGeneration,
+            resourceType: "tab",
+            resourceID: tabID,
+            currentGeneration: currentGeneration
+        )
+
+        let normalizedTitle = normalizedTabTitleOverride(request.title)
+        controller.titleOverride = normalizedTitle
+
+        let generation = generations.advanceTabGeneration(for: tabID)
+        let sequence = eventHub.emit(
+            event: "tab.updated",
+            requestID: request.requestID,
+            resource: .init(type: "tab", id: tabID, generation: generation),
+            payload: AnyEncodable(ControlTabUpdatedEventPayload(title: normalizedTitle))
+        )
+
+        return .init(
+            tabID: tabID,
+            generation: generation,
+            sequence: sequence,
+            title: normalizedTitle,
+            closed: false,
             requiresConfirmation: false,
             confirmationTitle: nil,
             confirmationMessage: nil
@@ -1772,6 +1841,15 @@ final class ControlHarnessCore {
                 "Working directory does not exist: \(workingDirectory)"
             )
         }
+    }
+
+    private func normalizedTabTitleOverride(_ title: String?) -> String? {
+        guard let title else {
+            return nil
+        }
+
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func buildSurfaceConfiguration(from request: ControlHarnessRequest) -> Ghostty.SurfaceConfiguration {

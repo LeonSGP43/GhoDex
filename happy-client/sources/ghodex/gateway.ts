@@ -360,6 +360,7 @@ function parseTabMutationResult(envelope: GatewayEnvelope): TabMutationResult {
         terminalGeneration: typeof result.terminal_generation === 'number' && Number.isFinite(result.terminal_generation)
             ? result.terminal_generation
             : null,
+        title: readString(result, 'title'),
         closed: readBoolean(result, 'closed'),
         requiresConfirmation: readBoolean(result, 'requires_confirmation'),
         confirmationTitle: readString(result, 'confirmation_title'),
@@ -542,6 +543,35 @@ export async function closeTab(input: GatewayConnection & {
             tab_id: tabId,
             expected_generation: input.expectedGeneration,
             force: input.force,
+        },
+    );
+    return parseTabMutationResult(envelope);
+}
+
+export async function renameTab(input: GatewayConnection & {
+    authToken: string;
+    tabId: string;
+    title: string;
+    expectedGeneration?: number;
+}): Promise<TabMutationResult> {
+    const authToken = input.authToken.trim();
+    const tabId = input.tabId.trim();
+    if (!authToken) {
+        throw new GatewayProtocolError('Auth token is empty');
+    }
+    if (!tabId) {
+        throw new GatewayProtocolError('tab_id is empty');
+    }
+
+    const envelope = await sendRequest(
+        input,
+        {
+            request_id: nextRequestId('rename-tab'),
+            command: 'rename-tab',
+            auth_token: authToken,
+            tab_id: tabId,
+            title: input.title.trim(),
+            expected_generation: input.expectedGeneration,
         },
     );
     return parseTabMutationResult(envelope);

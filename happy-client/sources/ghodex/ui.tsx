@@ -4,11 +4,13 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 
 export function ActionButton({
     busy,
+    compact,
     kind = 'primary',
     label,
     onPress,
 }: {
     busy?: boolean;
+    compact?: boolean;
     kind?: 'primary' | 'secondary';
     label: string;
     onPress: () => void;
@@ -19,6 +21,7 @@ export function ActionButton({
             onPress={onPress}
             style={({ pressed }) => [
                 styles.button,
+                compact ? styles.buttonCompact : null,
                 kind === 'secondary' ? styles.secondaryButton : styles.primaryButton,
                 pressed ? styles.buttonPressed : null,
                 busy ? styles.buttonDisabled : null,
@@ -91,6 +94,11 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         paddingHorizontal: 12,
+    },
+    buttonCompact: {
+        minHeight: 40,
+        borderRadius: 12,
+        paddingHorizontal: 14,
     },
     primaryButton: {
         backgroundColor: '#8a4b2a',
