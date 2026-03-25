@@ -35,6 +35,7 @@ struct MarkdownHTMLRenderer {
             :root {
               color-scheme: light dark;
               --base-font-size: \(formattedFontSize)px;
+              --page-bg: transparent;
               --text: rgba(18, 18, 18, 0.96);
               --muted: rgba(18, 18, 18, 0.54);
               --border: rgba(18, 18, 18, 0.11);
@@ -42,6 +43,15 @@ struct MarkdownHTMLRenderer {
               --code-bg: rgba(18, 18, 18, 0.045);
               --quote-border: rgba(18, 18, 18, 0.22);
               --selection: rgba(18, 18, 18, 0.11);
+              --selection-text: inherit;
+              --accent: rgba(18, 18, 18, 0.82);
+              --token-comment: rgba(112, 117, 127, 0.82);
+              --token-keyword: rgba(25, 84, 166, 0.96);
+              --token-string: rgba(145, 92, 40, 0.96);
+              --token-number: rgba(181, 112, 30, 0.96);
+              --token-type: rgba(23, 129, 129, 0.96);
+              --token-symbol: rgba(97, 101, 110, 0.9);
+              --token-call: rgba(76, 74, 178, 0.96);
             }
             @media (prefers-color-scheme: dark) {
               :root {
@@ -52,10 +62,19 @@ struct MarkdownHTMLRenderer {
                 --code-bg: rgba(255, 255, 255, 0.055);
                 --quote-border: rgba(255, 255, 255, 0.21);
                 --selection: rgba(255, 255, 255, 0.10);
+                --selection-text: inherit;
+                --accent: rgba(255, 255, 255, 0.88);
+                --token-comment: rgba(162, 168, 181, 0.86);
+                --token-keyword: rgba(126, 184, 255, 0.98);
+                --token-string: rgba(255, 198, 128, 0.96);
+                --token-number: rgba(255, 167, 74, 0.96);
+                --token-type: rgba(103, 221, 220, 0.96);
+                --token-symbol: rgba(208, 213, 220, 0.84);
+                --token-call: rgba(181, 175, 255, 0.98);
               }
             }
             * { box-sizing: border-box; }
-            html, body { margin: 0; padding: 0; background: transparent; color: var(--text); }
+            html, body { margin: 0; padding: 0; background: var(--page-bg); color: var(--text); }
             body {
               font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
               font-size: var(--base-font-size);
@@ -64,7 +83,7 @@ struct MarkdownHTMLRenderer {
               text-rendering: optimizeLegibility;
               padding: 24px 28px 42px;
             }
-            ::selection { background: var(--selection); }
+            ::selection { background: var(--selection); color: var(--selection-text); }
             main { max-width: 860px; margin: 0 auto; }
             h1, h2, h3, h4, h5, h6 {
               font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif;
@@ -111,6 +130,9 @@ struct MarkdownHTMLRenderer {
               background: var(--code-bg);
               border-radius: 0.45rem;
               padding: 0.12rem 0.38rem;
+              border: 1px solid var(--border);
+              color: var(--token-string);
+              font-weight: 560;
             }
             pre {
               background: var(--code-bg);
@@ -123,10 +145,27 @@ struct MarkdownHTMLRenderer {
               display: block;
               padding: 0;
               background: transparent;
+              border: 0;
+              color: inherit;
               border-radius: 0;
               font-size: 0.92em;
               line-height: 1.62;
+              font-weight: 400;
             }
+            .tok-comment { color: var(--token-comment); font-style: italic; }
+            .tok-keyword { color: var(--token-keyword); font-weight: 700; }
+            .tok-string {
+              color: var(--token-string);
+              font-weight: 620;
+              text-decoration: underline;
+              text-decoration-thickness: 0.05em;
+              text-decoration-color: color-mix(in srgb, var(--token-string) 36%, transparent);
+              text-underline-offset: 0.12em;
+            }
+            .tok-number { color: var(--token-number); }
+            .tok-type { color: var(--token-type); font-weight: 550; }
+            .tok-symbol { color: var(--token-symbol); }
+            .tok-call { color: var(--token-call); font-weight: 700; }
             figure.media {
               margin: 1.5em 0;
             }
@@ -439,8 +478,350 @@ struct MarkdownHTMLRenderer {
         }
 
         let classAttribute = language.isEmpty ? "" : " class=\"language-\(escapeHTML(language))\""
-        let codeHTML = escapeHTML(codeLines.joined(separator: "\n"))
+        let codeHTML = highlightCode(codeLines.joined(separator: "\n"), language: language)
         return ("<pre><code\(classAttribute)>\(codeHTML)</code></pre>", index)
+    }
+
+    private struct TokenPattern {
+        let pattern: String
+        let className: String
+        let options: NSRegularExpression.Options
+
+        init(_ pattern: String, className: String, options: NSRegularExpression.Options = []) {
+            self.pattern = pattern
+            self.className = className
+            self.options = options
+        }
+    }
+
+    private static func highlightCode(_ source: String, language: String) -> String {
+        let category = syntaxCategory(for: language, source: source)
+        let nsSource = source as NSString
+        var consumed = IndexSet()
+        var matches: [(range: NSRange, className: String)] = []
+
+        for tokenPattern in tokenPatterns(for: category) {
+            guard let regex = try? NSRegularExpression(pattern: tokenPattern.pattern, options: tokenPattern.options) else {
+                continue
+            }
+
+            for match in regex.matches(
+                in: source,
+                options: [],
+                range: NSRange(location: 0, length: nsSource.length)
+            ) {
+                let range = match.range
+                guard range.location != NSNotFound,
+                      range.length > 0 else { continue }
+
+                let candidateIndexes = IndexSet(integersIn: range.location..<(range.location + range.length))
+                guard consumed.isDisjoint(with: candidateIndexes) else { continue }
+
+                consumed.formUnion(candidateIndexes)
+                matches.append((range, tokenPattern.className))
+            }
+        }
+
+        guard !matches.isEmpty else { return escapeHTML(source) }
+        matches.sort { $0.range.location < $1.range.location }
+
+        var html = ""
+        var cursor = 0
+
+        for match in matches {
+            if cursor < match.range.location {
+                html += escapeHTML(
+                    nsSource.substring(with: NSRange(location: cursor, length: match.range.location - cursor))
+                )
+            }
+
+            let tokenText = nsSource.substring(with: match.range)
+            html += "<span class=\"\(match.className)\">\(escapeHTML(tokenText))</span>"
+            cursor = match.range.location + match.range.length
+        }
+
+        if cursor < nsSource.length {
+            html += escapeHTML(
+                nsSource.substring(with: NSRange(location: cursor, length: nsSource.length - cursor))
+            )
+        }
+
+        return html
+    }
+
+    private static func syntaxCategory(for language: String, source: String) -> String {
+        let normalizedLanguage = language
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        if normalizedLanguage.isEmpty {
+            return inferSyntaxCategory(from: source)
+        }
+
+        switch normalizedLanguage {
+        case "swift", "swiftui":
+            return "swift"
+        case "javascript", "js", "typescript", "ts", "jsx", "tsx", "node", "nodejs":
+            return "javascript"
+        case "json":
+            return "json"
+        case "python", "py":
+            return "python"
+        case "bash", "sh", "zsh", "shell", "shellsession", "shell-session", "console", "terminal", "fish", "nushell", "nu", "elvish":
+            return "shell"
+        case "zig":
+            return "zig"
+        case "yaml", "yml":
+            return "yaml"
+        case "html", "xml", "svg":
+            return "markup"
+        case "css", "scss", "sass", "less":
+            return "css"
+        case "sql", "postgresql", "mysql", "sqlite":
+            return "sql"
+        case "toml", "ini", "conf", "cfg", "dotenv", "properties":
+            return "toml"
+        case "diff", "patch":
+            return "diff"
+        case "text", "txt", "plaintext":
+            return inferSyntaxCategory(from: source)
+        default:
+            return inferSyntaxCategory(from: source)
+        }
+    }
+
+    private static func tokenPatterns(for category: String) -> [TokenPattern] {
+        let stringPattern = #""([^"\\]|\\.)*"|'([^'\\]|\\.)*'|`([^`\\]|\\.)*`"#
+        let numberPattern = #"\b\d+(?:\.\d+)?\b"#
+        let symbolPattern = #"[\[\]\(\)\{\}:=.,<>/+*!?-]"#
+        let callPattern = #"\b[A-Za-z_][A-Za-z0-9_]*(?=\()"#
+
+        switch category {
+        case "swift":
+            return [
+                TokenPattern(#"/\*[\s\S]*?\*/"#, className: "tok-comment"),
+                TokenPattern(#"//.*$"#, className: "tok-comment", options: [.anchorsMatchLines]),
+                TokenPattern(stringPattern, className: "tok-string"),
+                TokenPattern(#"\b(import|let|var|func|struct|class|enum|protocol|extension|if|else|guard|return|throw|throws|async|await|for|in|while|switch|case|default|break|continue|where|try|catch|public|private|fileprivate|internal|open|static|mutating|nonmutating|init|deinit|nil|true|false)\b"#, className: "tok-keyword"),
+                TokenPattern(#"\b(String|Int|Double|Float|Bool|URL|Data|Date|UUID|Void|Any|Result|Error)\b"#, className: "tok-type"),
+                TokenPattern(callPattern, className: "tok-call"),
+                TokenPattern(numberPattern, className: "tok-number"),
+                TokenPattern(symbolPattern, className: "tok-symbol"),
+            ]
+        case "javascript":
+            return [
+                TokenPattern(#"/\*[\s\S]*?\*/"#, className: "tok-comment"),
+                TokenPattern(#"//.*$"#, className: "tok-comment", options: [.anchorsMatchLines]),
+                TokenPattern(stringPattern, className: "tok-string"),
+                TokenPattern(#"\b(import|from|export|default|const|let|var|function|return|class|extends|new|if|else|switch|case|break|continue|for|while|do|try|catch|finally|throw|async|await|true|false|null|undefined|typeof|instanceof)\b"#, className: "tok-keyword"),
+                TokenPattern(#"\b(String|Number|Boolean|Object|Array|Promise|Date|Map|Set)\b"#, className: "tok-type"),
+                TokenPattern(callPattern, className: "tok-call"),
+                TokenPattern(numberPattern, className: "tok-number"),
+                TokenPattern(symbolPattern, className: "tok-symbol"),
+            ]
+        case "json":
+            return [
+                TokenPattern(#""([^"\\]|\\.)*"(?=\s*:)"#, className: "tok-type"),
+                TokenPattern(stringPattern, className: "tok-string"),
+                TokenPattern(#"\b(true|false|null)\b"#, className: "tok-keyword"),
+                TokenPattern(numberPattern, className: "tok-number"),
+                TokenPattern(symbolPattern, className: "tok-symbol"),
+            ]
+        case "python":
+            return [
+                TokenPattern(#"#.*$"#, className: "tok-comment", options: [.anchorsMatchLines]),
+                TokenPattern(stringPattern, className: "tok-string"),
+                TokenPattern(#"\b(import|from|as|def|class|return|if|elif|else|for|while|try|except|finally|raise|with|in|is|not|and|or|True|False|None|async|await|lambda|pass|break|continue)\b"#, className: "tok-keyword"),
+                TokenPattern(#"\b(str|int|float|bool|dict|list|tuple|set|None)\b"#, className: "tok-type"),
+                TokenPattern(callPattern, className: "tok-call"),
+                TokenPattern(numberPattern, className: "tok-number"),
+                TokenPattern(symbolPattern, className: "tok-symbol"),
+            ]
+        case "shell":
+            return [
+                TokenPattern(#"#.*$"#, className: "tok-comment", options: [.anchorsMatchLines]),
+                TokenPattern(stringPattern, className: "tok-string"),
+                TokenPattern(#"\b(if|then|else|fi|for|in|do|done|case|esac|function|export|local|return|while|until)\b"#, className: "tok-keyword"),
+                TokenPattern(#"\$[A-Za-z_][A-Za-z0-9_]*"#, className: "tok-type"),
+                TokenPattern(#"^\s*(?:[$#%]|❯)\s*[A-Za-z_./~:-][A-Za-z0-9_./~:-]*(?=\s|$)"#, className: "tok-call", options: [.anchorsMatchLines]),
+                TokenPattern(#"^\s*[A-Za-z_./~:-][A-Za-z0-9_./~:-]*(?=\s|$)"#, className: "tok-call", options: [.anchorsMatchLines]),
+                TokenPattern(callPattern, className: "tok-call"),
+                TokenPattern(numberPattern, className: "tok-number"),
+                TokenPattern(symbolPattern, className: "tok-symbol"),
+            ]
+        case "zig":
+            return [
+                TokenPattern(#"//.*$"#, className: "tok-comment", options: [.anchorsMatchLines]),
+                TokenPattern(stringPattern, className: "tok-string"),
+                TokenPattern(#"@[A-Za-z_][A-Za-z0-9_]*"#, className: "tok-call"),
+                TokenPattern(#"\b(const|var|fn|pub|extern|export|struct|enum|union|opaque|error|defer|errdefer|if|else|switch|while|for|break|continue|return|try|catch|comptime|async|await|suspend|resume|nosuspend|packed|inline|noinline|usingnamespace|test|threadlocal|anytype|asm|volatile|allowzero|linksection|callconv|or|and|orelse|unreachable|null|undefined|true|false)\b"#, className: "tok-keyword"),
+                TokenPattern(#"\b(u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize|f16|f32|f64|f80|f128|bool|void|noreturn|type|anyerror)\b"#, className: "tok-type"),
+                TokenPattern(callPattern, className: "tok-call"),
+                TokenPattern(numberPattern, className: "tok-number"),
+                TokenPattern(symbolPattern, className: "tok-symbol"),
+            ]
+        case "yaml":
+            return [
+                TokenPattern(#"#.*$"#, className: "tok-comment", options: [.anchorsMatchLines]),
+                TokenPattern(stringPattern, className: "tok-string"),
+                TokenPattern(#"(?m)^\s*[\w.-]+\s*:(?=\s|$)"#, className: "tok-type"),
+                TokenPattern(#"\b(true|false|yes|no|on|off|null|~)\b"#, className: "tok-keyword"),
+                TokenPattern(numberPattern, className: "tok-number"),
+                TokenPattern(symbolPattern, className: "tok-symbol"),
+            ]
+        case "markup":
+            return [
+                TokenPattern(#"<!--[\s\S]*?-->"#, className: "tok-comment"),
+                TokenPattern(stringPattern, className: "tok-string"),
+                TokenPattern(#"</?[A-Za-z][A-Za-z0-9:-]*"#, className: "tok-keyword"),
+                TokenPattern(#"\b[A-Za-z_:][A-Za-z0-9:._-]*(?==)"#, className: "tok-type"),
+                TokenPattern(numberPattern, className: "tok-number"),
+                TokenPattern(symbolPattern, className: "tok-symbol"),
+            ]
+        case "css":
+            return [
+                TokenPattern(#"/\*[\s\S]*?\*/"#, className: "tok-comment"),
+                TokenPattern(stringPattern, className: "tok-string"),
+                TokenPattern(#"@[A-Za-z-]+"#, className: "tok-keyword"),
+                TokenPattern(#"(?m)^\s*[.#]?[A-Za-z_-][A-Za-z0-9_:-]*(?=\s*\{)"#, className: "tok-type"),
+                TokenPattern(#"\b[A-Za-z-]+(?=\s*:)"#, className: "tok-call"),
+                TokenPattern(#"#[0-9A-Fa-f]{3,8}\b"#, className: "tok-number"),
+                TokenPattern(numberPattern, className: "tok-number"),
+                TokenPattern(symbolPattern, className: "tok-symbol"),
+            ]
+        case "sql":
+            return [
+                TokenPattern(#"/\*[\s\S]*?\*/"#, className: "tok-comment"),
+                TokenPattern(#"--.*$"#, className: "tok-comment", options: [.anchorsMatchLines]),
+                TokenPattern(stringPattern, className: "tok-string"),
+                TokenPattern(#"\b(SELECT|FROM|WHERE|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|TABLE|ALTER|DROP|JOIN|LEFT|RIGHT|INNER|OUTER|ON|GROUP|BY|ORDER|LIMIT|OFFSET|AS|AND|OR|NOT|NULL|DISTINCT|HAVING)\b"#, className: "tok-keyword"),
+                TokenPattern(callPattern, className: "tok-call"),
+                TokenPattern(numberPattern, className: "tok-number"),
+                TokenPattern(symbolPattern, className: "tok-symbol"),
+            ]
+        case "toml":
+            return [
+                TokenPattern(#"#.*$"#, className: "tok-comment", options: [.anchorsMatchLines]),
+                TokenPattern(stringPattern, className: "tok-string"),
+                TokenPattern(#"(?m)^\s*\[[^\]]+\]"#, className: "tok-keyword"),
+                TokenPattern(#"(?m)^\s*[A-Za-z0-9_.-]+(?=\s*=)"#, className: "tok-type"),
+                TokenPattern(#"\b(true|false)\b"#, className: "tok-keyword"),
+                TokenPattern(numberPattern, className: "tok-number"),
+                TokenPattern(symbolPattern, className: "tok-symbol"),
+            ]
+        case "diff":
+            return [
+                TokenPattern(#"^@@.*@@.*$"#, className: "tok-keyword", options: [.anchorsMatchLines]),
+                TokenPattern(#"^\+.*$"#, className: "tok-string", options: [.anchorsMatchLines]),
+                TokenPattern(#"^-.*$"#, className: "tok-comment", options: [.anchorsMatchLines]),
+            ]
+        default:
+            return [
+                TokenPattern(#"<!--[\s\S]*?-->"#, className: "tok-comment"),
+                TokenPattern(#"/\*[\s\S]*?\*/"#, className: "tok-comment"),
+                TokenPattern(#"--.*$"#, className: "tok-comment", options: [.anchorsMatchLines]),
+                TokenPattern(#"#.*$"#, className: "tok-comment", options: [.anchorsMatchLines]),
+                TokenPattern(#"//.*$"#, className: "tok-comment", options: [.anchorsMatchLines]),
+                TokenPattern(stringPattern, className: "tok-string"),
+                TokenPattern(#"</?[A-Za-z][A-Za-z0-9:-]*"#, className: "tok-keyword"),
+                TokenPattern(#"\b(import|from|export|default|const|let|var|function|return|class|extends|new|if|else|switch|case|break|continue|for|while|do|try|catch|finally|throw|async|await|def|lambda|pass|raise|with|in|is|not|and|or|func|struct|enum|protocol|extension|guard|throws|public|private|static|mutating|init|deinit|select|from|where|insert|into|values|update|set|delete|create|table|join|group|order|limit|if|then|fi|done|export|local|true|false|null|nil|None)\b"#, className: "tok-keyword"),
+                TokenPattern(numberPattern, className: "tok-number"),
+                TokenPattern(#"\b[A-Za-z_:][A-Za-z0-9:._-]*(?==)"#, className: "tok-type"),
+                TokenPattern(#"\b[A-Z][A-Za-z0-9_]+\b"#, className: "tok-type"),
+                TokenPattern(callPattern, className: "tok-call"),
+                TokenPattern(symbolPattern, className: "tok-symbol"),
+            ]
+        }
+    }
+
+    private static func inferSyntaxCategory(from source: String) -> String {
+        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "generic" }
+
+        if let data = trimmed.data(using: .utf8),
+           trimmed.hasPrefix("{") || trimmed.hasPrefix("["),
+           (try? JSONSerialization.jsonObject(with: data)) != nil {
+            return "json"
+        }
+
+        if firstMatch(
+            in: trimmed,
+            pattern: #"(?is)<!doctype\s+html|</?[A-Za-z][A-Za-z0-9:-]*(?:\s|>|/>)"#
+        ) != nil {
+            return "markup"
+        }
+
+        if firstMatch(
+            in: trimmed,
+            pattern: #"(?m)^\s*[.#]?[A-Za-z_-][A-Za-z0-9_:#.\-\s>]*(?=\s*\{)"#
+        ) != nil {
+            return "css"
+        }
+
+        if firstMatch(
+            in: trimmed,
+            pattern: #"(?m)^@@.*@@.*$|^(?:\+\+\+|---|\+|-).+$"#
+        ) != nil {
+            return "diff"
+        }
+
+        if firstMatch(
+            in: trimmed,
+            pattern: #"(?im)\b(select|insert|update|delete|create|alter|drop)\b[\s\S]{0,80}\b(from|into|table|set)\b"#
+        ) != nil {
+            return "sql"
+        }
+
+        if firstMatch(
+            in: trimmed,
+            pattern: #"(?m)^\s*\[[^\]]+\]\s*$"#
+        ) != nil && trimmed.contains("=") {
+            return "toml"
+        }
+
+        if firstMatch(
+            in: trimmed,
+            pattern: #"(?m)^\s*[\w.-]+\s*:\s+\S+"#
+        ) != nil && !trimmed.contains("{") && !trimmed.contains(";") {
+            return "yaml"
+        }
+
+        if firstMatch(
+            in: trimmed,
+            pattern: #"(?m)^\s*(const\s+\w+\s*[:=]|var\s+\w+\s*[:=]|pub\s+fn\b|fn\s+\w+\s*\(|@import\()"#
+        ) != nil {
+            return "zig"
+        }
+
+        if firstMatch(
+            in: trimmed,
+            pattern: #"(?m)^\s*(def\s+\w+\(|class\s+\w+|from\s+\w+\s+import\b|import\s+\w+|print\(|@[\w.]+)"#
+        ) != nil {
+            return "python"
+        }
+
+        if firstMatch(
+            in: trimmed,
+            pattern: #"(?m)^\s*(const|let|var|function|import|export|class)\b|console\.[A-Za-z_][A-Za-z0-9_]*\(|=>"#
+        ) != nil {
+            return "javascript"
+        }
+
+        if firstMatch(
+            in: trimmed,
+            pattern: #"(?m)^\s*(import\s+\w+|let\s+\w+|var\s+\w+|func\s+\w+\(|struct\s+\w+|enum\s+\w+|guard\b)|print\("#
+        ) != nil {
+            return "swift"
+        }
+
+        if firstMatch(
+            in: trimmed,
+            pattern: #"(?m)^\s*(#!/|export\s+\w+=|if\s+\[|for\s+\w+\s+in\b|echo\s+|cd\s+|git\s+|sudo\s+|brew\s+|zig\s+|curl\s+|wget\s+|xcodebuild\s+|make\s+|cmake\s+|\$ |# )"#
+        ) != nil {
+            return "shell"
+        }
+
+        return "generic"
     }
 
     private static func collectBlockquote(from lines: [String], startIndex: Int) -> (html: String, nextIndex: Int) {

@@ -3,6 +3,21 @@ import Foundation
 @testable import GhoDex
 
 struct MarkdownDocumentTests {
+    @Test func resolvesLocalDirectoryPathAgainstWorkingDirectory() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let childDirectoryURL = tempDirectoryURL.appendingPathComponent("Docs", isDirectory: true)
+        try FileManager.default.createDirectory(at: childDirectoryURL, withIntermediateDirectories: true)
+
+        let target = LocalPathTarget.resolve(
+            rawValue: "Docs",
+            workingDirectory: tempDirectoryURL.path
+        )
+
+        #expect(target?.fileURL == childDirectoryURL)
+        #expect(target?.isDirectory == true)
+    }
+
     @Test func resolvesMarkdownFileURL() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -136,6 +151,8 @@ struct MarkdownDocumentTests {
         #expect(html.contains("<ul><li>one</li><li>two</li></ul>"))
         #expect(html.contains("<blockquote><p>quote</p></blockquote>"))
         #expect(html.contains("<pre><code class=\"language-swift\">"))
+        #expect(html.contains("<span class=\"tok-call\">print</span>"))
+        #expect(html.contains("<span class=\"tok-string\">\"hi\"</span>"))
     }
 
     @Test func markdownHTMLRendererAcceptsCustomBaseFontSize() {
@@ -147,6 +164,85 @@ struct MarkdownDocumentTests {
 
         #expect(html.contains("--base-font-size: 19.0px;"))
         #expect(html.contains("font-size: var(--base-font-size);"))
+        #expect(html.contains("--page-bg: transparent;"))
+        #expect(html.contains("::selection { background: var(--selection); color: var(--selection-text); }"))
+    }
+
+    @Test func markdownHTMLRendererStylesInlineCodeWithVisibleAccent() {
+        let html = MarkdownHTMLRenderer.renderDocument(
+            markdown: "Path: `/tmp/demo/file.md`",
+            title: "Doc"
+        )
+
+        #expect(html.contains("color: var(--token-string);"))
+        #expect(html.contains("border: 1px solid var(--border);"))
+        #expect(html.contains("<code>/tmp/demo/file.md</code>"))
+    }
+
+    @Test func markdownHTMLRendererInfersLanguageForUnlabeledCodeBlocks() {
+        let html = MarkdownHTMLRenderer.renderDocument(
+            markdown: """
+            ```
+            const value = 42
+            console.log("hi")
+            ```
+            """,
+            title: "Doc"
+        )
+
+        #expect(html.contains("--token-keyword: rgba(25, 84, 166, 0.96);"))
+        #expect(html.contains("<span class=\"tok-keyword\">const</span>"))
+        #expect(html.contains("<span class=\"tok-call\">log</span>"))
+        #expect(html.contains("<span class=\"tok-string\">&quot;hi&quot;</span>"))
+    }
+
+    @Test func markdownHTMLRendererHighlightsShellSessionBlocks() {
+        let html = MarkdownHTMLRenderer.renderDocument(
+            markdown: """
+            ```shell-session
+            sudo xcode-select --switch /Applications/Xcode.app
+            ```
+            """,
+            title: "Doc"
+        )
+
+        #expect(html.contains("<pre><code class=\"language-shell-session\">"))
+        #expect(html.contains("<span class=\"tok-call\">sudo</span>"))
+        #expect(html.contains("xcode-select"))
+    }
+
+    @Test func markdownHTMLRendererHighlightsZigBlocks() {
+        let html = MarkdownHTMLRenderer.renderDocument(
+            markdown: """
+            ```zig
+            const std = @import("std");
+            pub fn main() void {
+                std.debug.print("hi", .{});
+            }
+            ```
+            """,
+            title: "Doc"
+        )
+
+        #expect(html.contains("<pre><code class=\"language-zig\">"))
+        #expect(html.contains("<span class=\"tok-keyword\">const</span>"))
+        #expect(html.contains("<span class=\"tok-call\">@import</span>"))
+        #expect(html.contains("<span class=\"tok-call\">print</span>"))
+    }
+
+    @Test func markdownHTMLRendererInfersShellForPlainCommandBlocks() {
+        let html = MarkdownHTMLRenderer.renderDocument(
+            markdown: """
+            ```
+            zig build
+            xcodebuild -project macos/GhoDex.xcodeproj
+            ```
+            """,
+            title: "Doc"
+        )
+
+        #expect(html.contains("<span class=\"tok-call\">zig</span>"))
+        #expect(html.contains("<span class=\"tok-call\">xcodebuild</span>"))
     }
 
     @Test func markdownHTMLRendererRendersImageAndVideoMedia() {
@@ -193,5 +289,67 @@ struct MarkdownDocumentTests {
         #expect(html.contains("<th>Name</th>"))
         #expect(html.contains("<td>collart.ai</td>"))
         #expect(html.contains("<td>10.03</td>"))
+    }
+
+    @MainActor
+    @Test func markdownViewModelTracksDirtyStateAndLivePreview() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("README.md")
+        try Data("hello".utf8).write(to: fileURL)
+
+        guard let target = MarkdownDocumentTarget(fileURL: fileURL) else {
+            Issue.record("Expected markdown target")
+            return
+        }
+
+        let viewModel = MarkdownDocumentViewModel(target: target)
+        try await waitUntilLoaded(viewModel)
+
+        viewModel.updateSourceText("# Changed")
+
+        #expect(viewModel.isDirty)
+        #expect(viewModel.previewHTML.contains("<h1>Changed</h1>"))
+        #expect(viewModel.summary.modifiedDescription == AppLocalization.localizedText("Unsaved"))
+    }
+
+    @MainActor
+    @Test func markdownViewModelSavesEditedSource() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("README.md")
+        try Data("hello".utf8).write(to: fileURL)
+
+        guard let target = MarkdownDocumentTarget(fileURL: fileURL) else {
+            Issue.record("Expected markdown target")
+            return
+        }
+
+        let viewModel = MarkdownDocumentViewModel(target: target)
+        try await waitUntilLoaded(viewModel)
+
+        viewModel.updateSourceText("updated")
+        try viewModel.saveSource()
+
+        let savedText = try String(contentsOf: fileURL, encoding: .utf8)
+        #expect(savedText == "updated")
+        #expect(!viewModel.isDirty)
+        #expect(viewModel.summary.modifiedDescription != AppLocalization.localizedText("Unsaved"))
+    }
+
+    @MainActor
+    private func waitUntilLoaded(_ viewModel: MarkdownDocumentViewModel) async throws {
+        for _ in 0..<50 {
+            if !viewModel.isLoadingSource && viewModel.loadError == nil && !viewModel.previewHTML.isEmpty {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        Issue.record("MarkdownDocumentViewModel did not finish loading in time")
     }
 }

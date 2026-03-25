@@ -40,6 +40,7 @@ enum GhosttyChrome {
 @MainActor
 final class GhosttyChromeTheme: ObservableObject {
     @Published private(set) var backgroundColor: Color = Color(nsColor: .windowBackgroundColor)
+    @Published private(set) var backgroundNSColor: NSColor = .windowBackgroundColor
     @Published private(set) var colorScheme: ColorScheme = .light
 
     var isLight: Bool {
@@ -48,6 +49,7 @@ final class GhosttyChromeTheme: ObservableObject {
 
     func apply(backgroundColor: NSColor) {
         let resolved = backgroundColor.usingColorSpace(.deviceRGB) ?? backgroundColor
+        self.backgroundNSColor = resolved
         self.backgroundColor = Color(nsColor: resolved)
         self.colorScheme = resolved.isLightColor ? .light : .dark
     }

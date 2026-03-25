@@ -40,6 +40,7 @@ final class MarkdownDocumentViewModel: ObservableObject {
     @Published private(set) var loadError: String?
     @Published private(set) var isLoadingSource = false
     @Published private(set) var fontSizeStep = 0
+    @Published private(set) var isDirty = false
     @Published private(set) var summary = MarkdownDocumentSummary(
         lineCount: 0,
         characterCount: 0,
@@ -48,6 +49,8 @@ final class MarkdownDocumentViewModel: ObservableObject {
     )
 
     let target: MarkdownDocumentTarget
+    private var persistedSourceText = ""
+    var onDirtyStateChange: ((Bool) -> Void)?
 
     init(target: MarkdownDocumentTarget) {
         self.target = target
@@ -62,7 +65,8 @@ final class MarkdownDocumentViewModel: ObservableObject {
         FontSizing.previewBaseSize + Double(fontSizeStep)
     }
 
-    func reloadSource() {
+    func reloadSource(force: Bool = false) {
+        guard force || !isDirty else { return }
         isLoadingSource = true
         loadError = nil
 
@@ -84,23 +88,51 @@ final class MarkdownDocumentViewModel: ObservableObject {
                 self.isLoadingSource = false
                 switch result {
                 case .success(let payload):
+                    self.persistedSourceText = payload.0
                     self.sourceText = payload.0
                     self.previewHTML = payload.1
                     self.summary = payload.2
+                    self.setDirty(false)
                     self.loadError = nil
                 case .failure(let error):
                     self.sourceText = ""
                     self.previewHTML = ""
+                    self.persistedSourceText = ""
                     self.summary = MarkdownDocumentSummary(
                         lineCount: 0,
                         characterCount: 0,
                         fileSizeDescription: "--",
                         modifiedDescription: nil
                     )
+                    self.setDirty(false)
                     self.loadError = error.localizedDescription
                 }
             }
         }
+    }
+
+    func updateSourceText(_ text: String) {
+        guard sourceText != text else { return }
+        sourceText = text
+        setDirty(text != persistedSourceText)
+        previewHTML = MarkdownHTMLRenderer.renderDocument(
+            markdown: text,
+            title: target.fileURL.lastPathComponent,
+            baseFontSize: FontSizing.previewBaseSize
+        )
+        summary = Self.makeEditingSummary(
+            for: target.fileURL,
+            sourceText: text,
+            isDirty: isDirty
+        )
+    }
+
+    func saveSource() throws {
+        try sourceText.write(to: target.fileURL, atomically: true, encoding: .utf8)
+        persistedSourceText = sourceText
+        setDirty(false)
+        summary = try Self.makeSummary(for: target.fileURL, sourceText: sourceText)
+        loadError = nil
     }
 
     func increaseFontSize() {
@@ -123,6 +155,34 @@ final class MarkdownDocumentViewModel: ObservableObject {
         sourceText: String
     ) throws -> MarkdownDocumentSummary {
         let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        return makeSummary(
+            for: fileURL,
+            sourceText: sourceText,
+            attributes: attributes,
+            isDirty: false
+        )
+    }
+
+    nonisolated private static func makeEditingSummary(
+        for fileURL: URL,
+        sourceText: String,
+        isDirty: Bool
+    ) -> MarkdownDocumentSummary {
+        let attributes = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)) ?? [:]
+        return makeSummary(
+            for: fileURL,
+            sourceText: sourceText,
+            attributes: attributes,
+            isDirty: isDirty
+        )
+    }
+
+    nonisolated private static func makeSummary(
+        for fileURL: URL,
+        sourceText: String,
+        attributes: [FileAttributeKey: Any],
+        isDirty: Bool
+    ) -> MarkdownDocumentSummary {
         let byteCount = (attributes[.size] as? NSNumber)?.int64Value ?? Int64(sourceText.utf8.count)
         let modifiedDate = attributes[.modificationDate] as? Date
         let lineCount = sourceText.isEmpty
@@ -135,8 +195,8 @@ final class MarkdownDocumentViewModel: ObservableObject {
         return MarkdownDocumentSummary(
             lineCount: lineCount,
             characterCount: sourceText.count,
-            fileSizeDescription: formatter.string(fromByteCount: byteCount),
-            modifiedDescription: modifiedDate.map(Self.modifiedDateString(from:))
+            fileSizeDescription: formatter.string(fromByteCount: isDirty ? Int64(sourceText.utf8.count) : byteCount),
+            modifiedDescription: isDirty ? AppLocalization.localizedText("Unsaved") : modifiedDate.map(Self.modifiedDateString(from:))
         )
     }
 
@@ -145,19 +205,30 @@ final class MarkdownDocumentViewModel: ObservableObject {
         formatter.unitsStyle = .short
         return formatter.localizedString(for: date, relativeTo: Date())
     }
+
+    private func setDirty(_ dirty: Bool) {
+        guard isDirty != dirty else { return }
+        isDirty = dirty
+        onDirtyStateChange?(dirty)
+    }
 }
 
 struct MarkdownDocumentView: View {
     @EnvironmentObject private var theme: GhosttyChromeTheme
     @ObservedObject var viewModel: MarkdownDocumentViewModel
+    let onSaveRequested: () -> Void
+    let onReloadRequested: () -> Void
+
+    private var previewTheme: MarkdownPreviewTheme {
+        MarkdownPreviewTheme(
+            backgroundColor: theme.backgroundNSColor,
+            isLight: theme.isLight
+        )
+    }
 
     var body: some View {
         ZStack {
             theme.backgroundColor
-                .ignoresSafeArea()
-
-            Rectangle()
-                .fill(Color.primary.opacity(theme.isLight ? 0.018 : 0.045))
                 .ignoresSafeArea()
 
             contentCard
@@ -187,6 +258,10 @@ struct MarkdownDocumentView: View {
             metadataLabel("\(viewModel.summary.characterCount)C", monospaced: false)
             metadataLabel(viewModel.summary.fileSizeDescription, monospaced: false)
 
+            if viewModel.isDirty {
+                metadataLabel(AppLocalization.localizedText("Edited"), monospaced: false)
+            }
+
             if let modified = viewModel.summary.modifiedDescription {
                 metadataLabel(modified, monospaced: false)
             }
@@ -200,7 +275,7 @@ struct MarkdownDocumentView: View {
         .background(footerSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.primary.opacity(theme.isLight ? 0.08 : 0.12), lineWidth: 1)
+                .stroke(Color(nsColor: previewTheme.chromeBorder), lineWidth: 1)
         )
     }
 
@@ -214,8 +289,22 @@ struct MarkdownDocumentView: View {
             .pickerStyle(.segmented)
             .frame(width: 150)
 
+            if viewModel.isDirty {
+                Button(action: onSaveRequested) {
+                    Image(systemName: "square.and.arrow.down")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 28, height: 24)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color(nsColor: previewTheme.controlFill))
+                )
+            }
+
             Button {
-                viewModel.reloadSource()
+                onReloadRequested()
             } label: {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 12, weight: .semibold))
@@ -223,16 +312,17 @@ struct MarkdownDocumentView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
+            .disabled(viewModel.isLoadingSource)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.primary.opacity(theme.isLight ? 0.05 : 0.12))
+                    .fill(Color(nsColor: previewTheme.controlFill))
             )
         }
     }
 
     private var footerSeparator: some View {
         Rectangle()
-            .fill(Color.primary.opacity(theme.isLight ? 0.12 : 0.16))
+            .fill(Color(nsColor: previewTheme.chromeBorder))
             .frame(width: 1, height: 12)
     }
 
@@ -268,12 +358,15 @@ struct MarkdownDocumentView: View {
                     MarkdownRenderedPreview(
                         html: viewModel.previewHTML,
                         baseURL: viewModel.target.fileURL.deletingLastPathComponent(),
-                        fontSize: viewModel.previewFontSize
+                        fontSize: viewModel.previewFontSize,
+                        theme: previewTheme
                     )
                 case .source:
                     MarkdownSourceView(
                         sourceText: viewModel.sourceText,
-                        fontSize: viewModel.sourceFontSize
+                        fontSize: viewModel.sourceFontSize,
+                        theme: previewTheme,
+                        onChange: viewModel.updateSourceText
                     )
                 }
             }
@@ -283,7 +376,7 @@ struct MarkdownDocumentView: View {
         .background(contentSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.primary.opacity(theme.isLight ? 0.08 : 0.12), lineWidth: 1)
+                .stroke(Color(nsColor: previewTheme.chromeBorder), lineWidth: 1)
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -305,15 +398,19 @@ struct MarkdownDocumentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(32)
-        .subpanelSurface()
+        .background(contentSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color(nsColor: previewTheme.chromeBorder), lineWidth: 1)
+        )
     }
 
     private var contentSurface: some ShapeStyle {
-        Color.primary.opacity(theme.isLight ? 0.028 : 0.12)
+        theme.backgroundColor
     }
 
     private var footerSurface: some ShapeStyle {
-        Color.primary.opacity(theme.isLight ? 0.022 : 0.10)
+        Color(nsColor: previewTheme.chromeFill)
     }
 }
 
@@ -321,9 +418,10 @@ private struct MarkdownRenderedPreview: View {
     let html: String
     let baseURL: URL
     let fontSize: Double
+    let theme: MarkdownPreviewTheme
 
     var body: some View {
-        MarkdownWebView(html: html, baseURL: baseURL, fontSize: fontSize)
+        MarkdownWebView(html: html, baseURL: baseURL, fontSize: fontSize, theme: theme)
     }
 }
 
@@ -331,6 +429,7 @@ private struct MarkdownWebView: NSViewRepresentable {
     let html: String
     let baseURL: URL
     let fontSize: Double
+    let theme: MarkdownPreviewTheme
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -348,6 +447,7 @@ private struct MarkdownWebView: NSViewRepresentable {
         webView.loadHTMLString(html, baseURL: baseURL)
         context.coordinator.lastHTML = html
         context.coordinator.lastFontSize = fontSize
+        context.coordinator.lastTheme = theme
         return webView
     }
 
@@ -355,26 +455,57 @@ private struct MarkdownWebView: NSViewRepresentable {
         if context.coordinator.lastHTML != html {
             context.coordinator.lastHTML = html
             context.coordinator.lastFontSize = fontSize
+            context.coordinator.lastTheme = theme
             nsView.loadHTMLString(html, baseURL: baseURL)
             return
         }
 
-        guard context.coordinator.lastFontSize != fontSize else { return }
-        context.coordinator.lastFontSize = fontSize
-        context.coordinator.applyFontSize(fontSize, to: nsView)
+        if context.coordinator.lastFontSize != fontSize {
+            context.coordinator.lastFontSize = fontSize
+            context.coordinator.applyFontSize(fontSize, to: nsView)
+        }
+
+        guard context.coordinator.lastTheme != theme else { return }
+        context.coordinator.lastTheme = theme
+        context.coordinator.applyTheme(theme, to: nsView)
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         var lastHTML = ""
         var lastFontSize = 16.0
+        var lastTheme = MarkdownPreviewTheme()
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             applyFontSize(lastFontSize, to: webView)
+            applyTheme(lastTheme, to: webView)
         }
 
         func applyFontSize(_ fontSize: Double, to webView: WKWebView) {
             let script = """
             document.documentElement.style.setProperty('--base-font-size', '\(fontSize)px');
+            """
+            webView.evaluateJavaScript(script)
+        }
+
+        func applyTheme(_ theme: MarkdownPreviewTheme, to webView: WKWebView) {
+            let script = """
+            document.documentElement.style.setProperty('--page-bg', '\(theme.pageBackground.javaScriptSingleQuotedLiteral)');
+            document.documentElement.style.setProperty('--text', '\(theme.textColor.javaScriptSingleQuotedLiteral)');
+            document.documentElement.style.setProperty('--muted', '\(theme.mutedTextColor.javaScriptSingleQuotedLiteral)');
+            document.documentElement.style.setProperty('--border', '\(theme.borderColor.javaScriptSingleQuotedLiteral)');
+            document.documentElement.style.setProperty('--border-strong', '\(theme.borderStrongColor.javaScriptSingleQuotedLiteral)');
+            document.documentElement.style.setProperty('--code-bg', '\(theme.codeBackground.javaScriptSingleQuotedLiteral)');
+            document.documentElement.style.setProperty('--quote-border', '\(theme.quoteBorderColor.javaScriptSingleQuotedLiteral)');
+            document.documentElement.style.setProperty('--selection', '\(theme.selectionColor.javaScriptSingleQuotedLiteral)');
+            document.documentElement.style.setProperty('--selection-text', '\(theme.selectionTextColor.javaScriptSingleQuotedLiteral)');
+            document.documentElement.style.setProperty('--accent', '\(theme.accentColor.javaScriptSingleQuotedLiteral)');
+            document.documentElement.style.setProperty('--token-comment', '\(theme.tokenCommentColor.javaScriptSingleQuotedLiteral)');
+            document.documentElement.style.setProperty('--token-keyword', '\(theme.tokenKeywordColor.javaScriptSingleQuotedLiteral)');
+            document.documentElement.style.setProperty('--token-string', '\(theme.tokenStringColor.javaScriptSingleQuotedLiteral)');
+            document.documentElement.style.setProperty('--token-number', '\(theme.tokenNumberColor.javaScriptSingleQuotedLiteral)');
+            document.documentElement.style.setProperty('--token-type', '\(theme.tokenTypeColor.javaScriptSingleQuotedLiteral)');
+            document.documentElement.style.setProperty('--token-symbol', '\(theme.tokenSymbolColor.javaScriptSingleQuotedLiteral)');
+            document.documentElement.style.setProperty('--token-call', '\(theme.tokenCallColor.javaScriptSingleQuotedLiteral)');
             """
             webView.evaluateJavaScript(script)
         }
@@ -409,6 +540,12 @@ private struct MarkdownWebView: NSViewRepresentable {
 private struct MarkdownSourceView: NSViewRepresentable {
     let sourceText: String
     let fontSize: CGFloat
+    let theme: MarkdownPreviewTheme
+    let onChange: (String) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onChange: onChange)
+    }
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView(frame: .zero)
@@ -419,13 +556,15 @@ private struct MarkdownSourceView: NSViewRepresentable {
         scrollView.autohidesScrollers = true
 
         let textView = NSTextView(frame: .zero)
+        textView.delegate = context.coordinator
         textView.drawsBackground = false
-        textView.isEditable = false
+        textView.isEditable = true
         textView.isSelectable = true
         textView.isRichText = false
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = true
         textView.importsGraphics = false
+        textView.allowsUndo = true
         textView.font = .monospacedSystemFont(ofSize: fontSize, weight: .regular)
         textView.textColor = .labelColor
         textView.insertionPointColor = .clear
@@ -437,6 +576,13 @@ private struct MarkdownSourceView: NSViewRepresentable {
             height: CGFloat.greatestFiniteMagnitude
         )
         textView.string = sourceText
+        textView.selectedTextAttributes = [
+            .backgroundColor: theme.selectionNSColor,
+            .foregroundColor: theme.selectionTextNSColor,
+        ]
+        context.coordinator.isApplyingProgrammaticUpdate = true
+        context.coordinator.lastText = sourceText
+        context.coordinator.isApplyingProgrammaticUpdate = false
 
         scrollView.documentView = textView
         return scrollView
@@ -445,11 +591,139 @@ private struct MarkdownSourceView: NSViewRepresentable {
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         guard let textView = nsView.documentView as? NSTextView else { return }
         if textView.string != sourceText {
+            context.coordinator.isApplyingProgrammaticUpdate = true
             textView.string = sourceText
+            context.coordinator.lastText = sourceText
+            context.coordinator.isApplyingProgrammaticUpdate = false
         }
         let desiredFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
         if textView.font?.pointSize != desiredFont.pointSize {
             textView.font = desiredFont
         }
+        textView.textColor = theme.textNSColor
+        textView.selectedTextAttributes = [
+            .backgroundColor: theme.selectionNSColor,
+            .foregroundColor: theme.selectionTextNSColor,
+        ]
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        let onChange: (String) -> Void
+        var isApplyingProgrammaticUpdate = false
+        var lastText = ""
+
+        init(onChange: @escaping (String) -> Void) {
+            self.onChange = onChange
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard !isApplyingProgrammaticUpdate,
+                  let textView = notification.object as? NSTextView else { return }
+            let updatedText = textView.string
+            guard updatedText != lastText else { return }
+            lastText = updatedText
+            onChange(updatedText)
+        }
+    }
+}
+
+private struct MarkdownPreviewTheme: Equatable {
+    let pageBackground: String
+    let textColor: String
+    let mutedTextColor: String
+    let borderColor: String
+    let borderStrongColor: String
+    let codeBackground: String
+    let quoteBorderColor: String
+    let selectionColor: String
+    let selectionTextColor: String
+    let accentColor: String
+    let tokenCommentColor: String
+    let tokenKeywordColor: String
+    let tokenStringColor: String
+    let tokenNumberColor: String
+    let tokenTypeColor: String
+    let tokenSymbolColor: String
+    let tokenCallColor: String
+    let chromeFill: NSColor
+    let chromeBorder: NSColor
+    let controlFill: NSColor
+    let textNSColor: NSColor
+    let selectionNSColor: NSColor
+    let selectionTextNSColor: NSColor
+
+    init() {
+        self.init(backgroundColor: .windowBackgroundColor, isLight: true)
+    }
+
+    init(backgroundColor: NSColor, isLight: Bool) {
+        let background = backgroundColor.usingColorSpace(.sRGB) ?? backgroundColor
+        let accent = NSColor.controlAccentColor.usingColorSpace(.sRGB) ?? .controlAccentColor
+        let text = isLight
+            ? NSColor(calibratedWhite: 0.08, alpha: 0.96)
+            : NSColor(calibratedWhite: 0.96, alpha: 0.94)
+        let muted = text.withAlphaComponent(isLight ? 0.58 : 0.64)
+        let border = text.withAlphaComponent(isLight ? 0.09 : 0.14)
+        let borderStrong = text.withAlphaComponent(isLight ? 0.16 : 0.22)
+        let code = text.withAlphaComponent(isLight ? 0.05 : 0.09)
+        let quote = accent.withAlphaComponent(isLight ? 0.34 : 0.42)
+        let selection = accent.withAlphaComponent(isLight ? 0.34 : 0.42)
+        let selectionText = accent.isLightColor
+            ? NSColor(calibratedWhite: 0.08, alpha: 1)
+            : NSColor(calibratedWhite: 1, alpha: 1)
+        let keyword = (NSColor.systemBlue.usingColorSpace(.sRGB) ?? accent)
+        let string = (NSColor.systemBrown.usingColorSpace(.sRGB)
+            ?? NSColor.systemOrange.usingColorSpace(.sRGB)
+            ?? accent)
+        let number = (NSColor.systemOrange.usingColorSpace(.sRGB) ?? accent)
+        let type = (NSColor.systemTeal.usingColorSpace(.sRGB) ?? accent)
+        let symbol = text.withAlphaComponent(isLight ? 0.70 : 0.78)
+        let call = (NSColor.systemIndigo.usingColorSpace(.sRGB) ?? keyword)
+
+        self.pageBackground = background.cssRGBAString
+        self.textColor = text.cssRGBAString
+        self.mutedTextColor = muted.cssRGBAString
+        self.borderColor = border.cssRGBAString
+        self.borderStrongColor = borderStrong.cssRGBAString
+        self.codeBackground = code.cssRGBAString
+        self.quoteBorderColor = quote.cssRGBAString
+        self.selectionColor = selection.cssRGBAString
+        self.selectionTextColor = selectionText.cssRGBAString
+        self.accentColor = accent.cssRGBAString
+        self.tokenCommentColor = muted.cssRGBAString
+        self.tokenKeywordColor = keyword.cssRGBAString
+        self.tokenStringColor = string.cssRGBAString
+        self.tokenNumberColor = number.cssRGBAString
+        self.tokenTypeColor = type.cssRGBAString
+        self.tokenSymbolColor = symbol.cssRGBAString
+        self.tokenCallColor = call.cssRGBAString
+        self.chromeFill = text.withAlphaComponent(isLight ? 0.04 : 0.08)
+        self.chromeBorder = text.withAlphaComponent(isLight ? 0.10 : 0.15)
+        self.controlFill = text.withAlphaComponent(isLight ? 0.055 : 0.11)
+        self.textNSColor = text
+        self.selectionNSColor = selection
+        self.selectionTextNSColor = selectionText
+    }
+}
+
+private extension NSColor {
+    var cssRGBAString: String {
+        let rgb = usingColorSpace(.sRGB) ?? self
+        return String(
+            format: "rgba(%d, %d, %d, %.3f)",
+            Int(round(rgb.redComponent * 255)),
+            Int(round(rgb.greenComponent * 255)),
+            Int(round(rgb.blueComponent * 255)),
+            rgb.alphaComponent
+        )
+    }
+}
+
+private extension String {
+    var javaScriptSingleQuotedLiteral: String {
+        self
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+            .replacingOccurrences(of: "\n", with: "\\n")
     }
 }
