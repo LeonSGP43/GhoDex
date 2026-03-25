@@ -21,6 +21,9 @@ What is materially working now:
 - managed CEF runtime installation and activation
 - managed, direct, and mirrored profile selection
 - mirrored Chrome web-session reuse, including the isolated Google/Gmail proof
+- runtime settings now explicitly describe the managed/custom runtime media
+  boundary instead of implying Chrome-like codec parity from the default CEF
+  bundle
 - download, file dialog, JS dialog, permission, HTTP auth, and certificate
   prompt handlers
 - page-level Browser control API over IPC and AppleScript
@@ -70,6 +73,9 @@ Conclusion:
 
 - WebGL parity improved a major visible surface, but media capability is still
   a confirmed normal-browser blocker in the current runtime
+- the product now exposes this boundary in the Browser runtime settings UI, but
+  the underlying codec gap is still real until a codec-enabled CEF runtime is
+  supplied
 
 ### Tier 1: Product Boundary Choices That Prevent Full Chrome Equivalence
 

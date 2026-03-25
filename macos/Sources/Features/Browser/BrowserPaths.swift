@@ -1,5 +1,17 @@
 import Foundation
 
+enum BrowserRuntimeMediaAssessmentReason {
+    case managedChromiumDistribution
+    case chromiumBrandedRuntime
+    case customRuntimeUnverified
+}
+
+struct BrowserRuntimeMediaAssessment {
+    let reason: BrowserRuntimeMediaAssessmentReason
+    let runtimePath: String?
+    let runtimeSource: String?
+}
+
 enum BrowserPaths {
     static let envRoot = "GHODEX_CEF_ROOT"
     static let envProfilePath = "GHODEX_CEF_PROFILE_PATH"
@@ -86,6 +98,35 @@ enum BrowserPaths {
             .appendingPathComponent("Chromium Embedded Framework", isDirectory: false)
     }
 
+    static func runtimeMediaAssessment(
+        runtimePath rawRuntimePath: String?,
+        usesManagedRuntime: Bool
+    ) -> BrowserRuntimeMediaAssessment {
+        if usesManagedRuntime {
+            return BrowserRuntimeMediaAssessment(
+                reason: .managedChromiumDistribution,
+                runtimePath: defaultManagedCEFRuntimeRoot().path,
+                runtimeSource: managedRuntimeSlug
+            )
+        }
+
+        let normalizedRuntimePath = normalizedDirectoryPath(rawRuntimePath)
+        let runtimeSource = normalizedRuntimePath.flatMap(runtimeSourceDescriptor(runtimePath:))
+        if runtimeLooksChromiumBranded(runtimePath: normalizedRuntimePath, runtimeSource: runtimeSource) {
+            return BrowserRuntimeMediaAssessment(
+                reason: .chromiumBrandedRuntime,
+                runtimePath: normalizedRuntimePath,
+                runtimeSource: runtimeSource
+            )
+        }
+
+        return BrowserRuntimeMediaAssessment(
+            reason: .customRuntimeUnverified,
+            runtimePath: normalizedRuntimePath,
+            runtimeSource: runtimeSource
+        )
+    }
+
     static func defaultManagedProfileRoot() -> URL {
         defaultCEFRootDirectory()
             .appendingPathComponent("Profiles", isDirectory: true)
@@ -113,6 +154,42 @@ enum BrowserPaths {
         let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._")
         let scalars = value.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" }
         return String(scalars)
+    }
+
+    static func normalizedDirectoryPath(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let standardized = (trimmed as NSString).standardizingPath
+        guard standardized.hasPrefix("/") else { return nil }
+        return standardized
+    }
+
+    private static func runtimeLooksChromiumBranded(
+        runtimePath: String?,
+        runtimeSource: String?
+    ) -> Bool {
+        let candidates = [runtimeSource, runtimePath].compactMap { $0?.lowercased() }
+        return candidates.contains(where: { candidate in
+            candidate.contains("chromium-") ||
+                candidate.contains("_minimal") ||
+                candidate.contains("cef_binary_")
+        })
+    }
+
+    private static func runtimeSourceDescriptor(runtimePath: String) -> String? {
+        let manifestURL = URL(fileURLWithPath: runtimePath, isDirectory: true)
+            .appendingPathComponent("manifest.json", isDirectory: false)
+        if
+            let data = try? Data(contentsOf: manifestURL),
+            let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let source = manifest["source"] as? String,
+            !source.isEmpty {
+            return source
+        }
+
+        return URL(fileURLWithPath: runtimePath, isDirectory: true).lastPathComponent
     }
 
     static func installHintLines() -> [String] {

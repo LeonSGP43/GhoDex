@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): surface runtime media capability warnings
+
+- What changed: Added `BrowserRuntimeMediaAssessment` in `BrowserPaths.swift` and surfaced it in the Browser runtime settings UI. Managed runtimes now explicitly warn that the bundled Chromium-branded CEF distribution does not provide H.264/AAC playback, Chromium-branded custom runtimes are called out as likely having the same limitation, and custom runtimes are described as "unverified unless codec-enabled" rather than being treated as Chrome-equivalent by default.
+- Why: The latest isolated acceptance proved that the remaining media blocker is not a launch-flag mistake but the runtime capability itself. Leaving the UI silent here makes the product look broken or misleading whenever a user expects Chrome-like MP4 playback from the default runtime.
+- Impact: Browser settings now expose the real runtime boundary before users spend time debugging profile state or site behavior. This does not solve H.264/AAC parity by itself, but it turns a hidden blocker into an explicit product contract and points the user toward the only real fix path: a codec-enabled custom CEF runtime.
+- Verification: `swiftlint lint macos/Sources/Features/Browser/BrowserPaths.swift "macos/Sources/Features/SSH Connections/SSHConnectionsView.swift" macos/Sources/Helpers/AppLocalization.swift`, `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug SYMROOT=/tmp/ghx-cef-media-build GHODEX_CEF_ENABLED=1 GHODEX_CEF_ROOT=/tmp/ghx-cef-media-build/cef-runtime/current GHODEX_CEF_OTHER_LDFLAGS=-lsqlite3 GHODEX_CEF_WRAPPER_LIB=/tmp/ghx-cef-media-build/cef-runtime/current/lib/Debug/libcef_dll_wrapper.a build`
+- Files: `macos/Sources/Features/Browser/BrowserPaths.swift`, `macos/Sources/Features/SSH Connections/SSHConnectionsView.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `browser-tab-completeness-audit.md`, `CHANGELOG.md`
+- Decision trail: Do not keep chasing bridge flags as if they will create proprietary codec support. Once the runtime itself is known to be Chromium-branded, the correct product move is to surface that boundary directly in settings and reserve "normal Chrome-like media parity" for codec-enabled runtimes only.
+
 ### fix(debug): isolate remote debug defaults in acceptance sessions
 
 - What changed: `ConfiguredRemoteDebuggingPort()` in `GhoDexCEFBridge.mm` and `getDebugStatus` in `ScriptBrowserTab.swift` now ignore shared `BrowserCEFRemoteDebugPort` defaults whenever an isolated `GHODEX_BROWSER_APP_SUPPORT_ROOT` session is active. Added `scripts/browser_media_debug_acceptance.py`, a durable isolated probe that launches the Debug app with isolated `HOME` plus isolated app-support state, stages a deterministic ffmpeg-generated H.264/AAC MP4, and records debug status, launch metadata, WebGL, codec support, and actual playback results.

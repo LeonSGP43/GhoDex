@@ -615,7 +615,12 @@ struct SSHConnectionsView: View {
     }
 
     private var browserRuntimeSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let runtimeAssessment = BrowserPaths.runtimeMediaAssessment(
+            runtimePath: browserUsesManagedRuntime ? appDelegate.managedBrowserRuntimePath : browserRuntimePathText,
+            usesManagedRuntime: browserUsesManagedRuntime
+        )
+
+        return VStack(alignment: .leading, spacing: 10) {
             Text(L10n.Settings.browserRuntimeSectionTitle)
                 .font(.headline)
 
@@ -666,6 +671,34 @@ struct SSHConnectionsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(L10n.Settings.browserRuntimeMediaTitle)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                Text(runtimeAssessmentMessage(runtimeAssessment))
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.orange.opacity(colorScheme == .dark ? 0.14 : 0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+    }
+
+    private func runtimeAssessmentMessage(_ assessment: BrowserRuntimeMediaAssessment) -> String {
+        switch assessment.reason {
+        case .managedChromiumDistribution:
+            return L10n.Settings.browserRuntimeMediaManagedWarning
+        case .chromiumBrandedRuntime:
+            return L10n.Settings.browserRuntimeMediaChromiumWarning(
+                assessment.runtimeSource ?? assessment.runtimePath ?? L10n.Common.untitled
+            )
+        case .customRuntimeUnverified:
+            return L10n.Settings.browserRuntimeMediaCustomHint
         }
     }
 
