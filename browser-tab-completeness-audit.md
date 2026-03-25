@@ -24,6 +24,8 @@ What is materially working now:
 - runtime settings now explicitly describe the managed/custom runtime media
   boundary instead of implying Chrome-like codec parity from the default CEF
   bundle
+- popup/new-window routing is now externally visible through the public browser
+  event broker instead of being trapped in private logs only
 - download, file dialog, JS dialog, permission, HTTP auth, and certificate
   prompt handlers
 - page-level Browser control API over IPC and AppleScript
@@ -158,7 +160,8 @@ Conclusion:
 - code coverage here is materially better than before, but "implemented" still
   exceeds "proven"
 
-#### 5. Popup requests are not externally observable through the public event broker
+#### 5. Popup requests are now externally observable, but still need a real
+popup-event acceptance artifact
 
 Why this matters:
 
@@ -168,13 +171,19 @@ Why this matters:
 
 Evidence:
 
-- `BrowserExternalEventBroker.externalKind(for:)` drops
-  `.openURLInNewTabRequested`
+- `BrowserExternalEventBroker` now maps `.openURLInNewTabRequested` into the
+  public `popupRequest` event kind instead of dropping it
+- `BrowserTabModel.handle(_:from:)` now enriches popup events with
+  `routingTarget`, `resultPageID`, `resultBrowserTabID`, `resultIsActive`, and
+  `resultVisibilityState`
+- `macos/Tests/Browser/BrowserPopupEventTests.swift` locks the payload contract
+  for page-tab and new-window routing outcomes
 
 Conclusion:
 
-- keeping popup/open-window events invisible externally weakens the product's
-  own ability to prove and debug popup correctness
+- the specific broker observability gap is closed
+- remaining work is evidence quality: a site-driven end-to-end artifact should
+  still prove the public popup event stream under a real popup flow
 
 #### 6. Remote-debug hardening is now runtime-verified for isolated acceptance
 

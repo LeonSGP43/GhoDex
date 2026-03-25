@@ -82,6 +82,8 @@ final class BrowserExternalEventBroker {
                 return BrowserControlEventKind.pageTitleChanged
             case .networkRequestFinished:
                 return BrowserControlEventKind.networkRequestFinished
+            case .popupRequest:
+                return BrowserControlEventKind.openURLInNewTabRequested
             case .pageInspectionSnapshot:
                 return nil
             }
@@ -108,7 +110,7 @@ final class BrowserExternalEventBroker {
         case .networkRequestFinished:
             return .networkRequestFinished
         case .openURLInNewTabRequested:
-            return nil
+            return .popupRequest
         }
     }
 

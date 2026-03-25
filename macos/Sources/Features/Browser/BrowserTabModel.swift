@@ -45,6 +45,13 @@ enum BrowserPopupDisposition: Int, Codable, Hashable {
     case newPictureInPicture = 11
 }
 
+struct BrowserPopupOpenWindowResult {
+    let browserTabID: String
+    let pageID: UUID
+    let isPageActive: Bool
+    let visibilityState: String
+}
+
 enum BrowserControlErrorCode: String, Codable, Hashable {
     case pageNotFound
     case bridgeUnavailable
@@ -777,7 +784,7 @@ final class BrowserTabModel: ObservableObject {
     @Published private(set) var runtimeState: RuntimeState
     @Published private(set) var installPhase: BrowserRuntimeInstallPhase = .idle
 
-    var openURLInNewWindowHandler: ((URL) -> Void)?
+    var openURLInNewWindowHandler: ((URL) -> BrowserPopupOpenWindowResult?)?
 
     private let defaultPageURL: URL
     private var installTask: Task<Void, Never>?
@@ -966,9 +973,10 @@ final class BrowserTabModel: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
-    func openURLInNewTab(_ rawURL: String, activate: Bool = true) {
+    @discardableResult
+    func openURLInNewTab(_ rawURL: String, activate: Bool = true) -> BrowserPageState? {
         let normalized = normalizedURLString(rawURL, fallback: displayedURL)
-        guard let url = URL(string: normalized) else { return }
+        guard let url = URL(string: normalized) else { return nil }
         NSLog(
             "[Browser][PopupTrace] open_url_in_new_tab normalized=%@ activate=%d selectedPageID=%@ pageCountBefore=%ld",
             normalized,
@@ -976,7 +984,7 @@ final class BrowserTabModel: ObservableObject {
             selectedPageID.uuidString,
             pages.count
         )
-        appendPage(initialURL: url, activate: activate)
+        return appendPage(initialURL: url, activate: activate)
     }
 
     func updatePageState(
@@ -1019,6 +1027,8 @@ final class BrowserTabModel: ObservableObject {
     }
 
     func handle(_ event: BrowserControlEvent, from pageID: UUID) {
+        var emittedEvent = event
+
         switch event.kind {
         case .pageTitleChanged:
             updatePageState(
@@ -1044,6 +1054,7 @@ final class BrowserTabModel: ObservableObject {
                     .flatMap(Int.init)
                     .flatMap(BrowserPopupDisposition.init(rawValue:))
                     ?? .newForegroundTab
+                let outcome = routePopupRequest(url, disposition: disposition, from: pageID)
                 NSLog(
                     "[Browser][PopupTrace] handle_open_url sourcePageID=%@ targetPageID=%@ selectedPageID=%@ disposition=%@ url=%@",
                     pageID.uuidString,
@@ -1052,7 +1063,25 @@ final class BrowserTabModel: ObservableObject {
                     String(describing: disposition),
                     url
                 )
-                routePopupRequest(url, disposition: disposition, from: pageID)
+
+                var payload = event.payload
+                payload["sourcePageID"] = pageID.uuidString
+                payload["requestedURL"] = url
+                payload["dispositionName"] = disposition.rawValueDescription
+                payload["routingTarget"] = outcome.routingTarget
+                payload["resultIsActive"] = String(outcome.resultIsActive)
+                payload["resultVisibilityState"] = outcome.resultVisibilityState
+                if let resultPageID = outcome.resultPageID {
+                    payload["resultPageID"] = resultPageID.uuidString
+                }
+                if let resultBrowserTabID = outcome.resultBrowserTabID {
+                    payload["resultBrowserTabID"] = resultBrowserTabID
+                }
+                emittedEvent = BrowserControlEvent(
+                    target: event.target,
+                    kind: event.kind,
+                    payload: payload
+                )
             }
         case .bridgeReady:
             pages.first(where: { $0.id == pageID })?.markControlBridgeReady()
@@ -1060,7 +1089,7 @@ final class BrowserTabModel: ObservableObject {
             break
         }
 
-        emit(event)
+        emit(emittedEvent)
     }
 
     func pageNavigationState(for pageID: UUID) -> PageNavigationSnapshot {
@@ -1181,7 +1210,8 @@ final class BrowserTabModel: ObservableObject {
         }
     }
 
-    private func appendPage(initialURL: URL, activate: Bool) {
+    @discardableResult
+    private func appendPage(initialURL: URL, activate: Bool) -> BrowserPageState {
         let page = BrowserPageState(initialURL: initialURL)
         register(page: page)
         pages.append(page)
@@ -1202,6 +1232,7 @@ final class BrowserTabModel: ObservableObject {
             )
             syncActivePageState()
         }
+        return page
     }
 
     private func loadURL(_ rawURL: String, in pageID: UUID) {
@@ -1214,7 +1245,11 @@ final class BrowserTabModel: ObservableObject {
         }
     }
 
-    private func routePopupRequest(_ rawURL: String, disposition: BrowserPopupDisposition, from pageID: UUID) {
+    private func routePopupRequest(
+        _ rawURL: String,
+        disposition: BrowserPopupDisposition,
+        from pageID: UUID
+    ) -> PopupRouteOutcome {
         NSLog(
             "[Browser][PopupTrace] route_popup_request sourcePageID=%@ disposition=%@ selectedPageID=%@ url=%@",
             pageID.uuidString,
@@ -1225,18 +1260,68 @@ final class BrowserTabModel: ObservableObject {
         switch disposition {
         case .unknown, .currentTab, .singletonTab:
             loadURL(rawURL, in: pageID)
+            return PopupRouteOutcome(
+                routingTarget: "currentPage",
+                resultPageID: pageID,
+                resultBrowserTabID: nil,
+                resultIsActive: selectedPageID == pageID,
+                resultVisibilityState: selectedPageID == pageID ? "foreground" : "background"
+            )
         case .newForegroundTab:
-            openURLInNewTab(rawURL, activate: true)
+            guard let page = openURLInNewTab(rawURL, activate: true) else {
+                return PopupRouteOutcome.invalid
+            }
+            return PopupRouteOutcome(
+                routingTarget: "pageTab",
+                resultPageID: page.id,
+                resultBrowserTabID: nil,
+                resultIsActive: true,
+                resultVisibilityState: "foreground"
+            )
         case .newBackgroundTab:
-            openURLInNewTab(rawURL, activate: false)
+            guard let page = openURLInNewTab(rawURL, activate: false) else {
+                return PopupRouteOutcome.invalid
+            }
+            return PopupRouteOutcome(
+                routingTarget: "pageTab",
+                resultPageID: page.id,
+                resultBrowserTabID: nil,
+                resultIsActive: false,
+                resultVisibilityState: "background"
+            )
         case .switchToTab:
             if !selectExistingPage(matching: rawURL) {
-                openURLInNewTab(rawURL, activate: true)
+                guard let page = openURLInNewTab(rawURL, activate: true) else {
+                    return PopupRouteOutcome.invalid
+                }
+                return PopupRouteOutcome(
+                    routingTarget: "pageTab",
+                    resultPageID: page.id,
+                    resultBrowserTabID: nil,
+                    resultIsActive: true,
+                    resultVisibilityState: "foreground"
+                )
             }
+            return PopupRouteOutcome(
+                routingTarget: "existingPage",
+                resultPageID: selectedPageID,
+                resultBrowserTabID: nil,
+                resultIsActive: true,
+                resultVisibilityState: "foreground"
+            )
         case .newPopup, .newWindow, .offTheRecord, .newPictureInPicture:
-            openURLInNewWindow(rawURL)
+            return openURLInNewWindow(rawURL)
         case .saveToDisk, .ignoreAction:
-            openURLInNewTab(rawURL, activate: true)
+            guard let page = openURLInNewTab(rawURL, activate: true) else {
+                return PopupRouteOutcome.invalid
+            }
+            return PopupRouteOutcome(
+                routingTarget: "pageTab",
+                resultPageID: page.id,
+                resultBrowserTabID: nil,
+                resultIsActive: true,
+                resultVisibilityState: "foreground"
+            )
         }
     }
 
@@ -1250,14 +1335,30 @@ final class BrowserTabModel: ObservableObject {
         return true
     }
 
-    private func openURLInNewWindow(_ rawURL: String) {
+    private func openURLInNewWindow(_ rawURL: String) -> PopupRouteOutcome {
         let normalized = normalizedURLString(rawURL, fallback: displayedURL)
-        guard let url = URL(string: normalized) else { return }
+        guard let url = URL(string: normalized) else { return .invalid }
         if let openURLInNewWindowHandler {
-            openURLInNewWindowHandler(url)
-            return
+            if let result = openURLInNewWindowHandler(url) {
+                return PopupRouteOutcome(
+                    routingTarget: "browserWindow",
+                    resultPageID: result.pageID,
+                    resultBrowserTabID: result.browserTabID,
+                    resultIsActive: result.isPageActive,
+                    resultVisibilityState: result.visibilityState
+                )
+            }
         }
-        openURLInNewTab(normalized, activate: true)
+        guard let page = openURLInNewTab(normalized, activate: true) else {
+            return .invalid
+        }
+        return PopupRouteOutcome(
+            routingTarget: "pageTabFallback",
+            resultPageID: page.id,
+            resultBrowserTabID: nil,
+            resultIsActive: true,
+            resultVisibilityState: "foreground"
+        )
     }
 
     private func register(page: BrowserPageState) {
@@ -1323,5 +1424,52 @@ final class BrowserTabModel: ObservableObject {
         let pageID: UUID?
         let kinds: Set<BrowserControlEventKind>?
         let observer: BrowserControlEventObserver
+    }
+
+    private struct PopupRouteOutcome {
+        let routingTarget: String
+        let resultPageID: UUID?
+        let resultBrowserTabID: String?
+        let resultIsActive: Bool
+        let resultVisibilityState: String
+
+        static let invalid = PopupRouteOutcome(
+            routingTarget: "unresolved",
+            resultPageID: nil,
+            resultBrowserTabID: nil,
+            resultIsActive: false,
+            resultVisibilityState: "unknown"
+        )
+    }
+}
+
+private extension BrowserPopupDisposition {
+    var rawValueDescription: String {
+        switch self {
+        case .unknown:
+            return "unknown"
+        case .currentTab:
+            return "currentTab"
+        case .singletonTab:
+            return "singletonTab"
+        case .newForegroundTab:
+            return "newForegroundTab"
+        case .newBackgroundTab:
+            return "newBackgroundTab"
+        case .newPopup:
+            return "newPopup"
+        case .newWindow:
+            return "newWindow"
+        case .saveToDisk:
+            return "saveToDisk"
+        case .offTheRecord:
+            return "offTheRecord"
+        case .ignoreAction:
+            return "ignoreAction"
+        case .switchToTab:
+            return "switchToTab"
+        case .newPictureInPicture:
+            return "newPictureInPicture"
+        }
     }
 }

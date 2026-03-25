@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): expose popup routing through the external event stream
+
+- What changed: Added a public `popupRequest` event kind to `browser.tab.v1`, taught `BrowserExternalEventBroker` to forward popup/open-window requests instead of dropping them, and enriched the emitted payload with route outcome fields such as `routingTarget`, `resultPageID`, `resultBrowserTabID`, `resultIsActive`, and `resultVisibilityState`. Added `macos/Tests/Browser/BrowserPopupEventTests.swift` to lock the payload contract for page-tab and new-window routing.
+- Why: Popup routing itself was already much better, but external automation still could not see it happen. That forced later debugging back into private logs exactly where popup/OAuth regressions are most expensive to triage.
+- Impact: Browser automation can now subscribe to popup/open-window intent and route outcome through the same public event channel it already uses for navigation, console, and network visibility. This closes the specific "broker drops popup requests" gap even though a fully site-driven end-to-end popup event artifact is still worth adding later.
+- Verification: `swiftlint lint macos/Sources/Features/Browser/BrowserCommandProtocol.swift macos/Sources/Features/Browser/BrowserTabModel.swift macos/Sources/Features/Browser/BrowserTabController.swift macos/Sources/Features/Browser/BrowserExternalEventBroker.swift macos/Tests/Browser/BrowserPopupEventTests.swift`, `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug SYMROOT=/tmp/ghx-cef-media-build GHODEX_CEF_ENABLED=1 GHODEX_CEF_ROOT=/tmp/ghx-cef-media-build/cef-runtime/current GHODEX_CEF_OTHER_LDFLAGS=-lsqlite3 GHODEX_CEF_WRAPPER_LIB=/tmp/ghx-cef-media-build/cef-runtime/current/lib/Debug/libcef_dll_wrapper.a build`
+- Files: `macos/Sources/Features/Browser/BrowserCommandProtocol.swift`, `macos/Sources/Features/Browser/BrowserTabModel.swift`, `macos/Sources/Features/Browser/BrowserTabController.swift`, `macos/Sources/Features/Browser/BrowserExternalEventBroker.swift`, `macos/Tests/Browser/BrowserPopupEventTests.swift`, `browser-tab-command-protocol.md`, `browser-tab-acceptance-matrix.md`, `browser-tab-completeness-audit.md`, `CHANGELOG.md`
+- Decision trail: Reuse the existing public event broker instead of inventing a popup-only debug channel. The right abstraction is one externally visible event envelope that carries both popup intent and GhoDex's routing decision, so automation can debug popup regressions without attaching DevTools or scraping private logs.
+
 ### feat(browser): surface runtime media capability warnings
 
 - What changed: Added `BrowserRuntimeMediaAssessment` in `BrowserPaths.swift` and surfaced it in the Browser runtime settings UI. Managed runtimes now explicitly warn that the bundled Chromium-branded CEF distribution does not provide H.264/AAC playback, Chromium-branded custom runtimes are called out as likely having the same limitation, and custom runtimes are described as "unverified unless codec-enabled" rather than being treated as Chrome-equivalent by default.

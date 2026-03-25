@@ -38,6 +38,7 @@ enum BrowserExternalEventKind: String, Codable, Hashable {
     case navigationStateChanged
     case pageTitleChanged
     case networkRequestFinished
+    case popupRequest
     case pageInspectionSnapshot
 }
 

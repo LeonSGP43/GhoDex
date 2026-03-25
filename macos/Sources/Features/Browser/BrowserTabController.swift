@@ -61,8 +61,14 @@ final class BrowserTabController: NSWindowController, NSWindowDelegate, TopLevel
         self.model = BrowserTabModel(initialURL: initialURL ?? Self.defaultHomePageURL(for: ghostty))
         super.init(window: nil)
         model.openURLInNewWindowHandler = { [weak self] url in
-            guard let self else { return }
-            _ = Self.newWindow(self.ghostty, initialURL: url, withParent: self.window)
+            guard let self else { return nil }
+            let controller = Self.newWindow(self.ghostty, initialURL: url, withParent: self.window)
+            return BrowserPopupOpenWindowResult(
+                browserTabID: controller.externalID,
+                pageID: controller.model.selectedPageID,
+                isPageActive: true,
+                visibilityState: "newWindowRequested"
+            )
         }
         Self.registerLiveController(self)
     }

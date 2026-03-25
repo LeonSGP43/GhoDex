@@ -444,7 +444,7 @@ Frame-specific notes:
 
 ```json
 {
-  "kindsJSON": "[\"consoleMessage\",\"navigationStateChanged\",\"networkRequestFinished\",\"pageInspectionSnapshot\"]"
+  "kindsJSON": "[\"consoleMessage\",\"navigationStateChanged\",\"networkRequestFinished\",\"popupRequest\",\"pageInspectionSnapshot\"]"
 }
 ```
 
@@ -474,6 +474,7 @@ The external event stream currently supports these `kind` values:
 - `navigationStateChanged`
 - `pageTitleChanged`
 - `networkRequestFinished`
+- `popupRequest`
 - `pageInspectionSnapshot`
 
 ### Event Envelope
@@ -519,6 +520,27 @@ Payload keys:
 
 `snapshotJSON` decodes into the same `BrowserDOMSnapshotResult` structure used
 by the internal Browser control plane.
+
+### `popupRequest` Payload
+
+`popupRequest` is emitted when Chromium asks GhoDex to route a `window.open`,
+`target=_blank`, or popup/new-window navigation through the Browser control
+plane.
+
+Payload keys:
+
+- `pageID`
+- `documentRevision`
+- `sourcePageID`
+- `requestedURL`
+- `disposition`
+- `dispositionName`
+- `userGesture`
+- `routingTarget`
+- `resultIsActive`
+- `resultVisibilityState`
+- `resultPageID` when the route resolved to a concrete Browser page
+- `resultBrowserTabID` when the route resolved into a different Browser window
 
 ## CLI Examples
 
@@ -686,7 +708,7 @@ ghodex +browser-control --transport=ipc --request '{
   "command":"subscribeEvents",
   "browserTabID":"browser-tab-1",
   "payload":{
-    "kindsJSON":"[\"consoleMessage\",\"navigationStateChanged\",\"networkRequestFinished\",\"pageInspectionSnapshot\"]"
+    "kindsJSON":"[\"consoleMessage\",\"navigationStateChanged\",\"networkRequestFinished\",\"popupRequest\",\"pageInspectionSnapshot\"]"
   }
 }'
 ```
