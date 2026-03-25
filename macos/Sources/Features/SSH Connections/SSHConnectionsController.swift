@@ -3,6 +3,7 @@ import SwiftUI
 
 enum SSHConnectionsPanelTab: String, CaseIterable, Identifiable {
     case connections
+    case todo
     case learning
     case taskQueue
     case preferences
@@ -13,6 +14,8 @@ enum SSHConnectionsPanelTab: String, CaseIterable, Identifiable {
         switch self {
         case .connections:
             return L10n.SSHConnections.tabConnections
+        case .todo:
+            return L10n.SSHConnections.tabTodo
         case .learning:
             return L10n.SSHConnections.tabLearning
         case .taskQueue:
@@ -26,6 +29,7 @@ enum SSHConnectionsPanelTab: String, CaseIterable, Identifiable {
 @MainActor
 final class SSHConnectionsPresentationState: ObservableObject {
     @Published var selectedTab: SSHConnectionsPanelTab = .connections
+    @Published var todoFocusedWorkspaceID: UUID?
 }
 
 final class SSHConnectionsController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
@@ -75,9 +79,11 @@ final class SSHConnectionsController: NSWindowController, NSWindowDelegate, NSMe
 
     func show(
         tab selectedTab: SSHConnectionsPanelTab = .connections,
+        todoFocusedWorkspaceID: UUID? = nil,
         tabbedInto parentWindow: NSWindow? = TerminalController.preferredParent?.window
     ) {
         presentationState.selectedTab = selectedTab
+        presentationState.todoFocusedWorkspaceID = todoFocusedWorkspaceID
         store.refresh()
 
         if let window,

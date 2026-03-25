@@ -794,6 +794,34 @@ extension Ghostty {
             optionalString(for: "ghodex-learning-prompt-template")
         }
 
+        var ghodexTodoEnabled: Bool {
+            bool(for: "ghodex-todo-enabled", default: true)
+        }
+
+        var ghodexTodoWorkspaceRootPath: String? {
+            optionalString(for: "ghodex-todo-workspace-root-path")
+        }
+
+        var ghodexTodoShowCompletedItems: Bool {
+            bool(for: "ghodex-todo-show-completed-items", default: true)
+        }
+
+        var ghodexTodoSelectedDateAnchor: String? {
+            optionalString(for: "ghodex-todo-selected-date-anchor")
+        }
+
+        var ghodexTodoSidebarEdge: String? {
+            optionalString(for: "ghodex-todo-sidebar-edge")
+        }
+
+        var ghodexTodoWorkspaceOverlayVisible: Bool {
+            bool(for: "ghodex-todo-workspace-overlay-visible", default: false)
+        }
+
+        var ghodexTodoWorkspaceOverlayCorner: String? {
+            optionalString(for: "ghodex-todo-workspace-overlay-corner")
+        }
+
         var ghodexHeartbeatEnabled: Bool {
             bool(for: "ghodex-heartbeat-enabled", default: true)
         }

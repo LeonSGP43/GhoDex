@@ -25,6 +25,7 @@ class AppDelegate: NSObject,
     @IBOutlet private var menuCheckForUpdates: NSMenuItem?
     @IBOutlet private var menuOpenConfig: NSMenuItem?
     @IBOutlet private var menuSettingsPanel: NSMenuItem?
+    private var menuTodoWorkspace: NSMenuItem?
     @IBOutlet private var menuReloadConfig: NSMenuItem?
     @IBOutlet private var menuSecureInput: NSMenuItem?
     @IBOutlet private var menuQuit: NSMenuItem?
@@ -141,9 +142,23 @@ class AppDelegate: NSObject,
         updateController.viewModel
     }
 
-    @MainActor lazy var aiTerminalManagerStore = AITerminalManagerStore(
-        appDelegateProvider: { [weak self] in self }
-    )
+    @MainActor private var _aiTerminalManagerStore: AITerminalManagerStore?
+
+    @MainActor var aiTerminalManagerStore: AITerminalManagerStore {
+        if let store = _aiTerminalManagerStore {
+            return store
+        }
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { [weak self] in self }
+        )
+        _aiTerminalManagerStore = store
+        return store
+    }
+
+    @MainActor var existingAITerminalManagerStore: AITerminalManagerStore? {
+        _aiTerminalManagerStore
+    }
 
     @Published private(set) var controlHarnessGatewaySettings = ControlHarnessGatewayAppSettings.load()
     @Published private(set) var controlHarnessGatewayStatusMessage = ""
@@ -229,7 +244,7 @@ class AppDelegate: NSObject,
                 )
             }
 
-        case "new-tab", "close-tab":
+        case "new-tab", "close-tab", "rename-tab":
             return .allow
 
         default:
@@ -581,13 +596,14 @@ class AppDelegate: NSObject,
             }
         }
 
-        // If our app says we don't need to confirm, we can exit now.
-        if !ghostty.needsConfirmQuit { return .terminateNow }
-
         // We have some visible window. Show an app-wide modal to confirm quitting.
+        // GhoDex contains more than terminal surfaces, so quitting the app should
+        // always be an explicit choice when the user still has visible UI open.
         let alert = NSAlert()
         alert.messageText = L10n.App.quitGhostty
-        alert.informativeText = L10n.App.allSessionsTerminated
+        alert.informativeText = ghostty.needsConfirmQuit
+            ? L10n.App.allSessionsTerminated
+            : L10n.App.allTabsAndSessionsClosed
         alert.addButton(withTitle: L10n.App.closeGhostty)
         alert.addButton(withTitle: L10n.App.cancel)
         alert.alertStyle = .warning
@@ -759,6 +775,8 @@ class AppDelegate: NSObject,
     /// Setup localized titles for menu items that are created in xib but need
     /// to track our runtime language selection.
     private func setupMenuLocalization() {
+        installTodoWorkspaceMenuItemIfNeeded()
+        menuTodoWorkspace?.title = L10n.SSHConnections.todoPanelTitle
         menuSaveWorkspace?.title = L10n.AITerminalManager.saveWorkspaceAction
     }
 
@@ -801,7 +819,20 @@ class AppDelegate: NSObject,
     }
 
     private func shouldShowRemotePairingQROnLaunch() -> Bool {
-        controlHarnessGatewaySettings.showPairingQrOnLaunch
+        if controlHarnessGatewaySettings.showPairingQrOnLaunch {
+            return true
+        }
+
+        guard let rawValue = ProcessInfo.processInfo.environment["GHODEX_CONTROL_HARNESS_PAIRING_QR_ON_LAUNCH"] else {
+            return false
+        }
+
+        switch rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "1", "true", "yes", "on":
+            return true
+        default:
+            return false
+        }
     }
 
     @objc
@@ -1071,19 +1102,29 @@ class AppDelegate: NSObject,
         case "127.0.0.1", "localhost", "::1":
             throw RemotePairingQRCodeError.loopbackOnlyListener
         case "0.0.0.0", "::", "":
-            if let stored = controlHarnessGatewaySettings.normalizedPairingAdvertiseHost {
-                return stored
+            if let override = preferredGatewayPairingHostOverride() {
+                return override
             }
             guard let address = firstNonLoopbackIPv4Address() else {
                 throw RemotePairingQRCodeError.noAdvertisableAddress
             }
             return address
         default:
-            if let stored = controlHarnessGatewaySettings.normalizedPairingAdvertiseHost {
-                return stored
+            if let override = preferredGatewayPairingHostOverride() {
+                return override
             }
             return listenHost
         }
+    }
+
+    private func preferredGatewayPairingHostOverride() -> String? {
+        if let override = ProcessInfo.processInfo.environment["GHODEX_CONTROL_HARNESS_PAIRING_QR_HOST"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           override.isEmpty == false {
+            return override
+        }
+
+        return controlHarnessGatewaySettings.normalizedPairingAdvertiseHost
     }
 
     private func firstNonLoopbackIPv4Address() -> String? {
@@ -1183,7 +1224,7 @@ class AppDelegate: NSObject,
             case .gatewayListenerUnavailable:
                 return "The control gateway listener port is not available yet."
             case .loopbackOnlyListener:
-                return "The control gateway is bound to loopback only. Change the listen host or pairing QR host in Settings > Gateway before generating a pairing QR."
+                return "The control gateway is bound to loopback only. Change the listen host or pairing QR host in Settings > Gateway, or set GHODEX_CONTROL_HARNESS_PAIRING_QR_HOST, before generating a pairing QR."
             case .noAdvertisableAddress:
                 return "No non-loopback IPv4 address was found for the pairing QR."
             }
@@ -1221,7 +1262,6 @@ class AppDelegate: NSObject,
 
         controlHarnessGatewayStatusMessage = L10n.Settings.gatewayStatusPending
     }
-
     /// Setup all the images for our menu items.
     private func setupMenuImages() {
         // Note: This COULD Be done all in the xib file, but I find it easier to
@@ -1230,6 +1270,7 @@ class AppDelegate: NSObject,
         self.menuCheckForUpdates?.setImageIfDesired(systemSymbolName: "square.and.arrow.down")
         self.menuOpenConfig?.setImageIfDesired(systemSymbolName: "gear")
         self.menuSettingsPanel?.setImageIfDesired(systemSymbolName: "slider.horizontal.3")
+        self.menuTodoWorkspace?.setImageIfDesired(systemSymbolName: "checklist")
         self.menuReloadConfig?.setImageIfDesired(systemSymbolName: "arrow.trianglehead.2.clockwise.rotate.90")
         self.menuSecureInput?.setImageIfDesired(systemSymbolName: "lock.display")
         self.menuNewWindow?.setImageIfDesired(systemSymbolName: "macwindow.badge.plus")
@@ -1356,6 +1397,24 @@ class AppDelegate: NSObject,
         guard let menuItem else { return }
         menuItem.keyEquivalent = ""
         menuItem.keyEquivalentModifierMask = []
+    }
+
+    private func installTodoWorkspaceMenuItemIfNeeded() {
+        guard menuTodoWorkspace == nil,
+              let settingsItem = menuSettingsPanel,
+              let menu = settingsItem.menu else { return }
+
+        let item = NSMenuItem(
+            title: L10n.SSHConnections.todoPanelTitle,
+            action: #selector(showTodoWorkspace(_:)),
+            keyEquivalent: "m"
+        )
+        item.target = self
+        item.keyEquivalentModifierMask = [.command, .shift]
+
+        let insertionIndex = menu.index(of: settingsItem) + 1
+        menu.insertItem(item, at: max(insertionIndex, 0))
+        menuTodoWorkspace = item
     }
 
     // MARK: Notifications and Events

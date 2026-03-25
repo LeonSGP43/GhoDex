@@ -23,6 +23,17 @@ vendor/glad/include/glad/glad.h: vendor/glad/include/glad/gl.h
 clean:
 	rm -rf \
 		zig-out .zig-cache \
+		macos/.zig-cache \
 		macos/build \
+		macos/macos/build \
+		macos/GhoDexKit.xcframework \
 		macos/GhosttyKit.xcframework
 .PHONY: clean
+
+prune-build-artifacts-dry-run:
+	bash ./scripts/prune-build-artifacts.sh
+.PHONY: prune-build-artifacts-dry-run
+
+prune-build-artifacts:
+	bash ./scripts/prune-build-artifacts.sh --apply
+.PHONY: prune-build-artifacts

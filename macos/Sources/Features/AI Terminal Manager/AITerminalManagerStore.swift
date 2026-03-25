@@ -3,12 +3,53 @@ import Foundation
 import SwiftUI
 import GhoDexKit
 
+private actor TodoDocumentPersistenceCoordinator {
+    private struct PendingSave {
+        var document: AITerminalTodoDayDocument
+        var path: String
+    }
+
+    private var pendingByPath: [String: PendingSave] = [:]
+    private var activePaths: Set<String> = []
+
+    func scheduleSave(
+        document: AITerminalTodoDayDocument,
+        to path: String,
+        writer: @Sendable @escaping (AITerminalTodoDayDocument, String) throws -> Void,
+        onError: @Sendable @escaping (Error) async -> Void
+    ) async {
+        pendingByPath[path] = .init(document: document, path: path)
+        guard activePaths.insert(path).inserted else { return }
+
+        while let pending = pendingByPath[path] {
+            pendingByPath[path] = nil
+            do {
+                try writer(pending.document, pending.path)
+            } catch {
+                await onError(error)
+            }
+        }
+
+        activePaths.remove(path)
+    }
+}
+
 @MainActor
 final class AITerminalManagerStore: ObservableObject {
     private struct PendingSSHPasswordAutomation {
         var hostID: String
         var password: String
         var hasSentPassword: Bool
+    }
+
+    private struct ResolvedTodoSourceState {
+        var reference: AITerminalTodoSourceReference
+        var item: AITerminalTodoItem
+    }
+
+    private struct TodoSyncCandidate {
+        var reference: AITerminalTodoSourceReference
+        var item: AITerminalTodoItem
     }
 
     private enum ExternalHeartbeatTaskAction: String, Codable {
@@ -43,6 +84,12 @@ final class AITerminalManagerStore: ObservableObject {
     struct LearningWorkspaceBootstrapResult {
         var chatWorkspacePath: String
         var learnWorkspacePath: String
+        var createdFileCount: Int
+        var reusedFileCount: Int
+    }
+
+    struct TodoWorkspaceBootstrapResult {
+        var workspaceRootPath: String
         var createdFileCount: Int
         var reusedFileCount: Int
     }
@@ -96,6 +143,7 @@ final class AITerminalManagerStore: ObservableObject {
     @Published private(set) var selectedSessionVisibleText = ""
     @Published private(set) var selectedSessionScreenText = ""
     @Published private(set) var managedSkillRepositoryStatuses: [ManagedSkillRepositoryStatus] = []
+    @Published private(set) var todoRevision = UUID()
     @Published var launchTarget: AITerminalLaunchTarget = .tab
     @Published var lastError: String?
 
@@ -104,10 +152,12 @@ final class AITerminalManagerStore: ObservableObject {
     private let heartbeatInboxDirectoryURL: URL
     private let sshConfigHostLoader: () -> [AITerminalHost]
     private let credentialStore: SSHConnectionCredentialStore
+    private let todoDocumentPersistence = TodoDocumentPersistenceCoordinator()
     private var registrations: [UUID: AITerminalLaunchRegistration] = [:]
     private var sshSessionAuthStates: [UUID: AITerminalSSHSessionAuthState] = [:]
     private var pendingSSHPasswordAutomations: [UUID: PendingSSHPasswordAutomation] = [:]
     private var taskBindings: [UUID: UUID] = [:]
+    private var todoDocumentCache: [String: AITerminalTodoDayDocument] = [:]
     private var sshPasswordAutomationTimer: Timer?
     private var heartbeatTimer: Timer?
     private var heartbeatSchedulerTimer: Timer?
@@ -322,6 +372,10 @@ final class AITerminalManagerStore: ObservableObject {
         configuration.heartbeatQueueSettings
     }
 
+    var todoSettings: AITerminalTodoSettings {
+        configuration.todoSettings
+    }
+
     var heartbeatQueueTasks: [AITerminalHeartbeatTask] {
         configuration.heartbeatTasks.sorted {
             if $0.executeAt != $1.executeAt {
@@ -349,6 +403,264 @@ final class AITerminalManagerStore: ObservableObject {
 
     var heartbeatFailedCount: Int {
         configuration.heartbeatTasks.filter { $0.status == .failed }.count
+    }
+
+    var todoWorkspaceRootPath: String {
+        configuration.todoSettings.workspaceRootPath
+    }
+
+    func liveTodoWorkspaceTargets() -> [AITerminalTodoWorkspaceTarget] {
+        let focusedWindow = NSApp.keyWindow?.tabGroup?.selectedWindow ?? NSApp.keyWindow
+        return TerminalController.all.compactMap { controller in
+            guard let window = controller.window else { return nil }
+            let trimmedTitle = controller.titleOverride?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let title = trimmedTitle.isEmpty ? window.title : trimmedTitle
+            return .init(
+                workspaceID: controller.workspaceID,
+                title: title.isEmpty ? "Tab" : title,
+                subtitle: window.title,
+                isFocused: window === focusedWindow
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.isFocused != rhs.isFocused {
+                return lhs.isFocused && !rhs.isFocused
+            }
+            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+        }
+    }
+
+    func todoWorkspaceSummary(
+        for workspaceID: UUID,
+        on date: Date = .now
+    ) -> AITerminalTodoWorkspaceProgressSummary {
+        let items = todoItems(assignedTo: workspaceID, on: date)
+        return .init(
+            workspaceID: workspaceID,
+            completedCount: items.filter(\.isCompleted).count,
+            totalCount: items.count
+        )
+    }
+
+    func todoItems(
+        assignedTo workspaceID: UUID,
+        on date: Date = .now,
+        includeCompleted: Bool = true
+    ) -> [AITerminalTodoItem] {
+        let items = todoDocumentSnapshot(for: date)
+            .orderedItems
+            .filter { $0.assignedWorkspaceID == workspaceID }
+        guard includeCompleted else {
+            return items.filter { !$0.isCompleted }
+        }
+        return items
+    }
+
+    func saveTodoSettings(_ settings: AITerminalTodoSettings) {
+        configuration.todoSettings = .init(
+            enabled: settings.enabled,
+            workspaceRootPath: settings.workspaceRootPath,
+            showCompletedItems: settings.showCompletedItems,
+            selectedDateAnchor: settings.selectedDateAnchor,
+            sidebarEdge: settings.sidebarEdge,
+            workspaceOverlayVisible: settings.workspaceOverlayVisible,
+            workspaceOverlayCorner: settings.workspaceOverlayCorner
+        )
+        lastError = nil
+        persistConfiguration()
+        bumpTodoRevision()
+    }
+
+    @discardableResult
+    func initializeTodoWorkspace(rootPath: String? = nil) -> TodoWorkspaceBootstrapResult? {
+        let candidatePath = rootPath?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? configuration.todoSettings.workspaceRootPath
+        guard !candidatePath.isEmpty else {
+            lastError = L10n.AITerminalManager.workspaceDirectoryEmpty
+            return nil
+        }
+
+        do {
+            let result = try Self.createTodoWorkspaceScaffold(rootPath: candidatePath)
+            var settings = configuration.todoSettings
+            settings.workspaceRootPath = result.workspaceRootPath
+            configuration.todoSettings = settings
+            persistConfiguration()
+            bumpTodoRevision()
+            lastError = nil
+            return result
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    func todoDocument(for date: Date) -> AITerminalTodoDayDocument {
+        do {
+            let dayString = AITerminalTodoSettings.dayString(from: date)
+            let document = try rawTodoDocument(forDayString: dayString)
+            let refreshed = refreshedTodoDocument(document)
+            cacheTodoDocument(refreshed)
+            lastError = nil
+            return refreshed
+        } catch {
+            lastError = error.localizedDescription
+            let fallback = AITerminalTodoDayDocument(date: AITerminalTodoSettings.dayString(from: date))
+            cacheTodoDocument(fallback)
+            return fallback
+        }
+    }
+
+    @discardableResult
+    func addTodoItem(
+        title: String,
+        notes: String,
+        for date: Date
+    ) -> AITerminalTodoDayDocument? {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else {
+            lastError = "Todo title cannot be empty."
+            return nil
+        }
+
+        return mutateTodoDocument(for: date) { document in
+            let nextSortOrder = (document.items.map(\.sortOrder).max() ?? -1) + 1
+            document.items.append(.init(
+                title: trimmedTitle,
+                notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
+                sortOrder: nextSortOrder
+            ))
+        }.map { _ in
+            self.todoDocument(for: date)
+        }
+    }
+
+    @discardableResult
+    func updateTodoItem(
+        id: UUID,
+        title: String,
+        notes: String,
+        for date: Date
+    ) -> AITerminalTodoDayDocument? {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else {
+            lastError = "Todo title cannot be empty."
+            return nil
+        }
+
+        let dayString = AITerminalTodoSettings.dayString(from: date)
+        guard let target = resolvedTodoMutationTarget(for: id, on: dayString),
+              let targetDate = AITerminalTodoSettings.date(fromDayString: target.day) else {
+            lastError = "Todo item not found."
+            return nil
+        }
+
+        guard mutateTodoDocument(for: targetDate, mutation: { document in
+            guard let index = document.items.firstIndex(where: { $0.id == target.itemID }) else { return }
+            document.items[index].title = trimmedTitle
+            document.items[index].notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+            document.items[index].updatedAt = .now
+        }) != nil else {
+            return nil
+        }
+
+        return todoDocument(for: date)
+    }
+
+    @discardableResult
+    func setTodoItemCompleted(
+        id: UUID,
+        isCompleted: Bool,
+        for date: Date
+    ) -> AITerminalTodoDayDocument? {
+        let dayString = AITerminalTodoSettings.dayString(from: date)
+        guard let target = resolvedTodoMutationTarget(for: id, on: dayString),
+              let targetDate = AITerminalTodoSettings.date(fromDayString: target.day) else {
+            lastError = "Todo item not found."
+            return nil
+        }
+
+        guard mutateTodoDocument(for: targetDate, mutation: { document in
+            guard let index = document.items.firstIndex(where: { $0.id == target.itemID }) else { return }
+            document.items[index].isCompleted = isCompleted
+            document.items[index].completedAt = isCompleted ? .now : nil
+            document.items[index].updatedAt = .now
+        }) != nil else {
+            return nil
+        }
+
+        return todoDocument(for: date)
+    }
+
+    @discardableResult
+    func assignTodoItem(
+        id: UUID,
+        to workspaceID: UUID?,
+        for date: Date
+    ) -> AITerminalTodoDayDocument? {
+        let dayString = AITerminalTodoSettings.dayString(from: date)
+        guard let target = resolvedTodoMutationTarget(for: id, on: dayString),
+              let targetDate = AITerminalTodoSettings.date(fromDayString: target.day) else {
+            lastError = "Todo item not found."
+            return nil
+        }
+
+        guard mutateTodoDocument(for: targetDate, mutation: { document in
+            guard let index = document.items.firstIndex(where: { $0.id == target.itemID }) else { return }
+            document.items[index].assignedWorkspaceID = workspaceID
+            document.items[index].updatedAt = .now
+        }) != nil else {
+            return nil
+        }
+
+        return todoDocument(for: date)
+    }
+
+    @discardableResult
+    func syncIncompleteTodoPointers(into date: Date = .now) -> Int? {
+        let dayString = AITerminalTodoSettings.dayString(from: date)
+
+        do {
+            let candidates = try staleTodoSyncCandidates(into: dayString)
+            guard !candidates.isEmpty else {
+                lastError = nil
+                return 0
+            }
+
+            guard mutateTodoDocument(for: date, mutation: { document in
+                var nextSortOrder = (document.items.map(\.sortOrder).max() ?? -1) + 1
+                for candidate in candidates {
+                    document.items.append(.init(
+                        sourceItem: candidate.reference,
+                        title: candidate.item.title,
+                        notes: candidate.item.notes,
+                        assignedWorkspaceID: candidate.item.assignedWorkspaceID,
+                        isCompleted: candidate.item.isCompleted,
+                        completedAt: candidate.item.completedAt,
+                        createdAt: candidate.item.createdAt,
+                        updatedAt: candidate.item.updatedAt,
+                        sortOrder: nextSortOrder
+                    ))
+                    nextSortOrder += 1
+                }
+            }) != nil else {
+                return nil
+            }
+
+            return candidates.count
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    func syncableStaleTodoPointerCount(into date: Date = .now) -> Int {
+        do {
+            return try staleTodoSyncCandidates(into: AITerminalTodoSettings.dayString(from: date)).count
+        } catch {
+            lastError = error.localizedDescription
+            return 0
+        }
     }
 
     func saveHeartbeatQueueSettings(_ settings: AITerminalHeartbeatQueueSettings) {
@@ -1890,7 +2202,7 @@ final class AITerminalManagerStore: ObservableObject {
         )
     }
 
-    private static func writeTextFileIfMissing(
+    nonisolated private static func writeTextFileIfMissing(
         _ content: String,
         to url: URL,
         createdFileCount: inout Int,
@@ -3150,6 +3462,17 @@ final class AITerminalManagerStore: ObservableObject {
             max(next.heartbeatQueueSettings.maxConcurrentTasks, Self.minHeartbeatMaxConcurrentTasks),
             Self.maxHeartbeatMaxConcurrentTasks
         )
+        next.todoSettings = .init(
+            enabled: next.todoSettings.enabled,
+            workspaceRootPath: next.todoSettings.workspaceRootPath.isEmpty
+                ? AITerminalTodoSettings.defaultWorkspaceRootPath
+                : next.todoSettings.workspaceRootPath,
+            showCompletedItems: next.todoSettings.showCompletedItems,
+            selectedDateAnchor: next.todoSettings.selectedDateAnchor,
+            sidebarEdge: next.todoSettings.sidebarEdge,
+            workspaceOverlayVisible: next.todoSettings.workspaceOverlayVisible,
+            workspaceOverlayCorner: next.todoSettings.workspaceOverlayCorner
+        )
         if next.learningLogs.count > Self.maxLearningLogEntries {
             next.learningLogs = Array(next.learningLogs.suffix(Self.maxLearningLogEntries))
         }
@@ -3273,7 +3596,9 @@ final class AITerminalManagerStore: ObservableObject {
 
     private func applyConfiguration(_ nextConfiguration: AITerminalManagerConfiguration) {
         configuration = Self.sanitizeConfiguration(nextConfiguration)
+        todoDocumentCache.removeAll()
         configurationRevision = UUID()
+        bumpTodoRevision()
     }
 
     nonisolated private static func configuration(from config: Ghostty.Config) -> AITerminalManagerConfiguration {
@@ -3290,6 +3615,19 @@ final class AITerminalManagerStore: ObservableObject {
                 maxConcurrentTasks: config.ghodexHeartbeatMaxConcurrentTasks
             ),
             heartbeatTasks: decodePayloads(AITerminalHeartbeatTask.self, from: config.ghodexHeartbeatTasks),
+            todoSettings: .init(
+                enabled: config.ghodexTodoEnabled,
+                workspaceRootPath: decodedStringValue(config.ghodexTodoWorkspaceRootPath) ?? AITerminalTodoSettings.defaultWorkspaceRootPath,
+                showCompletedItems: config.ghodexTodoShowCompletedItems,
+                selectedDateAnchor: decodedStringValue(config.ghodexTodoSelectedDateAnchor) ?? AITerminalTodoSettings.defaultSelectedDateAnchor,
+                sidebarEdge: AITerminalTodoSidebarEdge.normalized(
+                    decodedStringValue(config.ghodexTodoSidebarEdge)
+                ),
+                workspaceOverlayVisible: config.ghodexTodoWorkspaceOverlayVisible,
+                workspaceOverlayCorner: AITerminalTodoOverlayCorner.normalized(
+                    decodedStringValue(config.ghodexTodoWorkspaceOverlayCorner)
+                )
+            ),
             learningSettings: .init(
                 enabled: config.ghodexLearningEnabled,
                 preferTabWorkingDirectory: config.ghodexLearningPreferTabWorkingDirectory,
@@ -3336,6 +3674,13 @@ final class AITerminalManagerStore: ObservableObject {
         appendPayloadLines("ghodex-heartbeat-task", values: configuration.heartbeatTasks, to: &lines)
         appendPayloadLines("ghodex-learning-log", values: configuration.learningLogs, to: &lines)
 
+        lines.append("ghodex-todo-enabled = \(configuration.todoSettings.enabled ? "true" : "false")")
+        lines.append("ghodex-todo-workspace-root-path = \(configStringLiteral(encodeStringValue(configuration.todoSettings.workspaceRootPath)))")
+        lines.append("ghodex-todo-show-completed-items = \(configuration.todoSettings.showCompletedItems ? "true" : "false")")
+        lines.append("ghodex-todo-selected-date-anchor = \(configStringLiteral(encodeStringValue(configuration.todoSettings.selectedDateAnchor)))")
+        lines.append("ghodex-todo-sidebar-edge = \(configStringLiteral(encodeStringValue(configuration.todoSettings.sidebarEdge.rawValue)))")
+        lines.append("ghodex-todo-workspace-overlay-visible = \(configuration.todoSettings.workspaceOverlayVisible ? "true" : "false")")
+        lines.append("ghodex-todo-workspace-overlay-corner = \(configStringLiteral(encodeStringValue(configuration.todoSettings.workspaceOverlayCorner.rawValue)))")
         lines.append("ghodex-learning-enabled = \(configuration.learningSettings.enabled ? "true" : "false")")
         lines.append("ghodex-learning-prefer-tab-working-directory = \(configuration.learningSettings.preferTabWorkingDirectory ? "true" : "false")")
         lines.append("ghodex-learning-default-project-path = \(configStringLiteral(encodeStringValue(configuration.learningSettings.defaultProjectPath)))")
@@ -3371,6 +3716,216 @@ final class AITerminalManagerStore: ObservableObject {
         }
     }
 
+    private func todoDocumentPath(forDayString dayString: String) -> String {
+        URL(fileURLWithPath: configuration.todoSettings.workspaceRootPath, isDirectory: true)
+            .appendingPathComponent("days", isDirectory: true)
+            .appendingPathComponent("\(AITerminalTodoSettings.normalizedDateAnchor(dayString)).json", isDirectory: false)
+            .path
+    }
+
+    private func cacheTodoDocument(_ document: AITerminalTodoDayDocument) {
+        let path = todoDocumentPath(forDayString: document.date)
+        todoDocumentCache[todoDocumentCacheKey(for: path)] = document
+    }
+
+    private func rawTodoDocument(forDayString dayString: String) throws -> AITerminalTodoDayDocument {
+        let normalizedDayString = AITerminalTodoSettings.normalizedDateAnchor(dayString)
+        let path = todoDocumentPath(forDayString: normalizedDayString)
+        let cacheKey = todoDocumentCacheKey(for: path)
+        if let cached = todoDocumentCache[cacheKey] {
+            return cached
+        }
+
+        let document = try Self.loadTodoDocument(at: path, date: normalizedDayString)
+        todoDocumentCache[cacheKey] = document
+        return document
+    }
+
+    private func refreshedTodoDocument(_ document: AITerminalTodoDayDocument) -> AITerminalTodoDayDocument {
+        var refreshed = document
+
+        for index in refreshed.items.indices {
+            guard let sourceReference = refreshed.items[index].sourceItem,
+                  let resolvedSource = resolvedTodoSourceState(for: sourceReference) else {
+                continue
+            }
+
+            refreshed.items[index] = .init(
+                sourceItem: resolvedSource.reference,
+                id: refreshed.items[index].id,
+                title: resolvedSource.item.title,
+                notes: resolvedSource.item.notes,
+                assignedWorkspaceID: resolvedSource.item.assignedWorkspaceID,
+                isCompleted: resolvedSource.item.isCompleted,
+                completedAt: resolvedSource.item.completedAt,
+                createdAt: resolvedSource.item.createdAt,
+                updatedAt: resolvedSource.item.updatedAt,
+                sortOrder: refreshed.items[index].sortOrder
+            )
+        }
+
+        return refreshed
+    }
+
+    private func resolvedTodoSourceState(
+        for reference: AITerminalTodoSourceReference,
+        visited: Set<String> = []
+    ) -> ResolvedTodoSourceState? {
+        let visitKey = todoSourceReferenceKey(reference)
+        guard !visited.contains(visitKey) else { return nil }
+
+        guard let sourceDocument = try? rawTodoDocument(forDayString: reference.day),
+              let sourceItem = sourceDocument.items.first(where: { $0.id == reference.itemID }) else {
+            return nil
+        }
+
+        if let nestedReference = sourceItem.sourceItem,
+           let resolvedNested = resolvedTodoSourceState(
+                for: nestedReference,
+                visited: visited.union([visitKey])
+           ) {
+            return resolvedNested
+        }
+
+        return .init(reference: reference, item: sourceItem)
+    }
+
+    private func resolvedTodoMutationTarget(
+        for id: UUID,
+        on dayString: String
+    ) -> AITerminalTodoSourceReference? {
+        guard let item = try? rawTodoDocument(forDayString: dayString).items.first(where: { $0.id == id }) else {
+            return nil
+        }
+
+        if let sourceReference = item.sourceItem {
+            return resolvedTodoSourceState(for: sourceReference)?.reference ?? sourceReference
+        }
+
+        return .init(day: dayString, itemID: id)
+    }
+
+    private func staleTodoSyncCandidates(into dayString: String) throws -> [TodoSyncCandidate] {
+        let normalizedDayString = AITerminalTodoSettings.normalizedDateAnchor(dayString)
+        let destinationDocument = try rawTodoDocument(forDayString: normalizedDayString)
+        var existingReferences = Set(
+            destinationDocument.items.compactMap { $0.sourceItem.map(todoSourceReferenceKey) }
+        )
+        var candidates: [TodoSyncCandidate] = []
+
+        for url in try todoDayFileURLs(before: normalizedDayString) {
+            let sourceDayString = url.deletingPathExtension().lastPathComponent
+            let sourceDocument = try rawTodoDocument(forDayString: sourceDayString)
+
+            for item in sourceDocument.orderedItems where !item.isCompleted {
+                let resolvedSource: ResolvedTodoSourceState
+                if let sourceReference = item.sourceItem,
+                   let resolved = resolvedTodoSourceState(for: sourceReference) {
+                    resolvedSource = resolved
+                } else {
+                    resolvedSource = .init(
+                        reference: .init(day: sourceDayString, itemID: item.id),
+                        item: item
+                    )
+                }
+
+                let referenceKey = todoSourceReferenceKey(resolvedSource.reference)
+                if existingReferences.contains(referenceKey) || resolvedSource.item.isCompleted {
+                    continue
+                }
+                existingReferences.insert(referenceKey)
+                candidates.append(.init(reference: resolvedSource.reference, item: resolvedSource.item))
+            }
+        }
+
+        return candidates
+    }
+
+    private func todoDayFileURLs(before dayString: String) throws -> [URL] {
+        let daysURL = URL(fileURLWithPath: configuration.todoSettings.workspaceRootPath, isDirectory: true)
+            .appendingPathComponent("days", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: daysURL.path) else {
+            return []
+        }
+
+        return try FileManager.default.contentsOfDirectory(
+            at: daysURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+        .filter { $0.pathExtension == "json" }
+        .filter { $0.deletingPathExtension().lastPathComponent < dayString }
+        .sorted { lhs, rhs in
+            lhs.deletingPathExtension().lastPathComponent < rhs.deletingPathExtension().lastPathComponent
+        }
+    }
+
+    private func todoSourceReferenceKey(_ reference: AITerminalTodoSourceReference) -> String {
+        "\(reference.day)#\(reference.itemID.uuidString.lowercased())"
+    }
+
+    private func mutateTodoDocument(
+        for date: Date,
+        mutation: (inout AITerminalTodoDayDocument) -> Void
+    ) -> AITerminalTodoDayDocument? {
+        do {
+            let dayString = AITerminalTodoSettings.dayString(from: date)
+            let path = todoDocumentPath(forDayString: dayString)
+            var document = try rawTodoDocument(forDayString: dayString)
+            let original = document
+            mutation(&document)
+            guard document != original else {
+                cacheTodoDocument(document)
+                lastError = nil
+                return document
+            }
+            document.updatedAt = .now
+            cacheTodoDocument(document)
+            if Self.isRunningTests {
+                try Self.saveTodoDocument(document, to: path)
+            } else {
+                enqueueTodoDocumentSave(document, to: path)
+            }
+            bumpTodoRevision()
+            lastError = nil
+            return document
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    private func todoDocumentSnapshot(for date: Date) -> AITerminalTodoDayDocument {
+        todoDocument(for: date)
+    }
+
+    private func bumpTodoRevision() {
+        todoRevision = UUID()
+        NotificationCenter.default.post(name: .ghodexTodoStateDidChange, object: self)
+    }
+
+    private func enqueueTodoDocumentSave(_ document: AITerminalTodoDayDocument, to path: String) {
+        let persistence = todoDocumentPersistence
+        Task(priority: .utility) { [weak self] in
+            await persistence.scheduleSave(
+                document: document,
+                to: path,
+                writer: { document, path in
+                    try Self.saveTodoDocument(document, to: path)
+                },
+                onError: { error in
+                    await MainActor.run {
+                        self?.lastError = error.localizedDescription
+                    }
+                }
+            )
+        }
+    }
+
+    private func todoDocumentCacheKey(for path: String) -> String {
+        URL(fileURLWithPath: path, isDirectory: false).standardizedFileURL.path
+    }
+
     nonisolated private static func encodedPayload<T: Encodable>(_ value: T) -> String? {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -3404,6 +3959,99 @@ final class AITerminalManagerStore: ObservableObject {
         let start = encoded.index(after: encoded.startIndex)
         let end = encoded.index(before: encoded.endIndex)
         return String(encoded[start..<end])
+    }
+
+    nonisolated private static func createTodoWorkspaceScaffold(rootPath: String) throws -> TodoWorkspaceBootstrapResult {
+        let expandedPath = NSString(string: rootPath).expandingTildeInPath
+        let rootURL = URL(fileURLWithPath: expandedPath, isDirectory: true).standardizedFileURL
+        let daysURL = rootURL.appendingPathComponent("days", isDirectory: true)
+        let readmeURL = rootURL.appendingPathComponent("README.md", isDirectory: false)
+        let creatorURL = rootURL.appendingPathComponent("creator.md", isDirectory: false)
+
+        var createdFileCount = 0
+        var reusedFileCount = 0
+
+        let daysExisted = FileManager.default.fileExists(atPath: daysURL.path)
+        try FileManager.default.createDirectory(at: daysURL, withIntermediateDirectories: true)
+        if daysExisted {
+            reusedFileCount += 1
+        } else {
+            createdFileCount += 1
+        }
+
+        let readme = """
+        # GhoDex Todo Workspace
+
+        Daily todo files live under `days/YYYY-MM-DD.json`.
+        """
+        try writeTextFileIfMissing(
+            readme,
+            to: readmeURL,
+            createdFileCount: &createdFileCount,
+            reusedFileCount: &reusedFileCount
+        )
+
+        let creator = """
+        # creator
+
+        ## Why this folder exists
+        This workspace stores daily GhoDex todo files in a user-visible location.
+
+        ## Created by
+        GhoDex todo workspace scaffold
+
+        ## Creation date
+        \(AITerminalTodoSettings.dayString(from: .now))
+
+        ## Scope
+        - Store date-based todo files under `days/`.
+        - Keep task state human-visible and editable.
+        """
+        try writeTextFileIfMissing(
+            creator,
+            to: creatorURL,
+            createdFileCount: &createdFileCount,
+            reusedFileCount: &reusedFileCount
+        )
+
+        return .init(
+            workspaceRootPath: rootURL.path,
+            createdFileCount: createdFileCount,
+            reusedFileCount: reusedFileCount
+        )
+    }
+
+    nonisolated private static func loadTodoDocument(
+        at path: String,
+        date: String
+    ) throws -> AITerminalTodoDayDocument {
+        let url = URL(fileURLWithPath: path, isDirectory: false)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return .init(date: date)
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let data = try Data(contentsOf: url)
+        var document = try decoder.decode(AITerminalTodoDayDocument.self, from: data)
+        document.date = AITerminalTodoSettings.normalizedDateAnchor(document.date)
+        return document
+    }
+
+    nonisolated private static func saveTodoDocument(
+        _ document: AITerminalTodoDayDocument,
+        to path: String
+    ) throws {
+        let url = URL(fileURLWithPath: path, isDirectory: false)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(document)
+        try data.write(to: url, options: .atomic)
     }
 
     nonisolated private static func formatDouble(_ value: Double) -> String {

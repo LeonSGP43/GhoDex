@@ -20,16 +20,22 @@ struct ControlHarnessRequest: Codable {
     let protocolVersion: String?
     let authToken: String?
     let command: String
+    let date: String?
     let tabID: String?
     let parentTabID: String?
     let terminalID: String?
+    let todoID: String?
     let scope: String?
     let text: String?
     let commandText: String?
     let workingDirectory: String?
     let title: String?
+    let notes: String?
     let environment: [String: String]?
     let force: Bool?
+    let completed: Bool?
+    let workspaceID: String?
+    let includeCompleted: Bool?
     let client: String?
     let idempotencyKey: String?
     let expectedGeneration: Int?
@@ -49,16 +55,22 @@ struct ControlHarnessRequest: Codable {
         case protocolVersion = "protocol_version"
         case authToken = "auth_token"
         case command
+        case date
         case tabID = "tab_id"
         case parentTabID = "parent_tab_id"
         case terminalID = "terminal_id"
+        case todoID = "todo_id"
         case scope
         case text
         case commandText = "command_text"
         case workingDirectory = "working_directory"
         case title
+        case notes
         case environment
         case force
+        case completed
+        case workspaceID = "workspace_id"
+        case includeCompleted = "include_completed"
         case client
         case idempotencyKey = "idempotency_key"
         case expectedGeneration = "expected_generation"
@@ -353,6 +365,76 @@ private struct ControlTerminalMutationResult: Encodable {
     }
 }
 
+private struct ControlTodoItemRecord: Encodable {
+    let todoID: String
+    let sourceDay: String?
+    let sourceItemID: String?
+    let title: String
+    let notes: String
+    let assignedWorkspaceID: String?
+    let isCompleted: Bool
+    let completedAt: String?
+    let createdAt: String
+    let updatedAt: String
+    let sortOrder: Int
+    let isCarryForwardPointer: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case todoID = "todo_id"
+        case sourceDay = "source_day"
+        case sourceItemID = "source_item_id"
+        case title
+        case notes
+        case assignedWorkspaceID = "assigned_workspace_id"
+        case isCompleted = "is_completed"
+        case completedAt = "completed_at"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case sortOrder = "sort_order"
+        case isCarryForwardPointer = "is_carry_forward_pointer"
+    }
+}
+
+private struct ControlTodoSnapshotResult: Encodable {
+    let date: String
+    let includeCompleted: Bool
+    let updatedAt: String
+    let completionRate: Double
+    let totalCount: Int
+    let completedCount: Int
+    let remainingCount: Int
+    let returnedCount: Int
+    let items: [ControlTodoItemRecord]
+
+    enum CodingKeys: String, CodingKey {
+        case date
+        case includeCompleted = "include_completed"
+        case updatedAt = "updated_at"
+        case completionRate = "completion_rate"
+        case totalCount = "total_count"
+        case completedCount = "completed_count"
+        case remainingCount = "remaining_count"
+        case returnedCount = "returned_count"
+        case items
+    }
+}
+
+private struct ControlTodoMutationResult: Encodable {
+    let operation: String
+    let date: String
+    let mutatedTodoID: String?
+    let syncedCount: Int?
+    let snapshot: ControlTodoSnapshotResult
+
+    enum CodingKeys: String, CodingKey {
+        case operation
+        case date
+        case mutatedTodoID = "mutated_todo_id"
+        case syncedCount = "synced_count"
+        case snapshot
+    }
+}
+
 private struct ControlEventSubscriptionResult: Encodable {
     let protocolVersion: String
     let subscribed: Bool
@@ -388,31 +470,43 @@ private struct ControlTabCreatedEventPayload: Encodable {
 private struct ControlHarnessMutationFingerprint: Encodable {
     let protocolVersion: String?
     let command: String
+    let date: String?
     let tabID: String?
     let parentTabID: String?
     let terminalID: String?
+    let todoID: String?
     let scope: String?
     let text: String?
     let commandText: String?
     let workingDirectory: String?
     let title: String?
+    let notes: String?
     let environment: [String: String]?
     let force: Bool?
+    let completed: Bool?
+    let workspaceID: String?
+    let includeCompleted: Bool?
     let expectedGeneration: Int?
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol_version"
         case command
+        case date
         case tabID = "tab_id"
         case parentTabID = "parent_tab_id"
         case terminalID = "terminal_id"
+        case todoID = "todo_id"
         case scope
         case text
         case commandText = "command_text"
         case workingDirectory = "working_directory"
         case title
+        case notes
         case environment
         case force
+        case completed
+        case workspaceID = "workspace_id"
+        case includeCompleted = "include_completed"
         case expectedGeneration = "expected_generation"
     }
 }
@@ -515,6 +609,12 @@ final class ControlHarnessCore {
         "run-command",
         "read-terminal",
         "close-terminal",
+        "todo-snapshot",
+        "todo-add",
+        "todo-update",
+        "todo-complete",
+        "todo-assign",
+        "todo-sync-stale",
         "events.subscribe"
     ]
 
@@ -810,6 +910,57 @@ final class ControlHarnessCore {
                 )
             }
         }
+
+        if let date = request.date?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !date.isEmpty,
+           AITerminalTodoSettings.date(fromDayString: date) == nil {
+            throw ControlHarnessCoreError.invalidArgument("Invalid todo date: \(date)")
+        }
+
+        switch request.command {
+        case "todo-snapshot", "todo-sync-stale":
+            break
+
+        case "todo-add":
+            guard let title = request.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
+                throw ControlHarnessCoreError.invalidArgument("todo-add requires non-empty title")
+            }
+
+        case "todo-update":
+            guard let todoID = request.todoID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !todoID.isEmpty,
+                  UUID(uuidString: todoID) != nil else {
+                throw ControlHarnessCoreError.invalidArgument("todo-update requires valid todo_id")
+            }
+            if request.title == nil, request.notes == nil {
+                throw ControlHarnessCoreError.invalidArgument("todo-update requires title or notes")
+            }
+
+        case "todo-complete":
+            guard let todoID = request.todoID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !todoID.isEmpty,
+                  UUID(uuidString: todoID) != nil else {
+                throw ControlHarnessCoreError.invalidArgument("todo-complete requires valid todo_id")
+            }
+            guard request.completed != nil else {
+                throw ControlHarnessCoreError.invalidArgument("todo-complete requires completed=true|false")
+            }
+
+        case "todo-assign":
+            guard let todoID = request.todoID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !todoID.isEmpty,
+                  UUID(uuidString: todoID) != nil else {
+                throw ControlHarnessCoreError.invalidArgument("todo-assign requires valid todo_id")
+            }
+            if let workspaceID = request.workspaceID?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !workspaceID.isEmpty,
+               UUID(uuidString: workspaceID) == nil {
+                throw ControlHarnessCoreError.invalidArgument("workspace_id must be a UUID when provided")
+            }
+
+        default:
+            break
+        }
     }
 
     private func idempotencyFingerprint(for request: ControlHarnessRequest) throws -> Data? {
@@ -818,16 +969,22 @@ final class ControlHarnessCore {
         let fingerprint = ControlHarnessMutationFingerprint(
             protocolVersion: request.protocolVersion,
             command: request.command,
+            date: request.date,
             tabID: request.tabID,
             parentTabID: request.parentTabID,
             terminalID: request.terminalID,
+            todoID: request.todoID,
             scope: request.scope,
             text: request.text,
             commandText: request.commandText,
             workingDirectory: request.workingDirectory,
             title: request.title,
+            notes: request.notes,
             environment: request.environment,
             force: request.force,
+            completed: request.completed,
+            workspaceID: request.workspaceID,
+            includeCompleted: request.includeCompleted,
             expectedGeneration: request.expectedGeneration
         )
         let encoder = JSONEncoder()
@@ -876,6 +1033,24 @@ final class ControlHarnessCore {
         case "close-terminal":
             let result = try closeTerminal(from: request)
             return (AnyEncodable(result), result.sequence)
+
+        case "todo-snapshot":
+            return (AnyEncodable(try todoSnapshot(from: request)), nil)
+
+        case "todo-add":
+            return (AnyEncodable(try addTodo(from: request)), nil)
+
+        case "todo-update":
+            return (AnyEncodable(try updateTodo(from: request)), nil)
+
+        case "todo-complete":
+            return (AnyEncodable(try completeTodo(from: request)), nil)
+
+        case "todo-assign":
+            return (AnyEncodable(try assignTodo(from: request)), nil)
+
+        case "todo-sync-stale":
+            return (AnyEncodable(try syncStaleTodos(from: request)), nil)
 
         case "events.subscribe":
             return (
@@ -1312,6 +1487,114 @@ final class ControlHarnessCore {
         )
     }
 
+    private func todoSnapshot(from request: ControlHarnessRequest) throws -> ControlTodoSnapshotResult {
+        let date = try parseTodoDate(request.date)
+        return try makeTodoSnapshot(for: date, includeCompleted: request.includeCompleted ?? true)
+    }
+
+    private func addTodo(from request: ControlHarnessRequest) throws -> ControlTodoMutationResult {
+        guard let title = request.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
+            throw ControlHarnessCoreError.invalidArgument("todo-add requires non-empty title")
+        }
+
+        let date = try parseTodoDate(request.date)
+        let store = try todoStore()
+        guard store.addTodoItem(title: title, notes: request.notes ?? "", for: date) != nil else {
+            throw ControlHarnessCoreError.operationFailed(store.lastError ?? "Failed to add todo item")
+        }
+
+        let snapshot = try makeTodoSnapshot(for: date, includeCompleted: true)
+        return .init(
+            operation: "todo-add",
+            date: snapshot.date,
+            mutatedTodoID: snapshot.items.last?.todoID,
+            syncedCount: nil,
+            snapshot: snapshot
+        )
+    }
+
+    private func updateTodo(from request: ControlHarnessRequest) throws -> ControlTodoMutationResult {
+        let todoID = try parseTodoID(request.todoID)
+        let date = try parseTodoDate(request.date)
+        let currentSnapshot = try makeTodoSnapshot(for: date, includeCompleted: true)
+        guard let existingItem = currentSnapshot.items.first(where: { $0.todoID == todoID.uuidString }) else {
+            throw ControlHarnessCoreError.operationFailed("No todo exists for todo_id=\(todoID.uuidString)")
+        }
+
+        let store = try todoStore()
+        let title = request.title ?? existingItem.title
+        let notes = request.notes ?? existingItem.notes
+        guard store.updateTodoItem(id: todoID, title: title, notes: notes, for: date) != nil else {
+            throw ControlHarnessCoreError.operationFailed(store.lastError ?? "Failed to update todo item")
+        }
+
+        let snapshot = try makeTodoSnapshot(for: date, includeCompleted: true)
+        return .init(
+            operation: "todo-update",
+            date: snapshot.date,
+            mutatedTodoID: todoID.uuidString,
+            syncedCount: nil,
+            snapshot: snapshot
+        )
+    }
+
+    private func completeTodo(from request: ControlHarnessRequest) throws -> ControlTodoMutationResult {
+        let todoID = try parseTodoID(request.todoID)
+        guard let completed = request.completed else {
+            throw ControlHarnessCoreError.invalidArgument("todo-complete requires completed=true|false")
+        }
+
+        let date = try parseTodoDate(request.date)
+        let store = try todoStore()
+        guard store.setTodoItemCompleted(id: todoID, isCompleted: completed, for: date) != nil else {
+            throw ControlHarnessCoreError.operationFailed(store.lastError ?? "Failed to update todo completion state")
+        }
+
+        let snapshot = try makeTodoSnapshot(for: date, includeCompleted: true)
+        return .init(
+            operation: "todo-complete",
+            date: snapshot.date,
+            mutatedTodoID: todoID.uuidString,
+            syncedCount: nil,
+            snapshot: snapshot
+        )
+    }
+
+    private func assignTodo(from request: ControlHarnessRequest) throws -> ControlTodoMutationResult {
+        let todoID = try parseTodoID(request.todoID)
+        let workspaceID = try parseWorkspaceID(request.workspaceID)
+        let date = try parseTodoDate(request.date)
+        let store = try todoStore()
+        guard store.assignTodoItem(id: todoID, to: workspaceID, for: date) != nil else {
+            throw ControlHarnessCoreError.operationFailed(store.lastError ?? "Failed to assign todo item")
+        }
+
+        let snapshot = try makeTodoSnapshot(for: date, includeCompleted: true)
+        return .init(
+            operation: "todo-assign",
+            date: snapshot.date,
+            mutatedTodoID: todoID.uuidString,
+            syncedCount: nil,
+            snapshot: snapshot
+        )
+    }
+
+    private func syncStaleTodos(from request: ControlHarnessRequest) throws -> ControlTodoMutationResult {
+        let date = try parseTodoDate(request.date)
+        let store = try todoStore()
+        guard let syncedCount = store.syncIncompleteTodoPointers(into: date) else {
+            throw ControlHarnessCoreError.operationFailed(store.lastError ?? "Failed to sync stale todo pointers")
+        }
+
+        let snapshot = try makeTodoSnapshot(for: date, includeCompleted: true)
+        return .init(
+            operation: "todo-sync-stale",
+            date: snapshot.date,
+            mutatedTodoID: nil,
+            syncedCount: syncedCount,
+            snapshot: snapshot
+        )
+    }
     private static func applyChangedRowBudget(
         _ rows: [ControlHarnessReadChangedRow],
         maxLines: Int?
@@ -1401,6 +1684,82 @@ final class ControlHarnessCore {
             throw ControlHarnessCoreError.invalidArgument("Missing or invalid terminal_id")
         }
         return uuid
+    }
+
+    private func parseTodoID(_ rawValue: String?) throws -> UUID {
+        guard let rawValue else {
+            throw ControlHarnessCoreError.invalidArgument("Missing or invalid todo_id")
+        }
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let uuid = UUID(uuidString: trimmed) else {
+            throw ControlHarnessCoreError.invalidArgument("Missing or invalid todo_id")
+        }
+        return uuid
+    }
+
+    private func parseWorkspaceID(_ rawValue: String?) throws -> UUID? {
+        guard let rawValue else { return nil }
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard let uuid = UUID(uuidString: trimmed) else {
+            throw ControlHarnessCoreError.invalidArgument("Missing or invalid workspace_id")
+        }
+        return uuid
+    }
+
+    private func parseTodoDate(_ rawValue: String?) throws -> Date {
+        guard let rawValue else { return .now }
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .now }
+        guard let date = AITerminalTodoSettings.date(fromDayString: trimmed) else {
+            throw ControlHarnessCoreError.invalidArgument("Invalid todo date: \(trimmed)")
+        }
+        return date
+    }
+
+    private func todoStore() throws -> AITerminalManagerStore {
+        guard let appDelegate else {
+            throw ControlHarnessCoreError.appUnavailable
+        }
+        return appDelegate.aiTerminalManagerStore
+    }
+
+    private func makeTodoSnapshot(for date: Date, includeCompleted: Bool) throws -> ControlTodoSnapshotResult {
+        let store = try todoStore()
+        let document = store.todoDocument(for: date)
+        let orderedItems = document.orderedItems
+        let returnedItems = includeCompleted ? orderedItems : orderedItems.filter { !$0.isCompleted }
+        let completedCount = document.items.filter(\.isCompleted).count
+        let totalCount = document.items.count
+
+        return .init(
+            date: document.date,
+            includeCompleted: includeCompleted,
+            updatedAt: Self.iso8601(document.updatedAt),
+            completionRate: document.completionRate,
+            totalCount: totalCount,
+            completedCount: completedCount,
+            remainingCount: max(totalCount - completedCount, 0),
+            returnedCount: returnedItems.count,
+            items: returnedItems.map(todoRecord(from:))
+        )
+    }
+
+    private func todoRecord(from item: AITerminalTodoItem) -> ControlTodoItemRecord {
+        .init(
+            todoID: item.id.uuidString,
+            sourceDay: item.sourceItem?.day,
+            sourceItemID: item.sourceItem?.itemID.uuidString,
+            title: item.title,
+            notes: item.notes,
+            assignedWorkspaceID: item.assignedWorkspaceID?.uuidString,
+            isCompleted: item.isCompleted,
+            completedAt: item.completedAt.map(Self.iso8601),
+            createdAt: Self.iso8601(item.createdAt),
+            updatedAt: Self.iso8601(item.updatedAt),
+            sortOrder: item.sortOrder,
+            isCarryForwardPointer: item.isCarryForwardPointer
+        )
     }
 
     private func validateWorkingDirectory(_ workingDirectory: String?) throws {

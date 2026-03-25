@@ -46,6 +46,14 @@ Recent fork-specific upgrades include:
 - Hardened update/localization tests to be language-agnostic.
 - Added release governance basics (`VERSION`, `CHANGELOG.md`, SemVer flow).
 
+This fork's recommended local macOS setup also disables `Ctrl+U` in the
+terminal surface to avoid accidental whole-line clears while typing in shells.
+Apply that behavior in `config.ghodex` with:
+
+```ini
+keybind = ctrl+u=ignore
+```
+
 ## Download
 
 - Fork releases: <https://github.com/LeonSGP43/GhoDex/releases>
