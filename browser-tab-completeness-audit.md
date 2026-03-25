@@ -53,12 +53,13 @@ Evidence:
 
 - `browser-tab-acceptance-matrix.md` already records
   `VIDEO_CODECS WARN h264: ""` in the mirrored-profile fingerprint lane
-- the fresh isolated managed lane at `/tmp/ghx-browser-media-debug-managed.json`
+- the fresh isolated managed lane in
+  `/tmp/ghx-browser-media-debug-acceptance-postfix.json`
   reports `h264_baseline = ""`, `mp4_aac = ""`,
   `MediaSource.isTypeSupported(...) = false`, and
   `PipelineStatus::DEMUXER_ERROR_NO_SUPPORTED_STREAMS`
-- the fresh isolated external lane at `/tmp/ghx-browser-media-debug-external.json`
-  reports the same H.264/AAC failure shape under an external profile
+- the same combined artifact records the isolated external lane with the same
+  H.264/AAC failure shape under an external profile
 
 Code path:
 
