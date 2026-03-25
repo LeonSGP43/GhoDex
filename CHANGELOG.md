@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### docs(i18n): add bilingual readme switch and operations guides
+
+- What changed: Updated `README.md` to include explicit Chinese/English language switch links and operations-doc entry links, added an English landing document at `docs/README.en.md`, added bilingual operations playbooks at `docs/OPERATIONS.zh-CN.md` and `docs/OPERATIONS.en.md`, and added `docs/creator.md` for folder provenance.
+- Why: The project needed a clear bilingual documentation path so users can switch between Chinese and English quickly and follow consistent day-to-day operational guidance.
+- Impact: New and existing users can now discover the correct language entrypoint immediately and use standardized operation steps for release install, source build, test verification, cleanup, and troubleshooting.
+- Verification: `rg -n "Language / 语言|docs/README.en.md|OPERATIONS.zh-CN|OPERATIONS.en" README.md`; `test -f docs/README.en.md`; `test -f docs/OPERATIONS.zh-CN.md`; `test -f docs/OPERATIONS.en.md`
+- Files: `README.md`, `docs/README.en.md`, `docs/OPERATIONS.zh-CN.md`, `docs/OPERATIONS.en.md`, `docs/creator.md`, `CHANGELOG.md`
+- Decision trail: Keep the Chinese README as the primary local entrypoint while adding a dedicated English mirror and separate bilingual operations guides to avoid mixing high-level introduction with long operational details.
+
+### docs(readme): rewrite landing page to project-focused summary and deployment guide
+
+- What changed: Replaced the README opening structure with a project-focused Chinese landing page, removed the inherited Ghostty logo/header block and long upstream narrative sections, kept the local welcome hero image, added clear `功能总览` and `优化总结` sections, and added a practical `部署方法` guide covering release install and source-based macOS build commands.
+- Why: The repository front page needed to communicate this fork's own value first, instead of leading with inherited upstream framing and long generic background text.
+- Impact: New visitors now see a concise product-facing summary of GhoDex capabilities, concrete optimization points, and direct deployment steps, while still preserving a bottom-line attribution that the project is developed on top of Ghostty.
+- Verification: `rg -n "^## 功能总览|^## 优化总结|^## 部署方法|^## 声明" README.md`; manually confirm the old logo/upstream-longform blocks are removed from `README.md`.
+- Files: `README.md`, `CHANGELOG.md`
+- Decision trail: Keep the README focused on decision-ready onboarding (what it does, what is optimized, how to deploy) and move upstream heritage to a short attribution statement at the bottom instead of repeating large inherited descriptions.
+
 ### docs(readme): add welcome hero and polished feature showcase
 
 - What changed: Added a repository-local welcome banner image at `images/readme/welcome-hero.jpg` (optimized from the provided source), added `images/readme/creator.md` for folder provenance, and updated `README.md` to display the new hero image as the top welcome visual. Reworked the top navigation and replaced the old upgrade bullet list with a structured `Core Capabilities` table plus a `What This Fork Optimizes and Adds` section.
