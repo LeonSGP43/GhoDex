@@ -4,6 +4,8 @@ import type {
     PairingBeginResult,
     PairingExchangeResult,
     SnapshotResult,
+    TabMutationResult,
+    TabRow,
     TerminalChangedRow,
     TerminalMutationResult,
     TerminalReadResult,
@@ -28,11 +30,16 @@ interface GatewayRequest {
     client?: string;
     requested_scopes?: string[];
     pairing_code?: string;
+    tab_id?: string;
+    parent_tab_id?: string;
     terminal_id?: string;
     scope?: string;
     mode?: string;
     command_text?: string;
     text?: string;
+    working_directory?: string;
+    title?: string;
+    force?: boolean;
     expected_generation?: number;
     since_frame_id?: string;
     max_chars?: number;
@@ -221,54 +228,70 @@ function parsePairingExchangeResult(envelope: GatewayEnvelope): PairingExchangeR
     };
 }
 
-function parseTerminalRows(result: Record<string, unknown>): TerminalRow[] {
+function parseTabRows(result: Record<string, unknown>): TabRow[] {
     const tabsValue = result.tabs;
     if (!Array.isArray(tabsValue)) {
         return [];
     }
 
-    const terminals: TerminalRow[] = [];
-    for (const tab of tabsValue) {
+    return tabsValue.flatMap((tab) => {
         if (!tab || typeof tab !== 'object' || Array.isArray(tab)) {
-            continue;
+            return [];
         }
 
-        const terminalList = (tab as Record<string, unknown>).terminals;
-        if (!Array.isArray(terminalList)) {
-            continue;
+        const tabObject = tab as Record<string, unknown>;
+        const tabId = readString(tabObject, 'tab_id');
+        if (!tabId) {
+            return [];
         }
 
-        for (const terminal of terminalList) {
+        const terminalList = Array.isArray(tabObject.terminals) ? tabObject.terminals : [];
+        const terminals = terminalList.flatMap((terminal) => {
             if (!terminal || typeof terminal !== 'object' || Array.isArray(terminal)) {
-                continue;
+                return [];
             }
 
             const terminalObject = terminal as Record<string, unknown>;
             const terminalId = readString(terminalObject, 'terminal_id');
             if (!terminalId) {
-                continue;
+                return [];
             }
 
-            terminals.push({
+            return [{
+                tabId,
                 terminalId,
                 generation: readNumber(terminalObject, 'generation'),
                 title: readString(terminalObject, 'title'),
                 workingDirectory: readString(terminalObject, 'working_directory'),
                 focused: readBoolean(terminalObject, 'is_focused'),
                 visible: readBoolean(terminalObject, 'is_visible'),
-            });
-        }
-    }
+            }];
+        });
 
-    return terminals;
+        return [{
+            tabId,
+            generation: readNumber(tabObject, 'generation'),
+            windowNumber: readNumber(tabObject, 'window_number'),
+            title: readString(tabObject, 'title'),
+            focused: readBoolean(tabObject, 'is_focused'),
+            isMainWindow: readBoolean(tabObject, 'is_main_window'),
+            terminals,
+        }];
+    });
+}
+
+function flattenTerminalRows(tabs: TabRow[]): TerminalRow[] {
+    return tabs.flatMap((tab) => tab.terminals);
 }
 
 function parseSnapshotResult(envelope: GatewayEnvelope): SnapshotResult {
     const result = ensureObject(envelope.result, 'snapshot result');
+    const tabs = parseTabRows(result);
     return {
         protocolVersion: readString(result, 'protocol_version'),
         lastSequence: readNumber(result, 'last_sequence'),
-        terminals: parseTerminalRows(result),
+        tabs,
+        terminals: flattenTerminalRows(tabs),
     };
 }
 
@@ -319,6 +342,28 @@ function parseTerminalMutationResult(envelope: GatewayEnvelope): TerminalMutatio
         operation: readString(result, 'operation'),
         acknowledged: readBoolean(result, 'acknowledged'),
         writeId: readString(result, 'write_id'),
+    };
+}
+
+function parseTabMutationResult(envelope: GatewayEnvelope): TabMutationResult {
+    const result = ensureObject(envelope.result, 'tab mutation result');
+    const tabId = readString(result, 'tab_id');
+    if (!tabId) {
+        throw new GatewayProtocolError('Gateway tab mutation response is missing tab_id');
+    }
+
+    return {
+        tabId,
+        generation: readNumber(result, 'tab_generation') || readNumber(result, 'generation'),
+        sequence: readNumber(result, 'sequence'),
+        terminalId: readString(result, 'terminal_id'),
+        terminalGeneration: typeof result.terminal_generation === 'number' && Number.isFinite(result.terminal_generation)
+            ? result.terminal_generation
+            : null,
+        closed: readBoolean(result, 'closed'),
+        requiresConfirmation: readBoolean(result, 'requires_confirmation'),
+        confirmationTitle: readString(result, 'confirmation_title'),
+        confirmationMessage: readString(result, 'confirmation_message'),
     };
 }
 
@@ -448,6 +493,60 @@ export async function runTerminalCommand(input: GatewayConnection & {
     return parseTerminalMutationResult(envelope);
 }
 
+export async function createTab(input: GatewayConnection & {
+    authToken: string;
+    parentTabId?: string;
+    title?: string;
+    workingDirectory?: string;
+}): Promise<TabMutationResult> {
+    const authToken = input.authToken.trim();
+    if (!authToken) {
+        throw new GatewayProtocolError('Auth token is empty');
+    }
+
+    const envelope = await sendRequest(
+        input,
+        {
+            request_id: nextRequestId('new-tab'),
+            command: 'new-tab',
+            auth_token: authToken,
+            parent_tab_id: input.parentTabId?.trim() || undefined,
+            title: input.title?.trim() || undefined,
+            working_directory: input.workingDirectory?.trim() || undefined,
+        },
+    );
+    return parseTabMutationResult(envelope);
+}
+
+export async function closeTab(input: GatewayConnection & {
+    authToken: string;
+    tabId: string;
+    expectedGeneration?: number;
+    force?: boolean;
+}): Promise<TabMutationResult> {
+    const authToken = input.authToken.trim();
+    const tabId = input.tabId.trim();
+    if (!authToken) {
+        throw new GatewayProtocolError('Auth token is empty');
+    }
+    if (!tabId) {
+        throw new GatewayProtocolError('tab_id is empty');
+    }
+
+    const envelope = await sendRequest(
+        input,
+        {
+            request_id: nextRequestId('close-tab'),
+            command: 'close-tab',
+            auth_token: authToken,
+            tab_id: tabId,
+            expected_generation: input.expectedGeneration,
+            force: input.force,
+        },
+    );
+    return parseTabMutationResult(envelope);
+}
+
 export async function sendTerminalText(input: GatewayConnection & {
     authToken: string;
     terminalId: string;
@@ -494,6 +593,15 @@ export function subscribeToGatewayEvents(input: GatewayConnection & {
 
     const socket = new WebSocket(buildGatewayUrl(input));
     let closedByClient = false;
+    let settled = false;
+
+    const finalizeWithError = (error: GatewayProtocolError) => {
+        if (closedByClient || settled) {
+            return;
+        }
+        settled = true;
+        input.onError?.(error);
+    };
 
     socket.onopen = () => {
         const request: GatewayRequest = {
@@ -511,38 +619,46 @@ export function subscribeToGatewayEvents(input: GatewayConnection & {
             const rawText = typeof event.data === 'string' ? event.data : String(event.data ?? '');
             const envelope = parseEnvelope(rawText);
             if (envelope.status === 'error') {
-                throw new GatewayProtocolError(
+                const error = new GatewayProtocolError(
                     envelope.error_message ?? envelope.error_code ?? 'Gateway rejected subscription',
                     envelope.error_code,
                 );
+                finalizeWithError(error);
+                socket.close();
+                return;
             }
             input.onEnvelope(envelope);
         } catch (error) {
-            input.onError?.(error instanceof Error ? error : new GatewayProtocolError('Invalid subscription payload'));
+            finalizeWithError(
+                error instanceof GatewayProtocolError
+                    ? error
+                    : new GatewayProtocolError(
+                        error instanceof Error ? error.message : 'Invalid subscription payload',
+                    ),
+            );
+            socket.close();
         }
     };
 
     socket.onerror = () => {
-        if (closedByClient) {
-            return;
-        }
-        input.onError?.(new GatewayProtocolError('Gateway subscription socket failed'));
+        finalizeWithError(new GatewayProtocolError('Gateway subscription socket failed'));
     };
 
     socket.onclose = (event) => {
-        if (closedByClient) {
+        if (closedByClient || settled) {
             return;
         }
         if (event.code === 1000) {
             return;
         }
-        input.onError?.(new GatewayProtocolError(
+        finalizeWithError(new GatewayProtocolError(
             event.reason || `Gateway subscription closed unexpectedly (code ${event.code})`,
         ));
     };
 
     return () => {
         closedByClient = true;
+        settled = true;
         socket.close();
     };
 }

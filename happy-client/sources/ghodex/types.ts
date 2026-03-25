@@ -34,6 +34,7 @@ export interface PairingExchangeResult {
 }
 
 export interface TerminalRow {
+    tabId: string;
     terminalId: string;
     generation: number;
     title: string | null;
@@ -42,9 +43,20 @@ export interface TerminalRow {
     visible: boolean;
 }
 
+export interface TabRow {
+    tabId: string;
+    generation: number;
+    windowNumber: number;
+    title: string | null;
+    focused: boolean;
+    isMainWindow: boolean;
+    terminals: TerminalRow[];
+}
+
 export interface SnapshotResult {
     protocolVersion: string | null;
     lastSequence: number;
+    tabs: TabRow[];
     terminals: TerminalRow[];
 }
 
@@ -86,4 +98,16 @@ export interface TerminalMutationResult {
     operation: string | null;
     acknowledged: boolean;
     writeId: string | null;
+}
+
+export interface TabMutationResult {
+    tabId: string;
+    generation: number;
+    sequence: number;
+    terminalId: string | null;
+    terminalGeneration: number | null;
+    closed: boolean;
+    requiresConfirmation: boolean;
+    confirmationTitle: string | null;
+    confirmationMessage: string | null;
 }

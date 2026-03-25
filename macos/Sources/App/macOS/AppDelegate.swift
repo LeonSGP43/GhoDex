@@ -230,10 +230,7 @@ class AppDelegate: NSObject,
             }
 
         case "new-tab", "close-tab":
-            return .deny(
-                errorCode: "remote_policy_blocked",
-                errorMessage: "Remote \(request.command) is not enabled through the gateway"
-            )
+            return .allow
 
         default:
             return .allow

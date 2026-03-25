@@ -297,12 +297,41 @@ private struct ControlTabCloseResult: Encodable {
     let generation: Int
     let sequence: Int64
     let closed: Bool
+    let requiresConfirmation: Bool
+    let confirmationTitle: String?
+    let confirmationMessage: String?
 
     enum CodingKeys: String, CodingKey {
         case tabID = "tab_id"
         case generation
         case sequence
         case closed
+        case requiresConfirmation = "requires_confirmation"
+        case confirmationTitle = "confirmation_title"
+        case confirmationMessage = "confirmation_message"
+    }
+}
+
+struct ControlTabCloseConfirmation: Equatable {
+    let title: String
+    let message: String
+
+    static func resolve(hasMultipleTabs: Bool, needsConfirmQuit: Bool) -> Self? {
+        guard needsConfirmQuit else {
+            return nil
+        }
+
+        if hasMultipleTabs {
+            return .init(
+                title: "Close Tab?",
+                message: "The terminal still has a running process. If you close the tab the process will be killed."
+            )
+        }
+
+        return .init(
+            title: "Close Window?",
+            message: "All terminal sessions in this window will be terminated."
+        )
     }
 }
 
@@ -946,6 +975,18 @@ final class ControlHarnessCore {
             resourceID: tabID,
             currentGeneration: currentGeneration
         )
+        if request.force != true,
+           let confirmation = closeTabConfirmation(for: controller) {
+            return .init(
+                tabID: tabID,
+                generation: currentGeneration,
+                sequence: eventHub.currentSequence(),
+                closed: false,
+                requiresConfirmation: true,
+                confirmationTitle: confirmation.title,
+                confirmationMessage: confirmation.message
+            )
+        }
         if request.force == true {
             controller.closeTabImmediately()
         } else {
@@ -962,8 +1003,24 @@ final class ControlHarnessCore {
             tabID: tabID,
             generation: generation,
             sequence: sequence,
-            closed: true
+            closed: true,
+            requiresConfirmation: false,
+            confirmationTitle: nil,
+            confirmationMessage: nil
         )
+    }
+
+    @MainActor
+    private func closeTabConfirmation(for controller: TerminalController) -> (title: String, message: String)? {
+        let needsConfirmQuit = controller.allSurfaces.contains(where: { $0.needsConfirmQuit })
+        let tabCount = controller.window?.tabGroup?.windows.count ?? 1
+        guard let confirmation = ControlTabCloseConfirmation.resolve(
+            hasMultipleTabs: tabCount > 1,
+            needsConfirmQuit: needsConfirmQuit
+        ) else {
+            return nil
+        }
+        return (confirmation.title, confirmation.message)
     }
 
     private func sendText(from request: ControlHarnessRequest) throws -> ControlTerminalMutationResult {

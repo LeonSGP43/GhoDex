@@ -1,7 +1,10 @@
 import * as React from 'react';
 import {
     ActivityIndicator,
-    Modal,
+    Alert,
+    Animated,
+    Easing,
+    Platform,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -13,9 +16,12 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { renderAnsiText } from '@/ghodex/ansi';
 import {
+    closeTab as closeGatewayTab,
+    createTab as createGatewayTab,
     fetchSnapshot,
     readTerminal,
     runTerminalCommand,
@@ -28,6 +34,7 @@ import { ActionButton, SurfaceCard } from '@/ghodex/ui';
 import type {
     GatewayEnvelope,
     SnapshotResult,
+    TabRow,
     TerminalChangedRow,
     TerminalMutationResult,
     TerminalReadResult,
@@ -36,6 +43,8 @@ import type {
 
 type BusyAction =
     | 'snapshot'
+    | 'tab-create'
+    | 'tab-close'
     | 'terminal-read'
     | 'terminal-command'
     | 'terminal-send-text'
@@ -113,6 +122,100 @@ function pickPreferredTerminal(terminals: TerminalRow[], preferredTerminalId: st
     return terminals.find((terminal) => terminal.focused) ?? terminals[0] ?? null;
 }
 
+function pickPreferredTerminalInTab(tab: TabRow): TerminalRow | null {
+    return tab.terminals.find((terminal) => terminal.focused) ?? tab.terminals[0] ?? null;
+}
+
+function normalizeSidebarLabel(value: string | null | undefined): string {
+    return (value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function labelsMatch(left: string | null | undefined, right: string | null | undefined): boolean {
+    const normalizedLeft = normalizeSidebarLabel(left);
+    const normalizedRight = normalizeSidebarLabel(right);
+    return normalizedLeft.length > 0 && normalizedLeft === normalizedRight;
+}
+
+function tabHasDistinctTitle(tab: TabRow): boolean {
+    const tabTitle = tab.title?.trim();
+    if (!tabTitle) {
+        return false;
+    }
+
+    return !tab.terminals.some((terminal) => labelsMatch(tabTitle, terminal.title));
+}
+
+function fallbackTabLabel(tab: TabRow): string {
+    return tab.windowNumber > 0 ? `Tab ${tab.windowNumber}` : 'Tab';
+}
+
+function tabPrimaryLabel(tab: TabRow, preferredTerminal: TerminalRow | null): string {
+    const tabTitle = tab.title?.trim();
+    const terminalTitle = preferredTerminal?.title?.trim();
+
+    if (tab.terminals.length > 1) {
+        if (tabHasDistinctTitle(tab) && tabTitle) {
+            return tabTitle;
+        }
+        return fallbackTabLabel(tab);
+    }
+
+    if (tabTitle && !labelsMatch(tabTitle, terminalTitle)) {
+        return tabTitle;
+    }
+    if (terminalTitle) {
+        return terminalTitle;
+    }
+    if (tabTitle) {
+        return tabTitle;
+    }
+    return fallbackTabLabel(tab);
+}
+
+function tabSecondaryLabel(tab: TabRow, preferredTerminal: TerminalRow | null, primaryLabel: string): string | null {
+    if (tab.terminals.length > 1) {
+        return `${tab.terminals.length} terminals`;
+    }
+
+    const tabTitle = tab.title?.trim();
+    const terminalTitle = preferredTerminal?.title?.trim();
+    const workingDirectory = preferredTerminal?.workingDirectory?.trim();
+    if (
+        workingDirectory
+        && !labelsMatch(workingDirectory, primaryLabel)
+        && !labelsMatch(workingDirectory, terminalTitle)
+        && !labelsMatch(workingDirectory, tabTitle)
+    ) {
+        return workingDirectory;
+    }
+
+    if (
+        terminalTitle
+        && !labelsMatch(terminalTitle, primaryLabel)
+        && !labelsMatch(terminalTitle, tabTitle)
+    ) {
+        return terminalTitle;
+    }
+
+    if (
+        tabTitle
+        && !labelsMatch(tabTitle, primaryLabel)
+        && !labelsMatch(tabTitle, terminalTitle)
+    ) {
+        return tabTitle;
+    }
+
+    return null;
+}
+
+function terminalMetaLabel(terminal: TerminalRow): string {
+    const workingDirectory = terminal.workingDirectory?.trim();
+    if (workingDirectory && !labelsMatch(workingDirectory, terminal.title)) {
+        return workingDirectory;
+    }
+    return terminal.terminalId;
+}
+
 function isStructuralTerminalEvent(event: string | null | undefined): boolean {
     if (!event) {
         return false;
@@ -124,6 +227,38 @@ function nextSequenceFromEnvelope(envelope: GatewayEnvelope): number | null {
     return typeof envelope.sequence === 'number' && Number.isFinite(envelope.sequence) ? envelope.sequence : null;
 }
 
+function isGatewayAuthError(error: unknown): boolean {
+    return !!(
+        error
+        && typeof error === 'object'
+        && 'code' in error
+        && (error as { code?: unknown }).code === 'unauthorized'
+    );
+}
+
+function isRecoverableTabCloseError(error: unknown): boolean {
+    return !!(
+        error
+        && typeof error === 'object'
+        && 'code' in error
+        && (
+            (error as { code?: unknown }).code === 'stale_target'
+            || (error as { code?: unknown }).code === 'tab_not_found'
+        )
+    );
+}
+
+function normalizeCommandInput(input: string): string {
+    return input
+        .replace(/\r\n?/g, '\n')
+        .replace(/[\u2028\u2029]/g, '\n');
+}
+
+function shouldPasteRawInput(input: string): boolean {
+    const trimmed = normalizeCommandInput(input).trim();
+    return trimmed.includes('\n');
+}
+
 export default function GhoDexWorkspaceScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
@@ -133,6 +268,7 @@ export default function GhoDexWorkspaceScreen() {
     const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
     const [sidebarVisible, setSidebarVisible] = React.useState(false);
     const [subscriptionOpen, setSubscriptionOpen] = React.useState(false);
+    const [authorizationRequired, setAuthorizationRequired] = React.useState(false);
     const [session, setSession] = React.useState<StoredSession>(INITIAL_GATEWAY_SESSION);
     const [snapshot, setSnapshot] = React.useState<SnapshotResult | null>(null);
     const [selectedTerminalId, setSelectedTerminalId] = React.useState<string | null>(null);
@@ -140,15 +276,48 @@ export default function GhoDexWorkspaceScreen() {
     const [terminalContent, setTerminalContent] = React.useState('');
     const [terminalCommand, setTerminalCommand] = React.useState('');
     const sidebarWidth = Math.min(width * 0.84, 360);
+    const sidebarProgress = React.useRef(new Animated.Value(0)).current;
 
     const selectedTerminal = React.useMemo(
         () => snapshot?.terminals.find((terminal) => terminal.terminalId === selectedTerminalId) ?? null,
         [selectedTerminalId, snapshot],
     );
+    const selectedTab = React.useMemo(() => {
+        if (selectedTerminal?.tabId) {
+            return snapshot?.tabs.find((tab) => tab.tabId === selectedTerminal.tabId) ?? null;
+        }
+        return snapshot?.tabs.find((tab) => tab.focused) ?? snapshot?.tabs[0] ?? null;
+    }, [selectedTerminal, snapshot]);
     const paired = !!session.authToken.trim();
+    const tabCount = snapshot?.tabs.length ?? 0;
+    const terminalCount = snapshot?.terminals.length ?? 0;
     const syncLabel = session.liveUpdatesEnabled
         ? (subscriptionOpen ? 'Live stream' : `Live reconnecting, ${session.pollIntervalMs}ms fallback`)
         : `${session.pollIntervalMs}ms polling`;
+    const sidebarTranslateX = React.useMemo(() => (
+        sidebarProgress.interpolate({
+            inputRange: [0, 1],
+            outputRange: [-sidebarWidth, 0],
+        })
+    ), [sidebarProgress, sidebarWidth]);
+    const contentTranslateX = React.useMemo(() => (
+        sidebarProgress.interpolate({
+            inputRange: [0, 1],
+            outputRange: [0, sidebarWidth],
+        })
+    ), [sidebarProgress, sidebarWidth]);
+    const contentScale = React.useMemo(() => (
+        sidebarProgress.interpolate({
+            inputRange: [0, 1],
+            outputRange: [1, 0.98],
+        })
+    ), [sidebarProgress]);
+    const backdropOpacity = React.useMemo(() => (
+        sidebarProgress.interpolate({
+            inputRange: [0, 1],
+            outputRange: [0, 1],
+        })
+    ), [sidebarProgress]);
 
     const sessionRef = React.useRef(session);
     const snapshotRef = React.useRef<SnapshotResult | null>(snapshot);
@@ -164,6 +333,9 @@ export default function GhoDexWorkspaceScreen() {
 
     React.useEffect(() => {
         sessionRef.current = session;
+        if (!session.authToken.trim()) {
+            setAuthorizationRequired(false);
+        }
     }, [session]);
 
     React.useEffect(() => {
@@ -181,13 +353,29 @@ export default function GhoDexWorkspaceScreen() {
         subscriptionSequenceRef.current = Math.max(subscriptionSequenceRef.current, terminalView?.lastSequence ?? 0);
     }, [terminalView]);
 
+    React.useEffect(() => {
+        Animated.timing(sidebarProgress, {
+            toValue: sidebarVisible ? 1 : 0,
+            duration: sidebarVisible ? 240 : 200,
+            easing: sidebarVisible ? Easing.out(Easing.cubic) : Easing.inOut(Easing.quad),
+            useNativeDriver: true,
+        }).start();
+    }, [sidebarProgress, sidebarVisible]);
+
     const runAction = React.useCallback(async (action: BusyAction, task: () => Promise<void>) => {
         setBusyAction(action);
         setErrorMessage(null);
         try {
             await task();
+            setAuthorizationRequired(false);
         } catch (error) {
             const message = error instanceof Error ? error.message : 'Unexpected gateway error';
+            if (isGatewayAuthError(error)) {
+                setAuthorizationRequired(true);
+                setSubscriptionOpen(false);
+                setErrorMessage('Gateway authorization expired for this desktop build. Re-open Pairing in Settings and bind the phone again.');
+                return;
+            }
             setErrorMessage(message);
         } finally {
             setBusyAction(null);
@@ -223,6 +411,14 @@ export default function GhoDexWorkspaceScreen() {
             return {
                 ...current,
                 lastSequence: Math.max(current.lastSequence, result.lastSequence),
+                tabs: current.tabs.map((tab) => ({
+                    ...tab,
+                    terminals: tab.terminals.map((item) => (
+                        item.terminalId === result.terminalId
+                            ? { ...item, generation: result.generation }
+                            : item
+                    )),
+                })),
                 terminals: current.terminals.map((item) => (
                     item.terminalId === result.terminalId
                         ? { ...item, generation: result.generation }
@@ -305,6 +501,7 @@ export default function GhoDexWorkspaceScreen() {
             port: activeSession.port,
             authToken,
         });
+        setAuthorizationRequired(false);
         setSnapshot(result);
 
         const nextTerminal = pickPreferredTerminal(result.terminals, preferredTerminalId);
@@ -405,6 +602,12 @@ export default function GhoDexWorkspaceScreen() {
                     });
                 } while (liveReadPendingRef.current);
             } catch (error) {
+                if (isGatewayAuthError(error)) {
+                    setAuthorizationRequired(true);
+                    setSubscriptionOpen(false);
+                    setErrorMessage('Gateway authorization expired for this desktop build. Re-open Pairing in Settings and bind the phone again.');
+                    return;
+                }
                 console.warn('Failed to live-refresh terminal', error);
                 scheduleSnapshotRefresh('resync');
             } finally {
@@ -435,7 +638,15 @@ export default function GhoDexWorkspaceScreen() {
         }
 
         const resource = envelope.resource;
+        if (resource?.type === 'tab') {
+            scheduleSnapshotRefresh('structure');
+            return;
+        }
+
         if (resource?.type !== 'terminal' || !resource.id) {
+            if (isStructuralTerminalEvent(envelope.event)) {
+                scheduleSnapshotRefresh('structure');
+            }
             return;
         }
 
@@ -479,10 +690,22 @@ export default function GhoDexWorkspaceScreen() {
             setTerminalView(null);
             setTerminalContent('');
             setSubscriptionOpen(false);
+            setAuthorizationRequired(false);
             return;
         }
 
-        await refreshSnapshotImpl(authToken, selectedTerminalIdRef.current);
+        try {
+            await refreshSnapshotImpl(authToken, selectedTerminalIdRef.current);
+        } catch (error) {
+            if (isGatewayAuthError(error)) {
+                setAuthorizationRequired(true);
+                setSubscriptionOpen(false);
+                setErrorMessage('Gateway authorization expired for this desktop build. Re-open Pairing in Settings and bind the phone again.');
+                return;
+            }
+            const message = error instanceof Error ? error.message : 'Failed to load gateway snapshot';
+            setErrorMessage(message);
+        }
     }, [refreshSnapshotImpl]);
 
     useFocusEffect(React.useCallback(() => {
@@ -521,6 +744,78 @@ export default function GhoDexWorkspaceScreen() {
         });
     }, [loadTerminalViewImpl, runAction, session.authToken]);
 
+    const handleSelectTab = React.useCallback((tab: TabRow) => {
+        const preferredTerminal = pickPreferredTerminalInTab(tab);
+        if (!preferredTerminal) {
+            setErrorMessage('This tab does not expose any remote terminal yet.');
+            return;
+        }
+        handleSelectTerminal(preferredTerminal);
+    }, [handleSelectTerminal]);
+
+    const handleCreateTab = React.useCallback(() => {
+        const authToken = session.authToken.trim();
+        if (!authToken) {
+            setErrorMessage('No auth token yet. Open pairing first.');
+            return;
+        }
+
+        void runAction('tab-create', async () => {
+            const result = await createGatewayTab({
+                host: session.host,
+                port: session.port,
+                authToken,
+                parentTabId: selectedTab?.tabId,
+                workingDirectory: selectedTerminal?.workingDirectory ?? undefined,
+            });
+            await refreshSnapshotImpl(authToken, result.terminalId ?? selectedTerminalIdRef.current);
+            setSidebarVisible(false);
+        });
+    }, [refreshSnapshotImpl, runAction, selectedTab, selectedTerminal, session.authToken, session.host, session.port]);
+
+    const handleCloseTab = React.useCallback((tab: TabRow) => {
+        const authToken = session.authToken.trim();
+        if (!authToken) {
+            setErrorMessage('No auth token yet. Open pairing first.');
+            return;
+        }
+
+        Alert.alert(
+            'Close tab on phone?',
+            'This confirmation belongs to the phone side. If the tab still has a running process, confirming here will force close it on the desktop without showing a second desktop popup.',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Close Tab',
+                    style: 'destructive',
+                    onPress: () => {
+                        void runAction('tab-close', async () => {
+                            try {
+                                await closeGatewayTab({
+                                    host: session.host,
+                                    port: session.port,
+                                    authToken,
+                                    tabId: tab.tabId,
+                                    expectedGeneration: tab.generation,
+                                    force: true,
+                                });
+                            } catch (error) {
+                                if (isRecoverableTabCloseError(error)) {
+                                    await refreshSnapshotImpl(authToken, selectedTerminalIdRef.current);
+                                    setErrorMessage('The tab changed on desktop before the phone finished closing it. The phone view has been resynced.');
+                                    return;
+                                }
+                                throw error;
+                            }
+
+                            await refreshSnapshotImpl(authToken, selectedTerminalIdRef.current);
+                        });
+                    },
+                },
+            ],
+        );
+    }, [refreshSnapshotImpl, runAction, session.authToken, session.host, session.port]);
+
     const handleRefreshTerminal = React.useCallback(() => {
         if (!selectedTerminal) {
             setErrorMessage('Select a terminal first.');
@@ -545,13 +840,13 @@ export default function GhoDexWorkspaceScreen() {
         }
 
         const rawInput = terminalCommand;
-        const normalizedInput = rawInput.replace(/\r\n/g, '\n');
+        const normalizedInput = normalizeCommandInput(rawInput);
         if (!normalizedInput.trim()) {
             setErrorMessage('Input is empty.');
             return;
         }
 
-        const expectsRawSend = normalizedInput.includes('\n');
+        const expectsRawSend = shouldPasteRawInput(normalizedInput);
         const action: BusyAction = expectsRawSend ? 'terminal-send-text' : 'terminal-command';
 
         void runAction(action, async () => {
@@ -582,7 +877,7 @@ export default function GhoDexWorkspaceScreen() {
 
     React.useEffect(() => {
         const authToken = session.authToken.trim();
-        if (!loaded || !authToken || !session.liveUpdatesEnabled) {
+        if (!loaded || !authToken || !session.liveUpdatesEnabled || authorizationRequired) {
             setSubscriptionOpen(false);
             return;
         }
@@ -613,6 +908,12 @@ export default function GhoDexWorkspaceScreen() {
                         if (cancelled) {
                             return;
                         }
+                        if (isGatewayAuthError(error)) {
+                            setAuthorizationRequired(true);
+                            setSubscriptionOpen(false);
+                            setErrorMessage('Gateway authorization expired for this desktop build. Re-open Pairing in Settings and bind the phone again.');
+                            return;
+                        }
                         console.warn('Gateway subscription dropped', error);
                         setSubscriptionOpen(false);
                         reconnectTimer = setTimeout(openSubscription, Math.max(500, session.pollIntervalMs * 4));
@@ -636,11 +937,11 @@ export default function GhoDexWorkspaceScreen() {
             }
             unsubscribe?.();
         };
-    }, [handleSubscriptionEnvelope, loaded, session.authToken, session.host, session.liveUpdatesEnabled, session.pollIntervalMs, session.port]);
+    }, [authorizationRequired, handleSubscriptionEnvelope, loaded, session.authToken, session.host, session.liveUpdatesEnabled, session.pollIntervalMs, session.port]);
 
     React.useEffect(() => {
         const authToken = session.authToken.trim();
-        if (!loaded || !authToken || !selectedTerminal) {
+        if (!loaded || !authToken || !selectedTerminal || authorizationRequired) {
             return;
         }
         if (session.liveUpdatesEnabled && subscriptionOpen) {
@@ -680,6 +981,12 @@ export default function GhoDexWorkspaceScreen() {
                         : undefined,
                 });
             } catch (error) {
+                if (isGatewayAuthError(error)) {
+                    setAuthorizationRequired(true);
+                    setSubscriptionOpen(false);
+                    setErrorMessage('Gateway authorization expired for this desktop build. Re-open Pairing in Settings and bind the phone again.');
+                    return;
+                }
                 console.warn('Failed to refresh terminal view', error);
             } finally {
                 liveReadInFlightRef.current = false;
@@ -695,7 +1002,7 @@ export default function GhoDexWorkspaceScreen() {
                 clearTimeout(timer);
             }
         };
-    }, [busyAction, loadTerminalViewImpl, loaded, selectedTerminal, session.authToken, session.liveUpdatesEnabled, session.pollIntervalMs, subscriptionOpen, terminalView]);
+    }, [authorizationRequired, busyAction, loadTerminalViewImpl, loaded, selectedTerminal, session.authToken, session.liveUpdatesEnabled, session.pollIntervalMs, subscriptionOpen, terminalView]);
 
     const openPairing = React.useCallback(() => {
         setSidebarVisible(false);
@@ -721,10 +1028,158 @@ export default function GhoDexWorkspaceScreen() {
         : 'Open the left sidebar and choose a terminal session.';
 
     return (
-        <>
-            <View style={styles.screen}>
+        <View style={styles.screen}>
+            <Animated.View
+                pointerEvents={sidebarVisible ? 'auto' : 'none'}
+                style={[
+                    styles.sidebarPanel,
+                    {
+                        paddingTop: insets.top + 12,
+                        paddingBottom: Math.max(insets.bottom, 16),
+                        transform: [{ translateX: sidebarTranslateX }],
+                        width: sidebarWidth,
+                    },
+                ]}
+            >
+                <View style={styles.sidebarHeader}>
+                    <View style={styles.sidebarHeaderCopy}>
+                        <Text style={styles.sidebarTitle}>GhoDex</Text>
+                        <Text style={styles.sidebarSubtitle}>
+                            {paired ? `${tabCount} tabs, ${terminalCount} terminals` : 'No active pairing yet'}
+                        </Text>
+                    </View>
+                    <WorkspaceIconButton
+                        disabled={busyAction === 'tab-create'}
+                        icon="add-outline"
+                        onPress={handleCreateTab}
+                    />
+                </View>
+
+                <Text style={styles.sidebarSectionTitle}>Workspace Tabs</Text>
+                <ScrollView contentContainerStyle={styles.sidebarList} showsVerticalScrollIndicator={false} style={styles.sidebarScroll}>
+                    {paired && snapshot?.tabs.length ? snapshot.tabs.map((tab) => {
+                        const preferredTerminal = pickPreferredTerminalInTab(tab);
+                        const tabActive = tab.tabId === selectedTab?.tabId;
+                        const showTerminalList = tab.terminals.length > 1;
+                        const primaryLabel = tabPrimaryLabel(tab, preferredTerminal);
+                        const secondaryLabel = tabSecondaryLabel(tab, preferredTerminal, primaryLabel);
+
+                        return (
+                            <View
+                                key={tab.tabId}
+                                style={[
+                                    styles.sidebarTabCard,
+                                    tabActive ? styles.sidebarTabCardActive : null,
+                                ]}
+                            >
+                                <View style={styles.sidebarTabHeader}>
+                                    <Pressable
+                                        onPress={() => {
+                                            if (preferredTerminal) {
+                                                setSidebarVisible(false);
+                                                handleSelectTab(tab);
+                                            }
+                                        }}
+                                        style={({ pressed }) => [
+                                            styles.sidebarTabInfo,
+                                            pressed ? styles.sidebarTerminalItemPressed : null,
+                                        ]}
+                                    >
+                                        <Text numberOfLines={1} style={[
+                                            styles.sidebarTabTitle,
+                                            tabActive ? styles.sidebarTabTitleActive : null,
+                                        ]}>
+                                            {primaryLabel}
+                                        </Text>
+                                        {secondaryLabel ? (
+                                            <Text numberOfLines={1} style={[
+                                                styles.sidebarTabMeta,
+                                                tabActive ? styles.sidebarTabMetaActive : null,
+                                            ]}>
+                                                {secondaryLabel}
+                                            </Text>
+                                        ) : null}
+                                    </Pressable>
+                                    <Pressable
+                                        hitSlop={8}
+                                        onPress={() => handleCloseTab(tab)}
+                                        style={({ pressed }) => [
+                                            styles.sidebarTabCloseButton,
+                                            pressed ? styles.sidebarTerminalItemPressed : null,
+                                        ]}
+                                    >
+                                        <Ionicons color="#d8b18e" name="close-outline" size={18} />
+                                    </Pressable>
+                                </View>
+
+                                {showTerminalList ? (
+                                    <View style={styles.sidebarTabTerminalList}>
+                                        {tab.terminals.map((terminal) => (
+                                            <Pressable
+                                                key={terminal.terminalId}
+                                                onPress={() => {
+                                                    setSidebarVisible(false);
+                                                    handleSelectTerminal(terminal);
+                                                }}
+                                                style={({ pressed }) => [
+                                                    styles.sidebarTerminalItem,
+                                                    terminal.terminalId === selectedTerminalId ? styles.sidebarTerminalItemActive : null,
+                                                    pressed ? styles.sidebarTerminalItemPressed : null,
+                                                ]}
+                                            >
+                                                <Text numberOfLines={1} style={[
+                                                    styles.sidebarTerminalTitle,
+                                                    terminal.terminalId === selectedTerminalId ? styles.sidebarTerminalTitleActive : null,
+                                                ]}>
+                                                    {terminal.title || terminal.terminalId.slice(0, 8)}
+                                                </Text>
+                                                <Text numberOfLines={2} style={[
+                                                    styles.sidebarTerminalMeta,
+                                                    terminal.terminalId === selectedTerminalId ? styles.sidebarTerminalMetaActive : null,
+                                                ]}>
+                                                    {terminalMetaLabel(terminal)}
+                                                </Text>
+                                            </Pressable>
+                                        ))}
+                                    </View>
+                                ) : null}
+                            </View>
+                        );
+                    }) : (
+                        <View style={styles.sidebarEmpty}>
+                            <Text style={styles.sidebarEmptyTitle}>No tab data yet</Text>
+                            <Text style={styles.sidebarEmptyText}>
+                                Pair the phone first, then reopen the sidebar to manage desktop tabs and switch terminal sessions.
+                            </Text>
+                        </View>
+                    )}
+                </ScrollView>
+
+                <View style={styles.sidebarFooter}>
+                    <View style={styles.sidebarQuickRow}>
+                        <SidebarQuickAction icon="qr-code-outline" label="Device" onPress={openPairing} />
+                        <SidebarQuickAction icon="settings-outline" label="Settings" onPress={openSettings} />
+                    </View>
+                    <View style={styles.sidebarStatus}>
+                        <Text style={styles.sidebarStatusLine}>{session.host}:{session.port}</Text>
+                        <Text style={styles.sidebarStatusLine}>{syncLabel}</Text>
+                    </View>
+                </View>
+            </Animated.View>
+
+            <Animated.View
+                style={[
+                    styles.mainShell,
+                    {
+                        transform: [
+                            { translateX: contentTranslateX },
+                            { scale: contentScale },
+                        ],
+                    },
+                ]}
+            >
                 <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
-                    <WorkspaceIconButton icon="menu-outline" onPress={() => setSidebarVisible(true)} />
+                    <WorkspaceIconButton icon="menu-outline" onPress={() => setSidebarVisible((current) => !current)} />
                     <View style={styles.headerCopy}>
                         <Text numberOfLines={1} style={styles.headerTitle}>
                             {selectedTerminal?.title || (paired ? 'Choose terminal' : 'GhoDex Remote')}
@@ -733,160 +1188,87 @@ export default function GhoDexWorkspaceScreen() {
                             {selectedTerminal?.workingDirectory || syncLabel}
                         </Text>
                     </View>
-                    <WorkspaceIconButton
-                        disabled={!paired || busyAction === 'snapshot'}
-                        icon="refresh-outline"
-                        onPress={handleRefreshSnapshot}
-                    />
                 </View>
 
                 {errorMessage ? (
                     <View style={styles.errorBar}>
                         <Ionicons color="#a9412b" name="alert-circle-outline" size={16} />
-                        <Text numberOfLines={2} style={styles.errorText}>{errorMessage}</Text>
+                        <Text selectable style={styles.errorText}>{errorMessage}</Text>
                     </View>
                 ) : null}
 
-                <View style={styles.workspaceStage}>
-                    {!paired ? (
-                        <View style={styles.emptyStage}>
-                            <SurfaceCard title="Pair your desktop first" subtitle="The home screen now stays focused on the terminal panel. Pairing and sync settings moved into the left sidebar.">
-                                <View style={styles.emptyActions}>
-                                    <ActionButton label="Open Pairing" onPress={openPairing} />
-                                    <ActionButton kind="secondary" label="Settings" onPress={openSettings} />
+                <KeyboardAvoidingView
+                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                    style={styles.workspaceKeyboardFrame}
+                >
+                    <View style={styles.workspaceStage}>
+                        {!paired ? (
+                            <View style={styles.emptyStage}>
+                                <SurfaceCard title="Pair your desktop first" subtitle="The home screen now stays focused on the terminal panel. Pairing and sync settings moved into the left sidebar.">
+                                    <View style={styles.emptyActions}>
+                                        <ActionButton label="Open Pairing" onPress={openPairing} />
+                                        <ActionButton kind="secondary" label="Settings" onPress={openSettings} />
+                                    </View>
+                                </SurfaceCard>
+                            </View>
+                        ) : (
+                            <View style={styles.terminalShell}>
+                                <View style={styles.terminalToolbar}>
+                                    <Text numberOfLines={1} style={styles.terminalToolbarPath}>
+                                        {selectedTerminal?.workingDirectory || 'Select a terminal from the sidebar'}
+                                    </Text>
+                                    <View style={styles.terminalToolbarActions}>
+                                        <SyncBadge live={session.liveUpdatesEnabled} open={subscriptionOpen} pollIntervalMs={session.pollIntervalMs} />
+                                        <WorkspaceMiniAction
+                                            busy={busyAction === 'terminal-read' || busyAction === 'snapshot'}
+                                            icon="sync-outline"
+                                            onPress={handleRefreshTerminal}
+                                        />
+                                    </View>
                                 </View>
-                            </SurfaceCard>
-                        </View>
-                    ) : (
-                        <View style={styles.terminalShell}>
-                            <View style={styles.terminalToolbar}>
-                                <Text numberOfLines={1} style={styles.terminalToolbarPath}>
-                                    {selectedTerminal?.workingDirectory || 'Select a terminal from the sidebar'}
-                                </Text>
-                                <View style={styles.terminalToolbarActions}>
-                                    <SyncBadge live={session.liveUpdatesEnabled} open={subscriptionOpen} pollIntervalMs={session.pollIntervalMs} />
-                                    <WorkspaceMiniAction
-                                        busy={busyAction === 'terminal-read'}
-                                        icon="sync-outline"
-                                        label="Refresh"
-                                        onPress={handleRefreshTerminal}
+
+                                <View style={styles.terminalViewport}>
+                                    <ScrollView nestedScrollEnabled style={styles.terminalScroll}>
+                                        <Text selectable style={styles.terminalContent}>
+                                            {renderAnsiText(terminalDisplayText)}
+                                        </Text>
+                                    </ScrollView>
+                                </View>
+                            </View>
+                        )}
+                    </View>
+
+                    {paired ? (
+                        <View style={[styles.commandDock, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+                            <View style={styles.commandRow}>
+                                <TextInput
+                                    autoCapitalize="none"
+                                    autoCorrect={false}
+                                    multiline
+                                    onChangeText={setTerminalCommand}
+                                    placeholder="Run one line, paste real multi-line blocks."
+                                    placeholderTextColor="#8f867a"
+                                    style={styles.commandInput}
+                                    value={terminalCommand}
+                                />
+                                <View style={styles.commandActions}>
+                                    <WorkspaceSubmitButton
+                                        busy={busyAction === 'terminal-command' || busyAction === 'terminal-send-text'}
+                                        label={shouldPasteRawInput(terminalCommand) ? 'Paste' : 'Run'}
+                                        onPress={handleSubmitInput}
                                     />
                                 </View>
                             </View>
-
-                            <View style={styles.terminalViewport}>
-                                <ScrollView nestedScrollEnabled style={styles.terminalScroll}>
-                                    <Text selectable style={styles.terminalContent}>
-                                        {renderAnsiText(terminalDisplayText)}
-                                    </Text>
-                                </ScrollView>
-                            </View>
                         </View>
-                    )}
-                </View>
-
-                {paired ? (
-                    <View style={[styles.commandDock, { paddingBottom: Math.max(insets.bottom, 12) }]}>
-                        <TextInput
-                            autoCapitalize="none"
-                            autoCorrect={false}
-                            multiline
-                            onChangeText={setTerminalCommand}
-                            placeholder="Single line executes. Multiline text sends raw input."
-                            placeholderTextColor="#8f867a"
-                            style={styles.commandInput}
-                            value={terminalCommand}
-                        />
-                        <View style={styles.commandFooter}>
-                            <Text style={styles.commandHint}>
-                                Single-line input runs as a command. Multi-line input is pasted as raw terminal text.
-                            </Text>
-                            <View style={styles.commandActions}>
-                                <ActionButton
-                                    busy={busyAction === 'terminal-command' || busyAction === 'terminal-send-text'}
-                                    label={terminalCommand.includes('\n') ? 'Paste Raw' : 'Send'}
-                                    onPress={handleSubmitInput}
-                                />
-                            </View>
-                        </View>
-                    </View>
+                    ) : null}
+                </KeyboardAvoidingView>
+                {sidebarVisible ? (
+                    <Animated.View pointerEvents="box-none" style={[styles.contentBackdropLayer, { opacity: backdropOpacity }]}>
+                        <Pressable onPress={() => setSidebarVisible(false)} style={styles.sidebarBackdrop} />
+                    </Animated.View>
                 ) : null}
-            </View>
-
-            <Modal
-                animationType="fade"
-                onRequestClose={() => setSidebarVisible(false)}
-                transparent
-                visible={sidebarVisible}
-            >
-                <View style={styles.sidebarOverlay}>
-                    <View style={[styles.sidebarPanel, { paddingTop: insets.top + 12, paddingBottom: Math.max(insets.bottom, 16), width: sidebarWidth }]}>
-                        <View style={styles.sidebarHeader}>
-                            <View style={styles.sidebarHeaderCopy}>
-                                <Text style={styles.sidebarTitle}>GhoDex</Text>
-                                <Text style={styles.sidebarSubtitle}>
-                                    {paired ? `${snapshot?.terminals.length ?? 0} terminal sessions` : 'No active pairing yet'}
-                                </Text>
-                            </View>
-                            <WorkspaceIconButton icon="close-outline" onPress={() => setSidebarVisible(false)} />
-                        </View>
-
-                        <Text style={styles.sidebarSectionTitle}>Terminal Sessions</Text>
-                        <ScrollView contentContainerStyle={styles.sidebarList} showsVerticalScrollIndicator={false} style={styles.sidebarScroll}>
-                            {paired && snapshot?.terminals.length ? snapshot.terminals.map((terminal) => (
-                                <Pressable
-                                    key={terminal.terminalId}
-                                    onPress={() => {
-                                        setSidebarVisible(false);
-                                        handleSelectTerminal(terminal);
-                                    }}
-                                    style={({ pressed }) => [
-                                        styles.sidebarTerminalItem,
-                                        terminal.terminalId === selectedTerminalId ? styles.sidebarTerminalItemActive : null,
-                                        pressed ? styles.sidebarTerminalItemPressed : null,
-                                    ]}
-                                >
-                                    <Text numberOfLines={1} style={[
-                                        styles.sidebarTerminalTitle,
-                                        terminal.terminalId === selectedTerminalId ? styles.sidebarTerminalTitleActive : null,
-                                    ]}>
-                                        {terminal.title || terminal.terminalId.slice(0, 8)}
-                                    </Text>
-                                    <Text numberOfLines={2} style={[
-                                        styles.sidebarTerminalMeta,
-                                        terminal.terminalId === selectedTerminalId ? styles.sidebarTerminalMetaActive : null,
-                                    ]}>
-                                        {terminal.workingDirectory || terminal.terminalId}
-                                    </Text>
-                                </Pressable>
-                            )) : (
-                                <View style={styles.sidebarEmpty}>
-                                    <Text style={styles.sidebarEmptyTitle}>No terminal data yet</Text>
-                                    <Text style={styles.sidebarEmptyText}>
-                                        Pair the phone first, then reopen the sidebar to switch between desktop terminal sessions.
-                                    </Text>
-                                </View>
-                            )}
-                        </ScrollView>
-
-                        <View style={styles.sidebarFooter}>
-                            <SidebarLink icon="qr-code-outline" label="Pair Device" onPress={openPairing} />
-                            <SidebarLink icon="settings-outline" label="Settings" onPress={openSettings} />
-                            <SidebarLink icon="refresh-outline" label="Refresh Sessions" onPress={() => {
-                                setSidebarVisible(false);
-                                handleRefreshSnapshot();
-                            }}
-                            />
-                            <View style={styles.sidebarStatus}>
-                                <Text style={styles.sidebarStatusLine}>{session.host}:{session.port}</Text>
-                                <Text style={styles.sidebarStatusLine}>{syncLabel}</Text>
-                            </View>
-                        </View>
-                    </View>
-                    <Pressable onPress={() => setSidebarVisible(false)} style={styles.sidebarBackdrop} />
-                </View>
-            </Modal>
-        </>
+            </Animated.View>
+        </View>
     );
 }
 
@@ -910,9 +1292,8 @@ function WorkspaceIconButton(props: {
     );
 }
 
-function WorkspaceMiniAction(props: {
+function WorkspaceSubmitButton(props: {
     busy?: boolean;
-    icon: keyof typeof Ionicons.glyphMap;
     label: string;
     onPress: () => void;
 }) {
@@ -921,27 +1302,45 @@ function WorkspaceMiniAction(props: {
             disabled={props.busy}
             onPress={props.onPress}
             style={({ pressed }) => [
-                styles.miniAction,
-                pressed ? styles.sidebarTerminalItemPressed : null,
+                styles.submitButton,
+                pressed ? styles.iconButtonPressed : null,
                 props.busy ? styles.iconButtonDisabled : null,
             ]}
         >
-            {props.busy ? <ActivityIndicator color="#d9b68f" size="small" /> : <Ionicons color="#d9b68f" name={props.icon} size={15} />}
-            <Text style={styles.miniActionText}>{props.label}</Text>
+            {props.busy ? <ActivityIndicator color="#fffaf3" size="small" /> : <Text style={styles.submitButtonText}>{props.label}</Text>}
         </Pressable>
     );
 }
 
-function SidebarLink(props: {
+function WorkspaceMiniAction(props: {
+    busy?: boolean;
+    icon: keyof typeof Ionicons.glyphMap;
+    onPress: () => void;
+}) {
+    return (
+        <Pressable
+            disabled={props.busy}
+            onPress={props.onPress}
+            style={({ pressed }) => [
+                styles.miniAction,
+                pressed ? styles.iconButtonPressed : null,
+                props.busy ? styles.iconButtonDisabled : null,
+            ]}
+        >
+            {props.busy ? <ActivityIndicator color="#d9b68f" size="small" /> : <Ionicons color="#d9b68f" name={props.icon} size={15} />}
+        </Pressable>
+    );
+}
+
+function SidebarQuickAction(props: {
     icon: keyof typeof Ionicons.glyphMap;
     label: string;
     onPress: () => void;
 }) {
     return (
-        <Pressable onPress={props.onPress} style={({ pressed }) => [styles.sidebarLink, pressed ? styles.sidebarTerminalItemPressed : null]}>
+        <Pressable onPress={props.onPress} style={({ pressed }) => [styles.sidebarQuickAction, pressed ? styles.sidebarTerminalItemPressed : null]}>
             <Ionicons color="#fff4e7" name={props.icon} size={18} />
-            <Text style={styles.sidebarLinkText}>{props.label}</Text>
-            <Ionicons color="#c6b39b" name="chevron-forward-outline" size={18} />
+            <Text style={styles.sidebarQuickActionText}>{props.label}</Text>
         </Pressable>
     );
 }
@@ -968,6 +1367,14 @@ const styles = StyleSheet.create({
     screen: {
         flex: 1,
         backgroundColor: '#100d0b',
+        overflow: 'hidden',
+    },
+    mainShell: {
+        flex: 1,
+        backgroundColor: '#100d0b',
+    },
+    contentBackdropLayer: {
+        ...StyleSheet.absoluteFillObject,
     },
     loadingScreen: {
         flex: 1,
@@ -985,7 +1392,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: 12,
         paddingHorizontal: 16,
-        paddingBottom: 14,
+        paddingBottom: 6,
         backgroundColor: '#171210',
         borderBottomWidth: 1,
         borderBottomColor: '#2a211b',
@@ -1020,9 +1427,9 @@ const styles = StyleSheet.create({
     },
     errorBar: {
         marginHorizontal: 16,
-        marginTop: 12,
+        marginTop: 8,
         paddingHorizontal: 12,
-        paddingVertical: 10,
+        paddingVertical: 8,
         borderRadius: 14,
         borderWidth: 1,
         borderColor: '#6a2d21',
@@ -1041,8 +1448,12 @@ const styles = StyleSheet.create({
         flex: 1,
         minHeight: 0,
         paddingHorizontal: 16,
-        paddingTop: 12,
-        paddingBottom: 12,
+        paddingTop: 6,
+        paddingBottom: 6,
+    },
+    workspaceKeyboardFrame: {
+        flex: 1,
+        minHeight: 0,
     },
     emptyStage: {
         flex: 1,
@@ -1055,7 +1466,7 @@ const styles = StyleSheet.create({
     terminalShell: {
         flex: 1,
         minHeight: 0,
-        borderRadius: 24,
+        borderRadius: 18,
         borderWidth: 1,
         borderColor: '#2e241d',
         backgroundColor: '#0c0907',
@@ -1065,9 +1476,9 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: 12,
-        paddingHorizontal: 14,
-        paddingVertical: 12,
+        gap: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 7,
         borderBottomWidth: 1,
         borderBottomColor: '#221b16',
         backgroundColor: '#16110f',
@@ -1075,33 +1486,28 @@ const styles = StyleSheet.create({
     terminalToolbarPath: {
         flex: 1,
         color: '#b8a894',
-        fontSize: 12,
-        lineHeight: 17,
+        fontSize: 11,
+        lineHeight: 15,
         fontFamily: 'monospace',
     },
     terminalToolbarActions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: 6,
     },
     miniAction: {
-        flexDirection: 'row',
+        minWidth: 30,
+        paddingHorizontal: 7,
+        paddingVertical: 6,
+        borderRadius: 10,
         alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
-        borderRadius: 12,
+        justifyContent: 'center',
         backgroundColor: '#251d18',
-    },
-    miniActionText: {
-        color: '#d9b68f',
-        fontSize: 12,
-        fontWeight: '700',
     },
     syncBadge: {
         borderRadius: 999,
-        paddingHorizontal: 10,
-        paddingVertical: 7,
+        paddingHorizontal: 8,
+        paddingVertical: 5,
         backgroundColor: '#251d18',
     },
     syncBadgeLive: {
@@ -1109,7 +1515,7 @@ const styles = StyleSheet.create({
     },
     syncBadgeText: {
         color: '#d8c6b2',
-        fontSize: 11,
+        fontSize: 10,
         fontWeight: '700',
         textTransform: 'uppercase',
         letterSpacing: 0.5,
@@ -1122,62 +1528,78 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     terminalContent: {
-        padding: 16,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
         color: '#f8efe3',
-        fontSize: 14,
-        lineHeight: 22,
+        fontSize: 13,
+        lineHeight: 20,
         fontFamily: 'monospace',
     },
     commandDock: {
-        paddingHorizontal: 16,
-        paddingTop: 12,
+        paddingHorizontal: 12,
+        paddingTop: 8,
         backgroundColor: '#171210',
         borderTopWidth: 1,
         borderTopColor: '#2a211b',
-        gap: 10,
+    },
+    commandRow: {
+        flexDirection: 'row',
+        alignItems: 'stretch',
+        gap: 8,
     },
     commandInput: {
-        minHeight: 86,
-        maxHeight: 160,
-        borderRadius: 18,
+        flex: 1,
+        minHeight: 46,
+        maxHeight: 92,
+        borderRadius: 14,
         backgroundColor: '#221b16',
         borderWidth: 1,
         borderColor: '#342921',
-        paddingHorizontal: 14,
-        paddingVertical: 12,
+        paddingHorizontal: 12,
+        paddingVertical: 9,
         color: '#fff7ed',
-        fontSize: 15,
+        fontSize: 14,
         textAlignVertical: 'top',
         fontFamily: 'monospace',
     },
-    commandFooter: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        gap: 12,
-    },
-    commandHint: {
-        flex: 1,
-        color: '#a8937d',
-        fontSize: 12,
-        lineHeight: 17,
-    },
     commandActions: {
-        minWidth: 132,
+        width: 78,
+        alignSelf: 'stretch',
     },
-    sidebarOverlay: {
+    submitButton: {
         flex: 1,
-        flexDirection: 'row',
-        backgroundColor: 'rgba(0, 0, 0, 0.45)',
+        minHeight: 46,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#8a4b2a',
+        paddingHorizontal: 12,
+    },
+    submitButtonText: {
+        color: '#fffaf3',
+        fontSize: 13,
+        fontWeight: '700',
     },
     sidebarPanel: {
+        position: 'absolute',
+        top: 0,
+        bottom: 0,
+        left: 0,
+        zIndex: 20,
         backgroundColor: '#191411',
         borderRightWidth: 1,
         borderRightColor: '#2d241d',
         paddingHorizontal: 14,
         gap: 14,
+        shadowColor: '#000',
+        shadowOffset: { width: 8, height: 0 },
+        shadowOpacity: 0.22,
+        shadowRadius: 18,
+        elevation: 24,
     },
     sidebarBackdrop: {
         flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.28)',
     },
     sidebarHeader: {
         flexDirection: 'row',
@@ -1213,11 +1635,59 @@ const styles = StyleSheet.create({
         gap: 10,
         paddingBottom: 8,
     },
+    sidebarTabCard: {
+        borderRadius: 20,
+        paddingHorizontal: 12,
+        paddingVertical: 12,
+        backgroundColor: '#241d18',
+        gap: 10,
+    },
+    sidebarTabCardActive: {
+        backgroundColor: '#31241c',
+        borderWidth: 1,
+        borderColor: '#8a4b2a',
+    },
+    sidebarTabHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+    },
+    sidebarTabInfo: {
+        flex: 1,
+        gap: 3,
+    },
+    sidebarTabTitle: {
+        color: '#f8efe3',
+        fontSize: 15,
+        fontWeight: '800',
+    },
+    sidebarTabTitleActive: {
+        color: '#fff6ec',
+    },
+    sidebarTabMeta: {
+        color: '#b7a490',
+        fontSize: 12,
+        lineHeight: 17,
+    },
+    sidebarTabMetaActive: {
+        color: '#f1cfb3',
+    },
+    sidebarTabCloseButton: {
+        width: 30,
+        height: 30,
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#1a1410',
+    },
+    sidebarTabTerminalList: {
+        gap: 8,
+    },
     sidebarTerminalItem: {
         borderRadius: 18,
         paddingHorizontal: 14,
-        paddingVertical: 14,
-        backgroundColor: '#241d18',
+        paddingVertical: 12,
+        backgroundColor: '#1b1511',
         gap: 6,
     },
     sidebarTerminalItemActive: {
@@ -1264,7 +1734,12 @@ const styles = StyleSheet.create({
         gap: 10,
         paddingTop: 6,
     },
-    sidebarLink: {
+    sidebarQuickRow: {
+        flexDirection: 'row',
+        gap: 10,
+    },
+    sidebarQuickAction: {
+        flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 10,
@@ -1272,9 +1747,9 @@ const styles = StyleSheet.create({
         backgroundColor: '#241d18',
         paddingHorizontal: 14,
         paddingVertical: 13,
+        justifyContent: 'center',
     },
-    sidebarLinkText: {
-        flex: 1,
+    sidebarQuickActionText: {
         color: '#fff4e7',
         fontSize: 14,
         fontWeight: '700',

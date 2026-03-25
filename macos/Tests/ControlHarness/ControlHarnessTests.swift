@@ -708,6 +708,35 @@ struct ControlHarnessTests {
         }
     }
 
+    @Test func tabCloseConfirmationUsesTabCopyWhenMultipleTabsRemain() {
+        let confirmation = ControlTabCloseConfirmation.resolve(
+            hasMultipleTabs: true,
+            needsConfirmQuit: true
+        )
+
+        #expect(confirmation?.title == "Close Tab?")
+        #expect(confirmation?.message == "The terminal still has a running process. If you close the tab the process will be killed.")
+    }
+
+    @Test func tabCloseConfirmationUsesWindowCopyWhenLastTabWouldCloseWindow() {
+        let confirmation = ControlTabCloseConfirmation.resolve(
+            hasMultipleTabs: false,
+            needsConfirmQuit: true
+        )
+
+        #expect(confirmation?.title == "Close Window?")
+        #expect(confirmation?.message == "All terminal sessions in this window will be terminated.")
+    }
+
+    @Test func tabCloseConfirmationSkipsPromptWhenNoRunningProcessNeedsQuitConfirmation() {
+        let confirmation = ControlTabCloseConfirmation.resolve(
+            hasMultipleTabs: true,
+            needsConfirmQuit: false
+        )
+
+        #expect(confirmation == nil)
+    }
+
     private func responseJSON(_ response: ControlHarnessResponse) throws -> [String: Any] {
         let data = try JSONEncoder().encode(response)
         return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
