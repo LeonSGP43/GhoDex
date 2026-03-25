@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(browser): ignore shared external profile defaults in isolated runs
+
+- What changed: `ConfiguredExternalProfilePath()` in `GhoDexCEFBridge.mm` now ignores the shared `BrowserCEFProfilePath` user-defaults override whenever an isolated `GHODEX_BROWSER_APP_SUPPORT_ROOT` is active and no explicit `GHODEX_CEF_PROFILE_PATH` was provided for the process.
+- Why: Isolated popup and profile acceptance runs were still inheriting a real external-profile default from the host machine, which contaminated supposedly managed-profile test launches and made `external_profile` evidence unreliable.
+- Impact: Isolated Browser acceptance now starts from the intended managed-profile baseline unless the harness explicitly opts into an external profile. That makes popup/profile verification artifacts materially more trustworthy and avoids accidental reuse of the user's live Chrome state.
+- Verification: `/tmp/ghx-popup-followup-visible-acceptance.json` now records `external_profile=<none>` in the isolated app log while still completing the isolated popup acceptance flow under `GHODEX_BROWSER_APP_SUPPORT_ROOT=/tmp/...`.
+- Files: `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `CHANGELOG.md`
+- Decision trail: Keep the isolation rule at the CEF bridge entry point instead of trying to scrub unrelated host defaults elsewhere in the harness. The product contract is that an isolated app-support root should behave like its own Browser runtime unless the caller explicitly passes a profile override.
+
 ### fix(browser): align popup disposition mapping with CEF
 
 - What changed: `BrowserPopupDisposition` in `BrowserTabModel.swift` now matches CEF's real `cef_window_open_disposition_t` raw values, including the leading `UNKNOWN = 0` slot and the newer picture-in-picture case. Popup routing now treats the incoming CEF `disposition = 3` path as `newForegroundTab`, not `newBackgroundTab`.

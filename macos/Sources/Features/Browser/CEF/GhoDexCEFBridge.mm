@@ -2255,11 +2255,20 @@ NSString *ValidatedDirectoryPath(NSString *candidate) {
   return standardized;
 }
 
+BOOL HasIsolatedAppSupportRootOverride(void) {
+  NSString *override_path = NSProcessInfo.processInfo.environment[@"GHODEX_BROWSER_APP_SUPPORT_ROOT"];
+  return ValidatedDirectoryPath(override_path).length > 0;
+}
+
 NSString *ConfiguredExternalProfilePath(void) {
   NSString *override_path = NSProcessInfo.processInfo.environment[@"GHODEX_CEF_PROFILE_PATH"];
   NSString *validated = ValidatedDirectoryPath(override_path);
   if (validated.length > 0) {
     return validated;
+  }
+
+  if (HasIsolatedAppSupportRootOverride()) {
+    return nil;
   }
 
   NSString *defaults_path =
