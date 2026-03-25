@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(browser): preserve popup opener semantics
+
+- What changed: `GhoDexCEFBridge.mm` now hosts first-level Chromium popups inside a dedicated native popup window backed by a deferred `GhoDexCEFView`, instead of canceling the popup and reconstructing it through the normal Browser tab/window routing path. The popup host keeps the real CEF popup browser relationship alive, closes the native popup window when that popup browser closes, and the durable browser docs now record first-level popup/OAuth acceptance as working while calling out the narrower remaining gap around nested popup-host follow-up opens.
+- Why: The previous popup-disposition work fixed where popup URLs landed, but it still flattened real popup creation into a reconstructed Browser page/window. That broke the browser-side semantics sites care about for OAuth flows: opener linkage, `postMessage`, and popup self-close behavior.
+- Impact: First-level popup/OAuth semantics are now materially Chrome-like in runtime evidence. The current isolated artifact shows a popup-hosted child receiving `window.opener`, posting `oauth-complete` back to the opener, and self-closing while the opener observes the closed handle state. This raises the browser's completeness baseline for real auth flows, although nested popup-host follow-up opens still need to stay inside GhoDex instead of escaping to `NSWorkspace`.
+- Verification: `GHODEX_CEF_ROOT=/tmp/ghx-cef-full-root nu macos/build.nu --configuration Debug --action build`, `/tmp/ghx-popup-oauth-final-2d9a943a.json` (`window_open_returned_object = true`, `popup_reported_opener = true`, `popup_postmessage_reached_opener = true`, and `popup_closed_itself = true`)
+- Files: `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `browser-tab-acceptance-matrix.md`, `browser-tab-completeness-audit.md`, `CHANGELOG.md`
+- Decision trail: Keep the popup fix inside the CEF bridge instead of adding more Swift-side reconstruction policy. The right boundary is "let Chromium create the real popup browser, but give it a native host window we own." That fixes the site-visible semantics without reopening the already-dirty Browser page/window model, and it leaves the remaining nested-popup gap clearly isolated to the popup host controller.
+
 ### docs(browser): add completeness audit
 
 - What changed: Added `browser-tab-completeness-audit.md`, a durable audit of what the built-in browser can and cannot currently claim as a normal Chrome-like browser after the popup disposition-routing fix. The audit separates hard browsing blockers from intentional product boundaries and from verification-only gaps.

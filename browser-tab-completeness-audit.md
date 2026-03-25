@@ -2,8 +2,8 @@
 
 ## Purpose
 
-This document records the current browser-completeness baseline after the popup
-disposition routing fix on March 25, 2026.
+This document records the current browser-completeness baseline after the real
+popup-hosting fix on March 25, 2026.
 
 It answers a narrower question than the full acceptance matrix:
 
@@ -24,53 +24,54 @@ What is materially working now:
 - download, file dialog, JS dialog, permission, HTTP auth, and certificate
   prompt handlers
 - page-level Browser control API over IPC and AppleScript
-- disposition-aware popup routing across current-page load, page tab, and
-  Browser window targets
+- disposition-aware popup routing across current-page load, page tab, Browser
+  window targets, and first-level popup/OAuth hosting with working opener
+  semantics
 
 What is still not enough for "normal browser" parity:
 
-- popup/opener/OAuth semantics are still broken at runtime
 - external/mirror mode intentionally disables several Chrome-owned services
 - media/fingerprint acceptance is still incomplete
 - several shipped browser-service handlers are code-complete but not yet
   acceptance-backed
+- popup-hosted follow-up opens still fall back to `NSWorkspace`
 
 ## Risk Tiers
 
 ### Tier 0: Blocks Normal Browser Semantics
 
-#### 1. Real popup opener semantics are still broken
+#### 1. Popup-hosted follow-up opens are still not fully internalized
 
 Why this matters:
 
-- real OAuth and many identity/payment flows rely on `window.open(...)`,
-  `window.opener`, and `postMessage` between opener and child
-- a browser that opens the page but loses opener semantics is not equivalent to
-  Chrome from the site's point of view
+- the first popup hop now behaves like a real browser popup, but a popup-hosted
+  page can still delegate later open requests out to the system browser instead
+  of staying inside GhoDex
+- multi-hop auth/payment flows sometimes chain more than one popup or use
+  follow-up open requests after the first child is already live
 
 Evidence:
 
-- isolated runtime artifact `/tmp/ghx-popup-oauth-accept-d396923d.json`
-- opener result: `returnedObject = false`
-- popup result: `openerPresent = false`
-- opener page result: `messages = []`
-- popup close still works, proving the child Browser window exists but is not a
-  true opener-linked popup
+- isolated runtime artifact `/tmp/ghx-popup-oauth-final-2d9a943a.json`
+- settled opener state now reports `lastOpenResult.returnedObject = true`
+- popup result reports `openerPresent = true`
+- opener page receives the `oauth-complete` `postMessage`
+- popup self-close is reflected back to the opener with `popupClosedFlag = true`
+- popup-host follow-up requests from `GhoDexCEFPopupWindowController` still call
+  `NSWorkspace.sharedWorkspace openURL:`
 
 Code path:
 
-- `OnBeforePopup(...)` still cancels the real popup client path in
+- `OnBeforePopup(...)` now keeps the real popup client path in
   `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`
-- Swift then recreates the target as a new Browser page/window through
-  `macos/Sources/Features/Browser/BrowserTabModel.swift` and
-  `macos/Sources/Features/Browser/BrowserTabController.swift`
+- `GhoDexCEFPopupWindowController` in the same file still delegates nested
+  follow-up opens through `NSWorkspace`
 
 Conclusion:
 
-- the recent popup-routing fix corrected destination policy, but not browser
-  window semantics
-- if the product goal is "normal browser", the next implementation must keep a
-  real popup browser relationship instead of canceling and reconstructing it
+- the first-level popup/OAuth blocker is now fixed
+- the remaining popup gap is narrower: nested popup-host follow-up routing still
+  needs to stay inside the product instead of escaping to the system browser
 
 #### 2. H.264 / broader media-codec parity is still unproven and likely
 incomplete
@@ -211,7 +212,8 @@ If the target is:
 
 - "a stable internal browser that can reuse Chrome web state and browse normal
   sites reasonably well"
-  Current state: close, but popup/OAuth and media parity still block that claim
+  Current state: close. First-level popup/OAuth semantics are now fixed, but
+  media parity and a few remaining service-surface gaps still keep the claim
   from being strong.
 
 - "a browser that is basically Chrome with the same profile and service layer"
@@ -220,21 +222,21 @@ If the target is:
   Chrome service surfaces.
 
 - "a browser that does not look like an obviously stripped automation shell"
-  Current state: improved, but still unproven. WebGL parity is fixed; popup
-  opener semantics and H.264/media capability remain the highest-confidence
-  visible gaps.
+  Current state: improved, but still unproven. WebGL parity and first-level
+  popup opener semantics are fixed; H.264/media capability and reduced
+  Chrome-owned services remain the highest-confidence visible gaps.
 
 ## Recommended Next Sequence
 
-1. Replace popup reconstruction with a true CEF popup ownership model so child
-   windows preserve `window.opener` and `postMessage` semantics.
-2. Add a dedicated popup/OAuth acceptance harness and make it part of the
-   durable evidence set.
-3. Run a media-capability acceptance lane focused on H.264/video support and
+1. Internalize nested popup-host follow-up routing so popup-launched opens do
+   not escape to `NSWorkspace`.
+2. Run a media-capability acceptance lane focused on H.264/video support and
    other high-signal fingerprint surfaces.
+3. Add dedicated acceptance for the remaining permission/auth/dialog surfaces
+   that are currently code-backed but not end-to-end proven.
 4. Decide explicitly whether external/mirror mode is meant to stay a
    "web-session reuse" product or evolve toward fuller Chrome-service
    equivalence. That decision should control whether the current
    `disable-*`/`allow-browser-signin=false` launch policy stays in place.
-5. Add dedicated acceptance for permission/auth/dialog flows that are currently
-   only code-backed.
+5. Add a fresh isolated verification lane proving the debug port stays closed
+   when unset, so the hardening work is runtime-backed and not only build-backed.

@@ -30,6 +30,7 @@ NSString * const GhoDexCEFControlErrorDomain = @"com.leongong.ghodex.browser.cef
              receivedContentLength:(int64_t)receivedContentLength
                        isMainFrame:(BOOL)isMainFrame
                          frameName:(NSString *)frameName;
+- (void)browserDidClose;
 - (void)loadPendingBootstrapURLIfNeeded;
 @end
 
@@ -763,6 +764,7 @@ public:
         dispatch_async(dispatch_get_main_queue(), ^{
           [owner_ failPendingEvaluationRequestsWithCode:GhoDexCEFControlErrorCodeBridgeUnavailable
                                             description:@"The browser page closed before JavaScript evaluation completed."];
+          [owner_ browserDidClose];
         });
       }
       browser_ = nullptr;
@@ -831,13 +833,28 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
 - (void)loadPendingBootstrapURLIfNeeded;
 @end
 
+@interface GhoDexCEFView (PopupHostingInternal)
+- (CefRefPtr<GhoDexCEFClient>)preparePopupHostingClient;
+@end
+
+@interface GhoDexCEFPopupWindowController : NSWindowController <NSWindowDelegate, GhoDexCEFViewDelegate>
+@property(nonatomic, strong, readonly) GhoDexCEFView *cefView;
+- (instancetype)initWithSourceView:(GhoDexCEFView *)sourceView
+                     popupFeatures:(const CefPopupFeatures &)popupFeatures NS_DESIGNATED_INITIALIZER;
+- (void)presentPopupWindow;
+@end
+
 @interface GhoDexCEFView () {
   CefRefPtr<GhoDexCEFClient> _client;
   NSString *_initialURLString;
   NSString *_pendingBootstrapURLString;
+  BOOL _defersInitialBrowserCreation;
+  BOOL _closesWindowWhenBrowserCloses;
   int64_t _nextEvaluationRequestID;
   NSMutableDictionary<NSString *, GhoDexCEFJavaScriptEvaluationCompletion> *_pendingEvaluationCompletions;
 }
+- (instancetype)initWithInitialURLString:(NSString *)initialURLString
+             deferInitialBrowserCreation:(BOOL)deferInitialBrowserCreation NS_DESIGNATED_INITIALIZER;
 - (NSString *)registerEvaluationCompletion:(GhoDexCEFJavaScriptEvaluationCompletion)completion;
 - (void)completeEvaluationRequestID:(NSString *)requestID
                          resultJSON:(NSString * _Nullable)resultJSON
@@ -850,10 +867,17 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
 @implementation GhoDexCEFView
 
 - (instancetype)initWithInitialURLString:(NSString *)initialURLString {
+  return [self initWithInitialURLString:initialURLString deferInitialBrowserCreation:NO];
+}
+
+- (instancetype)initWithInitialURLString:(NSString *)initialURLString
+             deferInitialBrowserCreation:(BOOL)deferInitialBrowserCreation {
   self = [super initWithFrame:NSZeroRect];
   if (self) {
     _initialURLString = [initialURLString copy];
     _pendingBootstrapURLString = nil;
+    _defersInitialBrowserCreation = deferInitialBrowserCreation;
+    _closesWindowWhenBrowserCloses = NO;
     _pendingEvaluationCompletions = [NSMutableDictionary dictionary];
     self.wantsLayer = YES;
   }
@@ -878,6 +902,10 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
       _client->CloseBrowser();
       _client = nullptr;
     }
+    return;
+  }
+
+  if (_defersInitialBrowserCreation) {
     return;
   }
 
@@ -1110,6 +1138,185 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
   NSError *error = MakeControlError(code, description);
   for (GhoDexCEFJavaScriptEvaluationCompletion completion in pending.objectEnumerator) {
     completion(nil, error);
+  }
+}
+
+- (CefRefPtr<GhoDexCEFClient>)preparePopupHostingClient {
+  if (!_client) {
+    _client = new GhoDexCEFClient(self);
+  }
+  _defersInitialBrowserCreation = NO;
+  _pendingBootstrapURLString = nil;
+  _closesWindowWhenBrowserCloses = YES;
+  return _client;
+}
+
+- (void)browserDidClose {
+  if (!_closesWindowWhenBrowserCloses) {
+    return;
+  }
+
+  _closesWindowWhenBrowserCloses = NO;
+  if (self.window != nil) {
+    [self.window close];
+  }
+}
+
+@end
+
+namespace {
+NSMutableSet<GhoDexCEFPopupWindowController *> *PopupWindowControllers(void) {
+  static NSMutableSet<GhoDexCEFPopupWindowController *> *controllers = nil;
+  static dispatch_once_t once_token;
+  dispatch_once(&once_token, ^{
+    controllers = [NSMutableSet set];
+  });
+  return controllers;
+}
+
+void RegisterPopupWindowController(GhoDexCEFPopupWindowController *controller) {
+  if (controller != nil) {
+    [PopupWindowControllers() addObject:controller];
+  }
+}
+
+void UnregisterPopupWindowController(GhoDexCEFPopupWindowController *controller) {
+  if (controller != nil) {
+    [PopupWindowControllers() removeObject:controller];
+  }
+}
+
+NSRect PopupWindowFrameForSourceView(GhoDexCEFView *sourceView, const CefPopupFeatures &popupFeatures) {
+  constexpr CGFloat kDefaultWidth = 960;
+  constexpr CGFloat kDefaultHeight = 720;
+
+  NSWindow *source_window = sourceView.window ?: NSApp.keyWindow ?: NSApp.mainWindow;
+  NSRect source_frame = source_window != nil
+      ? source_window.frame
+      : NSMakeRect(160, 160, kDefaultWidth, kDefaultHeight);
+
+  CGFloat width = popupFeatures.widthSet ? MAX(320, popupFeatures.width) : kDefaultWidth;
+  CGFloat height = popupFeatures.heightSet ? MAX(240, popupFeatures.height) : kDefaultHeight;
+  CGFloat x = popupFeatures.xSet ? popupFeatures.x : NSMidX(source_frame) - (width / 2.0);
+  CGFloat y = popupFeatures.ySet ? popupFeatures.y : NSMidY(source_frame) - (height / 2.0);
+  return NSMakeRect(x, y, width, height);
+}
+}  // namespace
+
+@implementation GhoDexCEFPopupWindowController {
+  GhoDexCEFView *_cefView;
+}
+
+- (instancetype)initWithSourceView:(GhoDexCEFView *)sourceView
+                     popupFeatures:(const CefPopupFeatures &)popupFeatures {
+  NSRect frame = PopupWindowFrameForSourceView(sourceView, popupFeatures);
+  NSWindow *window = [[NSWindow alloc] initWithContentRect:frame
+                                                 styleMask:(NSWindowStyleMaskTitled |
+                                                            NSWindowStyleMaskClosable |
+                                                            NSWindowStyleMaskMiniaturizable |
+                                                            NSWindowStyleMaskResizable)
+                                                   backing:NSBackingStoreBuffered
+                                                     defer:NO];
+  self = [super initWithWindow:window];
+  if (self) {
+    _cefView = [[GhoDexCEFView alloc] initWithInitialURLString:@"about:blank"
+                                  deferInitialBrowserCreation:YES];
+    _cefView.delegate = self;
+    _cefView.frame = window.contentView.bounds;
+    _cefView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    window.contentView = _cefView;
+    window.delegate = self;
+    window.title = @"Browser Popup";
+  }
+  return self;
+}
+
+- (instancetype)initWithWindow:(NSWindow *)window {
+  (void)window;
+  return [self initWithSourceView:nil popupFeatures:CefPopupFeatures()];
+}
+
+- (GhoDexCEFView *)cefView {
+  return _cefView;
+}
+
+- (void)presentPopupWindow {
+  [self showWindow:nil];
+  [self.window makeKeyAndOrderFront:nil];
+  [NSApp activateIgnoringOtherApps:YES];
+  RegisterPopupWindowController(self);
+}
+
+- (void)windowWillClose:(NSNotification *)notification {
+  (void)notification;
+  UnregisterPopupWindowController(self);
+}
+
+- (void)cefViewDidBecomeReady:(GhoDexCEFView *)view {
+  (void)view;
+}
+
+- (void)cefView:(GhoDexCEFView *)view didUpdateTitle:(NSString *)title {
+  (void)view;
+  self.window.title = title.length > 0 ? title : @"Browser Popup";
+}
+
+- (void)cefView:(GhoDexCEFView *)view
+    didUpdateURL:(NSString *)url
+       canGoBack:(BOOL)canGoBack
+    canGoForward:(BOOL)canGoForward
+       isLoading:(BOOL)isLoading {
+  (void)view;
+  (void)url;
+  (void)canGoBack;
+  (void)canGoForward;
+  (void)isLoading;
+}
+
+- (void)cefView:(GhoDexCEFView *)view
+    didReceiveConsoleMessage:(NSString *)message
+                       level:(NSString *)level
+                      source:(NSString *)source
+                        line:(NSInteger)line {
+  (void)view;
+  (void)message;
+  (void)level;
+  (void)source;
+  (void)line;
+}
+
+- (void)cefView:(GhoDexCEFView *)view
+    didFinishNetworkRequestForURL:(NSString *)url
+                           method:(NSString *)method
+                    requestStatus:(NSString *)requestStatus
+                       statusCode:(NSInteger)statusCode
+                       statusText:(NSString *)statusText
+                         mimeType:(NSString *)mimeType
+            receivedContentLength:(int64_t)receivedContentLength
+                      isMainFrame:(BOOL)isMainFrame
+                        frameName:(NSString *)frameName {
+  (void)view;
+  (void)url;
+  (void)method;
+  (void)requestStatus;
+  (void)statusCode;
+  (void)statusText;
+  (void)mimeType;
+  (void)receivedContentLength;
+  (void)isMainFrame;
+  (void)frameName;
+}
+
+- (void)cefView:(GhoDexCEFView *)view
+requestOpenURLInNewTab:(NSString *)urlString
+    disposition:(NSInteger)disposition
+     userGesture:(BOOL)userGesture {
+  (void)view;
+  (void)disposition;
+  (void)userGesture;
+  NSURL *url = [NSURL URLWithString:urlString];
+  if (url != nil) {
+    [NSWorkspace.sharedWorkspace openURL:url];
   }
 }
 
@@ -1580,6 +1787,40 @@ bool GhoDexCEFClient::OnBeforePopup(CefRefPtr<CefBrowser> browser,
                                     bool *no_javascript_access) {
   if (!owner_) {
     return true;
+  }
+
+  NSLog(@"[CEF] OnBeforePopup disposition=%d target=%s user_gesture=%d",
+        static_cast<int>(target_disposition),
+        target_url.ToString().c_str(),
+        user_gesture ? 1 : 0);
+
+  if (target_disposition == CEF_WOD_NEW_POPUP || target_disposition == CEF_WOD_NEW_WINDOW) {
+    __block GhoDexCEFPopupWindowController *popup_controller = nil;
+    RunOnMainThreadSync(^{
+      popup_controller = [[GhoDexCEFPopupWindowController alloc] initWithSourceView:owner_
+                                                                      popupFeatures:popupFeatures];
+      [popup_controller presentPopupWindow];
+    });
+
+    GhoDexCEFView *popup_view = popup_controller.cefView;
+    if (popup_view != nil) {
+      client = [popup_view preparePopupHostingClient];
+      if (client.get()) {
+        CefRect bounds(0,
+                       0,
+                       static_cast<int>(popup_view.bounds.size.width),
+                       static_cast<int>(popup_view.bounds.size.height));
+        windowInfo.SetAsChild((__bridge CefWindowHandle)popup_view, bounds);
+        NSLog(@"[CEF] Hosting real popup disposition=%d in dedicated popup window",
+              static_cast<int>(target_disposition));
+        return false;
+      }
+      NSLog(@"[CEF] Popup host client preparation failed for disposition=%d",
+            static_cast<int>(target_disposition));
+    } else {
+      NSLog(@"[CEF] Popup host view was unavailable for disposition=%d",
+            static_cast<int>(target_disposition));
+    }
   }
 
   std::string requested_url = target_url.ToString();
