@@ -13,15 +13,6 @@ extension AppDelegate {
         sshConnectionsController.show(tab: selectedTab)
     }
 
-    private func isSettingsPanelMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        let title = menuItem.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        return [
-            "Settings Panel…",
-            "设置面板…",
-            AppLocalization.localizedText("Settings Panel…"),
-        ].contains(title)
-    }
-
     @IBAction func showTodoWorkspace(_ sender: Any?) {
         let preferredWindow = (sender as? NSWindow) ?? NSApp.keyWindow
         if toggleTodoSidebar(from: preferredWindow) {
@@ -106,5 +97,14 @@ extension AppDelegate {
             return selectedWindow?.windowController as? BaseTerminalController
         }
         .first
+    }
+
+    private func isSettingsPanelMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        let title = menuItem.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return [
+            "Settings Panel…",
+            "设置面板…",
+            AppLocalization.localizedText("Settings Panel…"),
+        ].contains(title)
     }
 }

@@ -5,6 +5,25 @@ All notable changes to this project are documented in this file.
 ## [Unreleased]
 
 ### fix(android): request camera permission before qr scan
+### fix(macos): let release builds launch on macOS 26 with embedded Sparkle
+
+- What changed: Added `com.apple.security.cs.disable-library-validation` to the `Release` macOS entitlements so the locally signed release app can load its embedded Sparkle framework and updater helpers under hardened runtime.
+- Why: The `Release` configuration used ad-hoc signing with hardened runtime but did not include the same library-validation exception already present in `Debug` and `ReleaseLocal`, which caused launch-time `DYLD` aborts on macOS 26 when Sparkle was loaded from the app bundle.
+- Impact: Release builds installed from this repo now launch on macOS 26 instead of showing the generic “contact the developer” crash dialog immediately after startup.
+- Verification: `nu macos/build.nu --configuration Release --action build`; `codesign -d --entitlements :- /Applications/GhoDex.app`; `'/Applications/GhoDex.app/Contents/MacOS/GhoDex'`
+- Files: `macos/GhoDex.entitlements`, `CHANGELOG.md`
+- Decision trail: Keep `Release` aligned with the existing local-signing configurations instead of inventing a special post-install re-sign step. When the app is built locally with ad-hoc signing and hardened runtime, the release entitlement set must explicitly allow loading the bundled Sparkle code path.
+
+### fix(build): bootstrap the macOS xcframework in the right optimize mode
+
+- What changed: Updated `macos/build.nu` so `Debug` builds keep using a debug `GhoDexKit.xcframework`, while `Release` and `ReleaseLocal` builds now bootstrap or rebuild the xcframework with `--release=fast` and persist a mode marker to detect stale mismatches.
+- Why: The previous script only checked whether `macos/GhoDexKit.xcframework` existed. If a debug xcframework had been created earlier, later `Release` app builds would silently link against that debug core, which triggered the in-app debug-performance warning and left the installed app behaving like a development build.
+- Impact: Installed release apps now use the optimized Zig core consistently, so the debug warning banner disappears and runtime performance matches the intended release path.
+- Verification: `nu macos/build.nu --configuration Release --action build`; `'/Applications/GhoDex.app/Contents/MacOS/GhoDex'`; verify the debug warning banner no longer appears in the release app.
+- Files: `macos/build.nu`, `CHANGELOG.md`
+- Decision trail: Fix the source of truth in the bootstrap script instead of relying on people to manually delete `GhoDexKit.xcframework`. The build wrapper already decides when the xcframework is prepared, so it should also own optimize-mode correctness.
+
+### fix(macos): make app quit an explicit choice on macOS
 
 - What changed: Added an explicit Android runtime permission flow for `CAMERA` before launching the embedded QR scanner, and routed granted/denied outcomes into the app status line instead of falling straight into the scanner path.
 - Why: On the connected Honor device the app's `android.permission.CAMERA` runtime permission was `granted=false`, and the previous implementation launched the scanner without requesting it first. That made tapping `Scan Pairing QR` crash instead of opening the permission dialog.

@@ -91,16 +91,22 @@ struct ControlHarnessRequest: Codable {
         protocolVersion: String?,
         authToken: String? = nil,
         command: String,
+        date: String? = nil,
         tabID: String?,
         parentTabID: String?,
         terminalID: String?,
+        todoID: String? = nil,
         scope: String?,
         text: String?,
         commandText: String?,
         workingDirectory: String?,
         title: String?,
+        notes: String? = nil,
         environment: [String: String]?,
         force: Bool?,
+        completed: Bool? = nil,
+        workspaceID: String? = nil,
+        includeCompleted: Bool? = nil,
         client: String?,
         idempotencyKey: String?,
         expectedGeneration: Int?,
@@ -119,16 +125,22 @@ struct ControlHarnessRequest: Codable {
         self.protocolVersion = protocolVersion
         self.authToken = authToken
         self.command = command
+        self.date = date
         self.tabID = tabID
         self.parentTabID = parentTabID
         self.terminalID = terminalID
+        self.todoID = todoID
         self.scope = scope
         self.text = text
         self.commandText = commandText
         self.workingDirectory = workingDirectory
         self.title = title
+        self.notes = notes
         self.environment = environment
         self.force = force
+        self.completed = completed
+        self.workspaceID = workspaceID
+        self.includeCompleted = includeCompleted
         self.client = client
         self.idempotencyKey = idempotencyKey
         self.expectedGeneration = expectedGeneration
