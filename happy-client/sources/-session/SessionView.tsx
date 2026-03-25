@@ -27,6 +27,7 @@ import { Session } from '@/sync/storageTypes';
 import { sync } from '@/sync/sync';
 import { t } from '@/text';
 import { tracking, trackMessageSent } from '@/track';
+import { resolveAndroidKeyboardInset } from '@/utils/keyboardAvoidance';
 import { isRunningOnMac } from '@/utils/platform';
 import { useDeviceType, useHeaderHeight, useIsLandscape, useIsTablet } from '@/utils/responsive';
 import { formatLastSeen, formatPathRelativeToHome, getResumeCommand, getSessionAvatarId, getSessionName, useSessionStatus } from '@/utils/sessionUtils';
@@ -37,6 +38,7 @@ import { useRouter } from 'expo-router';
 import * as React from 'react';
 import { useMemo } from 'react';
 import { ActivityIndicator, Platform, Pressable, ScrollView, Text, View } from 'react-native';
+import { KeyboardAvoidingView, useKeyboardState } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUnistyles } from 'react-native-unistyles';
 import type { ModelMode, PermissionMode } from '@/components/PermissionModeSelector';
@@ -195,11 +197,19 @@ function SessionViewLoaded({ sessionId, session }: { sessionId: string, session:
     const isLandscape = useIsLandscape();
     const deviceType = useDeviceType();
     const isTablet = useIsTablet();
+    const keyboardState = useKeyboardState();
     const [message, setMessage] = React.useState('');
     const realtimeStatus = useRealtimeStatus();
     const { messages, isLoaded } = useSessionMessages(sessionId);
     const acknowledgedCliVersions = useLocalSetting('acknowledgedCliVersions');
     const sessionInputHorizontalPadding = Platform.OS === 'web' || isRunningOnMac() || isTablet ? 12 : 8;
+    const androidKeyboardInset = Platform.OS === 'android'
+        ? resolveAndroidKeyboardInset({
+            height: keyboardState.height,
+            isVisible: keyboardState.isVisible,
+            safeAreaBottom: safeArea.bottom,
+        })
+        : 0;
 
     // Check if CLI version is outdated and not already acknowledged
     const cliVersion = session.metadata?.version;
@@ -459,11 +469,15 @@ function SessionViewLoaded({ sessionId, session }: { sessionId: string, session:
     );
 
     return (
-        <>
+        <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            enabled={Platform.OS === 'ios'}
+            style={{ flex: 1 }}
+        >
             <View style={{
                 flexBasis: 0,
                 flexGrow: 1,
-                paddingBottom: safeArea.bottom + ((isRunningOnMac() || Platform.OS === 'web') ? 8 : 0),
+                paddingBottom: safeArea.bottom + androidKeyboardInset + ((isRunningOnMac() || Platform.OS === 'web') ? 8 : 0),
                 paddingHorizontal: showContextRail ? 14 : 10,
                 paddingTop: 8,
             }}>
@@ -806,7 +820,7 @@ function SessionViewLoaded({ sessionId, session }: { sessionId: string, session:
                     </Pressable>
                 )
             }
-        </>
+        </KeyboardAvoidingView>
     )
 }
 

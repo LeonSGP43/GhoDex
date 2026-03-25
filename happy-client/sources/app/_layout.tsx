@@ -3,6 +3,7 @@ import * as React from 'react';
 import * as SplashScreen from 'expo-splash-screen';
 import { Stack } from 'expo-router';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 
@@ -35,17 +36,23 @@ export default function RootLayout() {
     return (
         <SafeAreaProvider initialMetrics={initialWindowMetrics}>
             <GestureHandlerRootView style={{ flex: 1 }} onLayout={onLayoutRootView}>
-                <StatusBar style="dark" />
-                <Stack
-                    screenOptions={{
-                        headerShown: false,
-                        contentStyle: {
-                            backgroundColor: '#f4efe6',
-                        },
-                    }}
+                <KeyboardProvider
+                    navigationBarTranslucent={true}
+                    preserveEdgeToEdge={true}
+                    statusBarTranslucent={true}
                 >
-                    <Stack.Screen name="(app)" options={{ headerShown: false }} />
-                </Stack>
+                    <StatusBar style="dark" />
+                    <Stack
+                        screenOptions={{
+                            headerShown: false,
+                            contentStyle: {
+                                backgroundColor: '#f4efe6',
+                            },
+                        }}
+                    >
+                        <Stack.Screen name="(app)" options={{ headerShown: false }} />
+                    </Stack>
+                </KeyboardProvider>
             </GestureHandlerRootView>
         </SafeAreaProvider>
     );
