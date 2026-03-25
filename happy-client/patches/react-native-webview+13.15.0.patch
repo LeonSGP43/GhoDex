@@ -1,0 +1,20 @@
+diff --git a/node_modules/react-native-webview/android/build.gradle b/node_modules/react-native-webview/android/build.gradle
+index cb3476a..21d2ef9 100644
+--- a/node_modules/react-native-webview/android/build.gradle
++++ b/node_modules/react-native-webview/android/build.gradle
+@@ -5,12 +5,14 @@ buildscript {
+         rootProject.ext.has(prop) ? rootProject.ext.get(prop) : project.properties['ReactNativeWebView_' + prop]
+     }
+     repositories {
++        mavenLocal()
+         google()
+         gradlePluginPortal()
++        mavenCentral()
+     }
+     dependencies {
+         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:${safeExtGet('kotlinVersion')}")
+-        classpath("com.android.tools.build:gradle:7.0.4")
++        classpath("com.android.tools.build:gradle:8.5.2")
+     }
+ }
+ 

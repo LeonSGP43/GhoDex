@@ -1,0 +1,19 @@
+diff --git a/node_modules/rn-encryption/android/build.gradle b/node_modules/rn-encryption/android/build.gradle
+index d92d094..7fd5ef2 100644
+--- a/node_modules/rn-encryption/android/build.gradle
++++ b/node_modules/rn-encryption/android/build.gradle
+@@ -3,12 +3,13 @@ buildscript {
+   def kotlin_version = rootProject.ext.has("kotlinVersion") ? rootProject.ext.get("kotlinVersion") : project.properties["Encryption_kotlinVersion"]
+ 
+   repositories {
++    mavenLocal()
+     google()
+     mavenCentral()
+   }
+ 
+   dependencies {
+-    classpath "com.android.tools.build:gradle:7.2.1"
++    classpath "com.android.tools.build:gradle:8.5.2"
+     // noinspection DifferentKotlinGradleVersion
+     classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+   }

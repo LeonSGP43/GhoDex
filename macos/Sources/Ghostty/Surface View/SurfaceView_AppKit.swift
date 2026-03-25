@@ -2623,7 +2623,8 @@ extension Ghostty.SurfaceView {
         let trimmed = command.trimmingCharacters(in: .newlines)
         guard !trimmed.isEmpty else { return }
         surfaceModel?.sendText(trimmed)
-        surfaceModel?.sendKeyEvent(.init(key: .enter))
+        surfaceModel?.sendKeyEvent(.init(key: .enter, action: .press))
+        surfaceModel?.sendKeyEvent(.init(key: .enter, action: .release))
     }
 
     @MainActor

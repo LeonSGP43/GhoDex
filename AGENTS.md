@@ -16,6 +16,17 @@ A file for [guiding coding agents](https://agents.md/).
 - **Formatting (Swift)**: `swiftlint lint --fix`
 - **Formatting (other)**: `prettier -w .`
 
+## Android Install Policy
+
+- For `happy-client` Android changes, the default delivery path is:
+  `build the APK` -> `install it to the connected phone with adb`.
+- Do not stop after compilation just to ask whether the package should be
+  installed.
+- After a successful Android build, proactively run the install step against
+  the currently connected device unless the user explicitly says not to.
+- If the device-side package installer shows a confirmation screen, continue
+  driving the install flow instead of handing the APK path back to the user.
+
 ## Directory Structure
 
 - Shared Zig core: `src/`

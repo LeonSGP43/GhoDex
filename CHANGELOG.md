@@ -13,200 +13,223 @@ All notable changes to this project are documented in this file.
 - Files: `macos/Sources/Ghostty/Ghostty.App.swift`, `macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Features/Markdown Viewer/MarkdownDocumentController.swift`, `macos/Sources/Features/Markdown Viewer/MarkdownDocumentView.swift`, `macos/Sources/Features/Markdown Viewer/MarkdownHTMLRenderer.swift`, `macos/Sources/zh-Hans.lproj/Localizable.strings`, `macos/Tests/MarkdownViewer/MarkdownDocumentTests.swift`, `CHANGELOG.md`
 - Decision trail: Keep the existing terminal click-detection pipeline intact and only specialize the final open step for local markdown files. That preserves normal URL/text-file behavior, lets markdown reuse macOS native tab groups, and avoids entangling terminal mouse handling with document-view UI. For the preview itself, move to HTML rendering inside a controlled `WKWebView` so the reading experience can be styled deliberately without sending the file out to another app. Treat zoom as a view-layer concern by driving a CSS variable inside the live web view rather than rebuilding the document HTML on every shortcut press. Theme matching also belongs at the view layer, so the markdown renderer now exposes CSS variables while the live macOS theme injects concrete colors for the current GhoDex chrome instead of baking a second permanent markdown palette into the document HTML. Editing support stays intentionally source-first: keep the preview interactive and trustworthy as a renderer, but confine writes to the text panel so save semantics, dirty tracking, and conflict prompts remain predictable.
 
+### fix(android): request camera permission before qr scan
+### fix(macos): let release builds launch on macOS 26 with embedded Sparkle
+
+- What changed: Added `com.apple.security.cs.disable-library-validation` to the `Release` macOS entitlements so the locally signed release app can load its embedded Sparkle framework and updater helpers under hardened runtime.
+- Why: The `Release` configuration used ad-hoc signing with hardened runtime but did not include the same library-validation exception already present in `Debug` and `ReleaseLocal`, which caused launch-time `DYLD` aborts on macOS 26 when Sparkle was loaded from the app bundle.
+- Impact: Release builds installed from this repo now launch on macOS 26 instead of showing the generic “contact the developer” crash dialog immediately after startup.
+- Verification: `nu macos/build.nu --configuration Release --action build`; `codesign -d --entitlements :- /Applications/GhoDex.app`; `'/Applications/GhoDex.app/Contents/MacOS/GhoDex'`
+- Files: `macos/GhoDex.entitlements`, `CHANGELOG.md`
+- Decision trail: Keep `Release` aligned with the existing local-signing configurations instead of inventing a special post-install re-sign step. When the app is built locally with ad-hoc signing and hardened runtime, the release entitlement set must explicitly allow loading the bundled Sparkle code path.
+
+### fix(build): bootstrap the macOS xcframework in the right optimize mode
+
+- What changed: Updated `macos/build.nu` so `Debug` builds keep using a debug `GhoDexKit.xcframework`, while `Release` and `ReleaseLocal` builds now bootstrap or rebuild the xcframework with `--release=fast` and persist a mode marker to detect stale mismatches.
+- Why: The previous script only checked whether `macos/GhoDexKit.xcframework` existed. If a debug xcframework had been created earlier, later `Release` app builds would silently link against that debug core, which triggered the in-app debug-performance warning and left the installed app behaving like a development build.
+- Impact: Installed release apps now use the optimized Zig core consistently, so the debug warning banner disappears and runtime performance matches the intended release path.
+- Verification: `nu macos/build.nu --configuration Release --action build`; `'/Applications/GhoDex.app/Contents/MacOS/GhoDex'`; verify the debug warning banner no longer appears in the release app.
+- Files: `macos/build.nu`, `CHANGELOG.md`
+- Decision trail: Fix the source of truth in the bootstrap script instead of relying on people to manually delete `GhoDexKit.xcframework`. The build wrapper already decides when the xcframework is prepared, so it should also own optimize-mode correctness.
+
+### fix(macos): stop todo titlebar quick look from freezing
+
+- What changed: Moved todo workspace summary/item snapshot reads onto a side-effect-free store path so titlebar quick look popovers can query assigned todo data without mutating `@Published` store state, and added a regression test that asserts those read accessors do not publish object changes.
+- Why: The titlebar todo quick look is a SwiftUI popover. Its body read `todoWorkspaceSummary` and `todoItems`, and those reads flowed through `todoDocument(for:)`, which cleared `lastError` on every access. That published a store change during body evaluation and could trap the popover in a re-render loop that looked like an app freeze as soon as an assigned todo made the button visible.
+- Impact: After assigning a todo to a tab, opening the titlebar todo quick look no longer self-invalidates the observed store on every render, so the dropdown/popover should open normally instead of hanging the UI thread.
+- Verification: `git diff --check`; `zig build test -Dtest-filter="todoWorkspaceReadsDoNotPublishStoreChanges"`
+- Files: `macos/Sources/Features/AI Terminal Manager/AITerminalManagerStore.swift`, `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`, `CHANGELOG.md`
+- Decision trail: Read models used from SwiftUI view bodies must not mutate `@Published` state. The safest fix is to keep explicit document fetch APIs behavior intact for management screens while giving summary/list accessors their own side-effect-free snapshot path.
+
 ### fix(macos): make app quit an explicit choice on macOS
 
-- What changed: Changed the Darwin default keybinding for `Cmd+Q` from immediate quit to `ignore`, added a regression test that asserts the default serialized config includes `keybind = super+q=ignore`, and updated the quit confirmation copy so closing the app warns about all open tabs and terminal sessions when visible UI is still present.
-- Why: GhoDex now contains more non-terminal workflow surfaces than upstream Ghostty, so accidental muscle-memory quits are more costly than before. The app should not silently disappear just because the user brushed `Cmd+Q`, and the quit dialog should describe the full scope of what will close.
-- Impact: macOS users now have stronger protection against accidental app termination by default, while intentional quits remain possible through explicit configuration or confirmation. The quit alert also better matches the actual UI state that will be dismissed.
-- Verification: `zig build test -Dtest-filter="formatEntry includes super+q ignore on darwin defaults"`; `git diff --check`
-- Files: `src/config/Config.zig`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `CHANGELOG.md`
-- Decision trail: Treat app termination as a higher-risk action than shell line editing in this fork. Preventing accidental quits at the default keybinding layer and keeping the modal copy honest are both part of the same explicit-quit contract.
-### docs(control): expand todo api usage guide
+- What changed: Added an explicit Android runtime permission flow for `CAMERA` before launching the embedded QR scanner, and routed granted/denied outcomes into the app status line instead of falling straight into the scanner path.
+- Why: On the connected Honor device the app's `android.permission.CAMERA` runtime permission was `granted=false`, and the previous implementation launched the scanner without requesting it first. That made tapping `Scan Pairing QR` crash instead of opening the permission dialog.
+- Impact: First-use QR scanning now prompts for camera access, and denied permission fails gracefully with a readable status instead of a process crash.
+- Verification: `adb shell dumpsys package com.leongong.ghodex.androidapp`; `git diff --check`; `cd android && ANDROID_SDK_ROOT="$HOME/Library/Android/sdk" ./gradlew :app:assembleDebug`
+- Files: `android/app/src/main/java/com/leongong/ghodex/androidapp/MainActivity.java`, `CHANGELOG.md`
+- Decision trail: Keep the embedded scanner approach, but add the missing runtime permission gate that Android 6+ requires. This is the smallest fix that addresses the real crash on current hardware.
 
-- What changed: Expanded `/Users/leongong/Desktop/LeonProjects/gho_workspace/wt-macos-todolist-picker-opus-20260320/TODO_CONTROL_API.md` into a fuller operator guide that now covers transport options, socket resolution, request and response envelopes, workspace ID discovery, carry-forward pointer semantics, detailed command usage for every todo control action, mutation and snapshot fields, error handling, and end-to-end automation flows.
-- Why: The first version documented the command surface but still left too much implicit for another program to integrate safely, especially around pointer behavior, idempotent mutations, workspace assignment, and how to discover the right identifiers from the running app.
-- Impact: External callers now have one durable reference that explains how to add todos, update notes, assign workspaces, toggle completion state, and sync stale unfinished items through the app's real control harness without reverse-engineering payloads from source.
+### fix(android): use embedded camera qr scanner fallback
+
+- What changed: Replaced the Play-Services-based QR scanner path with an embedded ZXing camera scanner, added camera permission to the Android manifest, and kept the existing QR payload parsing / exchange flow unchanged.
+- Why: The first scanner integration depended on a Google Play Services barcode module that was not available on the user's current device, which blocked the whole “scan to pair” path before the camera even opened.
+- Impact: `Scan Pairing QR` now launches an in-app camera scanner instead of requiring a compatible Play Services installation, so pairing works on a wider range of Android environments.
+- Verification: `git diff --check`; `cd android && ANDROID_SDK_ROOT="$HOME/Library/Android/sdk" ./gradlew :app:assembleDebug`
+- Files: `android/app/build.gradle.kts`, `android/app/src/main/AndroidManifest.xml`, `android/app/src/main/java/com/leongong/ghodex/androidapp/MainActivity.java`, `android/README.md`, `CHANGELOG.md`
+- Decision trail: Prefer an embedded scanner for this test shell because it directly matches the user's expectation of “tap button, camera opens, scan QR” and avoids external module/version coupling.
+
+### fix(remote-pairing): size desktop qr dialog correctly
+
+- What changed: Updated the macOS remote-pairing alert to host the QR content inside a fixed-size container view and switched the QR payload serialization to compact sorted JSON so the generated code fits the dialog and remains easier to scan.
+- Why: The first QR dialog implementation attached a stack view directly as the alert accessory without constraining the accessory container size, which could collapse the QR image to an almost invisible height. Pretty-printed JSON also made the code denser than necessary.
+- Impact: The desktop pairing dialog now visibly renders the QR image and the payload encodes into a tighter QR symbol for phone scanning.
+- Verification: `git diff --check`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS,arch=arm64' build`
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `CHANGELOG.md`
+- Decision trail: Keep the existing alert-based UX, but give the accessory a real layout box and reduce payload size instead of introducing a new custom window just to show the QR.
+
+### feat(remote-pairing): add qr-based desktop pairing flow
+
+- What changed: Added a desktop-side `Show Remote Pairing QR...` action that generates a short-lived pairing QR from the live gateway endpoint, added Google Code Scanner to the Android app shell, and taught the Android UI to scan a QR payload, fill `host` / `port` / `pairing_code`, then immediately exchange and refresh snapshot. Also documented the QR flow in the Android README and refreshed the blueprint status note.
+- Why: The previous pairing flow required local begin-pairing plus manual copying of host, port, pairing code, and occasionally token state. That made the first-run path much harder than the actual protocol needed to be.
+- Impact: Remote pairing is now a one-scan bootstrap flow for the test app. The desktop still keeps pairing begin local-only, but the phone no longer needs manual field entry to get through exchange and snapshot.
+- Verification: `git diff --check`; `cd android && ANDROID_SDK_ROOT="$HOME/Library/Android/sdk" ./gradlew :app:assembleDebug`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS,arch=arm64' build`
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `android/app/build.gradle.kts`, `android/app/src/main/java/com/leongong/ghodex/androidapp/MainActivity.java`, `android/app/src/main/java/com/leongong/ghodex/androidapp/GatewayQrPayload.java`, `android/gradle.properties`, `android/README.md`, `android-remote-control-blueprint.md`, `CHANGELOG.md`
+- Decision trail: Keep pairing begin on the desktop and move convenience to the transport boundary. A short-lived QR payload is safer than embedding a long-lived token, and Google Code Scanner is the lightest Android integration that avoids adding camera-permission complexity to this thin app shell.
+
+### fix(android): sync manual session inputs into active client state
+
+- What changed: Updated the Android app shell so editing `Pairing code`, `Auth token`, and observed terminal state in the form immediately reseeds the live `GhoDexGatewaySessionStore` when the host/port connection target is unchanged, instead of only persisting to `SharedPreferences`.
+- Why: The existing app reused the same state machine for repeated requests to the same host/port, but it returned early before applying newly typed session inputs. That made manual auth-token testing look broken because `Refresh Snapshot` still ran with an empty live token.
+- Impact: Manual recovery and debugging flows now work as expected. Pasted tokens and pairing codes are visible to the current session without forcing an app restart or host/port change.
+- Verification: `git diff --check`; `cd android && ANDROID_SDK_ROOT="$HOME/Library/Android/sdk" ./gradlew :app:assembleDebug`
+- Files: `android/app/src/main/java/com/leongong/ghodex/androidapp/MainActivity.java`, `CHANGELOG.md`
+- Decision trail: Keep the existing single state-machine-per-endpoint model, but make same-endpoint re-entry re-seed the live session state. That fixes the bug without introducing a heavier reconnect cycle on every button tap.
+
+### feat(android): add gradle wrapper and verified emulator install path
+
+- What changed: Added a checked-in Gradle wrapper under `android/`, suppressed the known AGP 8.5.2 compileSdk 35 warning in `gradle.properties`, and updated the Android README/blueprint to record the verified local build, install, and launch flow against the existing `Medium_Phone_API_35` emulator.
+- Why: The previous app-shell commit created a real Android module, but the machine still had no global `gradle` and no durable proof that the module could actually be assembled and installed. The missing piece was a repo-local build entrypoint plus one verified emulator execution path.
+- Impact: `android/app` is now not just source code. The repo contains a self-contained wrapper-based build path, and the current machine has a recorded end-to-end flow from `./gradlew :app:assembleDebug` to `adb install` and `am start`.
+- Verification: `ANDROID_SDK_ROOT=\"$HOME/Library/Android/sdk\" ./android/gradlew :app:assembleDebug`; `adb install -r android/app/build/outputs/apk/debug/app-debug.apk`; `adb shell am start -n com.leongong.ghodex.androidapp/.MainActivity`; `adb shell pidof com.leongong.ghodex.androidapp`
+- Files: `android/gradlew`, `android/gradlew.bat`, `android/gradle/wrapper/gradle-wrapper.jar`, `android/gradle/wrapper/gradle-wrapper.properties`, `android/gradle.properties`, `android/README.md`, `android-remote-control-blueprint.md`, `CHANGELOG.md`
+- Decision trail: Prefer a checked-in wrapper and one proven emulator path over relying on a machine-global Gradle install. That keeps the Android module buildable from the repo itself and turns “can probably build” into an observable, repeatable local fact.
+
+### feat(android): add app module transport shell
+
+- What changed: Packaged the Java gateway foundation under `com.leongong.ghodex.remote`, fixed pairing exchange to accept the real desktop `token` payload, taught the terminal index store to project snapshot inventory into UI rows, and added a real `android/app` Gradle module with a plain-Android `MainActivity` plus `SharedPreferences` persistence for host, token, pairing code, and observed terminal state.
+- Why: The branch already had a transport-backed Java state machine, but Milestone 4 was still blocked on a real app-module landing zone. Without an Android module and UI shell, the client runtime could not be exercised as an application, and the snapshot path still failed to materialize terminal inventory for presentation.
+- Impact: Milestone 4 is no longer “pure Java only”. The repo now contains an Android app shell that can drive TCP pairing, snapshot, observe, subscribe, and send-text flows once an SDK-backed build is available, and the foundation package is structured so both the self-test and the app module use the same transport/state code.
+- Verification: `tmpdir=\"$(mktemp -d)\"; javac -d \"$tmpdir\" android/*.java && java -ea -cp \"$tmpdir\" com.leongong.ghodex.remote.GhoDexGatewayContractSelfTest`; `git diff --check`
+- Files: `android/GhoDexGatewayRequest.java`, `android/GhoDexGatewayResumeState.java`, `android/GhoDexGatewayEnvelope.java`, `android/GhoDexGatewayTransport.java`, `android/GhoDexGatewayTcpTransport.java`, `android/GhoDexGatewayJsonCodec.java`, `android/GhoDexGatewaySessionStore.java`, `android/GhoDexTerminalIndexStore.java`, `android/GhoDexGatewayUiSnapshot.java`, `android/GhoDexGatewayUiStore.java`, `android/GhoDexGatewayClientStateMachine.java`, `android/GhoDexGatewayContractSelfTest.java`, `android/README.md`, `android/settings.gradle.kts`, `android/build.gradle.kts`, `android/gradle.properties`, `android/app/build.gradle.kts`, `android/app/src/main/AndroidManifest.xml`, `android/app/src/main/java/com/leongong/ghodex/androidapp/MainActivity.java`, `android/app/src/main/java/com/leongong/ghodex/androidapp/GatewayPreferencesStore.java`, `android-remote-control-blueprint.md`, `CHANGELOG.md`
+- Decision trail: Reuse the already-verified Java transport/state code instead of rewriting the client in a new stack first. The correct next step was to package that foundation cleanly and hang the thinnest possible Android app shell off it, leaving emulator/device verification as a separate environment-dependent step.
+
+### test(control): record live desktop probe evidence
+
+- What changed: Updated `android-remote-control-acceptance.md` with a real loopback desktop run launched from the branch-built Debug app, including the launch command, local pairing flow, live `events.subscribe` confirmation, scripted foreground input steps, and the archived coarse `%CPU` plus `gateway.metrics` snapshot captured by `control_gateway_acceptance_probe.py`.
+- Why: The acceptance doc already had app-hosted smoke archives, but it still lacked any live desktop evidence. The remaining gap was a durable record of one real gateway-enabled session showing bounded CPU and observed sampler state under foreground activity.
+- Impact: `Acceptance Metrics` is no longer backed only by synthetic smoke data. The branch now carries one recorded live desktop probe with explicit numbers and an honest note about the remaining human-perceptual lag caveat.
+- Verification: `python3 control_gateway_acceptance_probe.py --pid 89723 --port 45777 --duration 8 --interval 1 --label scenario-a-live-clean --skip-reset --output /tmp/ghdx-scenario-a-live-clean.json`
+- Files: `android-remote-control-acceptance.md`, `CHANGELOG.md`
+- Decision trail: Record the live run inside the durable acceptance document rather than leaving the evidence in `/tmp` or chat history. The coarse probe is sufficient to close the “no live data at all” gap while still clearly separating itself from a stricter production sign-off pass.
+
+### test(control): add live cpu acceptance probe
+
+- What changed: Added a stdlib-only `control_gateway_acceptance_probe.py` helper that resets `gateway.metrics`, samples the live desktop process `%CPU` via `ps`, captures the final `gateway.metrics` envelope, and writes one JSON artifact per acceptance run. Updated `android-remote-control-acceptance.md` to include the exact live-smoke command and to document that the helper is a coarse probe rather than a replacement for Activity Monitor or Instruments.
+- Why: The branch had automated desktop smoke archives, but the acceptance plan still required a repeatable way to collect live CPU evidence from a real running desktop session. Without a bundled probe, that last gate stayed manual in an underspecified way.
+- Impact: Operators now have a single command that archives a live CPU window plus sampler/gateway metrics for Scenario A/B/C runs, which moves `Acceptance Metrics` closer to closeout while keeping the final high-fidelity CPU/lag sign-off explicit.
+- Verification: `python3 control_gateway_acceptance_probe.py --help`; `git diff --check`
+- Files: `control_gateway_acceptance_probe.py`, `android-remote-control-acceptance.md`, `CHANGELOG.md`
+- Decision trail: Keep the live acceptance helper outside the app and stdlib-only so it can run against any local desktop process without adding another runtime dependency or altering the control gateway itself.
+
+### fix(control): restore app-hosted control test compatibility
+
+- What changed: Added an explicit `ControlHarnessRequest` initializer with a default `authToken`, marked `ControlHarnessCore.protocolVersion` as `nonisolated`, fixed the remaining app-hosted `ControlHarnessTests` helper drift, and repaired the gateway acceptance test closures so the Xcode/macOS test target can compile and execute against the current control API shape.
+- Why: The branch had already moved to token-aware gateway requests and stricter global-actor semantics, but several test helpers still depended on old memberwise-init and tuple layouts. That blocked real app-hosted acceptance runs even though the production path was close.
+- Impact: Targeted macOS `xcodebuild test` runs now pass for the control-harness acceptance path instead of stopping at compile time inside `GhosttyTests`.
+- Verification: `xcodebuild test -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS,arch=arm64' -only-testing:GhosttyTests/ControlHarnessTests/gatewayMetricsResetClearsRollingWindow -skip-testing:GhosttyUITests`
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `macos/Tests/ControlHarness/ControlHarnessTests.swift`, `CHANGELOG.md`
+- Decision trail: Make the request/test surface explicit rather than relying on fragile memberwise initializer behavior. The acceptance path needs stable API boundaries that survive both feature growth and Xcode's stricter compile rules.
+
+### test(control): archive desktop acceptance smoke scenarios
+
+- What changed: Added three app-hosted acceptance smoke scenarios to `ControlHarnessTests` covering one active observed terminal, five observed terminals with background churn, and slow-client overflow/resync. Updated `android-remote-control-acceptance.md` with the exact verification command, representative `gateway.metrics` snapshots, and an explicit note that CPU / live typing-lag evidence is still pending.
+- Why: The branch already had resettable metrics windows, but the acceptance document still had no concrete recorded run. Without at least automated desktop smoke evidence, `Acceptance Metrics` stayed stuck at a vague `in_progress`.
+- Impact: The worktree now has durable desktop-side evidence for sampler/gateway behavior under three representative scenarios, while still honestly leaving the manual CPU gate open.
+- Verification: `xcodebuild test -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS,arch=arm64' -only-testing:GhosttyTests/ControlHarnessTests/gatewayMetricsResetClearsRollingWindow -only-testing:GhosttyTests/ControlHarnessTests/acceptanceScenarioAActiveObservedTerminalArchivesMetrics -only-testing:GhosttyTests/ControlHarnessTests/acceptanceScenarioBFiveObservedTerminalsArchivesMetrics -only-testing:GhosttyTests/ControlHarnessTests/acceptanceScenarioCSlowClientOverflowArchivesMetrics -skip-testing:GhosttyUITests`
+- Files: `macos/Tests/ControlHarness/ControlHarnessTests.swift`, `android-remote-control-acceptance.md`, `CHANGELOG.md`
+- Decision trail: Use deterministic app-hosted smoke scenarios instead of pretending the full manual acceptance gate is already closed. This captures reproducible desktop evidence now and keeps the remaining manual CPU observations clearly separated.
+
+### feat(android): add transport-backed client state machine foundation
+
+- What changed: Expanded the pure-Java Android foundation with a real TCP transport, a JSON envelope codec, UI-facing snapshot materialization, and state-machine listener hooks on top of the existing session store, terminal index store, and request builders. The Java self-test now covers a live socket round trip through a fake gateway server, including pairing, snapshot, live subscription delivery, overflow-resync, and UI snapshot projection.
+- Why: The previous Android slice stopped at request builders and resume state, which still left Milestone 4 without a real client runtime capable of talking to the desktop gateway or surfacing state to a future UI. The next blocker was turning the contract foundation into something transport-backed and observable.
+- Impact: Milestone 4 now has a host-verifiable client runtime core that already speaks the desktop TCP protocol and exposes a stable UI snapshot layer, which lowers the remaining work to Android framework bindings and presentation rather than protocol rediscovery.
+- Verification: `tmpdir=\"$(mktemp -d)\"; javac -d \"$tmpdir\" android/*.java && java -ea -cp \"$tmpdir\" GhoDexGatewayContractSelfTest`; `git diff --check`
+- Files: `android/GhoDexGatewayRequest.java`, `android/GhoDexGatewayResumeState.java`, `android/GhoDexGatewayEnvelope.java`, `android/GhoDexGatewayTransport.java`, `android/GhoDexGatewayTcpTransport.java`, `android/GhoDexGatewayJsonCodec.java`, `android/GhoDexGatewaySessionStore.java`, `android/GhoDexTerminalIndexStore.java`, `android/GhoDexGatewayUiSnapshot.java`, `android/GhoDexGatewayUiStore.java`, `android/GhoDexGatewayClientStateMachine.java`, `android/GhoDexGatewayContractSelfTest.java`, `android/README.md`, `CHANGELOG.md`
+- Decision trail: Keep the Android client toolchain-light and protocol-faithful first. A plain-Java transport/UI core can be compiled and regression-tested locally now, while leaving the eventual Android WebSocket and app-module bindings as a thinner outer layer.
+
+### fix(control): use the audit logger support root for gateway auth storage
+
+- What changed: Fixed `AppDelegate` to derive the gateway auth storage path from `ControlHarnessAuditLogger.baseDirectory(...)` instead of referencing `ControlHarnessCore.baseDirectory(...)`, which does not exist.
+- Why: The desktop gateway/auth work compiled under the Zig test path, but the app-hosted Xcode build still failed before acceptance runs because the auth storage root was wired to the wrong type.
+- Impact: App-hosted macOS builds can now progress past this gateway auth storage compile failure, which unblocks real `xcodebuild test` acceptance work for the control gateway slice.
+- Verification: `git diff --check`; app-hosted `xcodebuild test` moved past the previous missing-member compile error after this fix.
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `CHANGELOG.md`
+- Decision trail: Reuse the existing audit logger support-root helper instead of inventing a second storage-root resolver. The auth store and audit log belong under the same Control Harness application-support subtree.
+
+### fix(control): align gateway sources with Xcode compile rules
+
+- What changed: Fixed several app-hosted Swift compile issues that Zig-targeted tests did not surface: the `ControlHarnessCore` convenience initializer is now explicitly `@MainActor` and no longer hides a main-actor default `sampleStore`, gateway closures use explicit `self` where Xcode requires it, `validateToken` now passes an explicit awaited actor operation into `withAuthManager`, and the performance monitor now uses its own ISO-8601 formatter plus explicit `return` in `snapshot(...)`.
+- Why: Once the missing xcframework and auth storage root blockers were cleared, app-hosted `xcodebuild test` still failed on Swift compile differences between the Zig path and Xcode's stricter actor/capture checking.
+- Impact: The control-harness slice is now materially closer to passing real macOS app-hosted tests, which is required before the acceptance metrics can be closed with representative desktop evidence.
+- Verification: `git diff --check`; targeted app-hosted `xcodebuild test` is being used as the regression path for this fix chain.
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `macos/Sources/Features/Control Harness/ControlHarnessGateway.swift`, `CHANGELOG.md`
+- Decision trail: Fix the Xcode-facing source semantics directly instead of weakening the acceptance path. The branch needs app-hosted validation, so the code should satisfy both Zig and Xcode compilers.
+
+### feat(android): add client contract foundation
+
+- What changed: Added a new top-level `android/` workspace with `creator.md`, a local README, a pure Java `GhoDexGatewayRequest` request-builder layer, a `GhoDexGatewayResumeState` helper for reconnect/replay state, and a `GhoDexGatewayContractSelfTest` entrypoint that can be compiled and run with the host JDK. The blueprint now marks Milestone 4 as `in_progress` instead of `pending`.
+- Why: This worktree still has no Gradle/Kotlin Android app shell, but Milestone 4 needed a real implementation entry point rather than more placeholder planning. A JDK-compiled contract layer is the safest way to start the client side without introducing an unverified Android build system into the repo.
+- Impact: The branch now has a concrete, compileable client-side contract foundation for pairing, observe, mutate, and replay requests. Future Android work can layer transport and UI on top of this instead of restating gateway payload shapes from scratch.
+- Verification: `javac -d \"$tmpdir\" android/GhoDexGatewayRequest.java android/GhoDexGatewayResumeState.java android/GhoDexGatewayContractSelfTest.java`; `java -ea -cp \"$tmpdir\" GhoDexGatewayContractSelfTest`
+- Files: `android/creator.md`, `android/README.md`, `android/GhoDexGatewayRequest.java`, `android/GhoDexGatewayResumeState.java`, `android/GhoDexGatewayContractSelfTest.java`, `android-remote-control-blueprint.md`, `CHANGELOG.md`
+- Decision trail: Start Milestone 4 with a pure Java contract layer because the current repo and machine can verify that immediately with `javac`, while a Gradle/Kotlin Android app shell would add unverified toolchain assumptions before the transport and state model are even stable.
+
+### feat(control): add resettable gateway metrics windows
+
+- What changed: Extended the local-only gateway metrics surface with `gateway.metrics.reset` so acceptance runs can start from a clean measurement window instead of mixing old sampler and gateway activity into new captures. `ControlHarnessPerformanceSnapshot` now also reports `window_started_at` and `window_age_ms`, and a new `android-remote-control-acceptance.md` runbook records how to collect representative scenario evidence against the blueprint's acceptance section.
+- Why: `gateway.metrics` was useful for spot inspection, but it still forced acceptance work to reason about an implicit rolling window. That made it awkward to capture repeatable scenario-by-scenario baselines and left no durable place to record the evidence workflow.
+- Impact: Desktop-side acceptance measurement can now reset the performance window before each scenario, collect snapshots with explicit window boundaries, and archive the evidence using a dedicated runbook instead of ad hoc notes.
 - Verification: `git diff --check`
-- Files: `TODO_CONTROL_API.md`, `CHANGELOG.md`
-- Decision trail: For automation surfaces, completeness matters more than brevity. A concise command list is not enough when the underlying model includes pointer rows, idempotency rules, and app-owned identifiers that external callers can misuse without explicit guidance.
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessGateway.swift`, `macos/Tests/ControlHarness/ControlHarnessTests.swift`, `android-remote-control-acceptance.md`, `CHANGELOG.md`
+- Decision trail: Keep the acceptance surface local-only and lightweight. The immediate gap was repeatable measurement workflow, not a new telemetry backend or remote metrics API.
 
-### fix(macos): avoid resetting todo sidebar scale on invalid samples
+### docs(control): annotate blueprint progress and drift status
 
-- What changed: Tightened the todo sidebar typography refresh so it only updates the scale when the focused surface exposes a valid quicklook font sample, instead of falling back to `1x` during transient nil reads.
-- Why: During focus transitions or surface rebuild timing, a temporary missing font sample could incorrectly snap the sidebar back to its base size even though the terminal font had not really reset.
-- Impact: The sidebar now keeps the last known-good scale until a fresh valid terminal font sample arrives, which removes spurious size jumps during refresh churn.
-- Verification: `git diff --check`; `cd macos && nu build.nu --configuration Debug --action build`
-- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
-- Decision trail: For UI sync based on asynchronously exposed runtime state, stale-but-valid is safer than replacing it with a guessed default on missing data. Missing samples should defer updates, not rewrite the scale.
-
-### fix(macos): keep todo sidebar font scaling responsive
-
-- What changed: Reworked the todo sidebar font-scale refresh path so each terminal font-size change starts a new refresh session and cancels stale pending retries, instead of relying on one short fixed retry chain.
-- Why: Repeated `Cmd +` or `Cmd -` presses could outlast the old retry window, which meant the sidebar sometimes sampled the terminal font before the new size fully applied and then stopped updating.
-- Impact: The todo sidebar now keeps tracking repeated font-size changes more reliably instead of appearing to freeze after several quick adjustments.
-- Verification: `git diff --check`; `cd macos && nu build.nu --configuration Debug --action build`
-- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
-- Decision trail: Treat font-size sync as a short-lived session keyed to the latest user action. Cancelling stale retries is safer than stacking overlapping delayed refreshes when the underlying terminal font updates asynchronously.
-
-### refactor(macos): scale and expand todo sidebar content
-
-- What changed: Taught the in-window todo sidebar to derive its typography scale from the focused terminal surface font so `Cmd +`, `Cmd -`, and reset-size actions refresh the sidebar text proportionally, and made todo card content tappable so truncated titles and notes can expand to their full height on demand instead of staying hard-clamped.
-- Why: The sidebar still felt visually detached from the rest of the app because its semantic text styles were fixed at one scale even when the user changed terminal text size. At the same time, long todo notes could only be partially read because the rows had no disclosure state beyond fixed line limits.
-- Impact: Todo content now stays closer to the active terminal's visual rhythm after font-size adjustments, and long task messages can be opened inline without forcing edit mode or losing the compact default card height.
-- Verification: `git diff --check`; `cd macos && nu build.nu --configuration Debug --action build`
-- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Features/Terminal/BaseTerminalController.swift`, `macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift`, `CHANGELOG.md`
-- Decision trail: Keep the sidebar aligned to the user's active reading scale by sampling the focused surface's real quicklook font instead of inventing a separate zoom preference. For dense task rows, preserve a compact default layout but let the content surface itself disclose fully on tap rather than requiring a mode switch.
-
-### feat(control): add todo control harness commands
-
-- What changed: Extended the native control harness and `ghodex +control` CLI with todo-oriented commands for snapshot, add, update, completion toggle, workspace assignment, and stale-pointer sync. Added typed todo snapshot/mutation responses in the Swift core and wrote a dedicated `TODO_CONTROL_API.md` with CLI examples, raw JSON payloads, response fields, and error behavior.
-- Why: The todo system was only operable from the macOS UI, which blocked automation and made it hard for external programs to add tasks, mark them done, or sync stale unfinished pointers into today using the app's real data model.
-- Impact: Programs can now drive the existing todo feature set through the same native control harness that already powers tab and terminal automation, without inventing a parallel todo storage format or bypassing pointer-resolution rules.
-- Verification: `git diff --check`; `zig build -Demit-macos-app=false`; `cd macos && nu build.nu --configuration Debug --action build`
-- Files: `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `macos/Sources/Features/Control Harness/ControlHarnessSupport.swift`, `src/cli/control.zig`, `TODO_CONTROL_API.md`, `CHANGELOG.md`
-- Decision trail: Reuse the existing control harness instead of adding a second automation entry point. That keeps todo mutations on the same app-owned store, preserves carry-forward pointer semantics, and makes the CLI and raw socket JSON behave as two skins over one protocol.
-
-### refactor(macos): streamline todo timeline rendering
-
-- What changed: Replaced the todo timeline's default SwiftUI scroll container with an AppKit-backed scroll view that fully disables visible scrollers, and moved the sidebar's timeline items, workspace assignment targets, and active-workspace completion counts onto local derived snapshots instead of recomputing them on every unrelated body refresh.
-- Why: The timeline scrollbar still looked out of place under macOS scroll settings that force indicator visibility, and the sidebar felt sticky because typing into the composer kept re-filtering todo rows, re-sorting workspace targets, and re-deriving summary counts even when the timeline data itself had not changed.
-- Impact: The timeline now stays visually cleaner with no visible scrollbar chrome, and the todo sidebar does less repeated work while typing or toggling controls, which reduces the "卡卡的" feel without changing todo behavior.
-- Verification: `git diff --check`; `cd macos && nu build.nu --configuration Debug --action build`
-- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
-- Decision trail: Treat the timeline as a focused reading surface, not a generic system scroll region. Hiding the scroller needed an AppKit-level container, and smoothing interaction required cutting repeated derived work at the sidebar boundary instead of trying to mask the lag with animation tuning.
-
-### fix(macos): keep todo notes focus and newline behavior plain
-
-- What changed: Hardened the todo quick-add notes editor so focus requests retry across the notes field's animated mount, and changed `Shift+Enter` newline insertion to write a raw line break instead of routing through AppKit text insertion. The notes text view now also disables automatic dash, quote, link, replacement, and completion behaviors that were leaking rich-text style edits into plain task notes.
-- Why: Expanding from the title field with `Shift+Enter` could still miss the real caret because the notes editor was not always attached to a window on the first focus attempt. When the notes text began with list-like prefixes such as `-`, AppKit could auto-continue that formatting on newline, which is wrong for this plain-text todo capture flow.
-- Impact: `Shift+Enter` from the title field now lands the insertion caret in notes more reliably, and line breaks inside notes stay plain instead of auto-inserting extra bullet prefixes.
-- Verification: `git diff --check`; `cd macos && nu build.nu --configuration Debug --action build`
-- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
-- Decision trail: The notes composer should behave like a focused plain-text capture surface, not a smart document editor. Retrying focus at the AppKit boundary is safer than assuming the animated mount is ready on the first pass, and raw newline insertion is more reliable than letting `NSTextView` reinterpret note content as a list.
-
-### fix(macos): restore isolated debug test builds in worktrees
-
-- What changed: Fixed `macos/build.nu` to target the `GhoDex` Xcode project and scheme by default, auto-bootstrap `macos/GhoDexKit.xcframework` when a clean worktree does not have the linked library yet, and pin Xcode `DerivedData` to `macos/build/DerivedData` so build caches stay local to the current worktree. Updated `macos/AGENTS.md` to document the corrected app name, output path, xcframework bootstrap behavior, and the intended `Debug` test-build workflow.
-- Why: The previous script still referenced `Ghostty` paths and reused global Xcode cache state, which made clean worktree builds brittle and could produce the wrong app bundle for local testing. Using `ReleaseLocal` also collided with the installed app identity and made the output look like it “wouldn’t open”.
-- Impact: A fresh worktree can now produce the intended debug test app directly from `macos/build.nu`, with isolated caches and a bundle that does not conflict with the installed release app.
-- Verification: `nu macos/build.nu --help`; `rm -rf macos/build`; `cd macos && nu build.nu --configuration Debug --action build`
-- Files: `macos/build.nu`, `macos/AGENTS.md`, `CHANGELOG.md`
-- Decision trail: Treat the worktree build script as the source of truth for local app testing. If the script points at the wrong Xcode target or shares stale DerivedData across worktrees, every downstream verification step becomes noisy and misleading, so fixing the build entrypoint and cache isolation takes priority over patching individual broken outputs.
-
-### feat(macos): sync stale unfinished todo pointers into today
-
-- What changed: Added a `Sync Unfinished` action for today's todo panel that scans older day files, brings unresolved tasks into today as pointer rows instead of cloning them as new tasks, marks those rows as stale carry-forwards in the UI, and routes edit/complete/assignment changes from the pointer row back to the original source task.
-- Why: Older unfinished tasks should stay visible in today's working list, but duplicating them as brand-new items would corrupt the task history and make completion drift across days.
-- Impact: Today's list can now surface stale work with one click while preserving the original task as the single source of truth. Carry-forward rows stay visually distinct and keep source-day context.
-- Verification: `git diff --check`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild test -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' -only-testing:'GhosttyTests/AITerminalManagerTests'`
-- Files: `macos/Sources/Features/AI Terminal Manager/AITerminalManagerModels.swift`, `macos/Sources/Features/AI Terminal Manager/AITerminalManagerStore.swift`, `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`, `CHANGELOG.md`
-- Decision trail: Treat stale carry-forward rows as references with their own placement in today's list, but always resolve state and mutations against the original task. That preserves history and prevents the same unfinished work from splitting into diverging copies across multiple day files.
-
-### fix(macos): restore todo notes focus after shift-return
-
-- What changed: Added an explicit composer focus-request token so the todo sidebar can re-issue focus even when the target field has not changed, and wired the quick-add title, notes, validation, empty-state CTA, and notes toggle through that shared focus path.
-- Why: `Shift+Enter` could expand the notes area without actually moving the insertion caret into the notes editor because the focus state was already `.notes` before the AppKit text view finished mounting.
-- Impact: Expanding notes from the title field now lands the real cursor inside the notes editor consistently instead of forcing an extra click.
+- What changed: Updated `android-remote-control-blueprint.md` to carry an explicit status legend plus a dated progress snapshot for each milestone, the acceptance-gate section, and the original file/module plan. The blueprint now distinguishes `completed`, `in_progress`, `pending`, and `drift`, and calls out where the current desktop implementation intentionally diverged from the original file split.
+- Why: The branch has moved well past the original planning state. Without an explicit status pass, the blueprint still reads like a future-only design doc even though Milestones 0 through 3 are already largely implemented while Android MVP, Shannon integration, and representative performance validation are still outstanding.
+- Impact: Later agents can now use the blueprint as an execution status document instead of reverse-engineering progress from commits and tests, and they can see immediately which remaining items are true product gaps versus harmless planning drift.
 - Verification: `git diff --check`
-- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
-- Decision trail: SwiftUI focus state alone was not enough once the notes editor appeared through an animated conditional mount. A separate focus-request identity lets the AppKit bridge treat repeated focus requests as real work instead of ignoring them as unchanged state.
+- Files: `android-remote-control-blueprint.md`, `CHANGELOG.md`
+- Decision trail: Keep the status update inside the durable blueprint rather than a one-off chat summary so the branch’s remaining work, done work, and plan drift stay visible to future agents in the same place as the original design constraints.
 
-### fix(macos): tighten todo composer keyboard flow
+### feat(control): expose gateway performance snapshots
 
-- What changed: Switched the todo quick-add composer onto AppKit-backed title and notes inputs so the panel can place a real insertion caret in the title field when `Cmd+Shift+M` opens it, submit the title with `Enter`, expand into notes with `Shift+Enter`, keep `Shift+Enter` as a newline inside notes, and block save with a red validation state when notes exist without a title.
-- Why: The previous SwiftUI-only quick-add flow could not reliably distinguish the title vs notes keyboard behaviors, and opening the panel did not guarantee that the caret was ready in the title field for immediate typing.
-- Impact: The todo sidebar now matches the intended keyboard-first capture loop: open panel, type title, press `Enter` to save or `Shift+Enter` to continue into notes, then confirm from notes with `Enter` without accidentally creating untitled tasks.
-- Verification: `git diff --check`; `zig build -Demit-xcframework=true -Demit-macos-app=false`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration ReleaseLocal -destination 'platform=macOS,arch=arm64' SYMROOT=macos/build`
-- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `CHANGELOG.md`
-- Decision trail: Keyboard capture is the primary value of the sidebar, so command handling had to move to controls that can intercept the actual AppKit newline selectors and explicitly restore the insertion point instead of relying on generic SwiftUI submit hooks.
+- What changed: Added a lightweight `ControlHarnessPerformanceMonitor` that records rolling sampler tick/capture timings plus gateway request/stream timings and counters. `ControlHarnessReadSampler` now reports tick size, refreshed sample count, and fresh-capture durations; `ControlHarnessGateway` records per-transport request timings, active stream counts, stream lifetimes, and exposes the current snapshot through a local-only `gateway.metrics` command on both TCP and WebSocket transports. `AppDelegate` wires the shared monitor into the sampler and gateway, and the control-harness tests now verify that `gateway.metrics` returns structured sampler/gateway stats.
+- Why: The Android remote-control blueprint already defines hard acceptance targets for CPU, main-thread cost, and update latency, but the implementation still had no durable way to inspect sampler/gateway behavior without ad hoc logging or profiler sessions.
+- Impact: Acceptance and local diagnosis can now query a stable JSON snapshot of the remote-control hot path before adding more product surface, which makes it possible to baseline sampler cadence, request churn, and long-lived stream behavior without instrumenting the app by hand each time.
+- Verification: `git diff --check`; `zig build test -Demit-macos-app=false -Dtest-filter=gatewayStopClosesLiveTcpSubscription` still surfaces an unrelated repository failure in `terminal.search.Thread.test_0`, so the direct evidence for this change is the new `gatewayMetricsReturnsPerformanceSnapshot` regression plus local code-path review.
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessGateway.swift`, `macos/Sources/Features/Control Harness/ControlHarnessReadSampler.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Tests/ControlHarness/ControlHarnessTests.swift`, `CHANGELOG.md`
+- Decision trail: Start with an in-process rolling snapshot instead of heavier signpost-only or persistent-metrics infrastructure. The immediate need is a stable acceptance/debugging surface for the new remote gateway path, not a full telemetry backend.
 
-### refactor(macos): align todo sidebar with system typography
+### fix(control): route gateway auth commands through the gateway layer
 
-- What changed: Reworked the todo sidebar typography to use semantic system text styles instead of hard-coded point sizes, tightened the overall panel spacing, upgraded the header controls into cleaner circular affordances, moved the quick-add container onto a softer grouped surface, and reduced the card/border treatment so task rows rely more on spacing, native text hierarchy, and restrained status color instead of heavy fixed-size chrome.
-- Why: The previous panel looked visually cheap because it mixed many fixed font sizes with layered rounded rectangles and strong strokes. That made the sidebar feel detached from the rest of macOS and caused type proportions to stop matching the user's system text scale.
-- Impact: The todo sidebar now tracks system typography more naturally, reads less like a custom sketch and more like a native macOS panel, and the hierarchy between title, task content, metadata, and controls is cleaner.
-- Verification: `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`
-- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
-- Decision trail: Prefer semantic text styles and calmer surface treatment over hand-tuned pixel sizes. When a panel has to live beside native app chrome, matching the system's proportional rhythm matters more than squeezing for a specific screenshot.
+- What changed: Taught the TCP and WebSocket request paths in `ControlHarnessGateway` to resolve `gateway.*` commands through `handleGatewayCommand` before falling back to the shared control-core request handler.
+- Why: The pairing/token lifecycle implementation already existed in the gateway, but the main request path was still dispatching every authorized request into `requestHandler`. That meant `gateway.pairing.*` and `gateway.token.*` commands could bypass their intended transport-local implementation and depend on unrelated downstream handlers.
+- Impact: Pairing begin/exchange and token info/rotate/revoke now execute at the correct boundary on both transports, and gateway-only auth flows no longer depend on the desktop control-core handler being able to understand gateway management commands.
+- Verification: `git diff --check`; the existing `gatewayPairingLifecycleIssuesRotatesAndRevokesTokens` regression already asserts these commands do not increment the downstream request-handler call count, while current `zig build test` is still blocked by an unrelated repo failure in `terminal.search.Thread.test_0`.
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessGateway.swift`, `CHANGELOG.md`
+- Decision trail: Keep gateway management commands transport-local. They are part of network/session management, not terminal control, so the gateway should intercept them before any core request dispatch occurs.
 
-### refactor(macos): tighten todo quick-add hit areas
+### fix(control): close live gateway streams on stop
 
-- What changed: Shrunk the todo sidebar quick-add title field back to a compact fixed-height control, kept the optional notes field bounded, aligned the add button to the top row, and moved the add button's capsule chrome into the button label itself so the whole visible blue surface becomes the real hit target instead of only the label text area.
-- Why: The previous quick-add bar let the title field stretch into an oversized block and the add button still felt fiddly because the visible chrome was larger than the reliably clickable region.
-- Impact: The capture area now reads like a compact input row again, and adding a task feels much more direct because the whole button body is clickable.
-- Verification: `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`
-- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
-- Decision trail: In the capture row, visible size and interactive size need to match exactly. Favor explicit control heights and a true button-sized hit region over flexible layout that looks larger than it behaves.
+- What changed: Added explicit active-stream tracking inside `ControlHarnessGateway` so every live TCP/WebSocket subscription registers a close hook, `stop()` snapshots and closes those hooks before tearing down the listener, and long-lived stream handlers unregister themselves on exit. Added a regression test that starts a live TCP `events.subscribe` stream, stops the gateway, and asserts the client observes EOF instead of waiting forever.
+- Why: The gateway could stop accepting new clients while leaving already-streaming subscriptions parked behind their per-client queues. That kept shutdown semantics ambiguous, delayed session release for long-lived streams, and left tests or future app shutdown paths waiting on connections that should have been terminated immediately.
+- Impact: Gateway shutdown now closes live remote observers promptly, long-lived session reservations are released as soon as the stream is torn down, and stop/restart or app-exit flows no longer rely on an extra outbound event to flush abandoned subscription sockets.
+- Verification: `git diff --check`; targeted `zig build test -Demit-macos-app=false -Dtest-filter=gatewayStopClosesLiveTcpSubscription` is still heavyweight in this repo because Zig recompiles the macOS test target through LLVM emit, so the correctness evidence for this entry is currently the new regression coverage plus local code-path review.
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessGateway.swift`, `macos/Tests/ControlHarness/ControlHarnessTests.swift`, `CHANGELOG.md`
+- Decision trail: Keep shutdown behavior local to the gateway boundary instead of teaching the core event layer about transport teardown. The transport already owns client socket lifetime, so it should also own deterministic stream closure when the listener is stopped.
 
-### refactor(macos): smooth todo sidebar interactions
+### feat(control): add sampled terminal-read and authenticated gateway transport foundations
 
-- What changed: Reduced repeated todo-sidebar work during render by caching the ordered day items in view state, deriving workspace progress from that cached list, reusing shared date/time formatters, and trimming the sidebar's always-on animation surface down to the actual entrance transition; also made the quick-add title and notes regions fully tappable so clicking anywhere inside their rounded input areas focuses the field instead of only the text glyph area.
-- Why: The panel still felt sticky during typing and repeated status changes because each refresh was doing unnecessary re-sorting, formatter creation, and broad animation work. On top of that, the quick-add hit target felt wrong because the visible input surface was larger than the actual focusable area.
-- Impact: Todo capture and row updates feel more fluid, the sidebar spends less time doing avoidable per-render work, and the quick-add inputs now behave like proper full-surface fields.
-- Verification: `git diff --check`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild test -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' -derivedDataPath /tmp/ghodex-todo-panel-20260322-0952 -only-testing:'GhosttyTests/AITerminalManagerTests'`
-- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `CHANGELOG.md`
-- Decision trail: Favor local cheap state for the panel over repeated derived work from the store during every body recomputation, and make visible interaction surfaces match their actual focus behavior so the UI feels native instead of fiddly.
+- What changed: Added a dedicated `ControlHarnessSampleStore`, a main-actor `ControlHarnessReadSampler` that captures visible/screen text on activity-based cadences, and extended the gateway with `ControlHarnessGatewayClientSession`, `ControlHarnessGatewaySubscription`, bounded session limits, overflow/gap markers, TCP and WebSocket listeners on the same gateway socket, and bridges that can stream control-harness subscription ack/replay/live events into isolated client sessions over either transport. A new `ControlHarnessAuth` actor now owns short-lived pairing codes plus revocable, rotatable, expiring tokens persisted on disk. `ControlHarnessGateway.Configuration` now resolves developer-facing enable/host/port/buffer overrides plus optional auth, concurrent-session, and rate-limit settings from environment variables so the desktop app can selectively expose the transport without changing the local Unix-socket service path. The gateway now supports `gateway.pairing.begin`, `gateway.pairing.exchange`, `gateway.token.info`, `gateway.token.rotate`, and `gateway.token.revoke`, rejects unauthenticated non-bootstrap requests once auth is enabled, enforces a per-identity concurrent session cap before long-lived subscriptions can pile up, and applies a fail-closed global request ceiling plus per-client `command` / `snapshot` / `events.subscribe` windows before requests reach the core. AppDelegate wires a remote-mutation policy that blocks gateway writes for `manual`, approval-waiting, paused, completed, or failed terminals while allowing `observed` and `managed_active` terminals. `ControlHarnessCore.read-terminal` now prefers sampled frames for steady-state reads, expires stale samples according to the current activity class, invalidates cached samples after terminal writes, and only falls back to a fresh main-actor read when bootstrapping a missing sample, repairing an expired sample, or verifying `read_after_write_id`.
+- Why: The existing control harness made remote clients pay for main-actor text reads on demand, and the original gateway placeholder lacked both the concrete backpressure contract and a real network transport that could be exercised independently from the desktop-local Unix socket. Without a bounded transport, a clean enable switch, and a first-line auth/rate/policy barrier, it was impossible to validate remote-session behavior without risking accidental changes to the existing local control path or silently enabling uncontrolled remote writes.
+- Impact: Remote-read groundwork now exists alongside a real, loopback-default gateway that can speak raw TCP or WebSocket and that issues real session credentials instead of relying only on a static developer token. Active or observed terminals can be sampled independently of request bursts, background/manual terminals stay on reduced cadence, stale samples no longer persist indefinitely across later reads, write paths no longer serve pre-mutation text from the sample cache, pairing can now start locally and exchange into persisted credentials, expired/revoked/rotated tokens fail closed, the same paired identity can no longer fan out unbounded concurrent subscriptions or command channels, abusive clients now hit explicit session and request ceilings instead of driving unbounded churn into the desktop path, and slow or disconnected gateway clients can still be isolated behind per-client buffers with overflow/resync semantics instead of directly backlogging the desktop control path.
+- Verification: `zig build test -Dtest-filter=ControlHarnessTests`; `git diff --check`
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessSampleStore.swift`, `macos/Sources/Features/Control Harness/ControlHarnessReadSampler.swift`, `macos/Sources/Features/Control Harness/ControlHarnessGateway.swift`, `macos/Sources/Features/Control Harness/ControlHarnessGatewayProtocol.swift`, `macos/Sources/Features/Control Harness/ControlHarnessGatewayClientSession.swift`, `macos/Sources/Features/Control Harness/ControlHarnessGatewaySubscription.swift`, `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `macos/Sources/Features/Control Harness/ControlHarnessSupport.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Tests/ControlHarness/ControlHarnessTests.swift`, `CHANGELOG.md`
+- Decision trail: Keep terminal mutations and the local Unix-socket transport unchanged for this step, but make the gateway boundary concrete now by giving each future remote client its own bounded buffer, explicit resync semantics, an opt-in network transport, and a real pairing/token/rate/policy gate before any pairing UI or Android shell exists. That keeps the desktop-local path stable while still letting the remote transport be validated end to end without opening a mutation path that bypasses managed-state policy or letting abusive traffic churn through the core unchecked.
 
-### refactor(macos): speed up todo sidebar capture and motion
-
-- What changed: Reworked the todo sidebar into an always-ready quick-add flow with a persistent title field, return-to-add submission, optional inline notes, a larger primary add button, larger completion hit targets, a direct complete/reset pill on every row, and a unified sidebar content entrance animation; also changed the default tab quick-look card setting to off so the main tab view stays clean until explicitly enabled.
-- Why: The previous panel still made fast capture feel too modal because adding a task required opening a composer first, and marking completion relied too heavily on a smaller icon target. The tab quick-look card also started visible by default even though the side panel is now the primary task-management surface.
-- Impact: Opening the todo panel now lands directly in a ready-to-type state, repeated task entry is faster, completion toggles are easier to hit, and the sidebar content enters with a more coherent motion rhythm. New configs and default-state reloads also no longer show the in-tab quick-look card unless the user turns it on.
-- Verification: `git diff --check`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild test -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' -only-testing:'GhosttyTests/AITerminalManagerTests'`
-- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Features/AI Terminal Manager/AITerminalManagerModels.swift`, `macos/Sources/Ghostty/Ghostty.Config.swift`, `src/config/Config.zig`, `macos/Sources/Helpers/AppLocalization.swift`, `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`, `CHANGELOG.md`
-- Decision trail: Treat the side panel as the default capture surface and optimize for the loop of `open -> type -> return -> repeat`. Reduce visual and interaction indirection first, then let secondary details such as notes remain expandable. Keep the quick-look card opt-in because duplicated task chrome across the tab and the side panel hurts focus more than it helps.
-
-### fix(macos): keep rapid todo completion toggles responsive
-
-- What changed: Added an in-memory per-day todo document cache and moved app-mode todo file persistence onto a coalescing background coordinator so rapid completion toggles update UI state immediately without forcing synchronous `load -> mutate -> save` work on the main actor for every click.
-- Why: The todo panel was mutating daily JSON files directly on the main actor. Rapidly clicking the completion control could stack repeated disk IO and whole-panel refreshes on the UI thread, which made the panel appear frozen.
-- Impact: Fast completion toggles now stay responsive in the panel and quick-look surfaces. The latest document state is still persisted, but repeated writes for the same day are coalesced off the main thread instead of blocking interaction.
-- Verification: `git diff --check`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild test -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' -only-testing:'GhosttyTests/AITerminalManagerTests'`
-- Files: `macos/Sources/Features/AI Terminal Manager/AITerminalManagerStore.swift`, `CHANGELOG.md`
-- Decision trail: Keep tests deterministic by preserving synchronous writes under the existing test-mode path, but switch real app interactions to cache-first mutation plus serialized background saves so UX stays snappy without weakening file-backed state.
-
-### refactor(macos): make the todo side panel content-first
-
-- What changed: Flattened the in-window todo panel into a list-first layout, removed the oversized top summary card, moved day/progress status into a slim footer, hid the visible scroll indicator, promoted `Add Task` into a full-width primary action, enlarged task title/notes typography, localized the created/completed timeline copy, and replaced the per-row overflow menu with direct visible edit/reset controls plus a visible assignment control.
-- Why: The previous side-panel pass still spent too much visual weight on summary chrome, date controls, and nested rounded surfaces. In practice the task list itself needs to dominate the panel, and common actions cannot require an extra overflow-menu click.
-- Impact: Opening the todo panel now lands the user directly in the task list. Tasks read larger, done vs undone cards are visually distinct, the footer carries low-priority progress state, and editing/resetting/assigning a task is available directly from the card without drilling into a hidden menu.
-- Verification: `git diff --check`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration ReleaseLocal -destination 'platform=macOS,arch=arm64' SYMROOT=macos/build`
-- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `ghodex-todo-picker-phase1-doc.md`, `CHANGELOG.md`
-- Decision trail: Treat the side panel as a fast reading and manipulation surface, not a dashboard. Summary state still matters, but it belongs at the edge of the panel. The main body should spend its space on large task content, direct status affordances, and one-tap row actions instead of nested containers and overflow menus.
-
-### refactor(macos): simplify the todo side-panel hierarchy
-
-- What changed: Reworked the in-window todo side panel so the selected day and timeline become the visual anchor, moved secondary actions into a compact control bar and overflow menu, collapsed task creation into a cleaner quick-add composer, and replaced per-row button clusters with quieter metadata pills plus a trailing actions menu.
-- Why: The first side-panel MVP exposed too many equal-weight controls at once, which pulled attention away from the task list itself and made quick capture feel heavier than it needed to be.
-- Impact: The todo panel now defaults to a more focused reading flow: open panel, see today, scan timeline, then optionally expand quick add. Navigation and filtering remain available, but they no longer compete visually with the main task content.
-- Verification: `git diff --check`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild test -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' -skip-testing GhosttyUITests`
-- Files: `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `ghodex-todo-picker-phase1-doc.md`, `CHANGELOG.md`
-- Decision trail: Keep the side panel as a management surface, but make the timeline the first-class visual object. Secondary controls should stay discoverable without dominating the panel, and task creation should start from one intentional entry point instead of two always-open text fields.
-
-### feat(macos): add todo workspace quick access and denser new-tab picker
-
-- What changed: Added a manual-first `Todo` tab to the Settings Panel with config-backed settings, workspace bootstrap for date-based todo files, day navigation, completion summaries, inline add/edit/complete/reset actions, task-to-workspace assignment, focused-workspace summaries, an app-wide `Cmd+Shift+M` todo side panel, titlebar progress badges for tabs with assigned tasks, and a configurable in-tab quick-look card for completing or resetting today's assigned tasks; also enlarged the new-tab picker window and tightened row spacing so more options remain visible without changing picker behavior.
-- Why: The existing learning settings flow already proved the value of lightweight workflow tooling inside GhoDex, but task tracking needs a separate manual-first domain with explicit state changes. Once todo items can be assigned to top-level tabs, the user also needs a fast path to open todo management globally without being bounced into the Settings Panel, plus a way to see tab-specific progress from inside the tab itself. In parallel, the new-tab picker interaction was already good, but the viewport exposed too few options at once.
-- Impact: Users can now configure a visible todo workspace rooted at a normal folder path, persist todo settings through `config.ghodex`, manage daily todo items from the panel, assign them to specific top-level tabs, toggle an in-window todo side panel from anywhere in the app, inspect a tab's assigned-task progress directly from that tab, choose which side the panel appears on, control or hide the quick-look card, and see more picker entries per screen without relearning shortcuts or selection flow.
-- Verification: `zig build -Demit-xcframework=true -Demit-macos-app=false`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64'`; `xcodebuild test -parallel-testing-enabled NO -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' -skip-testing GhosttyUITests`
-- Files: `plan.md`, `ghodex-todo-picker-phase1-spec.md`, `ghodex-todo-picker-phase1-doc.md`, `src/config/Config.zig`, `macos/Sources/Ghostty/Ghostty.Config.swift`, `macos/Sources/Ghostty/GhosttyPackage.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/App/macOS/AppDelegate+SSHConnections.swift`, `macos/Sources/Features/AI Terminal Manager/AITerminalManagerModels.swift`, `macos/Sources/Features/AI Terminal Manager/AITerminalManagerStore.swift`, `macos/Sources/Features/SSH Connections/SSHConnectionsController.swift`, `macos/Sources/Features/SSH Connections/SSHConnectionsView.swift`, `macos/Sources/Features/Terminal/Window Styles/TerminalWindow.swift`, `macos/Sources/Features/Terminal/TerminalView.swift`, `macos/Sources/Features/New Tab Picker/NewTabPickerController.swift`, `macos/Sources/Features/New Tab Picker/NewTabPickerView.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`, `CHANGELOG.md`
-- Decision trail: Keep todo state separate from learning/task-queue automation and require explicit UI-driven mutation for item status. Use the app config as the source of truth for settings, but store day documents as user-visible date files under a normal workspace folder. Use the stable top-level workspace/tab UUID as the assignment key so task ownership survives tab reuse/restoration. For quick access, keep the Settings Panel as the durable settings surface, but use an in-window side panel for `Cmd+Shift+M` so task review/updates stay inside the current tab context. For the picker, preserve search and keyboard behavior and change only window geometry and list density.
-### docs(readme): document the recommended Ctrl+U disable override
-
-- What changed: Added a README note that this fork's recommended local macOS setup disables `Ctrl+U` in the terminal surface via `keybind = ctrl+u=ignore`.
-- Why: `Ctrl+U` clears the shell input line by default in many terminal/shell combinations, which is easy to trigger accidentally during normal editing.
-- Impact: Users and future agents now have one durable repo-level explanation for the local override instead of relying on chat history or ad hoc shell tweaks.
-- Verification: `rg -n "Ctrl\\+U|ctrl\\+u=ignore" README.md CHANGELOG.md`
-- Files: `README.md`, `CHANGELOG.md`
-
-### chore(build): add a shared GhoDex build-artifact prune workflow
-
-- What changed: Added a dedicated `scripts/prune-build-artifacts.sh` cleanup tool, expanded `make clean` to cover the current checkout's missed Zig/Xcode artifact directories, and added `make prune-build-artifacts` plus `make prune-build-artifacts-dry-run` to scan and clean the main GhoDex checkout alongside sibling `GhoDex-wt-*` worktrees.
-- Why: Large `.zig-cache`, `macos/.zig-cache`, and `macos/build` directories were accumulating across the main repo and stale worktree folders, while the previous `make clean` target only removed a subset of local outputs and offered no reusable way to reclaim space from sibling worktrees.
-- Impact: Build-cache cleanup is now a one-command workflow with a safe dry-run default, broader local coverage, and explicit support for reclaiming space from abandoned or still-registered GhoDex worktrees without touching tracked files.
-- Verification: `bash ./scripts/prune-build-artifacts.sh`; `bash ./scripts/prune-build-artifacts.sh --current-only`; `make prune-build-artifacts-dry-run`
-- Files: `scripts/prune-build-artifacts.sh`, `Makefile`, `HACKING.md`, `CHANGELOG.md`
-- Decision trail: Keep normal build commands unchanged and add a separate prune path instead of making regular builds auto-delete caches. The prune script deletes only known generated directories, defaults to dry-run, and combines Git worktree discovery with sibling-folder scanning so stale or broken worktree directories are still reclaimable.
 ### fix(build): isolate Zig-driven Xcode test state
 
 - What changed: Updated the Zig macOS test step to pass `HOME` through to `xcodebuild`, pin the destination to the host macOS architecture, and route `-derivedDataPath` into an isolated `/tmp` location instead of sharing Xcode's default global state, while excluding the macOS `.zig-cache` helper directory from SwiftLint so generated artifacts do not poison app-hosted test runs.

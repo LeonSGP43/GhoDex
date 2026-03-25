@@ -18,6 +18,7 @@ struct AnyEncodable: Encodable {
 struct ControlHarnessRequest: Codable {
     let requestID: String
     let protocolVersion: String?
+    let authToken: String?
     let command: String
     let date: String?
     let tabID: String?
@@ -46,10 +47,13 @@ struct ControlHarnessRequest: Codable {
     let maxLines: Int?
     let cursor: String?
     let readAfterWriteID: String?
+    let pairingCode: String?
+    let requestedScopes: [String]?
 
     enum CodingKeys: String, CodingKey {
         case requestID = "request_id"
         case protocolVersion = "protocol_version"
+        case authToken = "auth_token"
         case command
         case date
         case tabID = "tab_id"
@@ -78,6 +82,78 @@ struct ControlHarnessRequest: Codable {
         case maxLines = "max_lines"
         case cursor
         case readAfterWriteID = "read_after_write_id"
+        case pairingCode = "pairing_code"
+        case requestedScopes = "requested_scopes"
+    }
+
+    init(
+        requestID: String,
+        protocolVersion: String?,
+        authToken: String? = nil,
+        command: String,
+        date: String? = nil,
+        tabID: String?,
+        parentTabID: String?,
+        terminalID: String?,
+        todoID: String? = nil,
+        scope: String?,
+        text: String?,
+        commandText: String?,
+        workingDirectory: String?,
+        title: String?,
+        notes: String? = nil,
+        environment: [String: String]?,
+        force: Bool?,
+        completed: Bool? = nil,
+        workspaceID: String? = nil,
+        includeCompleted: Bool? = nil,
+        client: String?,
+        idempotencyKey: String?,
+        expectedGeneration: Int?,
+        sinceSequence: Int64?,
+        eventLimit: Int?,
+        mode: String?,
+        sinceFrameID: String?,
+        maxChars: Int?,
+        maxLines: Int?,
+        cursor: String?,
+        readAfterWriteID: String?,
+        pairingCode: String? = nil,
+        requestedScopes: [String]? = nil
+    ) {
+        self.requestID = requestID
+        self.protocolVersion = protocolVersion
+        self.authToken = authToken
+        self.command = command
+        self.date = date
+        self.tabID = tabID
+        self.parentTabID = parentTabID
+        self.terminalID = terminalID
+        self.todoID = todoID
+        self.scope = scope
+        self.text = text
+        self.commandText = commandText
+        self.workingDirectory = workingDirectory
+        self.title = title
+        self.notes = notes
+        self.environment = environment
+        self.force = force
+        self.completed = completed
+        self.workspaceID = workspaceID
+        self.includeCompleted = includeCompleted
+        self.client = client
+        self.idempotencyKey = idempotencyKey
+        self.expectedGeneration = expectedGeneration
+        self.sinceSequence = sinceSequence
+        self.eventLimit = eventLimit
+        self.mode = mode
+        self.sinceFrameID = sinceFrameID
+        self.maxChars = maxChars
+        self.maxLines = maxLines
+        self.cursor = cursor
+        self.readAfterWriteID = readAfterWriteID
+        self.pairingCode = pairingCode
+        self.requestedScopes = requestedScopes
     }
 }
 
@@ -245,12 +321,63 @@ private struct ControlTabCloseResult: Encodable {
     let generation: Int
     let sequence: Int64
     let closed: Bool
+    let requiresConfirmation: Bool
+    let confirmationTitle: String?
+    let confirmationMessage: String?
 
     enum CodingKeys: String, CodingKey {
         case tabID = "tab_id"
         case generation
         case sequence
         case closed
+        case requiresConfirmation = "requires_confirmation"
+        case confirmationTitle = "confirmation_title"
+        case confirmationMessage = "confirmation_message"
+    }
+}
+
+private struct ControlTabMutationResult: Encodable {
+    let tabID: String
+    let generation: Int
+    let sequence: Int64
+    let title: String?
+    let closed: Bool
+    let requiresConfirmation: Bool
+    let confirmationTitle: String?
+    let confirmationMessage: String?
+
+    enum CodingKeys: String, CodingKey {
+        case tabID = "tab_id"
+        case generation
+        case sequence
+        case title
+        case closed
+        case requiresConfirmation = "requires_confirmation"
+        case confirmationTitle = "confirmation_title"
+        case confirmationMessage = "confirmation_message"
+    }
+}
+
+struct ControlTabCloseConfirmation: Equatable {
+    let title: String
+    let message: String
+
+    static func resolve(hasMultipleTabs: Bool, needsConfirmQuit: Bool) -> Self? {
+        guard needsConfirmQuit else {
+            return nil
+        }
+
+        if hasMultipleTabs {
+            return .init(
+                title: "Close Tab?",
+                message: "The terminal still has a running process. If you close the tab the process will be killed."
+            )
+        }
+
+        return .init(
+            title: "Close Window?",
+            message: "All terminal sessions in this window will be terminated."
+        )
     }
 }
 
@@ -370,6 +497,14 @@ private struct ControlTabCreatedEventPayload: Encodable {
     enum CodingKeys: String, CodingKey {
         case parentTabID = "parent_tab_id"
         case workingDirectory = "working_directory"
+        case title
+    }
+}
+
+private struct ControlTabUpdatedEventPayload: Encodable {
+    let title: String?
+
+    enum CodingKeys: String, CodingKey {
         case title
     }
 }
@@ -506,12 +641,13 @@ final class ControlHarnessAuditLogger {
 
 @MainActor
 final class ControlHarnessCore {
-    static let protocolVersion = "1.0"
+    nonisolated static let protocolVersion = "1.0"
     static let supportedCommands = [
         "handshake",
         "snapshot",
         "new-tab",
         "close-tab",
+        "rename-tab",
         "send-text",
         "run-command",
         "read-terminal",
@@ -532,14 +668,20 @@ final class ControlHarnessCore {
     private let idempotencyStore: ControlHarnessIdempotencyStore
     private let readStore: ControlHarnessTerminalReadStore
     private let readAfterWriteStore: ControlHarnessReadAfterWriteStore
+    private let sampleStore: ControlHarnessSampleStore
+    private let surfaceResolver: @MainActor (UUID) -> (any ControlHarnessReadableSurface)?
+    private let samplingActivityResolver: @MainActor (UUID) -> ControlHarnessSamplingActivityClass?
+    private let now: @MainActor () -> Date
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
         category: "ControlHarnessCore"
     )
 
+    @MainActor
     convenience init(
         appDelegate: AppDelegate?,
-        auditLogger: ControlHarnessAuditLogger
+        auditLogger: ControlHarnessAuditLogger,
+        sampleStore: ControlHarnessSampleStore
     ) {
         let bundleID = Bundle.main.bundleIdentifier ?? "com.leongong.ghodex"
         self.init(
@@ -549,7 +691,8 @@ final class ControlHarnessCore {
             generations: ControlHarnessGenerationTracker(),
             idempotencyStore: ControlHarnessIdempotencyStore(),
             readStore: ControlHarnessTerminalReadStore(),
-            readAfterWriteStore: ControlHarnessReadAfterWriteStore()
+            readAfterWriteStore: ControlHarnessReadAfterWriteStore(),
+            sampleStore: sampleStore
         )
     }
 
@@ -560,7 +703,11 @@ final class ControlHarnessCore {
         generations: ControlHarnessGenerationTracker,
         idempotencyStore: ControlHarnessIdempotencyStore,
         readStore: ControlHarnessTerminalReadStore,
-        readAfterWriteStore: ControlHarnessReadAfterWriteStore
+        readAfterWriteStore: ControlHarnessReadAfterWriteStore,
+        sampleStore: ControlHarnessSampleStore,
+        surfaceResolver: (@MainActor (UUID) -> (any ControlHarnessReadableSurface)?)? = nil,
+        samplingActivityResolver: (@MainActor (UUID) -> ControlHarnessSamplingActivityClass?)? = nil,
+        now: @escaping @MainActor () -> Date = Date.init
     ) {
         self.appDelegate = appDelegate
         self.auditLogger = auditLogger
@@ -569,6 +716,14 @@ final class ControlHarnessCore {
         self.idempotencyStore = idempotencyStore
         self.readStore = readStore
         self.readAfterWriteStore = readAfterWriteStore
+        self.sampleStore = sampleStore
+        self.surfaceResolver = surfaceResolver ?? { [weak appDelegate] terminalID in
+            appDelegate?.controlHarnessReadableSurface(for: terminalID)
+        }
+        self.samplingActivityResolver = samplingActivityResolver ?? { [weak appDelegate] terminalID in
+            appDelegate?.controlHarnessSamplingActivityClass(for: terminalID)
+        }
+        self.now = now
     }
 
     func handleSubscription(
@@ -907,6 +1062,10 @@ final class ControlHarnessCore {
             let result = try closeTab(from: request)
             return (AnyEncodable(result), result.sequence)
 
+        case "rename-tab":
+            let result = try renameTab(from: request)
+            return (AnyEncodable(result), result.sequence)
+
         case "send-text":
             let result = try sendText(from: request)
             return (AnyEncodable(result), result.sequence)
@@ -1001,7 +1160,7 @@ final class ControlHarnessCore {
             throw ControlHarnessCoreError.operationFailed("Failed to create a new tab")
         }
 
-        if let title = request.title, !title.isEmpty {
+        if let title = normalizedTabTitleOverride(request.title) {
             controller.titleOverride = title
         }
 
@@ -1038,6 +1197,18 @@ final class ControlHarnessCore {
             resourceID: tabID,
             currentGeneration: currentGeneration
         )
+        if request.force != true,
+           let confirmation = closeTabConfirmation(for: controller) {
+            return .init(
+                tabID: tabID,
+                generation: currentGeneration,
+                sequence: eventHub.currentSequence(),
+                closed: false,
+                requiresConfirmation: true,
+                confirmationTitle: confirmation.title,
+                confirmationMessage: confirmation.message
+            )
+        }
         if request.force == true {
             controller.closeTabImmediately()
         } else {
@@ -1054,8 +1225,58 @@ final class ControlHarnessCore {
             tabID: tabID,
             generation: generation,
             sequence: sequence,
-            closed: true
+            closed: true,
+            requiresConfirmation: false,
+            confirmationTitle: nil,
+            confirmationMessage: nil
         )
+    }
+
+    private func renameTab(from request: ControlHarnessRequest) throws -> ControlTabMutationResult {
+        let controller = try resolveTabController(tabID: request.tabID)
+        let tabID = controller.workspaceID.uuidString
+        let currentGeneration = generations.currentTabGeneration(for: tabID)
+        try generations.assertExpectedGeneration(
+            request.expectedGeneration,
+            resourceType: "tab",
+            resourceID: tabID,
+            currentGeneration: currentGeneration
+        )
+
+        let normalizedTitle = normalizedTabTitleOverride(request.title)
+        controller.titleOverride = normalizedTitle
+
+        let generation = generations.advanceTabGeneration(for: tabID)
+        let sequence = eventHub.emit(
+            event: "tab.updated",
+            requestID: request.requestID,
+            resource: .init(type: "tab", id: tabID, generation: generation),
+            payload: AnyEncodable(ControlTabUpdatedEventPayload(title: normalizedTitle))
+        )
+
+        return .init(
+            tabID: tabID,
+            generation: generation,
+            sequence: sequence,
+            title: normalizedTitle,
+            closed: false,
+            requiresConfirmation: false,
+            confirmationTitle: nil,
+            confirmationMessage: nil
+        )
+    }
+
+    @MainActor
+    private func closeTabConfirmation(for controller: TerminalController) -> (title: String, message: String)? {
+        let needsConfirmQuit = controller.allSurfaces.contains(where: { $0.needsConfirmQuit })
+        let tabCount = controller.window?.tabGroup?.windows.count ?? 1
+        guard let confirmation = ControlTabCloseConfirmation.resolve(
+            hasMultipleTabs: tabCount > 1,
+            needsConfirmQuit: needsConfirmQuit
+        ) else {
+            return nil
+        }
+        return (confirmation.title, confirmation.message)
     }
 
     private func sendText(from request: ControlHarnessRequest) throws -> ControlTerminalMutationResult {
@@ -1084,6 +1305,7 @@ final class ControlHarnessCore {
             resource: .init(type: "terminal", id: terminalIDString, generation: generation),
             payload: AnyEncodable(["text_length": text.count])
         )
+        sampleStore.removeTerminal(terminalIDString)
         let writeID = Self.writeID(forSequence: sequence)
         readAfterWriteStore.recordTextWrite(
             terminalID: terminalIDString,
@@ -1128,6 +1350,7 @@ final class ControlHarnessCore {
             resource: .init(type: "terminal", id: terminalIDString, generation: generation),
             payload: AnyEncodable(["command_length": commandText.count])
         )
+        sampleStore.removeTerminal(terminalIDString)
         let writeID = Self.writeID(forSequence: sequence)
         readAfterWriteStore.recordCommandWrite(
             terminalID: terminalIDString,
@@ -1157,30 +1380,30 @@ final class ControlHarnessCore {
             resourceID: terminalIDString,
             currentGeneration: generation
         )
-        guard let appDelegate else {
-            throw ControlHarnessCoreError.appUnavailable
-        }
-        guard let surface = appDelegate.findSurface(forUUID: terminalID) else {
+        guard let surface = surfaceResolver(terminalID) else {
+            if appDelegate == nil {
+                throw ControlHarnessCoreError.appUnavailable
+            }
             throw ControlHarnessCoreError.terminalNotFound(terminalID.uuidString)
         }
 
         let scope = request.scope ?? "visible"
         let mode = request.mode ?? "snapshot"
-        let refresh = request.readAfterWriteID != nil
-        let content: String
-        let consistency: String
-        let cacheAgeMs: Int
+        let observedWriteID = request.readAfterWriteID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let read = try resolveTerminalRead(
+            terminalUUID: terminalID,
+            terminalID: terminalIDString,
+            scope: scope,
+            surface: surface,
+            forceFresh: observedWriteID?.isEmpty == false
+        )
+        let content = read.content
+        let consistency = read.consistency
+        let cacheAgeMs = read.cacheAgeMs
+
         switch scope {
-        case "visible":
-            let read = surface.aiManagerVisibleText(refresh: refresh)
-            content = read.content
-            cacheAgeMs = read.cacheAgeMs
-            consistency = refresh ? "fresh_visible" : "cached_visible"
-        case "screen":
-            let read = surface.aiManagerScreenText(refresh: refresh)
-            content = read.content
-            cacheAgeMs = read.cacheAgeMs
-            consistency = refresh ? "fresh_screen" : "cached_screen"
+        case "visible", "screen":
+            break
         default:
             throw ControlHarnessCoreError.invalidArgument("Unsupported read scope: \(scope)")
         }
@@ -1218,7 +1441,6 @@ final class ControlHarnessCore {
             contentKind = "snapshot"
         }
 
-        let observedWriteID = request.readAfterWriteID?.trimmingCharacters(in: .whitespacesAndNewlines)
         let readAfterReady: Bool?
         if let observedWriteID, !observedWriteID.isEmpty {
             let targetSequence = try Self.parseWriteID(observedWriteID)
@@ -1242,7 +1464,7 @@ final class ControlHarnessCore {
             mode: mode,
             contentKind: contentKind,
             consistency: consistency,
-            capturedAt: Self.iso8601(Date()),
+            capturedAt: Self.iso8601(read.capturedAt),
             cacheAgeMs: cacheAgeMs,
             lastSequence: eventHub.currentSequence(),
             frameID: frame.frameID,
@@ -1277,6 +1499,7 @@ final class ControlHarnessCore {
         guard appDelegate.controlHarnessCloseTerminal(terminalID) else {
             throw ControlHarnessCoreError.terminalNotFound(terminalID.uuidString)
         }
+        sampleStore.removeTerminal(terminalIDString)
         let generation = generations.advanceTerminalGeneration(for: terminalIDString)
         let sequence = eventHub.emit(
             event: "terminal.closed",
@@ -1291,6 +1514,57 @@ final class ControlHarnessCore {
             operation: "close-terminal",
             acknowledged: true,
             writeID: nil
+        )
+    }
+
+    private func resolveTerminalRead(
+        terminalUUID: UUID,
+        terminalID: String,
+        scope: String,
+        surface: any ControlHarnessReadableSurface,
+        forceFresh: Bool
+    ) throws -> (content: String, consistency: String, cacheAgeMs: Int, capturedAt: Date) {
+        let currentTime = now()
+        let activityClass = samplingActivityResolver(terminalUUID)
+            ?? sampleStore.sample(for: terminalID, scope: scope)?.activityClass
+            ?? .observed
+
+        if !forceFresh,
+           let sample = sampleStore.sample(for: terminalID, scope: scope),
+           sampleStore.isFresh(sample, activityClass: activityClass, now: currentTime) {
+            return (
+                content: sample.content,
+                consistency: sample.consistency,
+                cacheAgeMs: sample.cacheAgeMs,
+                capturedAt: sample.capturedAt
+            )
+        }
+
+        let read: (content: String, cacheAgeMs: Int)
+        switch scope {
+        case "visible":
+            read = surface.controlHarnessReadVisibleText(refresh: true)
+        case "screen":
+            read = surface.controlHarnessReadScreenText(refresh: true)
+        default:
+            throw ControlHarnessCoreError.invalidArgument("Unsupported read scope: \(scope)")
+        }
+
+        let sample = sampleStore.store(
+            terminalID: terminalID,
+            scope: scope,
+            content: read.content,
+            consistency: "fresh_\(scope)",
+            cacheAgeMs: read.cacheAgeMs,
+            capturedAt: currentTime,
+            activityClass: activityClass,
+            forcedFresh: true
+        )
+        return (
+            content: sample.content,
+            consistency: sample.consistency,
+            cacheAgeMs: sample.cacheAgeMs,
+            capturedAt: sample.capturedAt
         )
     }
 
@@ -1402,7 +1676,6 @@ final class ControlHarnessCore {
             snapshot: snapshot
         )
     }
-
     private static func applyChangedRowBudget(
         _ rows: [ControlHarnessReadChangedRow],
         maxLines: Int?
@@ -1580,6 +1853,15 @@ final class ControlHarnessCore {
                 "Working directory does not exist: \(workingDirectory)"
             )
         }
+    }
+
+    private func normalizedTabTitleOverride(_ title: String?) -> String? {
+        guard let title else {
+            return nil
+        }
+
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func buildSurfaceConfiguration(from request: ControlHarnessRequest) -> Ghostty.SurfaceConfiguration {

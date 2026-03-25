@@ -1,0 +1,19 @@
+diff --git a/node_modules/@more-tech/react-native-libsodium/android/build.gradle b/node_modules/@more-tech/react-native-libsodium/android/build.gradle
+index 49282df..267510f 100644
+--- a/node_modules/@more-tech/react-native-libsodium/android/build.gradle
++++ b/node_modules/@more-tech/react-native-libsodium/android/build.gradle
+@@ -2,12 +2,13 @@ import java.nio.file.Paths
+ 
+ buildscript {
+   repositories {
++    mavenLocal()
+     google()
+     mavenCentral()
+   }
+ 
+   dependencies {
+-    classpath "com.android.tools.build:gradle:7.2.1"
++    classpath "com.android.tools.build:gradle:8.5.2"
+   }
+ }
+ 

@@ -2,7 +2,15 @@ import AppKit
 
 extension AppDelegate {
     @IBAction func showSSHConnections(_ sender: Any?) {
-        sshConnectionsController.show()
+        let selectedTab: SSHConnectionsPanelTab
+        if let menuItem = sender as? NSMenuItem,
+           isSettingsPanelMenuItem(menuItem) {
+            selectedTab = .preferences
+        } else {
+            selectedTab = .connections
+        }
+
+        sshConnectionsController.show(tab: selectedTab)
     }
 
     @IBAction func showTodoWorkspace(_ sender: Any?) {
@@ -89,5 +97,14 @@ extension AppDelegate {
             return selectedWindow?.windowController as? BaseTerminalController
         }
         .first
+    }
+
+    private func isSettingsPanelMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        let title = menuItem.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return [
+            "Settings Panel…",
+            "设置面板…",
+            AppLocalization.localizedText("Settings Panel…"),
+        ].contains(title)
     }
 }

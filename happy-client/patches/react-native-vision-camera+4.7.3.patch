@@ -1,0 +1,21 @@
+diff --git a/node_modules/react-native-vision-camera/android/build.gradle b/node_modules/react-native-vision-camera/android/build.gradle
+index b1d9973..5b6fb74 100644
+--- a/node_modules/react-native-vision-camera/android/build.gradle
++++ b/node_modules/react-native-vision-camera/android/build.gradle
+@@ -8,6 +8,7 @@ buildscript {
+   def kotlin_version = rootProject.ext.has("kotlinVersion") ? rootProject.ext.get("kotlinVersion") : project.properties["VisionCamera_kotlinVersion"]
+ 
+   repositories {
++    mavenLocal()
+     maven {
+       url "https://plugins.gradle.org/m2/"
+     }
+@@ -16,7 +17,7 @@ buildscript {
+   }
+ 
+   dependencies {
+-    classpath "com.android.tools.build:gradle:8.7.2"
++    classpath "com.android.tools.build:gradle:8.5.2"
+     classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+   }
+ }

@@ -1,4 +1,4 @@
-# creator
+# Creator Metadata
 
 ## Why this folder exists
 This folder hosts a dedicated Git worktree for the GhoDex markdown tab viewer feature.

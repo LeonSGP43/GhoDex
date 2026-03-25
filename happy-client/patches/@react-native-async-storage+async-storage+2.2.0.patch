@@ -1,0 +1,20 @@
+diff --git a/node_modules/@react-native-async-storage/async-storage/android/build.gradle b/node_modules/@react-native-async-storage/async-storage/android/build.gradle
+index 4560dc7..278d5a9 100644
+--- a/node_modules/@react-native-async-storage/async-storage/android/build.gradle
++++ b/node_modules/@react-native-async-storage/async-storage/android/build.gradle
+@@ -8,6 +8,7 @@ buildscript {
+     def kspVersion = ext.AsyncStorageConfig.kspVersion
+ 
+     repositories {
++        mavenLocal()
+         mavenCentral()
+         google()
+     }
+@@ -93,6 +94,7 @@ android {
+ }
+ 
+ repositories {
++    mavenLocal()
+     maven {
+         // All of React Native (JS, Obj-C sources, Android binaries) is installed from npm
+         url "${project.ext.resolveModulePath("react-native")}/android"

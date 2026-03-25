@@ -12,6 +12,7 @@ extension ControlHarnessRequest {
         switch command {
         case "new-tab",
             "close-tab",
+            "rename-tab",
             "send-text",
             "run-command",
             "close-terminal",
@@ -823,6 +824,25 @@ final class ControlHarnessEventSubscriptionSession {
                 signalFinishLocked()
             }
         }
+    }
+
+    func removeSubscriber(_ id: UUID?) {
+        guard let id else { return }
+
+        let finishHandler = queue.sync { () -> (@Sendable () -> Void)? in
+            guard !finished else { return nil }
+            finished = true
+            bufferingLiveEvents = false
+            bufferedLiveEvents.removeAll(keepingCapacity: false)
+            completionPending = false
+            eventHub.removeSubscriber(id)
+            let handler = self.finishHandler
+            deliverySink = nil
+            self.finishHandler = nil
+            return handler
+        }
+
+        finishHandler?()
     }
 
     private func consumeLiveEvent(data: Data) -> Bool {

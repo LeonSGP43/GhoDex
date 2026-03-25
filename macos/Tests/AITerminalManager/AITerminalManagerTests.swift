@@ -1,4 +1,5 @@
 import Testing
+import Combine
 import Foundation
 import AppKit
 @testable import GhoDex
@@ -1102,6 +1103,52 @@ struct AITerminalManagerTests {
         #expect(reloaded.items.first(where: { $0.id == firstID })?.assignedWorkspaceID == workspaceID)
         #expect(reloaded.items.first(where: { $0.id == secondID })?.assignedWorkspaceID == nil)
         #expect(reloaded.items.first(where: { $0.id == unrelatedID })?.assignedWorkspaceID == otherWorkspaceID)
+    }
+
+    @Test @MainActor func todoWorkspaceReadsDoNotPublishStoreChanges() throws {
+        let tempConfigURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+        let tempTodoRootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ghodex-todo-read-snapshot-\(UUID().uuidString)", isDirectory: true)
+
+        defer {
+            try? FileManager.default.removeItem(at: tempConfigURL)
+            try? FileManager.default.removeItem(at: tempTodoRootURL)
+        }
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempConfigURL
+        )
+
+        _ = try #require(store.initializeTodoWorkspace(rootPath: tempTodoRootURL.path))
+        let day = Date(timeIntervalSince1970: 1_710_892_800)
+        let workspaceID = UUID()
+        let document = try #require(store.addTodoItem(
+            title: "Inspect quick look",
+            notes: "",
+            for: day
+        ))
+        let todoID = try #require(document.items.first?.id)
+        _ = try #require(store.assignTodoItem(id: todoID, to: workspaceID, for: day))
+
+        store.lastError = "sticky"
+
+        var changeCount = 0
+        let cancellable = store.objectWillChange.sink {
+            changeCount += 1
+        }
+        defer { cancellable.cancel() }
+
+        let items = store.todoItems(assignedTo: workspaceID, on: day)
+        let summary = store.todoWorkspaceSummary(for: workspaceID, on: day)
+
+        #expect(items.map(\.id) == [todoID])
+        #expect(summary.totalCount == 1)
+        #expect(summary.completedCount == 0)
+        #expect(changeCount == 0)
+        #expect(store.lastError == "sticky")
     }
 
     @Test @MainActor func storeSyncsIncompleteTodoItemsIntoTodayAsPointers() throws {

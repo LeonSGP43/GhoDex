@@ -10,19 +10,49 @@ def clean-env [] {
     }
 }
 
-def ensure-xcframework [macos_dir: string, env_map: record] {
+def expected-xcframework-mode [configuration: string] {
+    if $configuration == "Debug" {
+        "Debug"
+    } else {
+        "ReleaseFast"
+    }
+}
+
+def xcframework-build-args [configuration: string] {
+    if $configuration == "Debug" {
+        []
+    } else {
+        ["--release=fast"]
+    }
+}
+
+def ensure-xcframework [macos_dir: string, configuration: string, env_map: record] {
     let xcframework = ($macos_dir | path join "GhoDexKit.xcframework")
-    if ($xcframework | path exists) {
-        return
+    let mode_marker = ($xcframework | path join ".ghodex-optimize-mode")
+    let expected_mode = (expected-xcframework-mode $configuration)
+
+    if ($xcframework | path exists) and ($mode_marker | path exists) {
+        let current_mode = (open $mode_marker | str trim)
+        if $current_mode == $expected_mode {
+            return
+        }
     }
 
-    print $"Missing ($xcframework), bootstrapping GhoDexKit.xcframework via Zig..."
+    if ($xcframework | path exists) {
+        print $"Rebuilding ($xcframework) for optimize mode ($expected_mode)..."
+        rm -rf $xcframework
+    } else {
+        print $"Missing ($xcframework), bootstrapping GhoDexKit.xcframework via Zig..."
+    }
+
+    let build_args = (xcframework-build-args $configuration)
 
     (^env -i
         $"HOME=($env_map.HOME)"
         $"PATH=($env_map.PATH)"
         zig
         build
+        ...$build_args
         -Demit-xcframework=true
         -Demit-macos-app=false
         | complete
@@ -33,6 +63,8 @@ def ensure-xcframework [macos_dir: string, env_map: record] {
             msg: $"Failed to generate ($xcframework)"
         }
     }
+
+    $expected_mode | save -f $mode_marker
 }
 
 def main [
@@ -46,7 +78,7 @@ def main [
     let derived_data_dir = ($build_dir | path join "DerivedData")
     let env_map = (clean-env)
 
-    ensure-xcframework $macos_dir $env_map
+    ensure-xcframework $macos_dir $configuration $env_map
 
     # Skip UI tests for CLI-based invocations because it requires
     # special permissions.
