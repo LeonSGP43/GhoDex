@@ -357,13 +357,30 @@ Payload notes:
 
 ### DOM Command Payloads
 
-`query`, `click`, `getText`, `getAttributes`, and `getBoundingBox` payload:
+`query`, `getText`, `getAttributes`, and `getBoundingBox` payload:
 
 ```json
 {
   "selector": "button.primary"
 }
 ```
+
+`click` payload:
+
+```json
+{
+  "selector": "button.primary",
+  "clickMode": "auto"
+}
+```
+
+`clickMode` values:
+
+- `auto` (default): prefer a trusted native click on the main frame and fall
+  back to DOM `element.click()` when trusted delivery is not possible
+- `trusted`: require a native trusted click; currently limited to the main
+  frame and will auto-activate a background Browser page tab before clicking
+- `dom`: always use DOM `element.click()`
 
 `typeText` payload:
 
@@ -398,6 +415,7 @@ Result notes:
 
 - `query` returns the existing `BrowserDOMQueryResult` JSON shape
 - `click` returns `BrowserDOMClickResult`
+  with `trusted`, `transport`, and `fallbackUsed` metadata
 - `typeText` returns `BrowserDOMTypeTextResult`
 - `waitForSelector` returns the structured observer result produced by the page
   agent, including `found`, `timedOut`, `selector`, `state`, and `elapsedMS`

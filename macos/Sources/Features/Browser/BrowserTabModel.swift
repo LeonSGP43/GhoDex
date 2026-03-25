@@ -168,6 +168,9 @@ struct BrowserDOMQueryResult: Hashable, Codable {
 struct BrowserDOMClickResult: Hashable, Codable {
     let clicked: Bool
     let selector: String
+    let trusted: Bool?
+    let transport: String?
+    let fallbackUsed: Bool?
 }
 
 struct BrowserDOMTypeTextResult: Hashable, Codable {
@@ -203,6 +206,15 @@ struct BrowserDOMBoundingBoxResult: Hashable, Codable {
     let scrollY: Double?
     let viewportWidth: Double?
     let viewportHeight: Double?
+}
+
+struct BrowserTrustedClickTargetResult: Hashable, Codable {
+    let found: Bool
+    let selector: String
+    let centerX: Double?
+    let centerY: Double?
+    let width: Double?
+    let height: Double?
 }
 
 struct BrowserDOMSnapshotNode: Hashable, Codable {

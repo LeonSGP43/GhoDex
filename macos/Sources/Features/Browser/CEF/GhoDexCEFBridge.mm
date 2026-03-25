@@ -44,6 +44,7 @@ NSString * const GhoDexCEFControlErrorDomain = @"com.leongong.ghodex.browser.cef
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <errno.h>
 #include <limits.h>
 #include <libproc.h>
@@ -819,6 +820,7 @@ public:
                           const std::string &request_id,
                           std::string *error_description);
   bool ListFrames(std::string *result_json, std::string *error_description);
+  bool SendTrustedClick(double x, double y, std::string *error_description);
   void WasResized();
   void CloseBrowser();
 
@@ -1057,6 +1059,36 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
   if (completion != nil) {
     completion(nil, MakeControlError(GhoDexCEFControlErrorCodeBridgeUnavailable, @"The CEF browser bridge is unavailable."));
   }
+}
+
+- (BOOL)performTrustedClickAtX:(double)x
+                             y:(double)y
+                          error:(NSError * _Nullable * _Nullable)error {
+  if (!_client) {
+    if (error != nil) {
+      *error = MakeControlError(
+          GhoDexCEFControlErrorCodeBridgeUnavailable,
+          @"The CEF browser bridge is unavailable.");
+    }
+    return NO;
+  }
+
+  if (self.window != nil) {
+    [self.window makeKeyAndOrderFront:nil];
+    [self.window makeFirstResponder:self];
+  }
+
+  std::string error_description;
+  if (_client->SendTrustedClick(x, y, &error_description)) {
+    return YES;
+  }
+
+  if (error != nil) {
+    *error = MakeControlError(
+        GhoDexCEFControlErrorCodeEvaluationFailed,
+        [NSString stringWithUTF8String:error_description.c_str() ?: "The browser could not dispatch the trusted click."]);
+  }
+  return NO;
 }
 
 - (void)notifyTitle:(NSString *)title {
@@ -2086,6 +2118,54 @@ void GhoDexCEFClient::WasResized() {
   if (browser_) {
     browser_->GetHost()->WasResized();
   }
+}
+
+bool GhoDexCEFClient::SendTrustedClick(double x,
+                                       double y,
+                                       std::string *error_description) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!browser_) {
+    if (error_description) {
+      *error_description = "The browser is unavailable for trusted click injection.";
+    }
+    return false;
+  }
+
+  CefRefPtr<CefBrowserHost> host = browser_->GetHost();
+  if (!host.get()) {
+    if (error_description) {
+      *error_description = "The browser host is unavailable for trusted click injection.";
+    }
+    return false;
+  }
+
+  const int view_width = owner_ ? static_cast<int>(owner_.bounds.size.width) : 0;
+  const int view_height = owner_ ? static_cast<int>(owner_.bounds.size.height) : 0;
+  const int event_x = std::max(0, static_cast<int>(std::lround(x)));
+  const int event_y = std::max(0, static_cast<int>(std::lround(y)));
+  if ((view_width > 0 && event_x >= view_width) || (view_height > 0 && event_y >= view_height)) {
+    if (error_description) {
+      *error_description = "The trusted click target is outside the current browser view bounds.";
+    }
+    return false;
+  }
+
+  host->SetFocus(true);
+
+  CefMouseEvent move_event;
+  move_event.x = event_x;
+  move_event.y = event_y;
+  move_event.modifiers = 0;
+  host->SendMouseMoveEvent(move_event, false);
+
+  CefMouseEvent down_event = move_event;
+  down_event.modifiers = EVENTFLAG_LEFT_MOUSE_BUTTON;
+  host->SendMouseClickEvent(down_event, MBT_LEFT, false, 1);
+
+  CefMouseEvent up_event = move_event;
+  up_event.modifiers = 0;
+  host->SendMouseClickEvent(up_event, MBT_LEFT, true, 1);
+  return true;
 }
 
 void GhoDexCEFClient::CloseBrowser() {

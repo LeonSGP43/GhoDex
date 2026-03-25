@@ -456,7 +456,7 @@ def run_acceptance(args: argparse.Namespace) -> dict:
                     "click",
                     browser_tab_id=browser_tab_id,
                     page_id=source_page["id"],
-                    payload={"selector": "#new-tab-link"},
+                    payload={"selector": "#new-tab-link", "clickMode": "trusted"},
                     timeout=max(20.0, args.page_timeout_ms / 1000.0),
                 )["response"]
             )
@@ -489,7 +489,7 @@ def run_acceptance(args: argparse.Namespace) -> dict:
                     "click",
                     browser_tab_id=browser_tab_id,
                     page_id=source_page["id"],
-                    payload={"selector": "#new-window-button"},
+                    payload={"selector": "#new-window-button", "clickMode": "trusted"},
                     timeout=max(20.0, args.page_timeout_ms / 1000.0),
                 )["response"]
             )

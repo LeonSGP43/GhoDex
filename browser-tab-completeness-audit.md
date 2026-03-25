@@ -26,6 +26,8 @@ What is materially working now:
   bundle
 - popup/new-window routing is now externally visible through the public browser
   event broker instead of being trapped in private logs only
+- `browser.tab.v1 click` can now request a trusted native browser gesture on
+  main-frame targets instead of being limited to DOM `element.click()`
 - download, file dialog, JS dialog, permission, HTTP auth, and certificate
   prompt handlers
 - page-level Browser control API over IPC and AppleScript
@@ -160,8 +162,8 @@ Conclusion:
 - code coverage here is materially better than before, but "implemented" still
   exceeds "proven"
 
-#### 5. Popup requests are now externally observable across both routed tabs and
-dedicated popup hosts, but still need a trusted-gesture end-to-end artifact
+#### 5. Popup requests are now externally observable and acceptance-backed
+through trusted Browser IPC gestures
 
 Why this matters:
 
@@ -180,16 +182,20 @@ Evidence:
   `resultVisibilityState`
 - `macos/Tests/Browser/BrowserPopupEventTests.swift` locks the payload contract
   for page-tab, Browser-window, and dedicated-popup-host outcomes
-- `scripts/browser_popup_event_acceptance.py` now provides an isolated harness
-  scaffold for future popup event artifacts
+- `browser.tab.v1 click` now supports `clickMode=auto|trusted|dom`, with
+  trusted mode using native click injection for main-frame targets and
+  auto-activating a background page tab when a real gesture is required
+- `/tmp/ghx-browser-popup-event-acceptance.json` proves both the page-tab and
+  dedicated popup-host flows through pure IPC, with `userGesture=true` and
+  observable `popupRequest` payloads for both routes
 
 Conclusion:
 
-- the specific broker observability gap is closed
-- remaining work is evidence quality: a fully automated site-driven artifact is
-  still blocked because `browser.tab.v1 click` currently uses DOM
-  `element.click()` instead of a trusted native browser gesture, so a pure IPC
-  harness cannot yet force real popup gestures reliably
+- the observability gap is closed and there is now a durable end-to-end trusted
+  popup artifact
+- remaining popup work is breadth, not control-plane capability: broader
+  site-specific coverage is still worth adding, but the prior trusted-gesture
+  blocker is no longer open
 
 #### 6. Remote-debug hardening is now runtime-verified for isolated acceptance
 
@@ -216,9 +222,9 @@ If the target is:
 
 - "a stable internal browser that can reuse Chrome web state and browse normal
   sites reasonably well"
-  Current state: close. Popup/OAuth routing is now materially where it needs to
-  be, but media parity and a few remaining service-surface gaps still keep the
-  claim from being strong.
+  Current state: close. Popup/OAuth routing and trusted popup gestures are now
+  materially where they need to be, but media parity and a few remaining
+  service-surface gaps still keep the claim from being strong.
 
 - "a browser that is basically Chrome with the same profile and service layer"
   Current state: not reached. The external-profile launch policy still
@@ -227,14 +233,14 @@ If the target is:
 
 - "a browser that does not look like an obviously stripped automation shell"
   Current state: improved, but still not complete. WebGL parity, popup routing,
-  and default-closed isolated debug proof are now in place; H.264/media
-  capability and reduced Chrome-owned services remain the highest-confidence
-  visible gaps.
+  trusted popup gestures, and default-closed isolated debug proof are now in
+  place; H.264/media capability and reduced Chrome-owned services remain the
+  highest-confidence visible gaps.
 
 ## Recommended Next Sequence
 
-1. Run a media-capability acceptance lane focused on H.264/video support and
-   other high-signal fingerprint surfaces.
+1. Supply and validate a codec-enabled CEF runtime for H.264/video support and
+   other high-signal media parity surfaces.
 2. Add dedicated acceptance for the remaining permission/auth/dialog surfaces
    that are currently code-backed but not end-to-end proven.
 3. Decide explicitly whether external/mirror mode is meant to stay a

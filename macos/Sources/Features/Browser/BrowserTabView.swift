@@ -397,14 +397,215 @@ private struct BrowserCEFDeckView: NSViewRepresentable {
                      .getAttributes,
                      .getBoundingBox,
                      .batchDOMCommands:
-                    self.routeDOMCommand(request, view: view, completion: completion)
+                    self.routeDOMCommand(request, pageID: pageID, view: view, completion: completion)
                 }
             })
         }
 
         private func routeDOMCommand(
             _ request: BrowserControlRequest,
+            pageID: UUID,
             view: GhoDexCEFView,
+            completion: @escaping BrowserControlCompletion
+        ) {
+            if request.command == .click {
+                routeClickCommand(request, pageID: pageID, view: view, completion: completion)
+                return
+            }
+
+            let script: String
+            do {
+                script = try BrowserControlScriptBuilder.script(for: request)
+            } catch let error as BrowserControlScriptBuilderError {
+                completion(.failure(for: request, error: .invalidRequest(error.localizedDescription)))
+                return
+            } catch {
+                completion(.failure(for: request, error: .internalFailure(error.localizedDescription)))
+                return
+            }
+
+            view.evaluateJavaScript(script, frameName: request.target.frameName) { resultJSON, error in
+                if let error {
+                    completion(.failure(
+                        for: request,
+                        error: .internalFailure(error.localizedDescription)
+                    ))
+                    return
+                }
+
+                completion(.success(for: request, valueJSON: resultJSON))
+            }
+        }
+
+        private func routeClickCommand(
+            _ request: BrowserControlRequest,
+            pageID: UUID,
+            view: GhoDexCEFView,
+            completion: @escaping BrowserControlCompletion
+        ) {
+            guard let selector = request.payload["selector"], !selector.isEmpty else {
+                completion(.failure(
+                    for: request,
+                    error: .invalidRequest("The click command requires a non-empty selector payload.")
+                ))
+                return
+            }
+
+            let clickMode = (request.payload["clickMode"] ?? "auto").lowercased()
+            let prefersTrustedClick = clickMode == "auto" || clickMode == "trusted"
+            let shouldFallbackToDOM = clickMode == "auto"
+
+            guard clickMode == "auto" || clickMode == "trusted" || clickMode == "dom" else {
+                completion(.failure(
+                    for: request,
+                    error: .invalidRequest("The clickMode payload must be one of auto, trusted, or dom.")
+                ))
+                return
+            }
+
+            if clickMode == "dom" {
+                routeDOMClickCommand(
+                    request,
+                    selector: selector,
+                    view: view,
+                    fallbackUsed: false,
+                    completion: completion
+                )
+                return
+            }
+
+            if pageID != model.selectedPageID {
+                if let currentlySelectedView = views[model.selectedPageID] {
+                    currentlySelectedView.isHidden = true
+                }
+                model.selectPage(pageID)
+                view.isHidden = false
+                view.superview?.layoutSubtreeIfNeeded()
+            }
+
+            if request.target.frameName != nil {
+                if shouldFallbackToDOM {
+                    routeDOMClickCommand(
+                        request,
+                        selector: selector,
+                        view: view,
+                        fallbackUsed: true,
+                        completion: completion
+                    )
+                    return
+                }
+
+                completion(.failure(
+                    for: request,
+                    error: .invalidRequest("Trusted click currently supports only the main frame. Omit frameName or use clickMode=dom.")
+                ))
+                return
+            }
+
+            guard prefersTrustedClick else {
+                routeDOMClickCommand(
+                    request,
+                    selector: selector,
+                    view: view,
+                    fallbackUsed: false,
+                    completion: completion
+                )
+                return
+            }
+
+            let targetScript: String
+            do {
+                targetScript = try BrowserControlScriptBuilder.trustedClickTargetScript(selector: selector)
+            } catch let error as BrowserControlScriptBuilderError {
+                completion(.failure(for: request, error: .invalidRequest(error.localizedDescription)))
+                return
+            } catch {
+                completion(.failure(for: request, error: .internalFailure(error.localizedDescription)))
+                return
+            }
+
+            view.evaluateJavaScript(targetScript, frameName: nil) { resultJSON, error in
+                if let error {
+                    if shouldFallbackToDOM {
+                        self.routeDOMClickCommand(
+                            request,
+                            selector: selector,
+                            view: view,
+                            fallbackUsed: true,
+                            completion: completion
+                        )
+                        return
+                    }
+
+                    completion(.failure(
+                        for: request,
+                        error: .internalFailure(error.localizedDescription)
+                    ))
+                    return
+                }
+
+                guard
+                    let resultJSON,
+                    let data = resultJSON.data(using: .utf8),
+                    let target = try? JSONDecoder().decode(BrowserTrustedClickTargetResult.self, from: data),
+                    target.found,
+                    let centerX = target.centerX,
+                    let centerY = target.centerY
+                else {
+                    if shouldFallbackToDOM {
+                        self.routeDOMClickCommand(
+                            request,
+                            selector: selector,
+                            view: view,
+                            fallbackUsed: true,
+                            completion: completion
+                        )
+                        return
+                    }
+
+                    completion(.failure(
+                        for: request,
+                        error: .internalFailure("The browser could not resolve a trusted click target.")
+                    ))
+                    return
+                }
+
+                do {
+                    try view.performTrustedClickAt(x: centerX, y: centerY)
+                    let result = BrowserDOMClickResult(
+                        clicked: true,
+                        selector: selector,
+                        trusted: true,
+                        transport: "native",
+                        fallbackUsed: false
+                    )
+                    let encoded = try JSONEncoder().encode(result)
+                    completion(.success(for: request, valueJSON: String(bytes: encoded, encoding: .utf8)))
+                } catch {
+                    if shouldFallbackToDOM {
+                        self.routeDOMClickCommand(
+                            request,
+                            selector: selector,
+                            view: view,
+                            fallbackUsed: true,
+                            completion: completion
+                        )
+                        return
+                    }
+
+                    completion(.failure(
+                        for: request,
+                        error: .internalFailure(error.localizedDescription)
+                    ))
+                }
+            }
+        }
+
+        private func routeDOMClickCommand(
+            _ request: BrowserControlRequest,
+            selector: String,
+            view: GhoDexCEFView,
+            fallbackUsed: Bool,
             completion: @escaping BrowserControlCompletion
         ) {
             let script: String
@@ -427,7 +628,35 @@ private struct BrowserCEFDeckView: NSViewRepresentable {
                     return
                 }
 
-                completion(.success(for: request, valueJSON: resultJSON))
+                guard
+                    let resultJSON,
+                    let data = resultJSON.data(using: .utf8),
+                    let rawResult = try? JSONDecoder().decode(BrowserDOMClickResult.self, from: data)
+                else {
+                    completion(.failure(
+                        for: request,
+                        error: .internalFailure("The browser returned an invalid DOM click result.")
+                    ))
+                    return
+                }
+
+                let normalizedResult = BrowserDOMClickResult(
+                    clicked: rawResult.clicked,
+                    selector: rawResult.selector.isEmpty ? selector : rawResult.selector,
+                    trusted: false,
+                    transport: "dom",
+                    fallbackUsed: fallbackUsed
+                )
+
+                do {
+                    let encoded = try JSONEncoder().encode(normalizedResult)
+                    completion(.success(for: request, valueJSON: String(bytes: encoded, encoding: .utf8)))
+                } catch {
+                    completion(.failure(
+                        for: request,
+                        error: .internalFailure(error.localizedDescription)
+                    ))
+                }
             }
         }
     }

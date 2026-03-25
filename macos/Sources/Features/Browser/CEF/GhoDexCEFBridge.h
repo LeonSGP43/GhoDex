@@ -37,6 +37,9 @@ typedef void (^GhoDexCEFJavaScriptEvaluationCompletion)(NSString * _Nullable res
                  frameName:(NSString * _Nullable)frameName
                 completion:(GhoDexCEFJavaScriptEvaluationCompletion)completion;
 - (void)listFramesWithCompletion:(GhoDexCEFJavaScriptEvaluationCompletion)completion;
+- (BOOL)performTrustedClickAtX:(double)x
+                             y:(double)y
+                          error:(NSError * _Nullable * _Nullable)error;
 @end
 
 @protocol GhoDexCEFViewDelegate <NSObject>

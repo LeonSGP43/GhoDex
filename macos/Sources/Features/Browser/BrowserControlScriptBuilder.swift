@@ -74,7 +74,54 @@ enum BrowserControlScriptBuilder {
           }
 
           element.click();
-          return { clicked: true, selector };
+          return { clicked: true, selector, trusted: false, transport: "dom", fallbackUsed: false };
+        })()
+        """
+    }
+
+    static func trustedClickTargetScript(selector: String) throws -> String {
+        let selectorLiteral = try javaScriptStringLiteral(selector)
+        return """
+        (() => {
+          const selector = \(selectorLiteral);
+          const element = document.querySelector(selector);
+          if (!element) {
+            return { found: false, selector, centerX: null, centerY: null, width: null, height: null };
+          }
+
+          if (typeof element.scrollIntoView === "function") {
+            element.scrollIntoView({ block: "center", inline: "center" });
+          }
+
+          return new Promise((resolve) => {
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                const rect = element.getBoundingClientRect();
+                if (!Number.isFinite(rect.width) || !Number.isFinite(rect.height) || rect.width <= 0 || rect.height <= 0) {
+                  resolve({
+                    found: false,
+                    selector,
+                    centerX: null,
+                    centerY: null,
+                    width: rect.width ?? null,
+                    height: rect.height ?? null
+                  });
+                  return;
+                }
+
+                const centerX = Math.min(Math.max(rect.left + (rect.width / 2), rect.left + 1), rect.right - 1);
+                const centerY = Math.min(Math.max(rect.top + (rect.height / 2), rect.top + 1), rect.bottom - 1);
+                resolve({
+                  found: true,
+                  selector,
+                  centerX,
+                  centerY,
+                  width: rect.width,
+                  height: rect.height
+                });
+              });
+            });
+          });
         })()
         """
     }
@@ -405,7 +452,7 @@ enum BrowserControlScriptBuilder {
                 }
 
                 element.click();
-                value = { clicked: true, selector };
+                value = { clicked: true, selector, trusted: false, transport: "dom", fallbackUsed: false };
                 break;
               }
               case "typeText": {
