@@ -196,6 +196,19 @@ class AppDelegate: NSObject,
     }
 
     @MainActor
+    func applyHostInstanceEnvironment(
+        to config: inout Ghostty.SurfaceConfiguration
+    ) {
+        GhoDexHostInstanceEnvironment.inject(
+            into: &config.environmentVariables,
+            controlSocketPath: controlHarnessService.socketURL.path,
+            processID: ProcessInfo.processInfo.processIdentifier,
+            bundleID: Bundle.main.bundleIdentifier,
+            executablePath: Bundle.main.executableURL?.path ?? ProcessInfo.processInfo.arguments.first
+        )
+    }
+
+    @MainActor
     func controlHarnessManagedState(for terminalID: UUID) -> AITerminalManagedState? {
         aiTerminalManagerStore.sessions
             .first(where: { $0.id == terminalID })?
