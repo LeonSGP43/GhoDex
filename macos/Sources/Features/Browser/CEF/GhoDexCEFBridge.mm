@@ -94,6 +94,7 @@ NSString * _Nullable CopyLastInitializationError(void) {
   return [g_cef_last_initialization_error copy];
 }
 
+BOOL HasIsolatedAppSupportRootOverride(void);
 NSString *ConfiguredExternalProfilePath(void);
 NSString *ConfiguredProfileRootPath(void);
 NSString * _Nullable CanonicalCEFPath(NSString *path);
@@ -2131,6 +2132,10 @@ NSString *ConfiguredFrameworkBinaryPath(void) {
 }
 
 int ConfiguredRemoteDebuggingPort(void) {
+  if (HasIsolatedAppSupportRootOverride()) {
+    return 0;
+  }
+
   NSInteger defaults_port =
       [NSUserDefaults.standardUserDefaults integerForKey:@"BrowserCEFRemoteDebugPort"];
   if (defaults_port >= 1 && defaults_port <= 65535) {

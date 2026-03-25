@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(debug): isolate remote debug defaults in acceptance sessions
+
+- What changed: `ConfiguredRemoteDebuggingPort()` in `GhoDexCEFBridge.mm` and `getDebugStatus` in `ScriptBrowserTab.swift` now ignore shared `BrowserCEFRemoteDebugPort` defaults whenever an isolated `GHODEX_BROWSER_APP_SUPPORT_ROOT` session is active. Added `scripts/browser_media_debug_acceptance.py`, a durable isolated probe that launches the Debug app with isolated `HOME` plus isolated app-support state, stages a deterministic ffmpeg-generated H.264/AAC MP4, and records debug status, launch metadata, WebGL, codec support, and actual playback results.
+- Why: The previous Phase 1 probe showed that supposedly isolated Browser sessions still inherited a stale shared remote-debug port (`50638`) from the host machine's user defaults. That made the "debug lane is off by default" claim unprovable in acceptance and hid whether later failures were real browser gaps or leaked host state.
+- Impact: Isolated managed and external Browser acceptance now starts with `remote_debug_port=0` and `getDebugStatus.enabled = false`, so the default-closed debug contract is finally backed by real runtime evidence instead of only command-line code inspection. The same durable probe also confirms the remaining blocker is H.264/AAC media parity: both lanes still report unsupported MP4/H.264 decode and fail actual playback with `DEMUXER_ERROR_NO_SUPPORTED_STREAMS`.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug SYMROOT=$PWD/macos/build GHODEX_CEF_ENABLED=1 GHODEX_CEF_ROOT=$PWD/macos/build/cef-runtime/current GHODEX_CEF_OTHER_LDFLAGS=-lsqlite3 GHODEX_CEF_WRAPPER_LIB=$PWD/macos/build/cef-runtime/current/lib/Debug/libcef_dll_wrapper.a build`, `bash scripts/stage_cef_helper_app.sh macos/build/Debug/GhoDex.app`, `/tmp/ghx-browser-media-debug-managed.json`, `/tmp/ghx-browser-media-debug-external.json`
+- Files: `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `scripts/browser_media_debug_acceptance.py`, `browser-tab-acceptance-matrix.md`, `browser-tab-completeness-audit.md`, `CHANGELOG.md`
+- Decision trail: Fix the leak at the runtime-resolution boundary instead of mutating the user's shared defaults during tests. Isolated Browser acceptance should behave like its own app-support island unless the harness explicitly opts into a debug port. Keep the media probe in the same change because Phase 1 needed one durable artifact proving which part is fixed (`debug`) and which part is still a merge blocker (`H.264/AAC`).
+
 ### docs(browser): add gap closure plan after main sync
 
 - What changed: Added `browser-tab-gap-closure-plan.md`, a durable post-merge plan that breaks the remaining browser-completeness work into four closure tracks: media/fingerprint parity, external/mirror service-surface decisions, missing handler end-to-end acceptance, and popup/open-window observability.

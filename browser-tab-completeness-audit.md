@@ -31,7 +31,8 @@ What is materially working now:
 What is still not enough for "normal browser" parity:
 
 - external/mirror mode intentionally disables several Chrome-owned services
-- media/fingerprint acceptance is still incomplete
+- H.264 / AAC media parity is still incomplete even after a fresh isolated
+  managed/external probe
 - several shipped browser-service handlers are code-complete but not yet
   acceptance-backed
 
@@ -39,8 +40,7 @@ What is still not enough for "normal browser" parity:
 
 ### Tier 0: Blocks Normal Browser Semantics
 
-#### 1. H.264 / broader media-codec parity is still unproven and likely
-incomplete
+#### 1. H.264 / broader media-codec parity is still incomplete
 
 Why this matters:
 
@@ -53,7 +53,12 @@ Evidence:
 
 - `browser-tab-acceptance-matrix.md` already records
   `VIDEO_CODECS WARN h264: ""` in the mirrored-profile fingerprint lane
-- only the WebGL/GPU parity lane is currently acceptance-backed
+- the fresh isolated managed lane at `/tmp/ghx-browser-media-debug-managed.json`
+  reports `h264_baseline = ""`, `mp4_aac = ""`,
+  `MediaSource.isTypeSupported(...) = false`, and
+  `PipelineStatus::DEMUXER_ERROR_NO_SUPPORTED_STREAMS`
+- the fresh isolated external lane at `/tmp/ghx-browser-media-debug-external.json`
+  reports the same H.264/AAC failure shape under an external profile
 
 Code path:
 
@@ -63,7 +68,7 @@ Code path:
 Conclusion:
 
 - WebGL parity improved a major visible surface, but media capability is still
-  a remaining normal-browser blocker until proven otherwise
+  a confirmed normal-browser blocker in the current runtime
 
 ### Tier 1: Product Boundary Choices That Prevent Full Chrome Equivalence
 
@@ -164,18 +169,24 @@ Conclusion:
 - keeping popup/open-window events invisible externally weakens the product's
   own ability to prove and debug popup correctness
 
-#### 6. Remote-debug hardening is build-verified but still lacks a fresh runtime proof
+#### 6. Remote-debug hardening is now runtime-verified for isolated acceptance
 
 Why this matters:
 
-- the command-line policy to strip accidental remote-debug switches is a good
-  hardening move
-- however, the latest work only proved that the app builds, not that a new
-  isolated runtime artifact confirms the lane stays closed when unset
+- a "debug lane is opt-in" contract is only credible if isolated acceptance can
+  prove it without inheriting stale host defaults
+
+Evidence:
+
+- `/tmp/ghx-browser-media-debug-managed.json` now records `enabled = false`
+  before and after `newTab`, with `remote_debug_port = 0`
+- `/tmp/ghx-browser-media-debug-external.json` records the same default-closed
+  result for the external-profile lane
 
 Conclusion:
 
-- this is a verification gap, not currently a correctness regression
+- this gap is closed for isolated acceptance. The remaining blocker is media
+  parity, not accidental default-open remote debugging
 
 ## What This Means
 
@@ -193,9 +204,10 @@ If the target is:
   Chrome service surfaces.
 
 - "a browser that does not look like an obviously stripped automation shell"
-  Current state: improved, but still unproven. WebGL parity and popup routing
-  semantics are fixed; H.264/media capability and reduced Chrome-owned
-  services remain the highest-confidence visible gaps.
+  Current state: improved, but still not complete. WebGL parity, popup routing,
+  and default-closed isolated debug proof are now in place; H.264/media
+  capability and reduced Chrome-owned services remain the highest-confidence
+  visible gaps.
 
 ## Recommended Next Sequence
 

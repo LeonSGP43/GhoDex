@@ -1493,7 +1493,12 @@ extension ScriptBrowserTab {
     }
 
     private static func debugStatusResult() -> BrowserExternalDebugStatusResult {
-        let configuredPort = UserDefaults.standard.integer(forKey: BrowserPaths.remoteDebugPortDefaultsKey)
+        let configuredPort: Int
+        if BrowserPaths.shouldMirrorBrowserConfigIntoDefaults() {
+            configuredPort = UserDefaults.standard.integer(forKey: BrowserPaths.remoteDebugPortDefaultsKey)
+        } else {
+            configuredPort = 0
+        }
         let enabledPort = (1...65535).contains(configuredPort) ? configuredPort : nil
 
         return BrowserExternalDebugStatusResult(
