@@ -66,6 +66,10 @@ typedef void (^GhoDexCEFJavaScriptEvaluationCompletion)(NSString * _Nullable res
 requestOpenURLInNewTab:(NSString *)urlString
     disposition:(NSInteger)disposition
      userGesture:(BOOL)userGesture;
+- (void)cefView:(GhoDexCEFView *)view
+didHostPopupWindowForURL:(NSString *)urlString
+    disposition:(NSInteger)disposition
+     userGesture:(BOOL)userGesture;
 @end
 
 NS_ASSUME_NONNULL_END

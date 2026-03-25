@@ -83,11 +83,16 @@ final class BrowserExternalEventBroker {
             case .networkRequestFinished:
                 return BrowserControlEventKind.networkRequestFinished
             case .popupRequest:
-                return BrowserControlEventKind.openURLInNewTabRequested
+                return nil
             case .pageInspectionSnapshot:
                 return nil
             }
         })
+
+        if externalKinds.contains(.popupRequest) {
+            kinds.insert(BrowserControlEventKind.openURLInNewTabRequested)
+            kinds.insert(BrowserControlEventKind.popupWindowHosted)
+        }
 
         if externalKinds.contains(.pageInspectionSnapshot) {
             kinds.insert(BrowserControlEventKind.bridgeReady)
@@ -110,6 +115,8 @@ final class BrowserExternalEventBroker {
         case .networkRequestFinished:
             return .networkRequestFinished
         case .openURLInNewTabRequested:
+            return .popupRequest
+        case .popupWindowHosted:
             return .popupRequest
         }
     }

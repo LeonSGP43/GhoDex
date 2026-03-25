@@ -33,6 +33,9 @@ NSString * const GhoDexCEFControlErrorDomain = @"com.leongong.ghodex.browser.cef
 - (void)notifyOpenURLInNewTab:(NSString *)urlString
                   disposition:(NSInteger)disposition
                   userGesture:(BOOL)userGesture;
+- (void)notifyHostedPopupWindowForURL:(NSString *)urlString
+                          disposition:(NSInteger)disposition
+                          userGesture:(BOOL)userGesture;
 - (void)browserDidClose;
 - (void)loadPendingBootstrapURLIfNeeded;
 @end
@@ -1105,6 +1108,15 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
               userGesture:userGesture];
 }
 
+- (void)notifyHostedPopupWindowForURL:(NSString *)urlString
+                          disposition:(NSInteger)disposition
+                          userGesture:(BOOL)userGesture {
+  [self.delegate cefView:self
+  didHostPopupWindowForURL:urlString
+             disposition:disposition
+              userGesture:userGesture];
+}
+
 - (NSString *)registerEvaluationCompletion:(GhoDexCEFJavaScriptEvaluationCompletion)completion {
   NSString *request_id = [NSString stringWithFormat:@"%lld", ++_nextEvaluationRequestID];
   if (completion != nil) {
@@ -1356,6 +1368,18 @@ requestOpenURLInNewTab:(NSString *)urlString
     NSLog(@"[CEF] Popup host missing source view; delegating follow-up open to NSWorkspace for %@",
           url.absoluteString ?: urlString);
     [NSWorkspace.sharedWorkspace openURL:url];
+  }
+}
+
+- (void)cefView:(GhoDexCEFView *)view
+didHostPopupWindowForURL:(NSString *)urlString
+    disposition:(NSInteger)disposition
+     userGesture:(BOOL)userGesture {
+  (void)view;
+  if (_sourceView != nil) {
+    [_sourceView notifyHostedPopupWindowForURL:urlString
+                                   disposition:disposition
+                                   userGesture:userGesture];
   }
 }
 
@@ -1852,6 +1876,15 @@ bool GhoDexCEFClient::OnBeforePopup(CefRefPtr<CefBrowser> browser,
         windowInfo.SetAsChild((__bridge CefWindowHandle)popup_view, bounds);
         NSLog(@"[CEF] Hosting real popup disposition=%d in dedicated popup window",
               static_cast<int>(target_disposition));
+        std::string hosted_url = target_url.ToString();
+        if (hosted_url.empty()) {
+          hosted_url = "about:blank";
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+          [owner_ notifyHostedPopupWindowForURL:[NSString stringWithUTF8String:hosted_url.c_str() ?: "about:blank"]
+                                    disposition:static_cast<NSInteger>(target_disposition)
+                                    userGesture:user_gesture];
+        });
         return false;
       }
       NSLog(@"[CEF] Popup host client preparation failed for disposition=%d",

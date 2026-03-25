@@ -160,8 +160,8 @@ Conclusion:
 - code coverage here is materially better than before, but "implemented" still
   exceeds "proven"
 
-#### 5. Popup requests are now externally observable, but still need a real
-popup-event acceptance artifact
+#### 5. Popup requests are now externally observable across both routed tabs and
+dedicated popup hosts, but still need a trusted-gesture end-to-end artifact
 
 Why this matters:
 
@@ -173,17 +173,23 @@ Evidence:
 
 - `BrowserExternalEventBroker` now maps `.openURLInNewTabRequested` into the
   public `popupRequest` event kind instead of dropping it
+- dedicated native popup-host windows now emit `popupRequest` too through the
+  new `.popupWindowHosted` bridge path instead of staying invisible
 - `BrowserTabModel.handle(_:from:)` now enriches popup events with
   `routingTarget`, `resultPageID`, `resultBrowserTabID`, `resultIsActive`, and
   `resultVisibilityState`
 - `macos/Tests/Browser/BrowserPopupEventTests.swift` locks the payload contract
-  for page-tab and new-window routing outcomes
+  for page-tab, Browser-window, and dedicated-popup-host outcomes
+- `scripts/browser_popup_event_acceptance.py` now provides an isolated harness
+  scaffold for future popup event artifacts
 
 Conclusion:
 
 - the specific broker observability gap is closed
-- remaining work is evidence quality: a site-driven end-to-end artifact should
-  still prove the public popup event stream under a real popup flow
+- remaining work is evidence quality: a fully automated site-driven artifact is
+  still blocked because `browser.tab.v1 click` currently uses DOM
+  `element.click()` instead of a trusted native browser gesture, so a pure IPC
+  harness cannot yet force real popup gestures reliably
 
 #### 6. Remote-debug hardening is now runtime-verified for isolated acceptance
 

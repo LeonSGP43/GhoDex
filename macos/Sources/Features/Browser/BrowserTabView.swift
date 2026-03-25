@@ -542,6 +542,25 @@ private final class PageDelegate: NSObject, @preconcurrency GhoDexCEFViewDelegat
             from: pageID
         )
     }
+
+    func cefView(
+        _ view: GhoDexCEFView,
+        didHostPopupWindowForURL urlString: String,
+        disposition: NSInteger,
+        userGesture: Bool
+    ) {
+        guard let target = model.controlTarget(for: pageID) else { return }
+        let resolvedDisposition = BrowserPopupDisposition(rawValue: Int(disposition)) ?? .newPopup
+        model.handle(
+            .popupWindowHosted(
+                target: target,
+                url: urlString,
+                disposition: resolvedDisposition,
+                userGesture: userGesture
+            ),
+            from: pageID
+        )
+    }
 }
 
 @MainActor

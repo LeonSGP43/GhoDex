@@ -542,6 +542,20 @@ Payload keys:
 - `resultPageID` when the route resolved to a concrete Browser page
 - `resultBrowserTabID` when the route resolved into a different Browser window
 
+Known routing targets currently emitted:
+
+- `currentPage`
+- `pageTab`
+- `existingPage`
+- `browserWindow`
+- `pageTabFallback`
+- `popupWindowHost` for dedicated native popup-host windows that stay outside
+  the first-class `browser.tab.v1` tab/page inventory
+
+For `popupWindowHost`, `resultPageID` and `resultBrowserTabID` are currently
+absent because the native popup host is observable but not yet exposed as a
+first-class Browser tab target.
+
 ## CLI Examples
 
 ### 1. List live Browser tabs

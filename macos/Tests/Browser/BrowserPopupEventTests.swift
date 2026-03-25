@@ -76,4 +76,36 @@ struct BrowserPopupEventTests {
         #expect(event.payload["resultIsActive"] == "true")
         #expect(event.payload["resultVisibilityState"] == "newWindowRequested")
     }
+
+    @Test func popupRequestEventIncludesDedicatedPopupHostOutcome() throws {
+        let model = BrowserTabModel(initialURL: try #require(URL(string: "https://example.com")))
+        let sourcePageID = model.selectedPageID
+        let sourceTarget = try #require(model.controlTarget(for: sourcePageID))
+        var receivedEvent: BrowserControlEvent?
+
+        let token = model.subscribeToControlEvents(kinds: [.popupWindowHosted]) { event in
+            receivedEvent = event
+        }
+        defer { model.unsubscribeFromControlEvents(token) }
+
+        model.handle(
+            .popupWindowHosted(
+                target: sourceTarget,
+                url: "https://popup.example/dedicated",
+                disposition: .newPopup,
+                userGesture: true
+            ),
+            from: sourcePageID
+        )
+
+        let event = try #require(receivedEvent)
+        #expect(event.payload["sourcePageID"] == sourcePageID.uuidString)
+        #expect(event.payload["requestedURL"] == "https://popup.example/dedicated")
+        #expect(event.payload["dispositionName"] == "newPopup")
+        #expect(event.payload["routingTarget"] == "popupWindowHost")
+        #expect(event.payload["resultIsActive"] == "true")
+        #expect(event.payload["resultVisibilityState"] == "popupWindowForeground")
+        #expect(event.payload["resultPageID"] == nil)
+        #expect(event.payload["resultBrowserTabID"] == nil)
+    }
 }

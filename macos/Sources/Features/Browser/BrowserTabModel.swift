@@ -24,6 +24,7 @@ enum BrowserControlEventKind: String, Codable, Hashable {
     case pageTitleChanged
     case navigationStateChanged
     case openURLInNewTabRequested
+    case popupWindowHosted
     case consoleMessage
     case bridgeReady
     case networkRequestFinished
@@ -415,6 +416,23 @@ struct BrowserControlEvent: Identifiable, Hashable, Codable {
         BrowserControlEvent(
             target: target,
             kind: .openURLInNewTabRequested,
+            payload: [
+                "url": url,
+                "disposition": String(disposition.rawValue),
+                "userGesture": String(userGesture),
+            ]
+        )
+    }
+
+    static func popupWindowHosted(
+        target: BrowserControlTarget,
+        url: String,
+        disposition: BrowserPopupDisposition,
+        userGesture: Bool
+    ) -> BrowserControlEvent {
+        BrowserControlEvent(
+            target: target,
+            kind: .popupWindowHosted,
             payload: [
                 "url": url,
                 "disposition": String(disposition.rawValue),
@@ -1064,23 +1082,32 @@ final class BrowserTabModel: ObservableObject {
                     url
                 )
 
-                var payload = event.payload
-                payload["sourcePageID"] = pageID.uuidString
-                payload["requestedURL"] = url
-                payload["dispositionName"] = disposition.rawValueDescription
-                payload["routingTarget"] = outcome.routingTarget
-                payload["resultIsActive"] = String(outcome.resultIsActive)
-                payload["resultVisibilityState"] = outcome.resultVisibilityState
-                if let resultPageID = outcome.resultPageID {
-                    payload["resultPageID"] = resultPageID.uuidString
-                }
-                if let resultBrowserTabID = outcome.resultBrowserTabID {
-                    payload["resultBrowserTabID"] = resultBrowserTabID
-                }
-                emittedEvent = BrowserControlEvent(
-                    target: event.target,
-                    kind: event.kind,
-                    payload: payload
+                emittedEvent = enrichedPopupEvent(
+                    event,
+                    sourcePageID: pageID,
+                    requestedURL: url,
+                    disposition: disposition,
+                    outcome: outcome
+                )
+            }
+        case .popupWindowHosted:
+            if let url = event.payload["url"] {
+                let disposition = event.payload["disposition"]
+                    .flatMap(Int.init)
+                    .flatMap(BrowserPopupDisposition.init(rawValue:))
+                    ?? .newPopup
+                emittedEvent = enrichedPopupEvent(
+                    event,
+                    sourcePageID: pageID,
+                    requestedURL: url,
+                    disposition: disposition,
+                    outcome: PopupRouteOutcome(
+                        routingTarget: "popupWindowHost",
+                        resultPageID: nil,
+                        resultBrowserTabID: nil,
+                        resultIsActive: true,
+                        resultVisibilityState: "popupWindowForeground"
+                    )
                 )
             }
         case .bridgeReady:
@@ -1418,6 +1445,33 @@ final class BrowserTabModel: ObservableObject {
             }
             registration.observer(event)
         }
+    }
+
+    private func enrichedPopupEvent(
+        _ event: BrowserControlEvent,
+        sourcePageID: UUID,
+        requestedURL: String,
+        disposition: BrowserPopupDisposition,
+        outcome: PopupRouteOutcome
+    ) -> BrowserControlEvent {
+        var payload = event.payload
+        payload["sourcePageID"] = sourcePageID.uuidString
+        payload["requestedURL"] = requestedURL
+        payload["dispositionName"] = disposition.rawValueDescription
+        payload["routingTarget"] = outcome.routingTarget
+        payload["resultIsActive"] = String(outcome.resultIsActive)
+        payload["resultVisibilityState"] = outcome.resultVisibilityState
+        if let resultPageID = outcome.resultPageID {
+            payload["resultPageID"] = resultPageID.uuidString
+        }
+        if let resultBrowserTabID = outcome.resultBrowserTabID {
+            payload["resultBrowserTabID"] = resultBrowserTabID
+        }
+        return BrowserControlEvent(
+            target: event.target,
+            kind: event.kind,
+            payload: payload
+        )
     }
 
     private struct EventObserverRegistration {
