@@ -9,7 +9,9 @@
     <br />
     <a href="#about">About</a>
     ·
-    <a href="#upgrade-highlights">Upgrade Highlights</a>
+    <a href="#core-capabilities">Core Capabilities</a>
+    ·
+    <a href="#what-this-fork-optimizes-and-adds">What's New</a>
     ·
     <a href="#download">Download</a>
     ·
@@ -19,6 +21,10 @@
     ·
     <a href="HACKING.md">Developing</a>
   </p>
+</p>
+
+<p align="center">
+  <img src="./images/readme/welcome-hero.jpg" alt="GhoDex Welcome Banner" width="960">
 </p>
 
 ## About
@@ -35,20 +41,34 @@ This repository is in a phased rebrand:
 - Runtime compatibility identifiers such as `ghostty`, `libghostty`, and
   `com.leongong.ghodex` are intentionally retained for now.
 
-## Upgrade Highlights
+## Core Capabilities
 
-Recent fork-specific upgrades include:
+| Capability | GhoDex Value |
+| --- | --- |
+| Standards-compliant terminal core | Preserves Ghostty's terminal correctness baseline while continuing conformance-focused behavior. |
+| Native performance path | Uses Metal on macOS and OpenGL on Linux, plus low-jitter IO architecture for heavy terminal workloads. |
+| Real desktop workflow features | Supports multi-window, tabs, splits, and native settings integration for day-to-day development usage. |
+| Embeddable runtime (`libghostty`) | Keeps the library-based architecture so terminal capabilities remain reusable outside the main app. |
+| Automation and control surface | Exposes a local control workflow for agent-friendly operations and terminal management tasks. |
 
-- Added an AI Terminal Manager settings panel and learning workflow for
-  terminal-to-knowledge capture.
-- Added a heartbeat task queue with configurable interval/concurrency and
-  a dedicated settings tab.
-- Hardened update/localization tests to be language-agnostic.
-- Added release governance basics (`VERSION`, `CHANGELOG.md`, SemVer flow).
+## What This Fork Optimizes and Adds
 
-This fork's recommended local macOS setup also disables `Ctrl+U` in the
-terminal surface to avoid accidental whole-line clears while typing in shells.
-Apply that behavior in `config.ghodex` with:
+### Optimizations
+
+- Improved command-routing reliability for multi-instance control workflows.
+- Hardened fork maintenance with explicit SemVer versioning and changelog governance.
+- Strengthened validation coverage with language-agnostic update/localization tests.
+
+### New Features
+
+- AI Terminal Manager panel with terminal-to-knowledge capture and learning workflow.
+- Heartbeat task queue with configurable interval/concurrency and a dedicated settings tab.
+- Native markdown tab flow (preview/source modes) designed to keep documentation reading/editing inside GhoDex.
+- Desktop-to-Android remote pairing improvements including QR-based bootstrap paths.
+
+Recommended local macOS safety tweak: disable `Ctrl+U` in the terminal surface
+to avoid accidental whole-line clears while typing in shells.
+Apply in `config.ghodex`:
 
 ```ini
 keybind = ctrl+u=ignore

@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### docs(readme): add welcome hero and polished feature showcase
+
+- What changed: Added a repository-local welcome banner image at `images/readme/welcome-hero.jpg` (optimized from the provided source), added `images/readme/creator.md` for folder provenance, and updated `README.md` to display the new hero image as the top welcome visual. Reworked the top navigation and replaced the old upgrade bullet list with a structured `Core Capabilities` table plus a `What This Fork Optimizes and Adds` section.
+- Why: The project needed a stronger first-screen README presentation and a clearer explanation of what GhoDex specifically optimizes and newly adds versus upstream expectations.
+- Impact: The repository landing page now looks more productized and communicates core value, optimizations, and fork-specific feature additions in a faster-to-scan format for new visitors.
+- Verification: `file images/readme/welcome-hero.jpg`; `ls -lh images/readme/welcome-hero.jpg`; `rg -n "welcome-hero|Core Capabilities|What This Fork Optimizes and Adds" README.md`
+- Files: `README.md`, `images/readme/welcome-hero.jpg`, `images/readme/creator.md`, `CHANGELOG.md`
+- Decision trail: Keep the change documentation-only to avoid runtime regressions, while still shipping a visible presentation upgrade. Store the hero image in-repo with an optimized size so README rendering remains fast and deterministic across forks.
+
 ### feat(control): inject host control identity into terminal environments
 
 - What changed: Added a dedicated host-instance environment injector that stamps every newly created macOS terminal surface with `GHODEX_CONTROL_SOCKET`, `GHODEX_INSTANCE_PID`, `GHODEX_INSTANCE_BUNDLE_ID`, and when available `GHODEX_INSTANCE_EXECUTABLE`, then wired that injector into the shared `SurfaceView_AppKit` surface creation path.
