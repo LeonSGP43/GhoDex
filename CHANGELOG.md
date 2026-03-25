@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(browser): scrub unintended remote debug switches
+
+- What changed: `GhoDexCEFApp::OnBeforeCommandLineProcessing(...)` now applies an explicit remote-debugging policy before any process-specific launch wiring. When `ghodex-browser-remote-debug-port` is unset, the bridge strips `remote-debugging-port`, `remote-debugging-pipe`, and `remote-allow-origins` from the CEF command line for browser and child processes. When a debug port is explicitly configured, the browser process still normalizes the command-line port to the configured value instead of inheriting a stale one.
+- Why: On March 25, 2026 the copied-`Profile 10` Google/Gmail mirror acceptance still logged `DevTools listening on ws://127.0.0.1:9222/...` even though the same run recorded `remote_debug_port=0` in the CEF initialization log. That meant the browser was still exposing a localhost debugging surface that the product had not intentionally enabled.
+- Impact: Browser launches now defend the "debug lane is opt-in" contract at both the `CefSettings` layer and the command-line layer, reducing the chance that an inherited or framework-injected switch quietly re-enables DevTools when the product config says debugging is off. This is specifically a hardening change for unintended debug exposure; it does not by itself solve popup semantics or broader anti-fingerprint parity.
+- Verification: `GHODEX_CEF_ROOT=/tmp/ghx-cef-full-root nu macos/build.nu --configuration Debug --action build`
+- Files: `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `CHANGELOG.md`
+- Decision trail: Treat unintended DevTools exposure as a separate control-plane hardening problem from popup/OAuth semantics. The safest atomic move is to scrub remote-debug switches at CEF command-line construction time, because that closes an entire class of accidental inheritance paths without forcing a wider refactor through the Browser window/page model.
+
 ### feat(browser): add core browser service handlers
 
 - What changed: Extended `GhoDexCEFClient` to implement CEF dialog, download, JavaScript dialog, and permission handlers, plus explicit auth-certificate request handling. Browser pages can now surface native file pickers, write downloads into the app user's `~/Downloads`, show JS alert/confirm/prompt and before-unload dialogs, and prompt for media, permission, HTTP auth, and certificate-error decisions instead of silently rejecting them. The file chooser path now normalizes MIME/extension filters, uses `UTType`-backed content filters when available, and forces AppKit modal work back onto the main thread.

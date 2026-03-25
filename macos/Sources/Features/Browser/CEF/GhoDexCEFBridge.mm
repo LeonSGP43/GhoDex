@@ -1854,6 +1854,53 @@ int ConfiguredRemoteDebuggingPort(void) {
   return 0;
 }
 
+void ApplyRemoteDebuggingCommandLinePolicy(
+    const CefString &process_type,
+    CefRefPtr<CefCommandLine> command_line) {
+  if (!command_line.get()) {
+    return;
+  }
+
+  std::string process_type_value = process_type.ToString();
+  NSString *process_label = process_type_value.empty()
+      ? @"browser"
+      : [NSString stringWithUTF8String:process_type_value.c_str() ?: "unknown"];
+
+  int configured_port = ConfiguredRemoteDebuggingPort();
+  bool has_remote_port = command_line->HasSwitch("remote-debugging-port");
+  bool has_remote_pipe = command_line->HasSwitch("remote-debugging-pipe");
+  bool has_remote_allow_origins = command_line->HasSwitch("remote-allow-origins");
+
+  if (configured_port > 0) {
+    std::string current_port_value =
+        has_remote_port ? command_line->GetSwitchValue("remote-debugging-port").ToString() : "";
+    NSString *current_port = [NSString stringWithUTF8String:current_port_value.c_str() ?: ""];
+    NSString *desired_port = [NSString stringWithFormat:@"%d", configured_port];
+    if (!has_remote_port || ![current_port isEqualToString:desired_port]) {
+#if CEF_API_ADDED(14100)
+      command_line->RemoveSwitch("remote-debugging-port");
+#endif
+      command_line->AppendSwitchWithValue("remote-debugging-port", desired_port.UTF8String);
+      NSLog(@"[CEF] Applied remote-debugging-port=%@ to %@ process command line",
+            desired_port,
+            process_label);
+    }
+    return;
+  }
+
+  if (!has_remote_port && !has_remote_pipe && !has_remote_allow_origins) {
+    return;
+  }
+
+#if CEF_API_ADDED(14100)
+  command_line->RemoveSwitch("remote-debugging-port");
+  command_line->RemoveSwitch("remote-debugging-pipe");
+  command_line->RemoveSwitch("remote-allow-origins");
+#endif
+  NSLog(@"[CEF] Stripped unexpected remote debugging switches from %@ process command line",
+        process_label);
+}
+
 NSString *ExecutablePath(void) {
   return NSBundle.mainBundle.executablePath.stringByStandardizingPath;
 }
@@ -3240,6 +3287,8 @@ BOOL EnsureLibraryLoaded(void) {
 void GhoDexCEFApp::OnBeforeCommandLineProcessing(
     const CefString &process_type,
     CefRefPtr<CefCommandLine> command_line) {
+  ApplyRemoteDebuggingCommandLinePolicy(process_type, command_line);
+
   if (!process_type.empty()) {
     return;
   }
