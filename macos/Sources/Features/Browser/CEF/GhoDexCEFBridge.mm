@@ -1064,8 +1064,13 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
                           frameName:frameName];
 }
 
-- (void)notifyOpenURLInNewTab:(NSString *)urlString {
-  [self.delegate cefView:self requestOpenURLInNewTab:urlString];
+- (void)notifyOpenURLInNewTab:(NSString *)urlString
+                  disposition:(NSInteger)disposition
+                  userGesture:(BOOL)userGesture {
+  [self.delegate cefView:self
+  requestOpenURLInNewTab:urlString
+             disposition:disposition
+              userGesture:userGesture];
 }
 
 - (NSString *)registerEvaluationCompletion:(GhoDexCEFJavaScriptEvaluationCompletion)completion {
@@ -1585,7 +1590,9 @@ bool GhoDexCEFClient::OnBeforePopup(CefRefPtr<CefBrowser> browser,
   NSString *url_string = [NSString stringWithUTF8String:requested_url.c_str() ?: "about:blank"];
   NSLog(@"[CEF] Popup requested disposition=%d url=%@", static_cast<int>(target_disposition), url_string);
   dispatch_async(dispatch_get_main_queue(), ^{
-    [owner_ notifyOpenURLInNewTab:url_string ?: @"about:blank"];
+    [owner_ notifyOpenURLInNewTab:url_string ?: @"about:blank"
+                     disposition:static_cast<NSInteger>(target_disposition)
+                     userGesture:user_gesture];
   });
 
   return true;

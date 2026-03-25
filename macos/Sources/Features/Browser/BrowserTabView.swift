@@ -524,9 +524,23 @@ private final class PageDelegate: NSObject, @preconcurrency GhoDexCEFViewDelegat
         )
     }
 
-    func cefView(_ view: GhoDexCEFView, requestOpenURLInNewTab urlString: String) {
+    func cefView(
+        _ view: GhoDexCEFView,
+        requestOpenURLInNewTab urlString: String,
+        disposition: NSInteger,
+        userGesture: Bool
+    ) {
         guard let target = model.controlTarget(for: pageID) else { return }
-        model.handle(.openURLInNewTabRequested(target: target, url: urlString), from: pageID)
+        let resolvedDisposition = BrowserPopupDisposition(rawValue: Int(disposition)) ?? .newForegroundTab
+        model.handle(
+            .openURLInNewTabRequested(
+                target: target,
+                url: urlString,
+                disposition: resolvedDisposition,
+                userGesture: userGesture
+            ),
+            from: pageID
+        )
     }
 }
 

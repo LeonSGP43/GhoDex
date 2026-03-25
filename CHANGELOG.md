@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(browser): route popup requests by disposition
+
+- What changed: `OnBeforePopup(...)` now forwards the CEF `WindowOpenDisposition` and `userGesture` metadata through `GhoDexCEFViewDelegate` instead of flattening every popup into a generic "open URL in new tab" request. `BrowserTabModel` now routes `currentTab` and `singletonTab` requests back into the originating page, keeps foreground/background tab requests inside the existing Browser window with the correct activation behavior, reuses an existing matching page for `switchToTab`, and escalates `newPopup` / `newWindow` / `offTheRecord` requests into a separate Browser window through `BrowserTabController`.
+- Why: The previous popup path erased the window semantics that sites rely on for OAuth and real `window.open(...)` flows. Even with cookie/session reuse fixed, flattening every popup into an internal page tab still made the browser behave unlike Chrome at a browser-window level.
+- Impact: Browser popup routing is now materially closer to Chromium's intent model. Sites that request a real popup or new window no longer get forced through the same internal page-tab path as a middle-click/new-tab open, and background-tab opens no longer steal focus by default. This still does not claim full Chrome popup parity: opener semantics and end-to-end OAuth acceptance still need explicit runtime evidence.
+- Verification: `swiftlint lint macos/Sources/Features/Browser/BrowserTabModel.swift macos/Sources/Features/Browser/BrowserTabView.swift macos/Sources/Features/Browser/BrowserTabController.swift`, `GHODEX_CEF_ROOT=/tmp/ghx-cef-full-root nu macos/build.nu --configuration Debug --action build`
+- Files: `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.h`, `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `macos/Sources/Features/Browser/BrowserTabModel.swift`, `macos/Sources/Features/Browser/BrowserTabView.swift`, `macos/Sources/Features/Browser/BrowserTabController.swift`, `browser-tab-acceptance-matrix.md`, `CHANGELOG.md`
+- Decision trail: Keep the change narrowly at the popup-routing seam instead of refactoring the whole Browser page/window model. Passing raw disposition metadata out of CEF lets the Swift side make policy decisions without entangling popup hardening with the already-dirty profile/settings work, and opening real popup/new-window dispositions as separate Browser windows is the smallest move that stops obviously incorrect OAuth/window behavior.
+
 ### fix(browser): scrub unintended remote debug switches
 
 - What changed: `GhoDexCEFApp::OnBeforeCommandLineProcessing(...)` now applies an explicit remote-debugging policy before any process-specific launch wiring. When `ghodex-browser-remote-debug-port` is unset, the bridge strips `remote-debugging-port`, `remote-debugging-pipe`, and `remote-allow-origins` from the CEF command line for browser and child processes. When a debug port is explicitly configured, the browser process still normalizes the command-line port to the configured value instead of inheriting a stale one.

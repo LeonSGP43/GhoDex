@@ -62,7 +62,10 @@ typedef void (^GhoDexCEFJavaScriptEvaluationCompletion)(NSString * _Nullable res
             receivedContentLength:(int64_t)receivedContentLength
                       isMainFrame:(BOOL)isMainFrame
                         frameName:(NSString *)frameName;
-- (void)cefView:(GhoDexCEFView *)view requestOpenURLInNewTab:(NSString *)urlString;
+- (void)cefView:(GhoDexCEFView *)view
+requestOpenURLInNewTab:(NSString *)urlString
+    disposition:(NSInteger)disposition
+     userGesture:(BOOL)userGesture;
 @end
 
 NS_ASSUME_NONNULL_END

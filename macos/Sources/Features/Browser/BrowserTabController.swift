@@ -60,6 +60,10 @@ final class BrowserTabController: NSWindowController, NSWindowDelegate, TopLevel
         self.ghostty = ghostty
         self.model = BrowserTabModel(initialURL: initialURL ?? Self.defaultHomePageURL(for: ghostty))
         super.init(window: nil)
+        model.openURLInNewWindowHandler = { [weak self] url in
+            guard let self else { return }
+            _ = Self.newWindow(self.ghostty, initialURL: url, withParent: self.window)
+        }
         Self.registerLiveController(self)
     }
 

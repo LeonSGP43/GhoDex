@@ -29,6 +29,19 @@ enum BrowserControlEventKind: String, Codable, Hashable {
     case networkRequestFinished
 }
 
+enum BrowserPopupDisposition: Int, Codable, Hashable {
+    case currentTab = 0
+    case singletonTab = 1
+    case newForegroundTab = 2
+    case newBackgroundTab = 3
+    case newPopup = 4
+    case newWindow = 5
+    case saveToDisk = 6
+    case offTheRecord = 7
+    case ignoreAction = 8
+    case switchToTab = 9
+}
+
 enum BrowserControlErrorCode: String, Codable, Hashable {
     case pageNotFound
     case bridgeUnavailable
@@ -383,8 +396,21 @@ struct BrowserControlEvent: Identifiable, Hashable, Codable {
         )
     }
 
-    static func openURLInNewTabRequested(target: BrowserControlTarget, url: String) -> BrowserControlEvent {
-        BrowserControlEvent(target: target, kind: .openURLInNewTabRequested, payload: ["url": url])
+    static func openURLInNewTabRequested(
+        target: BrowserControlTarget,
+        url: String,
+        disposition: BrowserPopupDisposition,
+        userGesture: Bool
+    ) -> BrowserControlEvent {
+        BrowserControlEvent(
+            target: target,
+            kind: .openURLInNewTabRequested,
+            payload: [
+                "url": url,
+                "disposition": String(disposition.rawValue),
+                "userGesture": String(userGesture),
+            ]
+        )
     }
 
     static func consoleMessage(
@@ -748,6 +774,8 @@ final class BrowserTabModel: ObservableObject {
     @Published private(set) var runtimeState: RuntimeState
     @Published private(set) var installPhase: BrowserRuntimeInstallPhase = .idle
 
+    var openURLInNewWindowHandler: ((URL) -> Void)?
+
     private let defaultPageURL: URL
     private var installTask: Task<Void, Never>?
     private var eventObservers: [UUID: EventObserverRegistration] = [:]
@@ -929,10 +957,10 @@ final class BrowserTabModel: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
-    func openURLInNewTab(_ rawURL: String) {
+    func openURLInNewTab(_ rawURL: String, activate: Bool = true) {
         let normalized = normalizedURLString(rawURL, fallback: displayedURL)
         guard let url = URL(string: normalized) else { return }
-        appendPage(initialURL: url, activate: true)
+        appendPage(initialURL: url, activate: activate)
     }
 
     func updatePageState(
@@ -996,7 +1024,11 @@ final class BrowserTabModel: ObservableObject {
             )
         case .openURLInNewTabRequested:
             if let url = event.payload["url"] {
-                openURLInNewTab(url)
+                let disposition = event.payload["disposition"]
+                    .flatMap(Int.init)
+                    .flatMap(BrowserPopupDisposition.init(rawValue:))
+                    ?? .newForegroundTab
+                routePopupRequest(url, disposition: disposition, from: pageID)
             }
         case .bridgeReady:
             pages.first(where: { $0.id == pageID })?.markControlBridgeReady()
@@ -1133,6 +1165,55 @@ final class BrowserTabModel: ObservableObject {
             selectedPageID = page.id
             syncActivePageState()
         }
+    }
+
+    private func loadURL(_ rawURL: String, in pageID: UUID) {
+        guard let page = pages.first(where: { $0.id == pageID }) else { return }
+        let normalized = normalizedURLString(rawURL, fallback: page.displayedURL)
+        page.updateAddressText(normalized)
+        page.send(.loadURL, payload: ["url": normalized]) { _ in }
+        if selectedPageID == page.id {
+            syncActivePageState()
+        }
+    }
+
+    private func routePopupRequest(_ rawURL: String, disposition: BrowserPopupDisposition, from pageID: UUID) {
+        switch disposition {
+        case .currentTab, .singletonTab:
+            loadURL(rawURL, in: pageID)
+        case .newForegroundTab:
+            openURLInNewTab(rawURL, activate: true)
+        case .newBackgroundTab:
+            openURLInNewTab(rawURL, activate: false)
+        case .switchToTab:
+            if !selectExistingPage(matching: rawURL) {
+                openURLInNewTab(rawURL, activate: true)
+            }
+        case .newPopup, .newWindow, .offTheRecord:
+            openURLInNewWindow(rawURL)
+        case .saveToDisk, .ignoreAction:
+            openURLInNewTab(rawURL, activate: true)
+        }
+    }
+
+    @discardableResult
+    private func selectExistingPage(matching rawURL: String) -> Bool {
+        let normalized = normalizedURLString(rawURL, fallback: displayedURL)
+        guard let existingPage = pages.first(where: { $0.restorableURL.absoluteString == normalized }) else {
+            return false
+        }
+        selectPage(existingPage.id)
+        return true
+    }
+
+    private func openURLInNewWindow(_ rawURL: String) {
+        let normalized = normalizedURLString(rawURL, fallback: displayedURL)
+        guard let url = URL(string: normalized) else { return }
+        if let openURLInNewWindowHandler {
+            openURLInNewWindowHandler(url)
+            return
+        }
+        openURLInNewTab(normalized, activate: true)
     }
 
     private func register(page: BrowserPageState) {
