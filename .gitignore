@@ -14,6 +14,7 @@ zig-out/
 /result*
 /.nixos-test-history
 /android/.gradle/
+/android/local.properties
 /android/app/build/
 /happy-client/node_modules/
 /happy-client/.expo/
@@ -33,3 +34,4 @@ glad.zip
 /ghostty.qcow2
 
 vgcore.*
+default.profraw
