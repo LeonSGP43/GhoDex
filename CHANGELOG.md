@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): add core browser service handlers
+
+- What changed: Extended `GhoDexCEFClient` to implement CEF dialog, download, JavaScript dialog, and permission handlers, plus explicit auth-certificate request handling. Browser pages can now surface native file pickers, write downloads into the app user's `~/Downloads`, show JS alert/confirm/prompt and before-unload dialogs, and prompt for media, permission, HTTP auth, and certificate-error decisions instead of silently rejecting them. The file chooser path now normalizes MIME/extension filters, uses `UTType`-backed content filters when available, and forces AppKit modal work back onto the main thread.
+- Why: The browser could already render pages and reuse mirrored Chrome state, but it still behaved like an incomplete shell whenever a site needed first-class browser services. Missing download/file-dialog/permission/auth handlers are exactly the kind of gaps that break normal browsing flows and make an embedded browser look obviously non-Chrome-like.
+- Impact: The in-app browser now covers a much larger share of the baseline browser contract that real sites expect from Chromium. Downloads no longer die at the handler boundary, and core prompt flows now have product-owned UI instead of falling through to default-deny behavior. This does not make GhoDex fully Chrome-equivalent yet: popup semantics are still rerouted through the existing Browser page-tab model, and DevTools-port exposure still needs a separate isolated fix/verification pass.
+- Verification: `GHODEX_CEF_ROOT=/tmp/ghx-cef-full-root nu macos/build.nu --configuration Debug --action build`, `/tmp/ghx-download-accept-cz_ycacz/result.json`
+- Files: `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `browser-tab-acceptance-matrix.md`, `CHANGELOG.md`
+- Decision trail: Land the browser-service parity work inside the CEF client boundary first, because downloads/dialogs/permissions/auth can be fixed atomically in one place without tangling this change with the already-dirty Swift popup/window model files. Keep popup/new-window semantics and remote-debug exposure as separate follow-ups so this commit stays narrowly about restoring missing browser service surfaces.
+
 ### fix(browser): restore hardware GPU for mirrored Chrome profiles
 
 - What changed: External direct/mirror Chrome profile launches no longer force Chromium through the old SwiftShader-only path. The CEF bridge now stops appending `disable-gpu`, `disable-gpu-compositing`, `in-process-gpu`, and `use-gl=swiftshader`, and it also stops disabling `VizDisplayCompositor` for external-profile runs.

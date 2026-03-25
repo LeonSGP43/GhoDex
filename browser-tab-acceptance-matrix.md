@@ -38,6 +38,7 @@ Stable artifact paths already present in the workspace:
 - `/tmp/ghx-mirror-manual-acceptance.json`
 - `/tmp/ghx-profile-mode-acceptance.json`
 - `/tmp/ghxgm7-ahignfzj/result.json`
+- `/tmp/ghx-download-accept-cz_ycacz/result.json`
 
 ## Acceptance Matrix
 
@@ -55,11 +56,12 @@ Stable artifact paths already present in the workspace:
 | Runtime override | Accepted through `ghodex-browser-runtime-path`, `BrowserCEFRuntimePath`, or `GHODEX_CEF_ROOT`. | `macos/Sources/Ghostty/Ghostty.Config.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm` | The override must already exist as a directory; invalid paths are ignored. |
 | Runtime round-trip evidence | Accepted and smoke-backed for repeated launches using the worktree runtime symlink path. | `/Users/leongong/Desktop/LeonProjects/gho_workspace/smoke-cef-browser-20260319/smoke-result.json`, `cef-browser-smoke-validation.md` | The smoke harness verifies selection and initialization, not every first-run installer UI branch in-place. |
 | Managed runtime download metadata | Accepted with a fixed CEF artifact URL and SHA-256 in code. | `macos/Sources/Features/Browser/BrowserPaths.swift`, `/Users/leongong/Desktop/LeonProjects/gho_workspace/smoke-cef-browser-20260319/smoke-result.json` | Managed install still depends on the download succeeding and the archive layout remaining compatible. |
+| Core browser service handlers | Accepted at the CEF client layer for file dialogs, downloads, JS dialogs, media/permission prompts, HTTP auth, and certificate warnings. | `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `/tmp/ghx-download-accept-cz_ycacz/result.json` | Download acceptance is durable; the other prompt surfaces are implemented but not yet covered by a dedicated automated end-to-end harness. Popup/new-window semantics also still follow GhoDex's internal page-tab routing instead of native Chrome popup behavior. |
 | Managed profile mode | Accepted: default profile root under `~/Library/Application Support/GhoDex/CEF/Profiles/managed/<bundle-slug>`. | `macos/Sources/Features/Browser/BrowserPaths.swift`, `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `/Users/leongong/Desktop/LeonProjects/gho_workspace/smoke-cef-browser-20260319/smoke-result.json` | The concrete leaf slug depends on the app bundle identifier. |
 | External profile source override | Accepted through `ghodex-browser-profile-path`, `BrowserCEFProfileSourcePath`, `BrowserCEFProfilePath`, or `GHODEX_CEF_PROFILE_PATH`. | `macos/Sources/Ghostty/Ghostty.Config.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Features/Browser/BrowserPaths.swift`, `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm` | The selected source must point at an existing profile directory. |
 | External profile mode selection | Accepted through `ghodex-browser-profile-mode` and mirrored into `BrowserCEFProfileMode`. | `src/config/Config.zig`, `macos/Sources/Ghostty/Ghostty.Config.swift`, `macos/Sources/App/macOS/main.swift`, `macos/Sources/App/macOS/AppDelegate.swift` | Supported values are `managed`, `direct`, `mirror-latest`, `mirror-once`, and `mirror-manual`. Missing or invalid values fall back to `direct` when a source path exists, otherwise `managed`. |
 | Mirrored profile sync strategy | Accepted for `mirror-latest`, `mirror-once`, and `mirror-manual` through the managed `ProfileMirrors` root. | `macos/Sources/Features/Browser/BrowserPaths.swift`, `macos/Sources/Features/SSH Connections/SSHConnectionsView.swift`, `browser-tab-cookie-lifecycle.md` | Live Chrome locks do not overwrite the last good mirror snapshot; `mirror-manual` refresh still requires the source root to be unlocked before it will copy again. |
-| Mirror profile GPU/WebGL parity | Accepted for the isolated copied-`Profile 10` mirror lane after removing the forced SwiftShader-only launch flags. | `/tmp/ghx-fp-postgpu-dbqzc1yn/result.json`, `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm` | This closes the earlier "no WebGL context" fingerprint gap, but it does not by itself make GhoDex a full Chrome-equivalent browser. The same probe still reports `VIDEO_CODECS WARN h264: ""`, and download handling remains rejected by default. |
+| Mirror profile GPU/WebGL parity | Accepted for the isolated copied-`Profile 10` mirror lane after removing the forced SwiftShader-only launch flags. | `/tmp/ghx-fp-postgpu-dbqzc1yn/result.json`, `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm` | This closes the earlier "no WebGL context" fingerprint gap, but it does not by itself make GhoDex a full Chrome-equivalent browser. The same probe still reports `VIDEO_CODECS WARN h264: ""`, and popup/new-window semantics are still product-specific. |
 | Copied Chrome Google/Gmail reuse | Accepted for the isolated copied-`Profile 10` mirror lane after runtime browser-signin sanitization. | `/tmp/ghxgm7-ahignfzj/result.json`, `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm` | GhoDex still is not a Chrome browser-signin client; the runtime copy intentionally strips browser-account/sync artifacts even though the copied Google web session is preserved and reusable. |
 | Copied Chrome Google/Gmail reuse after GPU normalization | Accepted again for the same copied-`Profile 10` mirror lane after restoring the normal GPU/compositor stack. | `/tmp/ghx-google-postgpu-dwz3_wvy/result.json`, `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm` | The anti-fingerprint fix did not regress the core mirror-login outcome: `https://www.google.com/` still shows a signed-in hint and `https://mail.google.com/mail/u/0/#inbox` still opens `Inbox (18) - yuan80060@gmail.com - Gmail`. |
 | Aggregate direct/mirror acceptance | Accepted with isolated `HOME`, dedicated source profiles, per-mode local cookie servers, and a linked host keychain view for macOS os_crypt. | `scripts/browser_profile_mirror_acceptance.py`, `/tmp/ghx-profile-mode-acceptance.json`, `/tmp/ghx-google-keychain-root-cause.json` | The aggregate harness currently proves profile/cookie semantics and control-plane health; it does not assert `UserDefaults` mirroring because the isolated launch path records empty defaults snapshots in this evidence set. |
@@ -132,6 +134,29 @@ What is not safe to assume yet:
 - that `mirror-manual` will refresh while another process still owns the source
   profile root; the manual refresh path intentionally errors instead of copying
   a live root
+
+### Browser Services
+
+Current status: materially improved, but not fully acceptance-complete.
+
+What is safe to rely on now:
+
+- download requests no longer die at the missing-handler boundary, and the
+  current durable proof is `/tmp/ghx-download-accept-cz_ycacz/result.json`
+- Browser can now provide native file-picking, JS dialog, media-permission,
+  generic permission, HTTP auth, and certificate-warning UI from product-owned
+  CEF client handlers instead of default silent rejection
+- AppKit modal surfaces in the CEF bridge now marshal back onto the main thread
+  instead of assuming the callback always arrives on a safe AppKit call site
+
+What is not safe to assume yet:
+
+- that popup OAuth or `window.open` flows are Chrome-equivalent; popup requests
+  are still rerouted into the existing Browser page-tab model
+- that every new prompt surface has the same level of automated acceptance
+  coverage as download/profile/cookie flows
+- that site-visible media-codec or anti-bot fingerprints are fully Chrome-parity
+  just because these missing service handlers now exist
 
 ### Debug
 

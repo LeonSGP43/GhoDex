@@ -2,6 +2,9 @@
 #import <CommonCrypto/CommonCryptor.h>
 #import <CommonCrypto/CommonKeyDerivation.h>
 #import <Security/Security.h>
+#if __has_include(<UniformTypeIdentifiers/UniformTypeIdentifiers.h>)
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#endif
 
 #include <sqlite3.h>
 
@@ -48,7 +51,11 @@ NSString * const GhoDexCEFControlErrorDomain = @"com.leongong.ghodex.browser.cef
 #include "include/cef_app.h"
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
+#include "include/cef_dialog_handler.h"
+#include "include/cef_download_handler.h"
+#include "include/cef_jsdialog_handler.h"
 #include "include/cef_parser.h"
+#include "include/cef_permission_handler.h"
 #include "include/cef_render_process_handler.h"
 #include "include/cef_v8.h"
 #include "include/wrapper/cef_library_loader.h"
@@ -120,6 +127,217 @@ NSString *RequestStatusString(cef_urlrequest_status_t status) {
   default:
     return @"unknown";
   }
+}
+
+NSWindow *PromptWindowForOwner(GhoDexCEFView *owner) {
+  if (owner.window != nil) {
+    return owner.window;
+  }
+  if (NSApp.keyWindow != nil) {
+    return NSApp.keyWindow;
+  }
+  return NSApp.mainWindow;
+}
+
+NSString *AlertDisplayOrigin(NSString *origin) {
+  return origin.length > 0 ? origin : @"this page";
+}
+
+void RunOnMainThreadSync(dispatch_block_t block) {
+  if (block == nil) {
+    return;
+  }
+  if ([NSThread isMainThread]) {
+    block();
+  } else {
+    dispatch_sync(dispatch_get_main_queue(), block);
+  }
+}
+
+NSModalResponse RunAlert(NSAlert *alert, GhoDexCEFView *owner) {
+  __block NSModalResponse response = NSModalResponseAbort;
+  RunOnMainThreadSync(^{
+    NSWindow *window = PromptWindowForOwner(owner);
+    [window makeKeyAndOrderFront:nil];
+    response = [alert runModal];
+  });
+  return response;
+}
+
+NSString *SanitizedFilename(NSString *suggested_name) {
+  NSString *candidate = suggested_name.lastPathComponent;
+  if (candidate.length == 0) {
+    candidate = @"download";
+  }
+
+  NSCharacterSet *invalid = [NSCharacterSet characterSetWithCharactersInString:@"/:\n\r\t"];
+  NSArray<NSString *> *components = [candidate componentsSeparatedByCharactersInSet:invalid];
+  NSString *joined = [[components filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"length > 0"]]
+      componentsJoinedByString:@"-"];
+  return joined.length > 0 ? joined : @"download";
+}
+
+NSURL *DownloadsDirectoryURL(void) {
+  NSURL *url = [NSURL fileURLWithPath:[NSHomeDirectory() stringByAppendingPathComponent:@"Downloads"]
+                          isDirectory:YES];
+  NSError *error = nil;
+  [[NSFileManager defaultManager] createDirectoryAtURL:url
+                           withIntermediateDirectories:YES
+                                            attributes:nil
+                                                 error:&error];
+  if (error != nil) {
+    NSLog(@"[CEF] Failed to create Downloads directory %@: %@",
+          url.path,
+          error.localizedDescription);
+  }
+  return url;
+}
+
+NSURL *UniqueDownloadURL(NSString *suggested_name) {
+  NSString *sanitized = SanitizedFilename(suggested_name);
+  NSString *stem = sanitized.stringByDeletingPathExtension;
+  NSString *ext = sanitized.pathExtension;
+  NSURL *directory = DownloadsDirectoryURL();
+  NSFileManager *file_manager = [NSFileManager defaultManager];
+
+  for (NSInteger attempt = 0; attempt < 1000; attempt++) {
+    NSString *filename = sanitized;
+    if (attempt > 0) {
+      NSString *suffix = [NSString stringWithFormat:@" (%ld)", (long)attempt];
+      NSString *candidate_stem = stem.length > 0 ? [stem stringByAppendingString:suffix]
+                                                 : [@"download" stringByAppendingString:suffix];
+      filename = ext.length > 0 ? [candidate_stem stringByAppendingPathExtension:ext]
+                                : candidate_stem;
+    }
+
+    NSURL *candidate = [directory URLByAppendingPathComponent:filename isDirectory:NO];
+    if (![file_manager fileExistsAtPath:candidate.path]) {
+      return candidate;
+    }
+  }
+
+  return [directory URLByAppendingPathComponent:sanitized isDirectory:NO];
+}
+
+NSArray<NSString *> *ExpandedFileDialogExtensions(
+    const std::vector<CefString> &accept_filters,
+    const std::vector<CefString> &accept_extensions) {
+  NSMutableOrderedSet<NSString *> *extensions = [NSMutableOrderedSet orderedSet];
+  auto append_value = ^(NSString *value) {
+    for (NSString *part in [value componentsSeparatedByString:@";"]) {
+      NSString *trimmed = [part stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+      if ([trimmed hasPrefix:@"."]) {
+        trimmed = [trimmed substringFromIndex:1];
+      }
+      if ([trimmed containsString:@"/"] || [trimmed isEqualToString:@"*"]) {
+        continue;
+      }
+      if (trimmed.length > 0) {
+        [extensions addObject:trimmed];
+      }
+    }
+  };
+
+  for (const CefString &extension : accept_extensions) {
+    NSString *value = [NSString stringWithUTF8String:extension.ToString().c_str() ?: ""];
+    append_value(value);
+  }
+  for (const CefString &filter : accept_filters) {
+    NSString *value = [NSString stringWithUTF8String:filter.ToString().c_str() ?: ""];
+    append_value(value);
+  }
+  return extensions.array;
+}
+
+void ApplyFileDialogExtensions(NSSavePanel *panel, NSArray<NSString *> *allowed_extensions) {
+  if (allowed_extensions.count == 0) {
+    return;
+  }
+#if __has_include(<UniformTypeIdentifiers/UniformTypeIdentifiers.h>)
+  if (@available(macOS 11.0, *)) {
+    NSMutableArray<UTType *> *content_types = [NSMutableArray array];
+    for (NSString *extension in allowed_extensions) {
+      UTType *content_type = [UTType typeWithFilenameExtension:extension];
+      if (content_type != nil) {
+        [content_types addObject:content_type];
+      }
+    }
+    if (content_types.count > 0) {
+      panel.allowedContentTypes = content_types;
+      return;
+    }
+  }
+#endif
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  panel.allowedFileTypes = allowed_extensions;
+#pragma clang diagnostic pop
+}
+
+NSString *MediaPermissionDescription(uint32_t requested_permissions) {
+  NSMutableArray<NSString *> *parts = [NSMutableArray array];
+  if ((requested_permissions & CEF_MEDIA_PERMISSION_DEVICE_AUDIO_CAPTURE) != 0) {
+    [parts addObject:@"microphone"];
+  }
+  if ((requested_permissions & CEF_MEDIA_PERMISSION_DEVICE_VIDEO_CAPTURE) != 0) {
+    [parts addObject:@"camera"];
+  }
+  if ((requested_permissions & CEF_MEDIA_PERMISSION_DESKTOP_AUDIO_CAPTURE) != 0) {
+    [parts addObject:@"system audio capture"];
+  }
+  if ((requested_permissions & CEF_MEDIA_PERMISSION_DESKTOP_VIDEO_CAPTURE) != 0) {
+    [parts addObject:@"screen capture"];
+  }
+
+  return parts.count > 0 ? [parts componentsJoinedByString:@", "] : @"device access";
+}
+
+void AppendPermissionTypeLabel(NSMutableArray<NSString *> *labels,
+                               uint32_t requested_permissions,
+                               uint32_t permission_type,
+                               NSString *label) {
+  if ((requested_permissions & permission_type) != 0) {
+    [labels addObject:label];
+  }
+}
+
+NSString *PermissionPromptDescription(uint32_t requested_permissions) {
+  NSMutableArray<NSString *> *labels = [NSMutableArray array];
+  AppendPermissionTypeLabel(labels, requested_permissions, CEF_PERMISSION_TYPE_GEOLOCATION, @"location");
+  AppendPermissionTypeLabel(labels, requested_permissions, CEF_PERMISSION_TYPE_NOTIFICATIONS, @"notifications");
+  AppendPermissionTypeLabel(labels, requested_permissions, CEF_PERMISSION_TYPE_CLIPBOARD, @"clipboard");
+  AppendPermissionTypeLabel(labels, requested_permissions, CEF_PERMISSION_TYPE_POINTER_LOCK, @"pointer lock");
+  AppendPermissionTypeLabel(labels, requested_permissions, CEF_PERMISSION_TYPE_KEYBOARD_LOCK, @"keyboard lock");
+  AppendPermissionTypeLabel(labels, requested_permissions, CEF_PERMISSION_TYPE_CAMERA_STREAM, @"camera");
+  AppendPermissionTypeLabel(labels, requested_permissions, CEF_PERMISSION_TYPE_MIC_STREAM, @"microphone");
+  AppendPermissionTypeLabel(labels, requested_permissions, CEF_PERMISSION_TYPE_MULTIPLE_DOWNLOADS, @"multiple downloads");
+  AppendPermissionTypeLabel(labels, requested_permissions, CEF_PERMISSION_TYPE_FILE_SYSTEM_ACCESS, @"file system access");
+  AppendPermissionTypeLabel(labels, requested_permissions, CEF_PERMISSION_TYPE_WINDOW_MANAGEMENT, @"window management");
+  AppendPermissionTypeLabel(labels, requested_permissions, CEF_PERMISSION_TYPE_LOCAL_FONTS, @"local fonts");
+  AppendPermissionTypeLabel(labels, requested_permissions, CEF_PERMISSION_TYPE_MIDI_SYSEX, @"MIDI SysEx");
+  AppendPermissionTypeLabel(labels, requested_permissions, CEF_PERMISSION_TYPE_PROTECTED_MEDIA_IDENTIFIER, @"protected media");
+  AppendPermissionTypeLabel(labels, requested_permissions, CEF_PERMISSION_TYPE_STORAGE_ACCESS, @"storage access");
+  AppendPermissionTypeLabel(labels, requested_permissions, CEF_PERMISSION_TYPE_TOP_LEVEL_STORAGE_ACCESS, @"top-level storage access");
+#if CEF_API_ADDED(13600)
+  AppendPermissionTypeLabel(labels, requested_permissions, CEF_PERMISSION_TYPE_LOCAL_NETWORK_ACCESS, @"local network access");
+#endif
+#if CEF_API_ADDED(14500)
+  AppendPermissionTypeLabel(labels, requested_permissions, CEF_PERMISSION_TYPE_LOCAL_NETWORK, @"local network");
+  AppendPermissionTypeLabel(labels, requested_permissions, CEF_PERMISSION_TYPE_LOOPBACK_NETWORK, @"loopback network");
+#endif
+
+  return labels.count > 0 ? [labels componentsJoinedByString:@", "] : @"additional browser permissions";
+}
+
+std::vector<CefString> VectorFromURLs(NSArray<NSURL *> *urls) {
+  std::vector<CefString> result;
+  result.reserve(urls.count);
+  for (NSURL *url in urls) {
+    if (url.path.length > 0) {
+      result.push_back(CefString(url.path.UTF8String));
+    }
+  }
+  return result;
 }
 
 id _Nullable FoundationObjectFromV8Value(CefRefPtr<CefV8Value> value,
@@ -439,17 +657,25 @@ public:
 };
 
 class GhoDexCEFClient final : public CefClient,
+                              public CefDialogHandler,
                               public CefDisplayHandler,
+                              public CefDownloadHandler,
+                              public CefJSDialogHandler,
                               public CefLifeSpanHandler,
                               public CefLoadHandler,
+                              public CefPermissionHandler,
                               public CefRequestHandler,
                               public CefResourceRequestHandler {
 public:
   explicit GhoDexCEFClient(GhoDexCEFView *owner) : owner_(owner) {}
 
+  CefRefPtr<CefDialogHandler> GetDialogHandler() override { return this; }
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
+  CefRefPtr<CefDownloadHandler> GetDownloadHandler() override { return this; }
+  CefRefPtr<CefJSDialogHandler> GetJSDialogHandler() override { return this; }
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
   CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
+  CefRefPtr<CefPermissionHandler> GetPermissionHandler() override { return this; }
   CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
   CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(
       CefRefPtr<CefBrowser> browser,
@@ -465,6 +691,46 @@ public:
                                 CefRefPtr<CefFrame> frame,
                                 CefProcessId source_process,
                                 CefRefPtr<CefProcessMessage> message) override;
+  bool OnFileDialog(CefRefPtr<CefBrowser> browser,
+                    FileDialogMode mode,
+                    const CefString &title,
+                    const CefString &default_file_path,
+                    const std::vector<CefString> &accept_filters,
+                    const std::vector<CefString> &accept_extensions,
+                    const std::vector<CefString> &accept_descriptions,
+                    CefRefPtr<CefFileDialogCallback> callback) override;
+  bool CanDownload(CefRefPtr<CefBrowser> browser,
+                   const CefString &url,
+                   const CefString &request_method) override;
+  bool OnBeforeDownload(CefRefPtr<CefBrowser> browser,
+                        CefRefPtr<CefDownloadItem> download_item,
+                        const CefString &suggested_name,
+                        CefRefPtr<CefBeforeDownloadCallback> callback) override;
+  void OnDownloadUpdated(CefRefPtr<CefBrowser> browser,
+                         CefRefPtr<CefDownloadItem> download_item,
+                         CefRefPtr<CefDownloadItemCallback> callback) override;
+  bool OnJSDialog(CefRefPtr<CefBrowser> browser,
+                  const CefString &origin_url,
+                  JSDialogType dialog_type,
+                  const CefString &message_text,
+                  const CefString &default_prompt_text,
+                  CefRefPtr<CefJSDialogCallback> callback,
+                  bool &suppress_message) override;
+  bool OnBeforeUnloadDialog(CefRefPtr<CefBrowser> browser,
+                            const CefString &message_text,
+                            bool is_reload,
+                            CefRefPtr<CefJSDialogCallback> callback) override;
+  bool OnRequestMediaAccessPermission(
+      CefRefPtr<CefBrowser> browser,
+      CefRefPtr<CefFrame> frame,
+      const CefString &requesting_origin,
+      uint32_t requested_permissions,
+      CefRefPtr<CefMediaAccessCallback> callback) override;
+  bool OnShowPermissionPrompt(CefRefPtr<CefBrowser> browser,
+                              uint64_t prompt_id,
+                              const CefString &requesting_origin,
+                              uint32_t requested_permissions,
+                              CefRefPtr<CefPermissionPromptCallback> callback) override;
 
   void OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString &title) override;
   bool OnConsoleMessage(CefRefPtr<CefBrowser> browser,
@@ -516,6 +782,19 @@ public:
                      CefBrowserSettings &settings,
                      CefRefPtr<CefDictionaryValue> &extra_info,
                      bool *no_javascript_access) override;
+  bool GetAuthCredentials(CefRefPtr<CefBrowser> browser,
+                          const CefString &origin_url,
+                          bool isProxy,
+                          const CefString &host,
+                          int port,
+                          const CefString &realm,
+                          const CefString &scheme,
+                          CefRefPtr<CefAuthCallback> callback) override;
+  bool OnCertificateError(CefRefPtr<CefBrowser> browser,
+                          cef_errorcode_t cert_error,
+                          const CefString &request_url,
+                          CefRefPtr<CefSSLInfo> ssl_info,
+                          CefRefPtr<CefCallback> callback) override;
 
   void OnLoadingStateChange(CefRefPtr<CefBrowser> browser, bool isLoading, bool canGoBack, bool canGoForward) override;
 
@@ -937,6 +1216,332 @@ bool GhoDexCEFClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                                                  : @"The renderer failed to evaluate JavaScript.")];
     }
   });
+  return true;
+}
+
+bool GhoDexCEFClient::OnFileDialog(CefRefPtr<CefBrowser> browser,
+                                   FileDialogMode mode,
+                                   const CefString &title,
+                                   const CefString &default_file_path,
+                                   const std::vector<CefString> &accept_filters,
+                                   const std::vector<CefString> &accept_extensions,
+                                   const std::vector<CefString> &accept_descriptions,
+                                   CefRefPtr<CefFileDialogCallback> callback) {
+  (void)browser;
+  (void)accept_filters;
+  (void)accept_descriptions;
+  if (!callback.get()) {
+    return false;
+  }
+
+  NSString *dialog_title = [NSString stringWithUTF8String:title.ToString().c_str() ?: ""];
+  NSString *default_path = [NSString stringWithUTF8String:default_file_path.ToString().c_str() ?: ""];
+  NSArray<NSString *> *allowed_extensions = ExpandedFileDialogExtensions(accept_filters, accept_extensions);
+
+  if (mode == FILE_DIALOG_SAVE) {
+    __block NSURL *selected_url = nil;
+    __block NSModalResponse response = NSModalResponseCancel;
+    RunOnMainThreadSync(^{
+      NSSavePanel *panel = [NSSavePanel savePanel];
+      panel.title = dialog_title.length > 0 ? dialog_title : @"Save File";
+      panel.canCreateDirectories = YES;
+      if (default_path.length > 0) {
+        NSURL *url = [NSURL fileURLWithPath:default_path];
+        panel.directoryURL = url.URLByDeletingLastPathComponent;
+        panel.nameFieldStringValue = url.lastPathComponent ?: @"";
+      }
+      ApplyFileDialogExtensions(panel, allowed_extensions);
+      response = [panel runModal];
+      selected_url = panel.URL;
+    });
+    if (response == NSModalResponseOK && selected_url.path.length > 0) {
+      std::vector<CefString> selection;
+      selection.push_back(CefString(selected_url.path.UTF8String));
+      callback->Continue(selection);
+    } else {
+      callback->Cancel();
+    }
+    return true;
+  }
+
+  __block NSArray<NSURL *> *selected_urls = @[];
+  __block NSModalResponse response = NSModalResponseCancel;
+  RunOnMainThreadSync(^{
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    panel.title = dialog_title.length > 0 ? dialog_title : @"Choose File";
+    panel.canChooseFiles = mode != FILE_DIALOG_OPEN_FOLDER;
+    panel.canChooseDirectories = mode == FILE_DIALOG_OPEN_FOLDER;
+    panel.allowsMultipleSelection = mode == FILE_DIALOG_OPEN_MULTIPLE;
+    if (default_path.length > 0) {
+      NSURL *url = [NSURL fileURLWithPath:default_path];
+      panel.directoryURL = [url hasDirectoryPath] ? url : url.URLByDeletingLastPathComponent;
+    }
+    if (mode != FILE_DIALOG_OPEN_FOLDER) {
+      ApplyFileDialogExtensions(panel, allowed_extensions);
+    }
+    response = [panel runModal];
+    selected_urls = panel.URLs ?: @[];
+  });
+
+  if (response == NSModalResponseOK) {
+    callback->Continue(VectorFromURLs(selected_urls));
+  } else {
+    callback->Cancel();
+  }
+  return true;
+}
+
+bool GhoDexCEFClient::CanDownload(CefRefPtr<CefBrowser> browser,
+                                  const CefString &url,
+                                  const CefString &request_method) {
+  (void)browser;
+  (void)url;
+  (void)request_method;
+  return true;
+}
+
+bool GhoDexCEFClient::OnBeforeDownload(CefRefPtr<CefBrowser> browser,
+                                       CefRefPtr<CefDownloadItem> download_item,
+                                       const CefString &suggested_name,
+                                       CefRefPtr<CefBeforeDownloadCallback> callback) {
+  (void)browser;
+  (void)download_item;
+  if (!callback.get()) {
+    return false;
+  }
+
+  NSString *suggested = [NSString stringWithUTF8String:suggested_name.ToString().c_str() ?: ""];
+  NSURL *target_url = UniqueDownloadURL(suggested);
+  NSLog(@"[CEF] Download starting suggested=%@ target=%@",
+        suggested.length > 0 ? suggested : @"<none>",
+        target_url.path ?: @"<none>");
+  callback->Continue(CefString(target_url.path.UTF8String), false);
+  return true;
+}
+
+void GhoDexCEFClient::OnDownloadUpdated(CefRefPtr<CefBrowser> browser,
+                                        CefRefPtr<CefDownloadItem> download_item,
+                                        CefRefPtr<CefDownloadItemCallback> callback) {
+  (void)browser;
+  (void)callback;
+  if (!download_item.get()) {
+    return;
+  }
+
+  if (download_item->IsComplete()) {
+    NSString *path = [NSString stringWithUTF8String:download_item->GetFullPath().ToString().c_str() ?: ""];
+    NSLog(@"[CEF] Download completed path=%@", path ?: @"<none>");
+  } else if (download_item->IsCanceled()) {
+    NSLog(@"[CEF] Download canceled id=%u", download_item->GetId());
+  } else if (download_item->IsInterrupted()) {
+    NSLog(@"[CEF] Download interrupted id=%u", download_item->GetId());
+  }
+}
+
+bool GhoDexCEFClient::OnJSDialog(CefRefPtr<CefBrowser> browser,
+                                 const CefString &origin_url,
+                                 JSDialogType dialog_type,
+                                 const CefString &message_text,
+                                 const CefString &default_prompt_text,
+                                 CefRefPtr<CefJSDialogCallback> callback,
+                                 bool &suppress_message) {
+  (void)browser;
+  if (!owner_ || !callback.get()) {
+    return false;
+  }
+
+  suppress_message = false;
+  NSString *origin = [NSString stringWithUTF8String:origin_url.ToString().c_str() ?: ""];
+  NSString *message = [NSString stringWithUTF8String:message_text.ToString().c_str() ?: ""];
+  NSString *default_prompt = [NSString stringWithUTF8String:default_prompt_text.ToString().c_str() ?: ""];
+
+  NSAlert *alert = [[NSAlert alloc] init];
+  alert.alertStyle = NSAlertStyleInformational;
+  alert.informativeText = message.length > 0 ? message : AlertDisplayOrigin(origin);
+
+  switch (dialog_type) {
+  case JSDIALOGTYPE_ALERT:
+    alert.messageText = [NSString stringWithFormat:@"%@ says", AlertDisplayOrigin(origin)];
+    [alert addButtonWithTitle:@"OK"];
+    callback->Continue(RunAlert(alert, owner_) == NSAlertFirstButtonReturn, CefString());
+    return true;
+  case JSDIALOGTYPE_CONFIRM:
+    alert.messageText = [NSString stringWithFormat:@"%@ confirmation", AlertDisplayOrigin(origin)];
+    [alert addButtonWithTitle:@"OK"];
+    [alert addButtonWithTitle:@"Cancel"];
+    callback->Continue(RunAlert(alert, owner_) == NSAlertFirstButtonReturn, CefString());
+    return true;
+  case JSDIALOGTYPE_PROMPT: {
+    alert.messageText = [NSString stringWithFormat:@"%@ prompt", AlertDisplayOrigin(origin)];
+    NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 320, 24)];
+    field.stringValue = default_prompt ?: @"";
+    alert.accessoryView = field;
+    [alert addButtonWithTitle:@"OK"];
+    [alert addButtonWithTitle:@"Cancel"];
+    BOOL accepted = RunAlert(alert, owner_) == NSAlertFirstButtonReturn;
+    callback->Continue(accepted, CefString((accepted ? field.stringValue : default_prompt).UTF8String));
+    return true;
+  }
+  default:
+    return false;
+  }
+}
+
+bool GhoDexCEFClient::OnBeforeUnloadDialog(CefRefPtr<CefBrowser> browser,
+                                           const CefString &message_text,
+                                           bool is_reload,
+                                           CefRefPtr<CefJSDialogCallback> callback) {
+  (void)browser;
+  if (!owner_ || !callback.get()) {
+    return false;
+  }
+
+  NSString *message = [NSString stringWithUTF8String:message_text.ToString().c_str() ?: ""];
+  NSAlert *alert = [[NSAlert alloc] init];
+  alert.messageText = is_reload ? @"Reload this page?" : @"Leave this page?";
+  alert.informativeText = message.length > 0 ? message : @"Changes you made may not be saved.";
+  alert.alertStyle = NSAlertStyleWarning;
+  [alert addButtonWithTitle:is_reload ? @"Reload" : @"Leave"];
+  [alert addButtonWithTitle:@"Stay"];
+  callback->Continue(RunAlert(alert, owner_) == NSAlertFirstButtonReturn, CefString());
+  return true;
+}
+
+bool GhoDexCEFClient::OnRequestMediaAccessPermission(
+    CefRefPtr<CefBrowser> browser,
+    CefRefPtr<CefFrame> frame,
+    const CefString &requesting_origin,
+    uint32_t requested_permissions,
+    CefRefPtr<CefMediaAccessCallback> callback) {
+  (void)browser;
+  (void)frame;
+  if (!owner_ || !callback.get()) {
+    return false;
+  }
+
+  NSString *origin = [NSString stringWithUTF8String:requesting_origin.ToString().c_str() ?: ""];
+  NSAlert *alert = [[NSAlert alloc] init];
+  alert.messageText = [NSString stringWithFormat:@"%@ wants to use %@", AlertDisplayOrigin(origin), MediaPermissionDescription(requested_permissions)];
+  alert.informativeText = @"Allow this browser page to access the requested device capabilities?";
+  alert.alertStyle = NSAlertStyleInformational;
+  [alert addButtonWithTitle:@"Allow"];
+  [alert addButtonWithTitle:@"Block"];
+  if (RunAlert(alert, owner_) == NSAlertFirstButtonReturn) {
+    callback->Continue(requested_permissions);
+  } else {
+    callback->Cancel();
+  }
+  return true;
+}
+
+bool GhoDexCEFClient::OnShowPermissionPrompt(CefRefPtr<CefBrowser> browser,
+                                             uint64_t prompt_id,
+                                             const CefString &requesting_origin,
+                                             uint32_t requested_permissions,
+                                             CefRefPtr<CefPermissionPromptCallback> callback) {
+  (void)browser;
+  (void)prompt_id;
+  if (!owner_ || !callback.get()) {
+    return false;
+  }
+
+  NSString *origin = [NSString stringWithUTF8String:requesting_origin.ToString().c_str() ?: ""];
+  NSAlert *alert = [[NSAlert alloc] init];
+  alert.messageText = [NSString stringWithFormat:@"%@ wants %@", AlertDisplayOrigin(origin), PermissionPromptDescription(requested_permissions)];
+  alert.informativeText = @"Choose whether to allow this permission request.";
+  alert.alertStyle = NSAlertStyleInformational;
+  [alert addButtonWithTitle:@"Allow"];
+  [alert addButtonWithTitle:@"Block"];
+  [alert addButtonWithTitle:@"Not Now"];
+
+  NSModalResponse response = RunAlert(alert, owner_);
+  if (response == NSAlertFirstButtonReturn) {
+    callback->Continue(CEF_PERMISSION_RESULT_ACCEPT);
+  } else if (response == NSAlertSecondButtonReturn) {
+    callback->Continue(CEF_PERMISSION_RESULT_DENY);
+  } else {
+    callback->Continue(CEF_PERMISSION_RESULT_DISMISS);
+  }
+  return true;
+}
+
+bool GhoDexCEFClient::GetAuthCredentials(CefRefPtr<CefBrowser> browser,
+                                         const CefString &origin_url,
+                                         bool isProxy,
+                                         const CefString &host,
+                                         int port,
+                                         const CefString &realm,
+                                         const CefString &scheme,
+                                         CefRefPtr<CefAuthCallback> callback) {
+  (void)browser;
+  (void)isProxy;
+  (void)port;
+  if (!owner_ || !callback.get()) {
+    return false;
+  }
+
+  GhoDexCEFView *owner = owner_;
+  NSString *origin = [NSString stringWithUTF8String:origin_url.ToString().c_str() ?: ""];
+  NSString *host_string = [NSString stringWithUTF8String:host.ToString().c_str() ?: ""];
+  NSString *realm_string = [NSString stringWithUTF8String:realm.ToString().c_str() ?: ""];
+  std::string scheme_value = scheme.ToString();
+  const char *scheme_cstr = scheme_value.c_str();
+  NSString *scheme_string = (scheme_cstr != nullptr && scheme_cstr[0] != '\0')
+      ? [NSString stringWithUTF8String:scheme_cstr]
+      : @"authentication";
+  dispatch_async(dispatch_get_main_queue(), ^{
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = [NSString stringWithFormat:@"%@ requires %@", host_string.length > 0 ? host_string : AlertDisplayOrigin(origin), scheme_string];
+    alert.informativeText = realm_string.length > 0 ? realm_string : @"Enter your username and password.";
+    alert.alertStyle = NSAlertStyleInformational;
+
+    NSView *accessory = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 320, 52)];
+    NSTextField *username = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 28, 320, 24)];
+    NSSecureTextField *password = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(0, 0, 320, 24)];
+    username.placeholderString = @"Username";
+    password.placeholderString = @"Password";
+    [accessory addSubview:username];
+    [accessory addSubview:password];
+    alert.accessoryView = accessory;
+
+    [alert addButtonWithTitle:@"Sign In"];
+    [alert addButtonWithTitle:@"Cancel"];
+    if (RunAlert(alert, owner) == NSAlertFirstButtonReturn) {
+      callback->Continue(CefString(username.stringValue.UTF8String),
+                         CefString(password.stringValue.UTF8String));
+    } else {
+      callback->Cancel();
+    }
+  });
+  return true;
+}
+
+bool GhoDexCEFClient::OnCertificateError(CefRefPtr<CefBrowser> browser,
+                                         cef_errorcode_t cert_error,
+                                         const CefString &request_url,
+                                         CefRefPtr<CefSSLInfo> ssl_info,
+                                         CefRefPtr<CefCallback> callback) {
+  (void)browser;
+  (void)ssl_info;
+  if (!owner_ || !callback.get()) {
+    return false;
+  }
+
+  NSString *url = [NSString stringWithUTF8String:request_url.ToString().c_str() ?: ""];
+  NSAlert *alert = [[NSAlert alloc] init];
+  alert.messageText = @"Certificate validation failed";
+  alert.informativeText = [NSString stringWithFormat:
+      @"The TLS certificate for %@ could not be verified (error %d). Continue anyway?",
+      url.length > 0 ? url : @"this site",
+      static_cast<int>(cert_error)];
+  alert.alertStyle = NSAlertStyleWarning;
+  [alert addButtonWithTitle:@"Continue"];
+  [alert addButtonWithTitle:@"Cancel"];
+  if (RunAlert(alert, owner_) == NSAlertFirstButtonReturn) {
+    callback->Continue();
+  } else {
+    callback->Cancel();
+  }
   return true;
 }
 
