@@ -1098,7 +1098,6 @@ class AppDelegate: NSObject,
 
     private func preferredGatewayPairingHost() throws -> String {
         let listenHost = controlHarnessGateway.configuration.listenHost
-        let pairingAdvertiseHost = nonLoopbackPairingAdvertiseHost()
         switch listenHost {
         case "127.0.0.1", "localhost", "::1":
             throw RemotePairingQRCodeError.loopbackOnlyListener
