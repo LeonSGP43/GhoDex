@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(browser): surface popup follow-up tabs
+
+- What changed: `GhoDexCEFPopupWindowController` now normalizes popup-host follow-up `newBackgroundTab` requests into visible foreground Browser pages before re-entering the source `GhoDexCEFView` delegate chain, and it explicitly raises the source Browser window when that routed page should be visible. This keeps popup-host follow-up opens inside GhoDex while also making the resulting page actually appear instead of hiding in the opener's background page list.
+- Why: The previous popup follow-up fix closed the routing escape hatch, but the real CEF disposition for the tested follow-up open was `newBackgroundTab`. In a dedicated popup host there is no visible tab strip for that background page, so the page existed in the Browser control plane without appearing to the user.
+- Impact: Popup follow-up browsing is now materially closer to normal browser behavior from the user's perspective. When a popup-hosted flow opens another internal page that would otherwise land invisibly in the background, GhoDex now surfaces that page in its own Browser UI instead of making the user think nothing happened.
+- Verification: `GHODEX_CEF_ROOT=/tmp/ghx-cef-full-root nu macos/build.nu --configuration Debug --action build`
+- Files: `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `CHANGELOG.md`
+- Decision trail: Keep the policy at the popup-host seam rather than teaching the general Browser tab model about popup-host-specific invisibility. The problem only exists because a dedicated popup window has no internal background-tab UI, so the smallest correct fix is to normalize that disposition before it crosses back into the shared Swift routing layer.
+
 ### fix(browser): internalize popup follow-up opens
 
 - What changed: `GhoDexCEFPopupWindowController` in `GhoDexCEFBridge.mm` now forwards popup-host follow-up open requests back into the originating `GhoDexCEFView` delegate chain instead of sending them straight to `NSWorkspace`. That lets popup-launched `_blank`/follow-up opens re-enter the existing Browser page/window routing policy in `BrowserTabModel` and `BrowserTabController`. The durable browser docs now record that popup-host follow-up opens stay inside GhoDex's own Browser control plane under a real user gesture.

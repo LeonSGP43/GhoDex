@@ -1204,6 +1204,17 @@ NSRect PopupWindowFrameForSourceView(GhoDexCEFView *sourceView, const CefPopupFe
   CGFloat y = popupFeatures.ySet ? popupFeatures.y : NSMidY(source_frame) - (height / 2.0);
   return NSMakeRect(x, y, width, height);
 }
+
+NSInteger RoutedDispositionForPopupFollowup(NSInteger disposition) {
+  switch (disposition) {
+  case CEF_WOD_NEW_BACKGROUND_TAB:
+    // Popup-hosted follow-up opens have no visible tab strip of their own.
+    // Promote background-tab requests so the resulting internal page is surfaced.
+    return CEF_WOD_NEW_FOREGROUND_TAB;
+  default:
+    return disposition;
+  }
+}
 }  // namespace
 
 @implementation GhoDexCEFPopupWindowController {
@@ -1318,9 +1329,24 @@ requestOpenURLInNewTab:(NSString *)urlString
      userGesture:(BOOL)userGesture {
   (void)view;
   if (_sourceView != nil) {
+    NSInteger routed_disposition = RoutedDispositionForPopupFollowup(disposition);
+    if (routed_disposition != disposition) {
+      NSLog(@"[CEF] Promoting popup follow-up disposition=%ld to visible disposition=%ld for %@",
+            (long)disposition,
+            (long)routed_disposition,
+            urlString);
+    }
     [_sourceView notifyOpenURLInNewTab:urlString
-                           disposition:disposition
+                           disposition:routed_disposition
                            userGesture:userGesture];
+    if (_sourceView.window != nil &&
+        (routed_disposition == CEF_WOD_CURRENT_TAB ||
+         routed_disposition == CEF_WOD_SINGLETON_TAB ||
+         routed_disposition == CEF_WOD_NEW_FOREGROUND_TAB ||
+         routed_disposition == CEF_WOD_SWITCH_TO_TAB)) {
+      [_sourceView.window makeKeyAndOrderFront:nil];
+      [NSApp activateIgnoringOtherApps:YES];
+    }
     return;
   }
 
