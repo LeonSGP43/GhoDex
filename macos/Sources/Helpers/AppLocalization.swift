@@ -394,6 +394,7 @@ enum AppLocalization {
         "settings.browser.custom_runtime_hint": "Point this at a compatible CEF runtime root directory that already contains Frameworks/Chromium Embedded Framework.framework.",
         "settings.browser.runtime_media_title": "Media Capability",
         "settings.browser.runtime_media_managed_warning": "The managed CEF runtime is a Chromium-branded distribution and does not provide H.264/AAC playback. Use a custom codec-enabled CEF runtime if you need normal Chrome-like MP4 media parity.",
+        "settings.browser.runtime_media_codec_enabled_hint": "This runtime declares H.264/AAC support in its managed descriptor or manifest. Verify it with the browser media acceptance probe before claiming full Chrome-like parity.",
         "settings.browser.runtime_media_chromium_warning": "This runtime appears to be a standard Chromium-branded CEF distribution (%@). H.264/AAC playback is likely unavailable here as well.",
         "settings.browser.runtime_media_custom_hint": "Custom runtime selected. GhoDex cannot verify H.264/AAC support from the path alone. If you need normal Chrome-like media parity, this runtime must come from a codec-enabled CEF build rather than the default Chromium-branded binaries.",
         "settings.browser.browse": "Browse…",
@@ -818,6 +819,7 @@ enum AppLocalization {
         "settings.browser.custom_runtime_hint": "请指向一个已经包含 Frameworks/Chromium Embedded Framework.framework 的兼容 CEF runtime 根目录。",
         "settings.browser.runtime_media_title": "媒体能力",
         "settings.browser.runtime_media_managed_warning": "当前托管 CEF runtime 属于 Chromium 品牌分发，不提供 H.264/AAC 播放能力。如果你需要接近正常 Chrome 的 MP4 媒体兼容性，请切换到一个启用了 codec 的自定义 CEF runtime。",
+        "settings.browser.runtime_media_codec_enabled_hint": "这个 runtime 在 managed descriptor 或 manifest 里声明了 H.264/AAC 支持。真正对外宣称接近 Chrome 之前，仍应先跑 browser media acceptance probe 做实测确认。",
         "settings.browser.runtime_media_chromium_warning": "这个 runtime 看起来仍然是标准的 Chromium 品牌 CEF 分发（%@）。这里同样很可能不支持 H.264/AAC 播放。",
         "settings.browser.runtime_media_custom_hint": "当前选择的是自定义 runtime。仅凭路径 GhoDex 无法直接验证它是否支持 H.264/AAC；如果你需要接近正常 Chrome 的媒体兼容性，这个 runtime 必须来自启用了 codec 的 CEF 构建，而不是默认的 Chromium 品牌二进制包。",
         "settings.browser.browse": "选择…",
@@ -1397,6 +1399,7 @@ enum L10n {
         nonisolated static var browserCustomRuntimeHint: String { AppLocalization.localizedString("settings.browser.custom_runtime_hint") }
         nonisolated static var browserRuntimeMediaTitle: String { AppLocalization.localizedString("settings.browser.runtime_media_title") }
         nonisolated static var browserRuntimeMediaManagedWarning: String { AppLocalization.localizedString("settings.browser.runtime_media_managed_warning") }
+        nonisolated static var browserRuntimeMediaCodecEnabledHint: String { AppLocalization.localizedString("settings.browser.runtime_media_codec_enabled_hint") }
         nonisolated static func browserRuntimeMediaChromiumWarning(_ source: String) -> String {
             AppLocalization.localizedString("settings.browser.runtime_media_chromium_warning", source)
         }

@@ -1,29 +1,90 @@
 import Foundation
 
-enum BrowserRuntimeMediaAssessmentReason {
+enum BrowserRuntimeMediaAssessmentReason: Equatable {
     case managedChromiumDistribution
+    case codecEnabledRuntime
     case chromiumBrandedRuntime
     case customRuntimeUnverified
+}
+
+struct BrowserRuntimeMediaCapabilities: Codable, Equatable {
+    let h264: Bool?
+    let aac: Bool?
+
+    var providesChromeLikeMP4Parity: Bool {
+        h264 == true && aac == true
+    }
+}
+
+struct BrowserManagedRuntimeDescriptor: Codable, Equatable {
+    let slug: String
+    let downloadURL: URL
+    let archiveSHA256: String
+    let source: String?
+    let ffmpegBranding: String?
+    let proprietaryCodecs: Bool?
+    let mediaCapabilities: BrowserRuntimeMediaCapabilities?
+
+    var declaresChromeLikeMP4Parity: Bool {
+        if mediaCapabilities?.providesChromeLikeMP4Parity == true {
+            return true
+        }
+
+        return proprietaryCodecs == true && ffmpegBranding?.lowercased() == "chrome"
+    }
 }
 
 struct BrowserRuntimeMediaAssessment {
     let reason: BrowserRuntimeMediaAssessmentReason
     let runtimePath: String?
     let runtimeSource: String?
+    let ffmpegBranding: String?
+    let proprietaryCodecs: Bool?
+    let mediaCapabilities: BrowserRuntimeMediaCapabilities?
+}
+
+private struct BrowserRuntimeManifestMetadata: Codable {
+    let source: String?
+    let ffmpegBranding: String?
+    let proprietaryCodecs: Bool?
+    let mediaCapabilities: BrowserRuntimeMediaCapabilities?
 }
 
 enum BrowserPaths {
     static let envRoot = "GHODEX_CEF_ROOT"
     static let envProfilePath = "GHODEX_CEF_PROFILE_PATH"
     static let envAppSupportRoot = "GHODEX_BROWSER_APP_SUPPORT_ROOT"
+    static let envManagedRuntimeDescriptorPath = "GHODEX_CEF_MANAGED_RUNTIME_DESCRIPTOR_PATH"
     static let runtimeDefaultsKey = "BrowserCEFRuntimePath"
     static let profileDefaultsKey = "BrowserCEFProfilePath"
     static let remoteDebugPortDefaultsKey = "BrowserCEFRemoteDebugPort"
     static let browserControlSocketName = "browser-control.sock"
     static let builtInHomePage = "https://www.google.com"
-    static let managedRuntimeSlug = "cef_binary_145.0.28+g51162e8+chromium-145.0.7632.160_macosarm64_minimal"
-    static let managedRuntimeDownloadURL = URL(string: "https://cef-builds.spotifycdn.com/cef_binary_145.0.28%2Bg51162e8%2Bchromium-145.0.7632.160_macosarm64_minimal.tar.bz2")!
-    static let managedRuntimeSHA256 = "004c79437220489f363b615a28f05c607fc13b7feb5045bdc8c7073e180506ad"
+    static let defaultManagedRuntimeDescriptor = BrowserManagedRuntimeDescriptor(
+        slug: "cef_binary_145.0.28+g51162e8+chromium-145.0.7632.160_macosarm64_minimal",
+        downloadURL: URL(string: "https://cef-builds.spotifycdn.com/cef_binary_145.0.28%2Bg51162e8%2Bchromium-145.0.7632.160_macosarm64_minimal.tar.bz2")!,
+        archiveSHA256: "004c79437220489f363b615a28f05c607fc13b7feb5045bdc8c7073e180506ad",
+        source: "cef_binary_145.0.28+g51162e8+chromium-145.0.7632.160_macosarm64_minimal",
+        ffmpegBranding: "Chromium",
+        proprietaryCodecs: false,
+        mediaCapabilities: BrowserRuntimeMediaCapabilities(h264: false, aac: false)
+    )
+
+    static var managedRuntimeDescriptor: BrowserManagedRuntimeDescriptor {
+        configuredManagedRuntimeDescriptor()
+    }
+
+    static var managedRuntimeSlug: String {
+        managedRuntimeDescriptor.slug
+    }
+
+    static var managedRuntimeDownloadURL: URL {
+        managedRuntimeDescriptor.downloadURL
+    }
+
+    static var managedRuntimeSHA256: String {
+        managedRuntimeDescriptor.archiveSHA256
+    }
 
     static func defaultAppSupportRootDirectory() -> URL {
         if let override = isolatedAppSupportRootOverride() {
@@ -67,6 +128,10 @@ enum BrowserPaths {
         defaultCEFRootDirectory().appendingPathComponent("current", isDirectory: true)
     }
 
+    static func defaultManagedRuntimeDescriptorFileURL() -> URL {
+        defaultCEFRootDirectory().appendingPathComponent("managed-runtime.json", isDirectory: false)
+    }
+
     static func defaultCEFRuntimeRoot() -> URL {
         defaultManagedCEFRuntimeRoot()
     }
@@ -100,30 +165,63 @@ enum BrowserPaths {
 
     static func runtimeMediaAssessment(
         runtimePath rawRuntimePath: String?,
-        usesManagedRuntime: Bool
+        usesManagedRuntime: Bool,
+        managedRuntimeDescriptor: BrowserManagedRuntimeDescriptor = BrowserPaths.managedRuntimeDescriptor
     ) -> BrowserRuntimeMediaAssessment {
         if usesManagedRuntime {
+            if managedRuntimeDescriptor.declaresChromeLikeMP4Parity {
+                return BrowserRuntimeMediaAssessment(
+                    reason: .codecEnabledRuntime,
+                    runtimePath: defaultManagedCEFRuntimeRoot().path,
+                    runtimeSource: managedRuntimeDescriptor.source ?? managedRuntimeDescriptor.slug,
+                    ffmpegBranding: managedRuntimeDescriptor.ffmpegBranding,
+                    proprietaryCodecs: managedRuntimeDescriptor.proprietaryCodecs,
+                    mediaCapabilities: managedRuntimeDescriptor.mediaCapabilities
+                )
+            }
+
             return BrowserRuntimeMediaAssessment(
                 reason: .managedChromiumDistribution,
                 runtimePath: defaultManagedCEFRuntimeRoot().path,
-                runtimeSource: managedRuntimeSlug
+                runtimeSource: managedRuntimeDescriptor.source ?? managedRuntimeDescriptor.slug,
+                ffmpegBranding: managedRuntimeDescriptor.ffmpegBranding,
+                proprietaryCodecs: managedRuntimeDescriptor.proprietaryCodecs,
+                mediaCapabilities: managedRuntimeDescriptor.mediaCapabilities
             )
         }
 
         let normalizedRuntimePath = normalizedDirectoryPath(rawRuntimePath)
-        let runtimeSource = normalizedRuntimePath.flatMap(runtimeSourceDescriptor(runtimePath:))
+        let runtimeMetadata = normalizedRuntimePath.flatMap(runtimeMetadata(runtimePath:))
+        let runtimeSource = runtimeMetadata?.source ?? normalizedRuntimePath.flatMap(runtimeSourceDescriptor(runtimePath:))
+        if runtimeDeclaresChromeLikeMP4Parity(runtimeMetadata) {
+            return BrowserRuntimeMediaAssessment(
+                reason: .codecEnabledRuntime,
+                runtimePath: normalizedRuntimePath,
+                runtimeSource: runtimeSource,
+                ffmpegBranding: runtimeMetadata?.ffmpegBranding,
+                proprietaryCodecs: runtimeMetadata?.proprietaryCodecs,
+                mediaCapabilities: runtimeMetadata?.mediaCapabilities
+            )
+        }
+
         if runtimeLooksChromiumBranded(runtimePath: normalizedRuntimePath, runtimeSource: runtimeSource) {
             return BrowserRuntimeMediaAssessment(
                 reason: .chromiumBrandedRuntime,
                 runtimePath: normalizedRuntimePath,
-                runtimeSource: runtimeSource
+                runtimeSource: runtimeSource,
+                ffmpegBranding: runtimeMetadata?.ffmpegBranding,
+                proprietaryCodecs: runtimeMetadata?.proprietaryCodecs,
+                mediaCapabilities: runtimeMetadata?.mediaCapabilities
             )
         }
 
         return BrowserRuntimeMediaAssessment(
             reason: .customRuntimeUnverified,
             runtimePath: normalizedRuntimePath,
-            runtimeSource: runtimeSource
+            runtimeSource: runtimeSource,
+            ffmpegBranding: runtimeMetadata?.ffmpegBranding,
+            proprietaryCodecs: runtimeMetadata?.proprietaryCodecs,
+            mediaCapabilities: runtimeMetadata?.mediaCapabilities
         )
     }
 
@@ -166,6 +264,25 @@ enum BrowserPaths {
         return standardized
     }
 
+    static func configuredManagedRuntimeDescriptor(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        defaultDescriptorFileURL: URL? = nil
+    ) -> BrowserManagedRuntimeDescriptor {
+        if
+            let overridePath = environment[envManagedRuntimeDescriptorPath],
+            let overrideURL = normalizedFileURL(overridePath),
+            let descriptor = loadManagedRuntimeDescriptor(at: overrideURL) {
+            return descriptor
+        }
+
+        let defaultDescriptorURL = defaultDescriptorFileURL ?? defaultManagedRuntimeDescriptorFileURL()
+        if let descriptor = loadManagedRuntimeDescriptor(at: defaultDescriptorURL) {
+            return descriptor
+        }
+
+        return defaultManagedRuntimeDescriptor
+    }
+
     private static func runtimeLooksChromiumBranded(
         runtimePath: String?,
         runtimeSource: String?
@@ -178,18 +295,67 @@ enum BrowserPaths {
         })
     }
 
+    private static func runtimeDeclaresChromeLikeMP4Parity(_ metadata: BrowserRuntimeManifestMetadata?) -> Bool {
+        guard let metadata else { return false }
+        if metadata.mediaCapabilities?.providesChromeLikeMP4Parity == true {
+            return true
+        }
+
+        return metadata.proprietaryCodecs == true && metadata.ffmpegBranding?.lowercased() == "chrome"
+    }
+
+    private static func runtimeMetadata(runtimePath: String) -> BrowserRuntimeManifestMetadata? {
+        let manifestURL = URL(fileURLWithPath: runtimePath, isDirectory: true)
+            .appendingPathComponent("manifest.json", isDirectory: false)
+        return loadRuntimeMetadata(at: manifestURL)
+    }
+
     private static func runtimeSourceDescriptor(runtimePath: String) -> String? {
         let manifestURL = URL(fileURLWithPath: runtimePath, isDirectory: true)
             .appendingPathComponent("manifest.json", isDirectory: false)
-        if
-            let data = try? Data(contentsOf: manifestURL),
-            let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let source = manifest["source"] as? String,
-            !source.isEmpty {
+        if let source = loadRuntimeMetadata(at: manifestURL)?.source, !source.isEmpty {
             return source
         }
 
         return URL(fileURLWithPath: runtimePath, isDirectory: true).lastPathComponent
+    }
+
+    private static func loadRuntimeMetadata(at url: URL) -> BrowserRuntimeManifestMetadata? {
+        guard
+            let data = try? Data(contentsOf: url),
+            let metadata = try? JSONDecoder().decode(BrowserRuntimeManifestMetadata.self, from: data) else {
+            return nil
+        }
+
+        return metadata
+    }
+
+    private static func loadManagedRuntimeDescriptor(at url: URL) -> BrowserManagedRuntimeDescriptor? {
+        guard
+            let data = try? Data(contentsOf: url),
+            let descriptor = try? JSONDecoder().decode(BrowserManagedRuntimeDescriptor.self, from: data) else {
+            return nil
+        }
+
+        guard !descriptor.slug.isEmpty, !descriptor.archiveSHA256.isEmpty else {
+            return nil
+        }
+
+        return descriptor
+    }
+
+    private static func normalizedFileURL(_ value: String?) -> URL? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if let fileURL = URL(string: trimmed), fileURL.isFileURL, !fileURL.path.isEmpty {
+            return fileURL.standardizedFileURL
+        }
+
+        let standardized = (trimmed as NSString).standardizingPath
+        guard standardized.hasPrefix("/") else { return nil }
+        return URL(fileURLWithPath: standardized, isDirectory: false)
     }
 
     static func installHintLines() -> [String] {
