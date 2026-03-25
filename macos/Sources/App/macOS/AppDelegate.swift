@@ -143,6 +143,7 @@ class AppDelegate: NSObject,
     }
 
     @MainActor private var _aiTerminalManagerStore: AITerminalManagerStore?
+    @MainActor private var markdownDocumentControllers: [UUID: MarkdownDocumentController] = [:]
 
     @MainActor var aiTerminalManagerStore: AITerminalManagerStore {
         if let store = _aiTerminalManagerStore {
@@ -1839,7 +1840,6 @@ class AppDelegate: NSObject,
         return nil
     }
 
-    @MainActor
     func controlHarnessReadableSurface(for terminalID: UUID) -> (any ControlHarnessReadableSurface)? {
         findSurface(forUUID: terminalID)
     }
@@ -1873,6 +1873,27 @@ class AppDelegate: NSObject,
         controlHarnessSamplingTargets()
             .first(where: { $0.terminalID == terminalID.uuidString })?
             .activityClass
+    }
+
+    @MainActor
+    func openMarkdownDocument(at fileURL: URL, tabbedInto parentWindow: NSWindow?) {
+        guard let target = MarkdownDocumentTarget(fileURL: fileURL) else {
+            NSWorkspace.shared.open(fileURL)
+            return
+        }
+
+        let controllerID = UUID()
+        let controller = MarkdownDocumentController(
+            appDelegate: self,
+            target: target
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.markdownDocumentControllers.removeValue(forKey: controllerID)
+            }
+        }
+
+        markdownDocumentControllers[controllerID] = controller
+        controller.show(tabbedInto: parentWindow)
     }
 
     @MainActor

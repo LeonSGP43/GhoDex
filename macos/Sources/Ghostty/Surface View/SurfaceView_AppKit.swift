@@ -1472,8 +1472,19 @@ extension Ghostty {
             // in a row without storing it all.
             var item: NSMenuItem
 
-            // If we have a selection, add copy and learn.
-            let hasSelection = (self.accessibilitySelectedText()?.isEmpty == false)
+            let selectedText = self.accessibilitySelectedText()?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let hasSelection = selectedText?.isEmpty == false
+            let selectedPathTarget: LocalPathTarget? = {
+                guard let selectedText,
+                      !selectedText.isEmpty else { return nil }
+                return LocalPathTarget.resolve(
+                    rawValue: selectedText,
+                    workingDirectory: pwd
+                )
+            }()
+
+            // If we have a selection, add copy and related context actions.
             if hasSelection {
                 menu.addItem(withTitle: AppLocalization.localizedText("Copy"), action: #selector(copy(_:)), keyEquivalent: "")
 
@@ -1483,6 +1494,16 @@ extension Ghostty {
                     keyEquivalent: ""
                 )
                 item.setImageIfDesired(systemSymbolName: "book.closed")
+
+                if let selectedPathTarget {
+                    item = menu.addItem(
+                        withTitle: AppLocalization.localizedText("Show in Finder"),
+                        action: #selector(revealSelectionInFinder(_:)),
+                        keyEquivalent: ""
+                    )
+                    item.representedObject = selectedPathTarget.fileURL
+                    item.setImageIfDesired(systemSymbolName: "folder")
+                }
             }
             menu.addItem(withTitle: AppLocalization.localizedText("Paste"), action: #selector(paste(_:)), keyEquivalent: "")
 
@@ -1527,6 +1548,23 @@ extension Ghostty {
             let action = "paste_from_clipboard"
             if !ghostty_surface_binding_action(surface, action, UInt(action.lengthOfBytes(using: .utf8))) {
                 AppDelegate.logger.warning("action failed action=\(action)")
+            }
+        }
+
+        @IBAction func revealSelectionInFinder(_ sender: Any?) {
+            guard let item = sender as? NSMenuItem,
+                  let fileURL = item.representedObject as? URL else { return }
+
+            var isDirectory = ObjCBool(false)
+            guard FileManager.default.fileExists(atPath: fileURL.path, isDirectory: &isDirectory) else {
+                NSSound.beep()
+                return
+            }
+
+            if isDirectory.boolValue {
+                NSWorkspace.shared.open(fileURL)
+            } else {
+                NSWorkspace.shared.activateFileViewerSelecting([fileURL])
             }
         }
 

@@ -1,6 +1,16 @@
 # Creator Metadata
 
-- Why: Dedicated Git worktree used to develop and integrate the Android remote gateway, remote pairing flow, and adjacent macOS control-harness / workflow changes without destabilizing the primary checkout.
-- Created by: Codex with user direction.
-- Creation date: 2026-03-20
-- Expected scope: Remote gateway transport, mobile control UX, pairing/bootstrap work, control-harness changes, and related macOS workflow updates merged through this branch.
+## Why this folder exists
+This folder hosts a dedicated Git worktree for the GhoDex markdown tab viewer feature.
+It isolates feature development from the coordination worktree and other active tasks.
+
+## Created by
+Codex agent (requested by user)
+
+## Creation date
+2026-03-25
+
+## Scope
+- Implement a macOS markdown-document tab for GhoDex.
+- Add cmd-click handling so markdown file paths can open in a new tab.
+- Keep feature code, tests, and verification isolated to this task worktree until integration.
