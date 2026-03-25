@@ -8,7 +8,9 @@ struct NewTabPickerView: View {
     let title: String
     let subtitle: String
     let onClose: () -> Void
+    let includeBrowserEntry: Bool
     let onOpenHost: ((AITerminalHost) -> Void)?
+    let onOpenBrowser: (() -> Void)?
     let onOpenWorkspace: ((AITerminalSavedWorkspaceTemplate) -> Void)?
 
     @State private var searchText = ""
@@ -39,6 +41,10 @@ struct NewTabPickerView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
+                        if !browserEntries.isEmpty {
+                            section(title: nil, entries: browserEntries)
+                        }
+
                         if let localEntry = entries.first(where: { $0.section == .local }) {
                             section(title: nil, entries: [localEntry])
                         }
@@ -266,7 +272,13 @@ struct NewTabPickerView: View {
     }
 
     private var entries: [NewTabPickerEntry] {
-        NewTabPickerModel.filteredEntries(store.newTabPickerEntries(mode: mode), query: searchText)
+        let baseEntries = store.newTabPickerEntries(mode: mode)
+        let allEntries = NewTabPickerModel.withBrowserEntry(baseEntries, includeBrowserEntry: includeBrowserEntry)
+        return NewTabPickerModel.filteredEntries(allEntries, query: searchText)
+    }
+
+    private var browserEntries: [NewTabPickerEntry] {
+        entries.filter { $0.section == .browser }
     }
 
     private var favoriteEntries: [NewTabPickerEntry] {
@@ -304,6 +316,8 @@ struct NewTabPickerView: View {
 
     private func open(_ entry: NewTabPickerEntry) {
         switch entry.kind {
+        case .browser:
+            onOpenBrowser?()
         case .host(let host):
             if let onOpenHost {
                 onOpenHost(host)
@@ -322,6 +336,8 @@ struct NewTabPickerView: View {
 
     private func primaryTitle(for entry: NewTabPickerEntry) -> String {
         switch entry.kind {
+        case .browser:
+            return AppLocalization.localizedText("Browser")
         case .host(let host):
             return host.name
         case .savedWorkspace(let workspace):
@@ -331,6 +347,8 @@ struct NewTabPickerView: View {
 
     private func primarySubtitle(for entry: NewTabPickerEntry) -> String {
         switch entry.kind {
+        case .browser:
+            return AppLocalization.localizedText("Open a web page inside a GhoDex tab")
         case .host(let host):
             return host.connectionTarget ?? host.displaySubtitle
         case .savedWorkspace(let workspace):
@@ -342,6 +360,8 @@ struct NewTabPickerView: View {
 
     private func sourceLabel(for entry: NewTabPickerEntry) -> String? {
         switch entry.section {
+        case .browser:
+            return AppLocalization.localizedText("Built-in")
         case .local:
             return nil
         case .favorites:
@@ -359,6 +379,8 @@ struct NewTabPickerView: View {
 
     private func iconName(for entry: NewTabPickerEntry) -> String {
         switch entry.kind {
+        case .browser:
+            return "globe"
         case .host(let host):
             switch host.transport {
             case .local, .localmcd:

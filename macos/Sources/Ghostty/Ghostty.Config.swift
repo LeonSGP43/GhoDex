@@ -794,6 +794,22 @@ extension Ghostty {
             optionalString(for: "ghodex-learning-prompt-template")
         }
 
+        var ghodexBrowserHomepage: String? {
+            optionalString(for: "ghodex-browser-homepage")
+        }
+
+        var ghodexBrowserProfilePath: String? {
+            optionalString(for: "ghodex-browser-profile-path")
+        }
+
+        var ghodexBrowserRuntimePath: String? {
+            optionalString(for: "ghodex-browser-runtime-path")
+        }
+
+        var ghodexBrowserRemoteDebugPort: Int {
+            Int(uint(for: "ghodex-browser-remote-debug-port", default: 0))
+        }
+
         var ghodexTodoEnabled: Bool {
             bool(for: "ghodex-todo-enabled", default: true)
         }

@@ -19,6 +19,7 @@ const crash_report = @import("crash_report.zig");
 const show_face = @import("show_face.zig");
 const boo = @import("boo.zig");
 const new_window = @import("new_window.zig");
+const browser_control = @import("browser_control.zig");
 const control = @import("control.zig");
 
 /// Special commands that can be invoked via CLI flags. These are all
@@ -69,6 +70,9 @@ pub const Action = enum {
 
     // Use IPC to tell the running GhoDex to open a new window.
     @"new-window",
+
+    // Use the built-in AppleScript bridge to send one browser command request.
+    @"browser-control",
 
     // Control a running GhoDex app instance through the native control harness.
     control,
@@ -151,6 +155,7 @@ pub const Action = enum {
             .@"show-face" => try show_face.run(alloc),
             .boo => try boo.run(alloc),
             .@"new-window" => try new_window.run(alloc),
+            .@"browser-control" => try browser_control.run(alloc),
             .control => try control.run(alloc),
         };
     }
@@ -191,6 +196,7 @@ pub const Action = enum {
                 .@"show-face" => show_face.Options,
                 .boo => boo.Options,
                 .@"new-window" => new_window.Options,
+                .@"browser-control" => browser_control.Options,
                 .control => control.Options,
             };
         }

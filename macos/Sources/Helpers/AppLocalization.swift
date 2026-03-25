@@ -377,6 +377,33 @@ enum AppLocalization {
         "settings.language.option.simplified_chinese": "简体中文",
         "settings.language.restart_required": "Restart GhoDex to apply the language change everywhere.",
         "settings.language.restart_now": "Restart Now",
+        "settings.browser.title": "Browser Profile",
+        "settings.browser.description": "Choose which Chromium profile GhoDex should use for Browser tabs. Leave it on the managed default to keep browser data isolated from Chrome.",
+        "settings.browser.profile_section": "Browser Profile",
+        "settings.browser.use_managed": "Use GhoDex managed browser profile",
+        "settings.browser.managed_path": "Managed profile path",
+        "settings.browser.custom_path": "Custom profile path",
+        "settings.browser.custom_placeholder": "/Users/you/Library/Application Support/Google/Chrome/Profile 1",
+        "settings.browser.custom_hint": "Point this at a dedicated Chromium/Chrome profile directory if you want to reuse cookies and local storage.",
+        "settings.browser.runtime_section": "CEF Runtime",
+        "settings.browser.runtime_description": "By default GhoDex downloads and manages its own Chromium runtime automatically. Switch to a custom runtime path only if you want to reuse an existing compatible CEF runtime directory.",
+        "settings.browser.use_managed_runtime": "Use GhoDex managed Chromium runtime",
+        "settings.browser.managed_runtime_path": "Managed runtime path",
+        "settings.browser.custom_runtime_path": "Custom runtime path",
+        "settings.browser.custom_runtime_placeholder": "/Users/you/Library/Application Support/GhoDex/CEF/current",
+        "settings.browser.custom_runtime_hint": "Point this at a compatible CEF runtime root directory that already contains Frameworks/Chromium Embedded Framework.framework.",
+        "settings.browser.runtime_media_title": "Media Capability",
+        "settings.browser.runtime_media_managed_warning": "The managed CEF runtime is a Chromium-branded distribution and does not provide H.264/AAC playback. Use a custom codec-enabled CEF runtime if you need normal Chrome-like MP4 media parity.",
+        "settings.browser.runtime_media_chromium_warning": "This runtime appears to be a standard Chromium-branded CEF distribution (%@). H.264/AAC playback is likely unavailable here as well.",
+        "settings.browser.runtime_media_custom_hint": "Custom runtime selected. GhoDex cannot verify H.264/AAC support from the path alone. If you need normal Chrome-like media parity, this runtime must come from a codec-enabled CEF build rather than the default Chromium-branded binaries.",
+        "settings.browser.browse": "Browse…",
+        "settings.browser.save": "Save Browser Settings",
+        "settings.browser.saved": "Browser settings saved to config.",
+        "settings.browser.restart_required": "Restart GhoDex after changing the browser profile path if Chromium has already been activated in this app session.",
+        "settings.browser.invalid_path": "Choose an existing profile directory before saving.",
+        "settings.browser.picker_message": "Choose the browser profile directory that Browser tabs should reuse.",
+        "settings.browser.invalid_runtime_path": "Choose an existing CEF runtime directory before saving.",
+        "settings.browser.runtime_picker_message": "Choose the CEF runtime directory that Browser tabs should use.",
         "settings.gateway.title": "Control Gateway",
         "settings.gateway.description": "Run the mobile pairing gateway directly inside GhoDex. Changes apply immediately and persist across launches.",
         "settings.gateway.enabled": "Enable gateway on app launch",
@@ -774,6 +801,33 @@ enum AppLocalization {
         "settings.language.option.simplified_chinese": "简体中文",
         "settings.language.restart_required": "需要重启 GhoDex，语言变更才会完整应用到所有界面。",
         "settings.language.restart_now": "立即重启",
+        "settings.browser.title": "浏览器 Profile",
+        "settings.browser.description": "选择 Browser tab 使用哪个 Chromium profile。保持为 GhoDex 管理的默认值时，浏览器数据会和 Chrome 隔离。",
+        "settings.browser.profile_section": "浏览器 Profile",
+        "settings.browser.use_managed": "使用 GhoDex 管理的浏览器 Profile",
+        "settings.browser.managed_path": "托管 Profile 路径",
+        "settings.browser.custom_path": "自定义 Profile 路径",
+        "settings.browser.custom_placeholder": "/Users/you/Library/Application Support/Google/Chrome/Profile 1",
+        "settings.browser.custom_hint": "如果你想复用 cookie 和本地存储，请指向一个专门给 GhoDex/CEF 使用的 Chromium/Chrome profile 目录。",
+        "settings.browser.runtime_section": "CEF 内核",
+        "settings.browser.runtime_description": "默认情况下 GhoDex 会自动下载并管理自己的 Chromium runtime。只有当你想复用一个现成的兼容 CEF runtime 目录时，才切换到自定义路径。",
+        "settings.browser.use_managed_runtime": "使用 GhoDex 管理的 Chromium runtime",
+        "settings.browser.managed_runtime_path": "托管 runtime 路径",
+        "settings.browser.custom_runtime_path": "自定义 runtime 路径",
+        "settings.browser.custom_runtime_placeholder": "/Users/you/Library/Application Support/GhoDex/CEF/current",
+        "settings.browser.custom_runtime_hint": "请指向一个已经包含 Frameworks/Chromium Embedded Framework.framework 的兼容 CEF runtime 根目录。",
+        "settings.browser.runtime_media_title": "媒体能力",
+        "settings.browser.runtime_media_managed_warning": "当前托管 CEF runtime 属于 Chromium 品牌分发，不提供 H.264/AAC 播放能力。如果你需要接近正常 Chrome 的 MP4 媒体兼容性，请切换到一个启用了 codec 的自定义 CEF runtime。",
+        "settings.browser.runtime_media_chromium_warning": "这个 runtime 看起来仍然是标准的 Chromium 品牌 CEF 分发（%@）。这里同样很可能不支持 H.264/AAC 播放。",
+        "settings.browser.runtime_media_custom_hint": "当前选择的是自定义 runtime。仅凭路径 GhoDex 无法直接验证它是否支持 H.264/AAC；如果你需要接近正常 Chrome 的媒体兼容性，这个 runtime 必须来自启用了 codec 的 CEF 构建，而不是默认的 Chromium 品牌二进制包。",
+        "settings.browser.browse": "选择…",
+        "settings.browser.save": "保存浏览器设置",
+        "settings.browser.saved": "浏览器设置已写入配置文件。",
+        "settings.browser.restart_required": "如果本次会话里 Chromium 已经启动过，修改浏览器 Profile 路径后需要重启 GhoDex 才能完整生效。",
+        "settings.browser.invalid_path": "保存前请选择一个已存在的 Profile 目录。",
+        "settings.browser.picker_message": "选择 Browser tab 需要复用的浏览器 Profile 目录。",
+        "settings.browser.invalid_runtime_path": "保存前请选择一个已存在的 CEF runtime 目录。",
+        "settings.browser.runtime_picker_message": "选择 Browser tab 要使用的 CEF runtime 根目录。",
         "settings.gateway.title": "控制网关",
         "settings.gateway.description": "直接在 GhoDex 内运行移动端配对网关。修改会立即生效，并在下次启动时继续保留。",
         "settings.gateway.enabled": "启动应用时自动启用网关",
@@ -1326,6 +1380,35 @@ enum L10n {
         nonisolated static var languageOptionSimplifiedChinese: String { AppLocalization.localizedString("settings.language.option.simplified_chinese") }
         nonisolated static var languageRestartRequired: String { AppLocalization.localizedString("settings.language.restart_required") }
         nonisolated static var restartNow: String { AppLocalization.localizedString("settings.language.restart_now") }
+        nonisolated static var browserTitle: String { AppLocalization.localizedString("settings.browser.title") }
+        nonisolated static var browserDescription: String { AppLocalization.localizedString("settings.browser.description") }
+        nonisolated static var browserProfileSectionTitle: String { AppLocalization.localizedString("settings.browser.profile_section") }
+        nonisolated static var browserUseManagedProfile: String { AppLocalization.localizedString("settings.browser.use_managed") }
+        nonisolated static var browserManagedPath: String { AppLocalization.localizedString("settings.browser.managed_path") }
+        nonisolated static var browserCustomPath: String { AppLocalization.localizedString("settings.browser.custom_path") }
+        nonisolated static var browserCustomPlaceholder: String { AppLocalization.localizedString("settings.browser.custom_placeholder") }
+        nonisolated static var browserCustomHint: String { AppLocalization.localizedString("settings.browser.custom_hint") }
+        nonisolated static var browserRuntimeSectionTitle: String { AppLocalization.localizedString("settings.browser.runtime_section") }
+        nonisolated static var browserRuntimeDescription: String { AppLocalization.localizedString("settings.browser.runtime_description") }
+        nonisolated static var browserUseManagedRuntime: String { AppLocalization.localizedString("settings.browser.use_managed_runtime") }
+        nonisolated static var browserManagedRuntimePath: String { AppLocalization.localizedString("settings.browser.managed_runtime_path") }
+        nonisolated static var browserCustomRuntimePath: String { AppLocalization.localizedString("settings.browser.custom_runtime_path") }
+        nonisolated static var browserCustomRuntimePlaceholder: String { AppLocalization.localizedString("settings.browser.custom_runtime_placeholder") }
+        nonisolated static var browserCustomRuntimeHint: String { AppLocalization.localizedString("settings.browser.custom_runtime_hint") }
+        nonisolated static var browserRuntimeMediaTitle: String { AppLocalization.localizedString("settings.browser.runtime_media_title") }
+        nonisolated static var browserRuntimeMediaManagedWarning: String { AppLocalization.localizedString("settings.browser.runtime_media_managed_warning") }
+        nonisolated static func browserRuntimeMediaChromiumWarning(_ source: String) -> String {
+            AppLocalization.localizedString("settings.browser.runtime_media_chromium_warning", source)
+        }
+        nonisolated static var browserRuntimeMediaCustomHint: String { AppLocalization.localizedString("settings.browser.runtime_media_custom_hint") }
+        nonisolated static var browserBrowseButton: String { AppLocalization.localizedString("settings.browser.browse") }
+        nonisolated static var browserSaveButton: String { AppLocalization.localizedString("settings.browser.save") }
+        nonisolated static var browserSaved: String { AppLocalization.localizedString("settings.browser.saved") }
+        nonisolated static var browserRestartRequired: String { AppLocalization.localizedString("settings.browser.restart_required") }
+        nonisolated static var browserInvalidPath: String { AppLocalization.localizedString("settings.browser.invalid_path") }
+        nonisolated static var browserPickerMessage: String { AppLocalization.localizedString("settings.browser.picker_message") }
+        nonisolated static var browserInvalidRuntimePath: String { AppLocalization.localizedString("settings.browser.invalid_runtime_path") }
+        nonisolated static var browserRuntimePickerMessage: String { AppLocalization.localizedString("settings.browser.runtime_picker_message") }
         nonisolated static var gatewayTitle: String { AppLocalization.localizedString("settings.gateway.title") }
         nonisolated static var gatewayDescription: String { AppLocalization.localizedString("settings.gateway.description") }
         nonisolated static var gatewayEnabled: String { AppLocalization.localizedString("settings.gateway.enabled") }

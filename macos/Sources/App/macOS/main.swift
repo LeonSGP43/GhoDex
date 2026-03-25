@@ -2,6 +2,117 @@ import AppKit
 import Cocoa
 import GhoDexKit
 
+private let browserProfileConfigKey = "ghodex-browser-profile-path"
+private let browserRuntimeConfigKey = "ghodex-browser-runtime-path"
+private let browserRemoteDebugPortConfigKey = "ghodex-browser-remote-debug-port"
+
+private func validatedBrowserDirectorySetting(_ value: String?) -> String? {
+    guard let value, !value.isEmpty else { return nil }
+
+    let standardized = (value as NSString).standardizingPath
+    guard !standardized.isEmpty, standardized.hasPrefix("/") else {
+        return nil
+    }
+
+    var isDirectory = ObjCBool(false)
+    guard FileManager.default.fileExists(atPath: standardized, isDirectory: &isDirectory),
+          isDirectory.boolValue else {
+        return nil
+    }
+
+    return standardized
+}
+
+private func browserSettingJSONValue(for key: String, in text: String) -> Any? {
+    for line in text.components(separatedBy: .newlines) {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("\(key) ="), let separatorIndex = trimmed.firstIndex(of: "=") else {
+            continue
+        }
+
+        let rawValue = trimmed[trimmed.index(after: separatorIndex)...].trimmingCharacters(in: .whitespaces)
+        let data = Data("[\(rawValue)]".utf8)
+        guard
+            let decoded = try? JSONSerialization.jsonObject(with: data) as? [Any],
+            let value = decoded.first
+        else {
+            continue
+        }
+
+        return value
+    }
+
+    return nil
+}
+
+private func browserSettingValue(for key: String, in text: String) -> String? {
+    browserSettingJSONValue(for: key, in: text) as? String
+}
+
+private func seedBrowserCEFDefaultsFromConfigFile() {
+    guard BrowserPaths.shouldMirrorBrowserConfigIntoDefaults() else {
+        return
+    }
+
+    guard let configPath = ProcessInfo.processInfo.environment["GHOSTTY_CONFIG_PATH"], !configPath.isEmpty else {
+        return
+    }
+    guard let text = try? String(contentsOfFile: configPath, encoding: .utf8) else {
+        return
+    }
+
+    let defaults = UserDefaults.standard
+    if let profilePath = browserSettingValue(for: browserProfileConfigKey, in: text), !profilePath.isEmpty {
+        if let validatedProfilePath = validatedBrowserDirectorySetting(profilePath) {
+            defaults.set(validatedProfilePath, forKey: BrowserPaths.profileDefaultsKey)
+        } else {
+            NSLog("[CEF] Ignoring invalid Browser profile override from config file: %@", profilePath)
+            defaults.removeObject(forKey: BrowserPaths.profileDefaultsKey)
+        }
+    } else {
+        defaults.removeObject(forKey: BrowserPaths.profileDefaultsKey)
+    }
+
+    if let runtimePath = browserSettingValue(for: browserRuntimeConfigKey, in: text), !runtimePath.isEmpty {
+        if let validatedRuntimePath = validatedBrowserDirectorySetting(runtimePath) {
+            defaults.set(validatedRuntimePath, forKey: BrowserPaths.runtimeDefaultsKey)
+        } else {
+            NSLog("[CEF] Ignoring invalid Browser runtime override from config file: %@", runtimePath)
+            defaults.removeObject(forKey: BrowserPaths.runtimeDefaultsKey)
+        }
+    } else {
+        defaults.removeObject(forKey: BrowserPaths.runtimeDefaultsKey)
+    }
+
+    if let debugValue = browserSettingJSONValue(for: browserRemoteDebugPortConfigKey, in: text) {
+        if let portNumber = debugValue as? NSNumber {
+            let port = portNumber.intValue
+            if (1...65535).contains(port) {
+                defaults.set(port, forKey: BrowserPaths.remoteDebugPortDefaultsKey)
+            } else if port == 0 {
+                defaults.removeObject(forKey: BrowserPaths.remoteDebugPortDefaultsKey)
+            } else {
+                NSLog("[CEF] Ignoring invalid Browser remote debug port from config file: %@", "\(port)")
+                defaults.removeObject(forKey: BrowserPaths.remoteDebugPortDefaultsKey)
+            }
+        } else {
+            NSLog("[CEF] Ignoring invalid Browser remote debug port from config file: %@", "\(debugValue)")
+            defaults.removeObject(forKey: BrowserPaths.remoteDebugPortDefaultsKey)
+        }
+    } else {
+        defaults.removeObject(forKey: BrowserPaths.remoteDebugPortDefaultsKey)
+    }
+
+    defaults.synchronize()
+}
+
+seedBrowserCEFDefaultsFromConfigFile()
+
+let cefExitCode = GhoDexCEFExecuteProcessIfNeeded()
+if cefExitCode >= 0 {
+    exit(cefExitCode)
+}
+
 // Initialize Ghostty global state. We do this once right away because the
 // CLI APIs require it and it lets us ensure it is done immediately for the
 // rest of the app.

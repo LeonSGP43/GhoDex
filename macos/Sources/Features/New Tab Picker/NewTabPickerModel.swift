@@ -7,11 +7,13 @@ enum NewTabPickerMode: Hashable {
 
 struct NewTabPickerEntry: Identifiable, Hashable {
     enum Kind: Hashable {
+        case browser
         case host(AITerminalHost)
         case savedWorkspace(AITerminalSavedWorkspaceTemplate)
     }
 
     enum Section: Hashable {
+        case browser
         case local
         case favorites
         case recent
@@ -26,6 +28,8 @@ struct NewTabPickerEntry: Identifiable, Hashable {
 
     var id: String {
         switch kind {
+        case .browser:
+            return "browser"
         case .host(let host):
             return host.id
         case .savedWorkspace(let workspace):
@@ -104,6 +108,24 @@ enum NewTabPickerModel {
         return entries
     }
 
+    static func withBrowserEntry(
+        _ entries: [NewTabPickerEntry],
+        includeBrowserEntry: Bool
+    ) -> [NewTabPickerEntry] {
+        guard includeBrowserEntry else { return entries }
+
+        var result = entries
+        result.insert(.init(kind: .browser, section: .browser, shortcutIndex: 1), at: 0)
+
+        return result.enumerated().map { index, entry in
+            .init(
+                kind: entry.kind,
+                section: entry.section,
+                shortcutIndex: index < 9 ? index + 1 : nil
+            )
+        }
+    }
+
     static func filteredEntries(
         _ entries: [NewTabPickerEntry],
         query: String
@@ -113,12 +135,21 @@ enum NewTabPickerModel {
 
         return entries.filter {
             switch $0.kind {
+            case .browser:
+                return matchesBrowser(query: normalizedQuery)
             case .host(let host):
                 return matches(host: host, query: normalizedQuery)
             case .savedWorkspace(let workspace):
                 return matches(workspace: workspace, query: normalizedQuery)
             }
         }
+    }
+
+    private static func matchesBrowser(query: String) -> Bool {
+        AppLocalization.localizedText("Browser").localizedCaseInsensitiveContains(query)
+            || AppLocalization
+            .localizedText("Open a web page inside a GhoDex tab")
+            .localizedCaseInsensitiveContains(query)
     }
 
     private static func matches(host: AITerminalHost, query: String) -> Bool {

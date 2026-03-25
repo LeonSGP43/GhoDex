@@ -328,6 +328,8 @@ class AppDelegate: NSObject,
         store: aiTerminalManagerStore
     )
 
+    @MainActor lazy var settingsController = SettingsController(appDelegate: self)
+    private let browserControlIPCService = BrowserControlIPCService()
     /// The elapsed time since the process was started
     var timeSinceLaunch: TimeInterval {
         return ProcessInfo.processInfo.systemUptime - applicationLaunchTime
@@ -344,6 +346,8 @@ class AppDelegate: NSObject,
 
     /// The custom app icon image that is currently in use.
     @Published private(set) var appIcon: NSImage?
+    @Published private(set) var browserProfilePathOverride: String?
+    @Published private(set) var browserRuntimePathOverride: String?
 
     private var remotePairingQRMenuItem: NSMenuItem?
     private var remotePairingQRCodeWindow: NSWindow?
@@ -540,6 +544,8 @@ class AppDelegate: NSObject,
                 NSApp.arrangeInFront(nil)
             }
         }
+
+        browserControlIPCService.start()
     }
 
     func applicationDidHide(_ notification: Notification) {
@@ -639,6 +645,8 @@ class AppDelegate: NSObject,
         // so remove them all now. In the future we may want to be
         // more selective and only remove surface-targeted notifications.
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        browserControlIPCService.stop()
+        GhoDexCEFShutdownGlobal()
     }
 
     @MainActor
@@ -1653,18 +1661,18 @@ class AppDelegate: NSObject,
         // Keep keyboard-triggered new-tab actions aligned with the picker flow
         // used by the menu and tab-bar affordances in the sidebar workspace UI.
         guard window.windowController is TerminalController else { return }
-        showNewTabPicker(from: selectedTerminalWindow(for: window) ?? window)
+        showNewTabPicker(from: selectedTopLevelWindow(for: window) ?? window)
     }
 
     @MainActor @objc private func ghosttyNewPaneTab(_ notification: Notification) {
         let notificationSurface = notification.object as? Ghostty.SurfaceView
-        let notificationWindow = selectedTerminalWindow(for: notificationSurface?.window)
+        let notificationWindow = selectedTopLevelWindow(for: notificationSurface?.window)
         let notificationController = selectedTerminalController(for: notificationWindow)
 
         guard let controller = activeTerminalController(preferred: notificationWindow)
             ?? notificationController else { return }
 
-        let window = selectedTerminalWindow(for: controller.window) ?? notificationWindow
+        let window = selectedTopLevelWindow(for: controller.window) ?? notificationWindow
         guard let sourceSurface = activePaneSurface(in: controller) else { return }
 
         showNewPaneTabPicker(from: window, in: controller, sourceSurface: sourceSurface)
@@ -1683,6 +1691,13 @@ class AppDelegate: NSObject,
     private func ghosttyConfigDidChange(config: Ghostty.Config) {
         // Update the config we need to store
         self.derivedConfig = DerivedConfig(config)
+        syncBrowserProfileConfig(config)
+        syncBrowserRuntimeConfig(config)
+        syncBrowserRemoteDebugPortConfig(config)
+        // Browser tabs now initialize CEF lazily when the first page model is
+        // constructed. Doing eager global init here can stall launch before the
+        // Browser IPC service starts, which makes isolated control-plane
+        // validation impossible even though the runtime is otherwise present.
 
         // Depending on the "window-save-state" setting we have to set the NSQuitAlwaysKeepsWindows
         // configuration. This is the only way to carefully control whether macOS invokes the
@@ -1784,6 +1799,184 @@ class AppDelegate: NSObject,
         }
     }
 
+    var managedBrowserProfilePath: String {
+        BrowserPaths.defaultManagedProfileRoot().path
+    }
+
+    var managedBrowserRuntimePath: String {
+        BrowserPaths.defaultManagedCEFRuntimeRoot().path
+    }
+
+    @MainActor
+    func chooseBrowserProfilePath(currentPath: String?) -> String? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = L10n.Settings.browserBrowseButton
+        panel.message = L10n.Settings.browserPickerMessage
+
+        if let currentPath = Self.normalizedBrowserProfilePath(currentPath) {
+            panel.directoryURL = URL(fileURLWithPath: currentPath).deletingLastPathComponent()
+        } else {
+            panel.directoryURL = BrowserPaths.defaultManagedProfileRoot().deletingLastPathComponent()
+        }
+
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return url.path
+    }
+
+    @MainActor
+    func chooseBrowserRuntimePath(currentPath: String?) -> String? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = L10n.Settings.browserBrowseButton
+        panel.message = L10n.Settings.browserRuntimePickerMessage
+
+        if let currentPath = Self.normalizedBrowserRuntimePath(currentPath) {
+            panel.directoryURL = URL(fileURLWithPath: currentPath).deletingLastPathComponent()
+        } else {
+            panel.directoryURL = BrowserPaths.defaultManagedCEFRuntimeRoot().deletingLastPathComponent()
+        }
+
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return url.path
+    }
+
+    @MainActor
+    func saveBrowserProfilePathSetting(_ rawValue: String) throws {
+        let normalized = Self.normalizedBrowserProfilePath(rawValue)
+        if let normalized {
+            var isDirectory = ObjCBool(false)
+            guard FileManager.default.fileExists(atPath: normalized, isDirectory: &isDirectory),
+                  isDirectory.boolValue else {
+                throw NSError(
+                    domain: "GhoDexBrowserSettings",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: L10n.Settings.browserInvalidPath]
+                )
+            }
+        }
+
+        let configURL = Self.browserSettingsConfigURL()
+        try Self.saveBrowserSettingsConfig(profilePath: normalized, runtimePath: browserRuntimePathOverride, to: configURL)
+
+        applyBrowserProfileDefaults(path: normalized)
+        browserProfilePathOverride = normalized
+        ghostty.reloadConfig()
+    }
+
+    @MainActor
+    func saveBrowserSettings(profilePath rawProfileValue: String, runtimePath rawRuntimeValue: String) throws {
+        let normalizedProfile = Self.normalizedBrowserProfilePath(rawProfileValue)
+        if let normalizedProfile {
+            var isDirectory = ObjCBool(false)
+            guard FileManager.default.fileExists(atPath: normalizedProfile, isDirectory: &isDirectory),
+                  isDirectory.boolValue else {
+                throw NSError(
+                    domain: "GhoDexBrowserSettings",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: L10n.Settings.browserInvalidPath]
+                )
+            }
+        }
+
+        let normalizedRuntime = Self.normalizedBrowserRuntimePath(rawRuntimeValue)
+        if let normalizedRuntime {
+            do {
+                try FileManager.default.createDirectory(
+                    at: URL(fileURLWithPath: normalizedRuntime, isDirectory: true),
+                    withIntermediateDirectories: true
+                )
+            } catch {
+                throw NSError(
+                    domain: "GhoDexBrowserSettings",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: L10n.Settings.browserInvalidRuntimePath]
+                )
+            }
+        }
+
+        let configURL = Self.browserSettingsConfigURL()
+        try Self.saveBrowserSettingsConfig(profilePath: normalizedProfile, runtimePath: normalizedRuntime, to: configURL)
+
+        applyBrowserProfileDefaults(path: normalizedProfile)
+        applyBrowserRuntimeDefaults(path: normalizedRuntime)
+        browserProfilePathOverride = normalizedProfile
+        browserRuntimePathOverride = normalizedRuntime
+        ghostty.reloadConfig()
+    }
+
+    private func syncBrowserProfileConfig(_ config: Ghostty.Config) {
+        let fileOverrides = Self.loadBrowserSettingsConfig()
+        let resolved = Self.resolvedBrowserProfilePath(
+            fileOverride: fileOverrides.profilePath,
+            configOverride: config.ghodexBrowserProfilePath
+        )
+        browserProfilePathOverride = resolved
+        applyBrowserProfileDefaults(path: resolved)
+        if BrowserPaths.shouldMirrorBrowserConfigIntoDefaults() {
+            UserDefaults.standard.synchronize()
+        }
+    }
+
+    private func syncBrowserRuntimeConfig(_ config: Ghostty.Config) {
+        let fileOverrides = Self.loadBrowserSettingsConfig()
+        let resolved = Self.resolvedBrowserRuntimePath(
+            fileOverride: fileOverrides.runtimePath,
+            configOverride: config.ghodexBrowserRuntimePath
+        )
+        browserRuntimePathOverride = resolved
+        applyBrowserRuntimeDefaults(path: resolved)
+        if BrowserPaths.shouldMirrorBrowserConfigIntoDefaults() {
+            UserDefaults.standard.synchronize()
+        }
+    }
+
+    private func syncBrowserRemoteDebugPortConfig(_ config: Ghostty.Config) {
+        let resolved = Self.normalizedBrowserRemoteDebugPort(config.ghodexBrowserRemoteDebugPort)
+        applyBrowserRemoteDebugPortDefaults(port: resolved)
+        if BrowserPaths.shouldMirrorBrowserConfigIntoDefaults() {
+            UserDefaults.standard.synchronize()
+        }
+    }
+
+    private func initializeBrowserCEFIfPossible() {
+        guard !GhoDexCEFIsInitialized(), GhoDexCEFBuildHasRuntime() else { return }
+        _ = GhoDexCEFInitializeGlobal()
+    }
+
+    private func applyBrowserProfileDefaults(path: String?) {
+        guard BrowserPaths.shouldMirrorBrowserConfigIntoDefaults() else { return }
+        if let path {
+            UserDefaults.standard.set(path, forKey: BrowserPaths.profileDefaultsKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: BrowserPaths.profileDefaultsKey)
+        }
+    }
+
+    private func applyBrowserRuntimeDefaults(path: String?) {
+        guard BrowserPaths.shouldMirrorBrowserConfigIntoDefaults() else { return }
+        if let path {
+            UserDefaults.standard.set(path, forKey: BrowserPaths.runtimeDefaultsKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: BrowserPaths.runtimeDefaultsKey)
+        }
+    }
+
+    private func applyBrowserRemoteDebugPortDefaults(port: Int?) {
+        guard BrowserPaths.shouldMirrorBrowserConfigIntoDefaults() else { return }
+        if let port {
+            UserDefaults.standard.set(port, forKey: BrowserPaths.remoteDebugPortDefaultsKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: BrowserPaths.remoteDebugPortDefaultsKey)
+        }
+    }
+
     // MARK: - Restorable State
 
     /// We support NSSecureCoding for restorable state. Required as of macOS Sonoma (14) but a good idea anyways.
@@ -1853,6 +2046,7 @@ class AppDelegate: NSObject,
         return nil
     }
 
+    @MainActor
     func controlHarnessReadableSurface(for terminalID: UUID) -> (any ControlHarnessReadableSurface)? {
         findSurface(forUUID: terminalID)
     }
@@ -2000,6 +2194,12 @@ class AppDelegate: NSObject,
         showNewTabPicker(from: TerminalController.preferredParent?.window ?? NSApp.keyWindow)
     }
 
+    @IBAction func newBrowserTab(_ sender: Any?) {
+        let parentWindow = selectedTopLevelWindow(for: NSApp.keyWindow)
+            ?? selectedTopLevelWindow(for: TerminalController.preferredParent?.window)
+        _ = BrowserTabController.newTab(ghostty, from: parentWindow)
+    }
+
     @IBAction func newPaneTab(_ sender: Any?) {
         activeTerminalController()?.newPaneTab(sender)
     }
@@ -2114,7 +2314,7 @@ class AppDelegate: NSObject,
     }
 
     @IBAction func changeTitleContext(_ sender: Any?) {
-        activeTerminalController()?.changeTitleContext(sender)
+        activeTopLevelTabController(preferred: NSApp.keyWindow)?.promptTabTitle()
     }
 
     @IBAction func previousPaneTab(_ sender: Any?) {
@@ -2127,12 +2327,29 @@ class AppDelegate: NSObject,
 
     @MainActor
     func showNewTabPicker(from window: NSWindow?) {
+        let browserAction = { [weak self] in
+            guard let self else { return }
+            let parentWindow = self.selectedTopLevelWindow(for: window)
+                ?? self.selectedTopLevelWindow(for: NSApp.keyWindow)
+            _ = BrowserTabController.newTab(self.ghostty, from: parentWindow)
+        }
+
         if let window {
-            newTabPickerController.show(relativeTo: window, mode: .topLevel)
+            newTabPickerController.show(
+                relativeTo: window,
+                mode: .topLevel,
+                includeBrowserEntry: true,
+                onOpenBrowser: browserAction
+            )
             return
         }
 
-        aiTerminalManagerStore.openLocalShell(launchTarget: .window)
+        newTabPickerController.show(
+            relativeTo: nil,
+            mode: .topLevel,
+            includeBrowserEntry: true,
+            onOpenBrowser: browserAction
+        )
     }
 
     @MainActor
@@ -2152,6 +2369,7 @@ class AppDelegate: NSObject,
                 mode: .paneChild,
                 title: AppLocalization.localizedText("New Pane Tab"),
                 subtitle: L10n.SSHConnections.newTabPickerSubtitle,
+                includeBrowserEntry: false,
                 onOpenHost: openHost)
             return
         }
@@ -2179,11 +2397,31 @@ class AppDelegate: NSObject,
         return TerminalController.preferredParent
     }
 
-    private func selectedTerminalController(for window: NSWindow?) -> TerminalController? {
-        selectedTerminalWindow(for: window)?.windowController as? TerminalController
+    private func activeTopLevelTabController(preferred window: NSWindow? = nil) -> TopLevelTabController? {
+        if let controller = selectedTopLevelTabController(for: window) {
+            return controller
+        }
+
+        if let controller = selectedTopLevelTabController(for: NSApp.keyWindow) {
+            return controller
+        }
+
+        if let controller = selectedTopLevelTabController(for: NSApp.mainWindow) {
+            return controller
+        }
+
+        return selectedTopLevelTabController(for: TerminalController.preferredParent?.window)
     }
 
-    private func selectedTerminalWindow(for window: NSWindow?) -> NSWindow? {
+    private func selectedTerminalController(for window: NSWindow?) -> TerminalController? {
+        selectedTopLevelWindow(for: window)?.windowController as? TerminalController
+    }
+
+    private func selectedTopLevelTabController(for window: NSWindow?) -> TopLevelTabController? {
+        selectedTopLevelWindow(for: window)?.windowController as? TopLevelTabController
+    }
+
+    private func selectedTopLevelWindow(for window: NSWindow?) -> NSWindow? {
         window?.tabGroup?.selectedWindow ?? window
     }
 
@@ -2194,7 +2432,35 @@ class AppDelegate: NSObject,
     }
 
     @IBAction func closeAllWindows(_ sender: Any?) {
-        TerminalController.closeAllWindows()
+        let browserControllers = BrowserTabController.all
+        let confirmWindow = TerminalController.all
+            .first(where: { $0.allSurfaces.contains(where: { $0.needsConfirmQuit }) })?
+            .allSurfaces.first(where: { $0.needsConfirmQuit })?
+            .window
+
+        guard let confirmWindow else {
+            TerminalController.closeAllWindowsImmediately()
+            BrowserTabController.closeAllWindowsImmediately()
+            AboutController.shared.hide()
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = L10n.App.closeAllWindowsQuestion
+        alert.informativeText = L10n.App.allSessionsTerminated
+        alert.addButton(withTitle: L10n.App.closeAllWindows)
+        alert.addButton(withTitle: L10n.App.cancel)
+        alert.alertStyle = .warning
+        alert.beginSheetModal(for: confirmWindow) { response in
+            guard response == .alertFirstButtonReturn else { return }
+
+            // Avoid focus loss while closing a whole tab group under Stage Manager.
+            alert.window.orderOut(nil)
+            TerminalController.closeAllWindowsImmediately()
+            browserControllers.forEach { $0.window?.close() }
+            AboutController.shared.hide()
+        }
+
         AboutController.shared.hide()
     }
 
@@ -2390,6 +2656,239 @@ extension AppDelegate: NSMenuItemValidation {
         default:
             return true
         }
+    }
+}
+
+extension AppDelegate {
+    private static let browserSettingsStartMarker = "# >>> GhoDex browser settings >>>"
+    private static let browserSettingsEndMarker = "# <<< GhoDex browser settings <<<"
+    private static let browserProfileConfigKey = "ghodex-browser-profile-path"
+    private static let browserRuntimeConfigKey = "ghodex-browser-runtime-path"
+    private static let browserRemoteDebugPortConfigKey = "ghodex-browser-remote-debug-port"
+
+    fileprivate static func normalizedBrowserProfilePath(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return (trimmed as NSString).standardizingPath
+    }
+
+    fileprivate static func normalizedBrowserRuntimePath(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return (trimmed as NSString).standardizingPath
+    }
+
+    fileprivate static func normalizedBrowserRemoteDebugPort(_ value: Int) -> Int? {
+        guard (1...65535).contains(value) else { return nil }
+        return value
+    }
+
+    fileprivate static func validatedExistingBrowserOverridePath(
+        _ normalizedPath: String?,
+        settingName: String,
+        source: String
+    ) -> String? {
+        guard let normalizedPath else { return nil }
+
+        var isDirectory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: normalizedPath, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            AppDelegate.logger.warning(
+                "Ignoring invalid Browser \(settingName, privacy: .public) override from \(source, privacy: .public): \(normalizedPath, privacy: .public)"
+            )
+            return nil
+        }
+
+        return normalizedPath
+    }
+
+    fileprivate static func resolvedBrowserProfilePath(
+        fileOverride: String?,
+        configOverride: String?
+    ) -> String? {
+        if fileOverride != nil {
+            return validatedExistingBrowserOverridePath(
+                normalizedBrowserProfilePath(fileOverride),
+                settingName: "profile",
+                source: "browser settings block"
+            )
+        }
+
+        return validatedExistingBrowserOverridePath(
+            normalizedBrowserProfilePath(configOverride),
+            settingName: "profile",
+            source: "Ghostty config"
+        )
+    }
+
+    fileprivate static func resolvedBrowserRuntimePath(
+        fileOverride: String?,
+        configOverride: String?
+    ) -> String? {
+        if fileOverride != nil {
+            return validatedExistingBrowserOverridePath(
+                normalizedBrowserRuntimePath(fileOverride),
+                settingName: "runtime",
+                source: "browser settings block"
+            )
+        }
+
+        return validatedExistingBrowserOverridePath(
+            normalizedBrowserRuntimePath(configOverride),
+            settingName: "runtime",
+            source: "Ghostty config"
+        )
+    }
+
+    fileprivate static func browserSettingsConfigURL() -> URL {
+        let fileManager = FileManager.default
+        if let envPath = ProcessInfo.processInfo.environment["GHOSTTY_CONFIG_PATH"],
+           !envPath.isEmpty {
+            let url = URL(fileURLWithPath: envPath, isDirectory: false)
+            try? fileManager.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            return url
+        }
+
+        if let path = Ghostty.App.configPath(), !path.isEmpty {
+            let url = URL(fileURLWithPath: path, isDirectory: false)
+            try? fileManager.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            return url
+        }
+
+        let appSupport = (try? fileManager.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )) ?? fileManager.homeDirectoryForCurrentUser
+
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.leongong.ghodex"
+        let directory = appSupport.appendingPathComponent(bundleID, isDirectory: true)
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("config.ghodex", isDirectory: false)
+    }
+
+    fileprivate static func saveBrowserSettingsConfig(profilePath: String?, runtimePath: String?, to url: URL) throws {
+        let fileManager = FileManager.default
+        try fileManager.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        let existingText: String
+        if fileManager.fileExists(atPath: url.path) {
+            existingText = try String(contentsOf: url, encoding: .utf8)
+        } else {
+            existingText = ""
+        }
+
+        let stripped = stripBrowserSettingsConfig(from: existingText)
+        let block = browserSettingsConfigBlock(profilePath: profilePath, runtimePath: runtimePath)
+        let normalized = stripped.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = normalized.isEmpty ? "\(block)\n" : "\(normalized)\n\n\(block)\n"
+        try text.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    fileprivate static func loadBrowserSettingsConfig() -> (profilePath: String?, runtimePath: String?) {
+        let url = browserSettingsConfigURL()
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+            return (nil, nil)
+        }
+
+        return (
+            profilePath: browserSettingValue(for: browserProfileConfigKey, in: text),
+            runtimePath: browserSettingValue(for: browserRuntimeConfigKey, in: text)
+        )
+    }
+
+    private static func browserSettingsConfigBlock(profilePath: String?, runtimePath: String?) -> String {
+        [
+            browserSettingsStartMarker,
+            "\(browserProfileConfigKey) = \(configStringLiteral(profilePath ?? ""))",
+            "\(browserRuntimeConfigKey) = \(configStringLiteral(runtimePath ?? ""))",
+            browserSettingsEndMarker,
+        ].joined(separator: "\n")
+    }
+
+    private static func stripBrowserSettingsConfig(from text: String) -> String {
+        let lines = text.components(separatedBy: .newlines)
+        var result: [String] = []
+        var insideManagedBlock = false
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            if trimmed == browserSettingsStartMarker {
+                insideManagedBlock = true
+                continue
+            }
+
+            if trimmed == browserSettingsEndMarker {
+                insideManagedBlock = false
+                continue
+            }
+
+            if insideManagedBlock {
+                continue
+            }
+
+            if trimmed.hasPrefix("\(browserProfileConfigKey) =") ||
+                trimmed == browserProfileConfigKey ||
+                trimmed.hasPrefix("\(browserRuntimeConfigKey) =") ||
+                trimmed == browserRuntimeConfigKey {
+                continue
+            }
+
+            result.append(line)
+        }
+
+        return result.joined(separator: "\n")
+    }
+
+    private static func configStringLiteral(_ value: String) -> String {
+        let data = try? JSONSerialization.data(withJSONObject: [value], options: [])
+        guard
+            let data,
+            let encoded = String(data: data, encoding: .utf8),
+            encoded.count >= 2
+        else {
+            return "\"\""
+        }
+
+        let start = encoded.index(after: encoded.startIndex)
+        let end = encoded.index(before: encoded.endIndex)
+        return String(encoded[start..<end])
+    }
+
+    private static func browserSettingValue(for key: String, in text: String) -> String? {
+        var result: String?
+
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("\(key) =") else { continue }
+
+            guard let separatorIndex = trimmed.firstIndex(of: "=") else { continue }
+            let rawValue = trimmed[trimmed.index(after: separatorIndex)...].trimmingCharacters(in: .whitespaces)
+            let data = Data("[\(rawValue)]".utf8)
+            guard
+                let decoded = try? JSONSerialization.jsonObject(with: data) as? [String],
+                let value = decoded.first
+            else {
+                continue
+            }
+
+            result = value
+        }
+
+        return result
     }
 }
 

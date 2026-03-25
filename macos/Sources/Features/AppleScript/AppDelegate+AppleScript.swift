@@ -110,6 +110,34 @@ extension NSApplication {
     }
 }
 
+// MARK: - Browser Tabs
+
+@MainActor
+extension NSApplication {
+    /// Live Browser tabs for the external command protocol.
+    ///
+    /// This path is intentionally independent of `macos-applescript` so the
+    /// local Browser IPC/CLI control plane keeps working even when AppleScript
+    /// automation is disabled in user config.
+    var browserTabsForExternalControl: [ScriptBrowserTab] {
+        BrowserTabController.all.map { ScriptBrowserTab(controller: $0) }
+    }
+
+    /// Backing collection for `application.browser tabs`.
+    @objc(browserTabs)
+    var browserTabs: [ScriptBrowserTab] {
+        guard isAppleScriptEnabled else { return [] }
+        return browserTabsForExternalControl
+    }
+
+    /// Enables AppleScript unique-ID lookup for browser tab references.
+    @objc(valueInBrowserTabsWithUniqueID:)
+    func valueInBrowserTabs(uniqueID: String) -> ScriptBrowserTab? {
+        guard isAppleScriptEnabled else { return nil }
+        return browserTabs.first(where: { $0.stableID == uniqueID })
+    }
+}
+
 // MARK: - Commands
 
 @MainActor
@@ -290,6 +318,64 @@ extension NSApplication {
         // bookkeeping has not fully refreshed in the current run loop.
         let fallbackWindow = ScriptWindow(primaryController: createdController)
         return ScriptTab(window: fallbackWindow, controller: createdController)
+    }
+
+    /// Handler for the `new browser tab` AppleScript command.
+    @objc(handleNewBrowserTabScriptCommand:)
+    func handleNewBrowserTabScriptCommand(_ command: NSScriptCommand) -> ScriptBrowserTab? {
+        guard validateScript(command: command) else { return nil }
+
+        guard let appDelegate = delegate as? AppDelegate else {
+            command.scriptErrorNumber = errAEEventFailed
+            command.scriptErrorString = "GhoDex app delegate is unavailable."
+            return nil
+        }
+
+        let initialURL: URL?
+        if let rawURL = command.evaluatedArguments?["url"] as? String, !rawURL.isEmpty {
+            let normalizedURL = BrowserPaths.normalizedURLString(
+                rawURL,
+                fallback: BrowserTabController.defaultHomePageURL(for: appDelegate.ghostty).absoluteString
+            )
+            guard let url = URL(string: normalizedURL) else {
+                command.scriptErrorNumber = errAECoercionFail
+                command.scriptErrorString = "The Browser tab URL is invalid."
+                return nil
+            }
+            initialURL = url
+        } else {
+            initialURL = nil
+        }
+
+        let controller = BrowserTabController.newWindow(appDelegate.ghostty, initialURL: initialURL)
+        return ScriptBrowserTab(controller: controller)
+    }
+
+    /// Handler for the versioned `run browser command protocol` AppleScript command.
+    @objc(handleRunBrowserCommandProtocolScriptCommand:)
+    func handleRunBrowserCommandProtocolScriptCommand(_ command: NSScriptCommand) -> NSString? {
+        guard validateScript(command: command) else { return nil }
+
+        guard let requestJSON = command.directParameter as? String, !requestJSON.isEmpty else {
+            command.scriptErrorNumber = errAEParamMissed
+            command.scriptErrorString = "Missing browser command protocol JSON request."
+            return nil
+        }
+
+        let responseJSON: String
+        do {
+            responseJSON = try ScriptBrowserTab.runExternalCommandProtocolSynchronously(requestJSON: requestJSON)
+        } catch let error as BrowserExternalCommandError {
+            command.scriptErrorNumber = errAEEventFailed
+            command.scriptErrorString = error.message
+            return nil
+        } catch {
+            command.scriptErrorNumber = errAEEventFailed
+            command.scriptErrorString = error.localizedDescription
+            return nil
+        }
+
+        return responseJSON as NSString
     }
 }
 

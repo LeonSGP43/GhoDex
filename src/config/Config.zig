@@ -3792,6 +3792,22 @@ term: []const u8 = "xterm-ghostty",
 @"ghodex-learning-fast-model": ?[:0]const u8 = null,
 @"ghodex-learning-prompt-template": ?[:0]const u8 = null,
 
+/// The default homepage used when opening a new in-app browser tab.
+/// If unset, GhoDex falls back to its built-in browser start page.
+@"ghodex-browser-homepage": ?[:0]const u8 = null,
+
+/// The browser profile directory used by the in-app Chromium tab feature.
+/// Leave unset to use GhoDex's managed profile directory instead.
+@"ghodex-browser-profile-path": ?[:0]const u8 = null,
+
+/// The Chromium runtime directory used by the in-app browser tab feature.
+/// Leave unset to use GhoDex's managed runtime directory instead.
+@"ghodex-browser-runtime-path": ?[:0]const u8 = null,
+
+/// Local-only Chromium remote debugging port for the in-app browser tab feature.
+/// Leave at 0 to keep the diagnostics lane disabled by default.
+@"ghodex-browser-remote-debug-port": u16 = 0,
+
 /// GhoDex-managed heartbeat queue settings persisted in the main config file.
 @"ghodex-heartbeat-enabled": bool = true,
 @"ghodex-heartbeat-interval-seconds": f64 = 5,
