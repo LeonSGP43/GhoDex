@@ -2669,13 +2669,9 @@ void GhoDexCEFApp::OnBeforeCommandLineProcessing(
   command_line->AppendSwitch("disable-default-apps");
   command_line->AppendSwitch("disable-extensions");
   command_line->AppendSwitch("disable-sync");
-  command_line->AppendSwitch("disable-gpu");
-  command_line->AppendSwitch("disable-gpu-compositing");
-  command_line->AppendSwitch("in-process-gpu");
-  command_line->AppendSwitchWithValue("use-gl", "swiftshader");
   command_line->AppendSwitchWithValue(
       "disable-features",
-      "SegmentationPlatformFeature,OptimizationGuideModelDownloading,MediaRouter,VizDisplayCompositor");
+      "SegmentationPlatformFeature,OptimizationGuideModelDownloading,MediaRouter");
   NSLog(@"[CEF] Using external Chrome profile %@ (runtime-user-data-dir=%@ profile-directory=%@)",
         external_profile,
         user_data_dir,

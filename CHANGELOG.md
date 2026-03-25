@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(browser): restore hardware GPU for mirrored Chrome profiles
+
+- What changed: External direct/mirror Chrome profile launches no longer force Chromium through the old SwiftShader-only path. The CEF bridge now stops appending `disable-gpu`, `disable-gpu-compositing`, `in-process-gpu`, and `use-gl=swiftshader`, and it also stops disabling `VizDisplayCompositor` for external-profile runs.
+- Why: The copied-`Profile 10` Google/Gmail acceptance had already proved that mirrored Chrome web-session reuse can work, but the browser still fingerprinted like a stripped automation shell because mirror/external mode exposed no WebGL context at all. That was a strong site-visible anomaly compared with managed mode and real Chrome on the same machine.
+- Impact: Mirror/external launches now expose the normal macOS ANGLE Metal renderer again instead of the previous "Canvas has no webgl context" result. The isolated `bot.sannysoft.com` lane now reports `WebGL Vendor = Google Inc. (Apple)` and `WebGL Renderer = ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version)`, while copied-`Profile 10` Google/Gmail reuse still reaches the signed-in homepage and inbox.
+- Verification: `GHODEX_CEF_ROOT=/tmp/ghx-cef-full-root nu macos/build.nu --configuration Debug --action build`, `/tmp/ghx-fp-postgpu-dbqzc1yn/result.json`, and `/tmp/ghx-google-postgpu-dwz3_wvy/result.json`
+- Files: `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `browser-tab-acceptance-matrix.md`, `CHANGELOG.md`
+- Decision trail: Treat the broken WebGL surface as the highest-confidence anti-automation regression first, because it was both web-visible and caused entirely by our own launch flags. Keep the Chrome-browser-signin restrictions in place for now, but stop disabling the compositor/GPU stack that normal Chrome already uses on the same Mac.
+
 ### fix(browser): strip browser-signin-only state from mirrored Chrome runtimes
 
 - What changed: `PrepareExternalProfileRuntimeState()` now removes browser-signin-only artifacts from the runtime-owned copy of an external Chrome profile after os_crypt rewrap. The sanitization pass clears `gaia_cookie`, existing browser-signin preference/account keys, `Web Data.token_service`, and removes runtime-only browser-account artifacts such as `Accounts`, `Account Web Data`, `Login Data For Account`, `Sync Data`, `trusted_vault.pb`, and the copied Google profile avatar. The migration version also bumps so previously seeded runtime profiles re-run the stronger sanitization automatically.
