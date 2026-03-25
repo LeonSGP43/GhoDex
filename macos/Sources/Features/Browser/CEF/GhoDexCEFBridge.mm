@@ -30,6 +30,9 @@ NSString * const GhoDexCEFControlErrorDomain = @"com.leongong.ghodex.browser.cef
              receivedContentLength:(int64_t)receivedContentLength
                        isMainFrame:(BOOL)isMainFrame
                          frameName:(NSString *)frameName;
+- (void)notifyOpenURLInNewTab:(NSString *)urlString
+                  disposition:(NSInteger)disposition
+                  userGesture:(BOOL)userGesture;
 - (void)browserDidClose;
 - (void)loadPendingBootstrapURLIfNeeded;
 @end
@@ -1205,6 +1208,7 @@ NSRect PopupWindowFrameForSourceView(GhoDexCEFView *sourceView, const CefPopupFe
 
 @implementation GhoDexCEFPopupWindowController {
   GhoDexCEFView *_cefView;
+  __weak GhoDexCEFView *_sourceView;
 }
 
 - (instancetype)initWithSourceView:(GhoDexCEFView *)sourceView
@@ -1219,6 +1223,7 @@ NSRect PopupWindowFrameForSourceView(GhoDexCEFView *sourceView, const CefPopupFe
                                                      defer:NO];
   self = [super initWithWindow:window];
   if (self) {
+    _sourceView = sourceView;
     _cefView = [[GhoDexCEFView alloc] initWithInitialURLString:@"about:blank"
                                   deferInitialBrowserCreation:YES];
     _cefView.delegate = self;
@@ -1312,10 +1317,17 @@ requestOpenURLInNewTab:(NSString *)urlString
     disposition:(NSInteger)disposition
      userGesture:(BOOL)userGesture {
   (void)view;
-  (void)disposition;
-  (void)userGesture;
+  if (_sourceView != nil) {
+    [_sourceView notifyOpenURLInNewTab:urlString
+                           disposition:disposition
+                           userGesture:userGesture];
+    return;
+  }
+
   NSURL *url = [NSURL URLWithString:urlString];
   if (url != nil) {
+    NSLog(@"[CEF] Popup host missing source view; delegating follow-up open to NSWorkspace for %@",
+          url.absoluteString ?: urlString);
     [NSWorkspace.sharedWorkspace openURL:url];
   }
 }

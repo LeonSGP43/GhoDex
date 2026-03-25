@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(browser): internalize popup follow-up opens
+
+- What changed: `GhoDexCEFPopupWindowController` in `GhoDexCEFBridge.mm` now forwards popup-host follow-up open requests back into the originating `GhoDexCEFView` delegate chain instead of sending them straight to `NSWorkspace`. That lets popup-launched `_blank`/follow-up opens re-enter the existing Browser page/window routing policy in `BrowserTabModel` and `BrowserTabController`. The durable browser docs now record that popup-host follow-up opens stay inside GhoDex's own Browser control plane under a real user gesture.
+- Why: The previous popup-opener fix restored the real first-level popup browser relationship, but popup-hosted follow-up opens could still escape to the system browser because the popup window controller had no path back into GhoDex's internal Browser routing layer.
+- Impact: Popup behavior is now materially more complete for real browsing flows. A first-level popup can host a user-gesture follow-up `_blank` open and the resulting page is created inside GhoDex's Browser controller instead of leaving the app. This removes the last known popup-routing escape hatch from the completeness audit.
+- Verification: `GHODEX_CEF_ROOT=/tmp/ghx-cef-full-root nu macos/build.nu --configuration Debug --action build`, `/tmp/ghx-popup-followup-keypress-7aa045da.json` (`popup2_page_appeared_in_internal_browser = true`, `popup_followup_internalized_pass = true`)
+- Files: `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `browser-tab-acceptance-matrix.md`, `browser-tab-completeness-audit.md`, `CHANGELOG.md`
+- Decision trail: Keep the fix at the popup-host seam instead of duplicating Browser routing policy in Objective-C++. The popup window controller only needed a narrow bridge back to the source `GhoDexCEFView`, because the Swift side already owns the right disposition-aware routing logic for new tabs and windows.
+
 ### fix(browser): preserve popup opener semantics
 
 - What changed: `GhoDexCEFBridge.mm` now hosts first-level Chromium popups inside a dedicated native popup window backed by a deferred `GhoDexCEFView`, instead of canceling the popup and reconstructing it through the normal Browser tab/window routing path. The popup host keeps the real CEF popup browser relationship alive, closes the native popup window when that popup browser closes, and the durable browser docs now record first-level popup/OAuth acceptance as working while calling out the narrower remaining gap around nested popup-host follow-up opens.

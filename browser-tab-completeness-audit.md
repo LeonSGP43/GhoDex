@@ -34,46 +34,12 @@ What is still not enough for "normal browser" parity:
 - media/fingerprint acceptance is still incomplete
 - several shipped browser-service handlers are code-complete but not yet
   acceptance-backed
-- popup-hosted follow-up opens still fall back to `NSWorkspace`
 
 ## Risk Tiers
 
 ### Tier 0: Blocks Normal Browser Semantics
 
-#### 1. Popup-hosted follow-up opens are still not fully internalized
-
-Why this matters:
-
-- the first popup hop now behaves like a real browser popup, but a popup-hosted
-  page can still delegate later open requests out to the system browser instead
-  of staying inside GhoDex
-- multi-hop auth/payment flows sometimes chain more than one popup or use
-  follow-up open requests after the first child is already live
-
-Evidence:
-
-- isolated runtime artifact `/tmp/ghx-popup-oauth-final-2d9a943a.json`
-- settled opener state now reports `lastOpenResult.returnedObject = true`
-- popup result reports `openerPresent = true`
-- opener page receives the `oauth-complete` `postMessage`
-- popup self-close is reflected back to the opener with `popupClosedFlag = true`
-- popup-host follow-up requests from `GhoDexCEFPopupWindowController` still call
-  `NSWorkspace.sharedWorkspace openURL:`
-
-Code path:
-
-- `OnBeforePopup(...)` now keeps the real popup client path in
-  `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`
-- `GhoDexCEFPopupWindowController` in the same file still delegates nested
-  follow-up opens through `NSWorkspace`
-
-Conclusion:
-
-- the first-level popup/OAuth blocker is now fixed
-- the remaining popup gap is narrower: nested popup-host follow-up routing still
-  needs to stay inside the product instead of escaping to the system browser
-
-#### 2. H.264 / broader media-codec parity is still unproven and likely
+#### 1. H.264 / broader media-codec parity is still unproven and likely
 incomplete
 
 Why this matters:
@@ -81,13 +47,18 @@ Why this matters:
 - many real sites and anti-bot stacks treat media-capability mismatches as a
   strong browser-quality signal
 - a browser that cannot expose expected codec support is still visibly unlike
-  normal Chrome even when WebGL is fixed
+  normal Chrome even when WebGL and popup routing are fixed
 
 Evidence:
 
 - `browser-tab-acceptance-matrix.md` already records
   `VIDEO_CODECS WARN h264: ""` in the mirrored-profile fingerprint lane
 - only the WebGL/GPU parity lane is currently acceptance-backed
+
+Code path:
+
+- media/codec behavior still depends on the embedded Chromium runtime and the
+  launch/runtime surface in `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`
 
 Conclusion:
 
@@ -96,7 +67,7 @@ Conclusion:
 
 ### Tier 1: Product Boundary Choices That Prevent Full Chrome Equivalence
 
-#### 3. External/mirror mode still launches with an intentionally reduced Chrome
+#### 2. External/mirror mode still launches with an intentionally reduced Chrome
 service surface
 
 Why this matters:
@@ -128,7 +99,7 @@ Interpretation:
 - for "behave like full Chrome with the same profile-backed service layer", it
   is not sufficient
 
-#### 4. Browser-signin parity remains intentionally out of scope
+#### 3. Browser-signin parity remains intentionally out of scope
 
 Why this matters:
 
@@ -152,7 +123,7 @@ Conclusion:
 
 ### Tier 2: Acceptance and Observability Gaps
 
-#### 5. Several browser-service handlers are implemented but not acceptance-backed
+#### 4. Several browser-service handlers are implemented but not acceptance-backed
 
 Implemented surfaces:
 
@@ -175,7 +146,7 @@ Conclusion:
 - code coverage here is materially better than before, but "implemented" still
   exceeds "proven"
 
-#### 6. Popup requests are not externally observable through the public event broker
+#### 5. Popup requests are not externally observable through the public event broker
 
 Why this matters:
 
@@ -193,7 +164,7 @@ Conclusion:
 - keeping popup/open-window events invisible externally weakens the product's
   own ability to prove and debug popup correctness
 
-#### 7. Remote-debug hardening is build-verified but still lacks a fresh runtime proof
+#### 6. Remote-debug hardening is build-verified but still lacks a fresh runtime proof
 
 Why this matters:
 
@@ -212,9 +183,9 @@ If the target is:
 
 - "a stable internal browser that can reuse Chrome web state and browse normal
   sites reasonably well"
-  Current state: close. First-level popup/OAuth semantics are now fixed, but
-  media parity and a few remaining service-surface gaps still keep the claim
-  from being strong.
+  Current state: close. Popup/OAuth routing is now materially where it needs to
+  be, but media parity and a few remaining service-surface gaps still keep the
+  claim from being strong.
 
 - "a browser that is basically Chrome with the same profile and service layer"
   Current state: not reached. The external-profile launch policy still
@@ -222,21 +193,19 @@ If the target is:
   Chrome service surfaces.
 
 - "a browser that does not look like an obviously stripped automation shell"
-  Current state: improved, but still unproven. WebGL parity and first-level
-  popup opener semantics are fixed; H.264/media capability and reduced
-  Chrome-owned services remain the highest-confidence visible gaps.
+  Current state: improved, but still unproven. WebGL parity and popup routing
+  semantics are fixed; H.264/media capability and reduced Chrome-owned
+  services remain the highest-confidence visible gaps.
 
 ## Recommended Next Sequence
 
-1. Internalize nested popup-host follow-up routing so popup-launched opens do
-   not escape to `NSWorkspace`.
-2. Run a media-capability acceptance lane focused on H.264/video support and
+1. Run a media-capability acceptance lane focused on H.264/video support and
    other high-signal fingerprint surfaces.
-3. Add dedicated acceptance for the remaining permission/auth/dialog surfaces
+2. Add dedicated acceptance for the remaining permission/auth/dialog surfaces
    that are currently code-backed but not end-to-end proven.
-4. Decide explicitly whether external/mirror mode is meant to stay a
+3. Decide explicitly whether external/mirror mode is meant to stay a
    "web-session reuse" product or evolve toward fuller Chrome-service
    equivalence. That decision should control whether the current
    `disable-*`/`allow-browser-signin=false` launch policy stays in place.
-5. Add a fresh isolated verification lane proving the debug port stays closed
+4. Add a fresh isolated verification lane proving the debug port stays closed
    when unset, so the hardening work is runtime-backed and not only build-backed.

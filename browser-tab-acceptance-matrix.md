@@ -40,6 +40,7 @@ Stable artifact paths already present in the workspace:
 - `/tmp/ghxgm7-ahignfzj/result.json`
 - `/tmp/ghx-download-accept-cz_ycacz/result.json`
 - `/tmp/ghx-popup-oauth-final-2d9a943a.json`
+- `/tmp/ghx-popup-followup-keypress-7aa045da.json`
 
 ## Acceptance Matrix
 
@@ -57,7 +58,7 @@ Stable artifact paths already present in the workspace:
 | Runtime override | Accepted through `ghodex-browser-runtime-path`, `BrowserCEFRuntimePath`, or `GHODEX_CEF_ROOT`. | `macos/Sources/Ghostty/Ghostty.Config.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm` | The override must already exist as a directory; invalid paths are ignored. |
 | Runtime round-trip evidence | Accepted and smoke-backed for repeated launches using the worktree runtime symlink path. | `/Users/leongong/Desktop/LeonProjects/gho_workspace/smoke-cef-browser-20260319/smoke-result.json`, `cef-browser-smoke-validation.md` | The smoke harness verifies selection and initialization, not every first-run installer UI branch in-place. |
 | Managed runtime download metadata | Accepted with a fixed CEF artifact URL and SHA-256 in code. | `macos/Sources/Features/Browser/BrowserPaths.swift`, `/Users/leongong/Desktop/LeonProjects/gho_workspace/smoke-cef-browser-20260319/smoke-result.json` | Managed install still depends on the download succeeding and the archive layout remaining compatible. |
-| Core browser service handlers | Accepted at the CEF client layer for file dialogs, downloads, JS dialogs, media/permission prompts, HTTP auth, certificate warnings, and first-level popup/OAuth hosting. | `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `/tmp/ghx-download-accept-cz_ycacz/result.json`, `/tmp/ghx-popup-oauth-final-2d9a943a.json` | Download and first-level popup/OAuth acceptance are now durable; the other prompt surfaces are implemented but not yet covered by a dedicated automated end-to-end harness. |
+| Core browser service handlers | Accepted at the CEF client layer for file dialogs, downloads, JS dialogs, media/permission prompts, HTTP auth, certificate warnings, first-level popup/OAuth hosting, and popup-host follow-up open re-entry into GhoDex's internal Browser routing. | `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `/tmp/ghx-download-accept-cz_ycacz/result.json`, `/tmp/ghx-popup-oauth-final-2d9a943a.json`, `/tmp/ghx-popup-followup-keypress-7aa045da.json` | Download plus popup/open-window acceptance are now durable; the other prompt surfaces are implemented but not yet covered by a dedicated automated end-to-end harness. |
 | Managed profile mode | Accepted: default profile root under `~/Library/Application Support/GhoDex/CEF/Profiles/managed/<bundle-slug>`. | `macos/Sources/Features/Browser/BrowserPaths.swift`, `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `/Users/leongong/Desktop/LeonProjects/gho_workspace/smoke-cef-browser-20260319/smoke-result.json` | The concrete leaf slug depends on the app bundle identifier. |
 | External profile source override | Accepted through `ghodex-browser-profile-path`, `BrowserCEFProfileSourcePath`, `BrowserCEFProfilePath`, or `GHODEX_CEF_PROFILE_PATH`. | `macos/Sources/Ghostty/Ghostty.Config.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Features/Browser/BrowserPaths.swift`, `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm` | The selected source must point at an existing profile directory. |
 | External profile mode selection | Accepted through `ghodex-browser-profile-mode` and mirrored into `BrowserCEFProfileMode`. | `src/config/Config.zig`, `macos/Sources/Ghostty/Ghostty.Config.swift`, `macos/Sources/App/macOS/main.swift`, `macos/Sources/App/macOS/AppDelegate.swift` | Supported values are `managed`, `direct`, `mirror-latest`, `mirror-once`, and `mirror-manual`. Missing or invalid values fall back to `direct` when a source path exists, otherwise `managed`. |
@@ -77,7 +78,7 @@ Stable artifact paths already present in the workspace:
 | DOM batch API | Accepted: `runDOMBatch` supports `query`, `click`, `typeText`, `getText`, `getAttributes`, `getBoundingBox`, and `getDOMSnapshot`. | `macos/Sources/Features/Browser/BrowserCommandProtocol.swift`, `macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `browser-tab-command-protocol.md` | `runDOMBatch` remains the batching/compatibility path now that common DOM verbs are also first-class external commands. |
 | Event subscription API | Accepted: `subscribeEvents`, `drainEvents`, and `unsubscribeEvents`. | `macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `macos/Sources/Features/Browser/BrowserExternalEventBroker.swift`, `browser-tab-command-protocol.md` | The broker buffers up to 256 events per subscription and reports overflow via `droppedCount`. |
 | Inspection snapshot event | Accepted as a synthesized event driven by `bridgeReady` and completed navigations. | `macos/Sources/Features/Browser/BrowserExternalEventBroker.swift`, `browser-tab-command-protocol.md` | Snapshot capture is event-triggered and not a general passive DOM mirror. |
-| Popup/new-tab routing | Accepted as disposition-aware routing across current-page loads, foreground/background page tabs, and real popup/new-window hosting in a dedicated native popup window when Chromium requests a first-level popup browser. | `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `macos/Sources/Features/Browser/BrowserTabModel.swift`, `macos/Sources/Features/Browser/BrowserTabController.swift`, `/tmp/ghx-popup-oauth-final-2d9a943a.json`, `CHANGELOG.md` | First-level popup/OAuth semantics are now runtime-backed (`window.open`, `window.opener`, `postMessage`, and popup self-close all succeed in the durable artifact). Nested delegated opens from the popup-host controller still fall back to `NSWorkspace`, so multi-hop popup flows are not yet fully internalized. |
+| Popup/new-tab routing | Accepted as disposition-aware routing across current-page loads, foreground/background page tabs, real popup/new-window hosting in a dedicated native popup window when Chromium requests a first-level popup browser, and popup-host follow-up `_blank` opens re-entering the original Browser controller instead of escaping the app. | `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `macos/Sources/Features/Browser/BrowserTabModel.swift`, `macos/Sources/Features/Browser/BrowserTabController.swift`, `/tmp/ghx-popup-oauth-final-2d9a943a.json`, `/tmp/ghx-popup-followup-keypress-7aa045da.json`, `CHANGELOG.md` | First-level popup/OAuth semantics are runtime-backed, and a popup-hosted follow-up user-gesture open now creates the follow-up page inside GhoDex's own Browser control plane. Remaining popup risk is no longer routing escape; it is broader site-specific coverage across more real-world popup trees. |
 
 ## Practical Readout
 
@@ -152,9 +153,10 @@ What is safe to rely on now:
 
 What is not safe to assume yet:
 
-- that every popup flow is fully Chrome-equivalent across multiple popup hops;
-  first-level OAuth/opener semantics are now acceptance-backed, but nested
-  popup-host follow-up opens still fall back to `NSWorkspace`
+- that every popup flow is fully Chrome-equivalent across arbitrary site
+  patterns; first-level OAuth/opener semantics and popup-host follow-up `_blank`
+  opens are now acceptance-backed, but broader real-site popup coverage is
+  still smaller than Chrome's long-tail behavior
 - that every new prompt surface has the same level of automated acceptance
   coverage as download/profile/cookie flows
 - that site-visible media-codec or anti-bot fingerprints are fully Chrome-parity
