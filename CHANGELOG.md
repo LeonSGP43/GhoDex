@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### docs(browser): add gap closure plan after main sync
+
+- What changed: Added `browser-tab-gap-closure-plan.md`, a durable post-merge plan that breaks the remaining browser-completeness work into four closure tracks: media/fingerprint parity, external/mirror service-surface decisions, missing handler end-to-end acceptance, and popup/open-window observability.
+- Why: After syncing the latest `main` into the browser worktree, the branch needed one current source of truth for the remaining blockers so later agents do not confuse "browser works for many flows" with "browser is ready to claim long-term normal-browser completeness".
+- Impact: Browser follow-up work now has an explicit sequence, merge gate, and decision trail instead of relying on scattered chat history or ad hoc TODOs.
+- Verification: `zig build -Demit-macos-app=false`; reviewed existing browser evidence including `/tmp/ghx-popup-followup-visible-acceptance.json` and `/tmp/ghx-control-proof-b53caadb`
+- Files: `browser-tab-gap-closure-plan.md`, `CHANGELOG.md`
+- Decision trail: Keep the plan separate from the completeness audit. The audit describes current truth; this plan describes the ordered path required to make the branch safely mergeable as a durable browser surface.
+
 ### fix(browser): ignore shared external profile defaults in isolated runs
 
 - What changed: `ConfiguredExternalProfilePath()` in `GhoDexCEFBridge.mm` now ignores the shared `BrowserCEFProfilePath` user-defaults override whenever an isolated `GHODEX_BROWSER_APP_SUPPORT_ROOT` is active and no explicit `GHODEX_CEF_PROFILE_PATH` was provided for the process.
