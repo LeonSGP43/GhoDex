@@ -692,6 +692,19 @@ struct AITerminalTodoWorkspaceProgressSummary: Hashable, Sendable {
     }
 }
 
+struct AITerminalTodoWorkspaceSnapshot: Hashable, Sendable {
+    let workspaceID: UUID
+    var items: [AITerminalTodoItem]
+
+    var summary: AITerminalTodoWorkspaceProgressSummary {
+        .init(
+            workspaceID: workspaceID,
+            completedCount: items.filter(\.isCompleted).count,
+            totalCount: items.count
+        )
+    }
+}
+
 struct AITerminalLearningSettings: Codable, Hashable, Sendable {
     var enabled: Bool
     var preferTabWorkingDirectory: Bool

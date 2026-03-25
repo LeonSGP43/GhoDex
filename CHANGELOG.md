@@ -32,6 +32,15 @@ All notable changes to this project are documented in this file.
 - Files: `macos/Sources/Features/AI Terminal Manager/AITerminalManagerStore.swift`, `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`, `CHANGELOG.md`
 - Decision trail: Read models used from SwiftUI view bodies must not mutate `@Published` state. The safest fix is to keep explicit document fetch APIs behavior intact for management screens while giving summary/list accessors their own side-effect-free snapshot path.
 
+### fix(macos): isolate todo quick look rendering from store re-publishes
+
+- What changed: Added a dedicated todo workspace snapshot model/helper and changed the titlebar quick look popover to render from local snapshot state refreshed on todo notifications instead of subscribing its SwiftUI body directly to the full store object.
+- Why: The earlier store-side fix removed the direct read-triggered publish, but the quick look view still re-ran todo reads whenever unrelated `objectWillChange` events hit the store. Snapshot-driven rendering keeps this titlebar UI on a narrower update path.
+- Impact: The todo quick look is less likely to hitch, re-enter layout, or churn repeated store reads while the rest of the manager store updates for unrelated reasons.
+- Verification: `git diff --check`; `zig build test -Dtest-filter="todoWorkspaceReadsDoNotPublishStoreChanges"`
+- Files: `macos/Sources/Features/AI Terminal Manager/AITerminalManagerModels.swift`, `macos/Sources/Features/AI Terminal Manager/AITerminalManagerStore.swift`, `macos/Sources/Features/Terminal/Window Styles/TerminalWindow.swift`, `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`, `CHANGELOG.md`
+- Decision trail: Titlebar popovers should not depend on broad `ObservableObject` invalidation when they only need a small todo slice. Pulling the view onto explicit snapshots keeps updates predictable without changing the todo editor behavior elsewhere.
+
 ### fix(macos): make app quit an explicit choice on macOS
 
 - What changed: Added an explicit Android runtime permission flow for `CAMERA` before launching the embedded QR scanner, and routed granted/denied outcomes into the app status line instead of falling straight into the scanner path.

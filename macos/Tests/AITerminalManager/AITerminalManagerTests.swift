@@ -1141,9 +1141,13 @@ struct AITerminalManagerTests {
         }
         defer { cancellable.cancel() }
 
+        let snapshot = store.todoWorkspaceSnapshot(for: workspaceID, on: day)
         let items = store.todoItems(assignedTo: workspaceID, on: day)
         let summary = store.todoWorkspaceSummary(for: workspaceID, on: day)
 
+        #expect(snapshot.items.map(\.id) == [todoID])
+        #expect(snapshot.summary.totalCount == 1)
+        #expect(snapshot.summary.completedCount == 0)
         #expect(items.map(\.id) == [todoID])
         #expect(summary.totalCount == 1)
         #expect(summary.completedCount == 0)

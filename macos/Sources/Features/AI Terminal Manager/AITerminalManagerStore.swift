@@ -434,12 +434,7 @@ final class AITerminalManagerStore: ObservableObject {
         for workspaceID: UUID,
         on date: Date = .now
     ) -> AITerminalTodoWorkspaceProgressSummary {
-        let items = todoItems(assignedTo: workspaceID, on: date)
-        return .init(
-            workspaceID: workspaceID,
-            completedCount: items.filter(\.isCompleted).count,
-            totalCount: items.count
-        )
+        todoWorkspaceSnapshot(for: workspaceID, on: date).summary
     }
 
     func todoItems(
@@ -447,13 +442,25 @@ final class AITerminalManagerStore: ObservableObject {
         on date: Date = .now,
         includeCompleted: Bool = true
     ) -> [AITerminalTodoItem] {
+        todoWorkspaceSnapshot(
+            for: workspaceID,
+            on: date,
+            includeCompleted: includeCompleted
+        ).items
+    }
+
+    func todoWorkspaceSnapshot(
+        for workspaceID: UUID,
+        on date: Date = .now,
+        includeCompleted: Bool = true
+    ) -> AITerminalTodoWorkspaceSnapshot {
         let items = todoDocumentSnapshot(for: date)
             .orderedItems
             .filter { $0.assignedWorkspaceID == workspaceID }
-        guard includeCompleted else {
-            return items.filter { !$0.isCompleted }
-        }
-        return items
+        let filteredItems = includeCompleted
+            ? items
+            : items.filter { !$0.isCompleted }
+        return .init(workspaceID: workspaceID, items: filteredItems)
     }
 
     func saveTodoSettings(_ settings: AITerminalTodoSettings) {

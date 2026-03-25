@@ -761,18 +761,33 @@ class TerminalWindow: NSWindow {
     }
 }
 
+@MainActor
 private struct TodoQuickLookView: View {
-    @ObservedObject var store: AITerminalManagerStore
+    let store: AITerminalManagerStore
     let workspaceID: UUID
     let workspaceTitle: String
     let openManager: () -> Void
+    @State private var snapshot: AITerminalTodoWorkspaceSnapshot
+
+    init(
+        store: AITerminalManagerStore,
+        workspaceID: UUID,
+        workspaceTitle: String,
+        openManager: @escaping () -> Void
+    ) {
+        self.store = store
+        self.workspaceID = workspaceID
+        self.workspaceTitle = workspaceTitle
+        self.openManager = openManager
+        _snapshot = State(initialValue: store.todoWorkspaceSnapshot(for: workspaceID, on: .now))
+    }
 
     private var summary: AITerminalTodoWorkspaceProgressSummary {
-        store.todoWorkspaceSummary(for: workspaceID)
+        snapshot.summary
     }
 
     private var items: [AITerminalTodoItem] {
-        store.todoItems(assignedTo: workspaceID, on: .now)
+        snapshot.items
     }
 
     var body: some View {
@@ -823,16 +838,26 @@ private struct TodoQuickLookView: View {
         }
         .padding(14)
         .frame(width: 340, alignment: .leading)
+        .onAppear(perform: reloadSnapshot)
+        .onReceive(NotificationCenter.default.publisher(
+            for: .ghodexTodoStateDidChange,
+            object: store
+        )) { _ in
+            reloadSnapshot()
+        }
     }
 
     private func todoRow(_ item: AITerminalTodoItem) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Button {
-                _ = store.setTodoItemCompleted(
+                guard store.setTodoItemCompleted(
                     id: item.id,
                     isCompleted: !item.isCompleted,
                     for: .now
-                )
+                ) != nil else {
+                    return
+                }
+                reloadSnapshot()
             } label: {
                 Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
                     .foregroundStyle(item.isCompleted ? Color.green : Color.secondary)
@@ -856,6 +881,10 @@ private struct TodoQuickLookView: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func reloadSnapshot() {
+        snapshot = store.todoWorkspaceSnapshot(for: workspaceID, on: .now)
     }
 }
 
