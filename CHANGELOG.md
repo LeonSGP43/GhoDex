@@ -23,6 +23,15 @@ All notable changes to this project are documented in this file.
 - Files: `macos/build.nu`, `CHANGELOG.md`
 - Decision trail: Fix the source of truth in the bootstrap script instead of relying on people to manually delete `GhoDexKit.xcframework`. The build wrapper already decides when the xcframework is prepared, so it should also own optimize-mode correctness.
 
+### fix(macos): stop todo titlebar quick look from freezing
+
+- What changed: Moved todo workspace summary/item snapshot reads onto a side-effect-free store path so titlebar quick look popovers can query assigned todo data without mutating `@Published` store state, and added a regression test that asserts those read accessors do not publish object changes.
+- Why: The titlebar todo quick look is a SwiftUI popover. Its body read `todoWorkspaceSummary` and `todoItems`, and those reads flowed through `todoDocument(for:)`, which cleared `lastError` on every access. That published a store change during body evaluation and could trap the popover in a re-render loop that looked like an app freeze as soon as an assigned todo made the button visible.
+- Impact: After assigning a todo to a tab, opening the titlebar todo quick look no longer self-invalidates the observed store on every render, so the dropdown/popover should open normally instead of hanging the UI thread.
+- Verification: `git diff --check`; `zig build test -Dtest-filter="todoWorkspaceReadsDoNotPublishStoreChanges"`
+- Files: `macos/Sources/Features/AI Terminal Manager/AITerminalManagerStore.swift`, `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`, `CHANGELOG.md`
+- Decision trail: Read models used from SwiftUI view bodies must not mutate `@Published` state. The safest fix is to keep explicit document fetch APIs behavior intact for management screens while giving summary/list accessors their own side-effect-free snapshot path.
+
 ### fix(macos): make app quit an explicit choice on macOS
 
 - What changed: Added an explicit Android runtime permission flow for `CAMERA` before launching the embedded QR scanner, and routed granted/denied outcomes into the app status line instead of falling straight into the scanner path.

@@ -3896,7 +3896,18 @@ final class AITerminalManagerStore: ObservableObject {
     }
 
     private func todoDocumentSnapshot(for date: Date) -> AITerminalTodoDayDocument {
-        todoDocument(for: date)
+        let dayString = AITerminalTodoSettings.dayString(from: date)
+
+        do {
+            // Keep read-only snapshot queries side-effect free because SwiftUI
+            // views call them during body evaluation.
+            let document = try rawTodoDocument(forDayString: dayString)
+            let refreshed = refreshedTodoDocument(document)
+            cacheTodoDocument(refreshed)
+            return refreshed
+        } catch {
+            return .init(date: AITerminalTodoSettings.normalizedDateAnchor(dayString))
+        }
     }
 
     private func bumpTodoRevision() {
