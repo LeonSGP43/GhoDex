@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### docs(browser): add completeness audit
+
+- What changed: Added `browser-tab-completeness-audit.md`, a durable audit of what the built-in browser can and cannot currently claim as a normal Chrome-like browser after the popup disposition-routing fix. The audit separates hard browsing blockers from intentional product boundaries and from verification-only gaps.
+- Why: The codebase and changelog now contain enough browser work that later agents can easily confuse "implemented somewhere" with "acceptance-backed normal browser parity". A single completeness audit makes the current boundary explicit before more fixes land.
+- Impact: Future work can target the real next blockers instead of reopening already-solved profile/cookie issues. The audit currently identifies true popup-opener semantics and media-codec parity as the highest-confidence remaining browser-completeness gaps, while documenting that browser-signin/sync/extensions are still intentionally reduced in external-profile mode.
+- Verification: Read current code paths in `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `macos/Sources/Features/Browser/BrowserTabModel.swift`, `macos/Sources/Features/Browser/BrowserTabController.swift`, `macos/Sources/Features/Browser/BrowserExternalEventBroker.swift`, and the isolated popup artifact `/tmp/ghx-popup-oauth-accept-d396923d.json`
+- Files: `browser-tab-completeness-audit.md`, `CHANGELOG.md`
+- Decision trail: Keep this audit as a separate durable document instead of overloading the acceptance matrix. The matrix answers "what shipped and what evidence exists"; this audit answers the different question "is the browser complete enough to call normal Chrome-like behavior today, and if not, exactly why not?"
+
 ### fix(browser): route popup requests by disposition
 
 - What changed: `OnBeforePopup(...)` now forwards the CEF `WindowOpenDisposition` and `userGesture` metadata through `GhoDexCEFViewDelegate` instead of flattening every popup into a generic "open URL in new tab" request. `BrowserTabModel` now routes `currentTab` and `singletonTab` requests back into the originating page, keeps foreground/background tab requests inside the existing Browser window with the correct activation behavior, reuses an existing matching page for `switchToTab`, and escalates `newPopup` / `newWindow` / `offTheRecord` requests into a separate Browser window through `BrowserTabController`.
