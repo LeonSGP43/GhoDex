@@ -104,6 +104,13 @@ enum AppLocalization {
         "ai.manager.workspaces.host": "Host",
         "ai.manager.workspaces.directory": "Directory",
         "ai.manager.workspaces.save": "Save Workspace",
+        "ai.manager.workspaces.save_action": "Save Workspace...",
+        "ai.manager.workspaces.save_prompt": "Save the current top-level tab layout so it can be reopened from the New Tab picker.",
+        "ai.manager.workspaces.saved_section": "Saved Workspaces",
+        "ai.manager.workspaces.saved_item": "Saved Workspace",
+        "ai.manager.workspaces.replace_title": "Workspace Already Exists",
+        "ai.manager.workspaces.replace_message": "A workspace named \"%@\" already exists. Do you want to replace it?",
+        "ai.manager.workspaces.replace": "Replace",
         "ai.manager.workspaces.empty": "No workspaces saved yet.",
         "ai.manager.open": "Open",
         "ai.manager.sessions": "Sessions",
@@ -147,6 +154,11 @@ enum AppLocalization {
         "ai.manager.error.local_mcd_commands_empty": "Provide at least one startup command.",
         "ai.manager.error.workspace_name_empty": "Workspace name cannot be empty.",
         "ai.manager.error.workspace_directory_empty": "Workspace directory cannot be empty.",
+        "ai.manager.error.workspace_empty": "Workspace is empty.",
+        "ai.manager.error.workspace_duplicate_name": "A workspace with this name already exists.",
+        "ai.manager.error.saved_workspace_empty_pane": "Saved workspace contains an empty pane.",
+        "ai.manager.error.saved_workspace_unknown_host": "Saved workspace references an unknown host.",
+        "ai.manager.error.could_not_save_workspace": "Could Not Save Workspace",
         "ai.manager.error.session_unavailable": "The selected terminal session is no longer available.",
         "ai.manager.error.input_empty": "Input cannot be empty.",
         "ai.manager.error.command_empty": "Command cannot be empty.",
@@ -225,9 +237,70 @@ enum AppLocalization {
         "ssh.connections.new_tab_picker.search": "Search local and SSH connections",
         "ssh.connections.new_tab_picker.quick_connect": "⌘1-9 Quick Connect",
         "ssh.connections.tab.connections": "Connection Center",
+        "ssh.connections.tab.todo": "Todo",
         "ssh.connections.tab.learning": "Learning Settings",
         "ssh.connections.page.connections.title": "Connection Center",
         "ssh.connections.page.connections.subtitle": "Manage saved SSH connections, reuse Keychain passwords, and jump back into active remote sessions.",
+        "ssh.connections.todo.title": "Todo Workspace",
+        "ssh.connections.todo.subtitle": "Track today's tasks in a manual-first flow with local daily files.",
+        "ssh.connections.todo.enable": "Enable todo workflow",
+        "ssh.connections.todo.workspace_root_path": "Todo workspace root path",
+        "ssh.connections.todo.workspace_required": "Todo workspace root path is required.",
+        "ssh.connections.todo.day_file_path": "Selected day file path",
+        "ssh.connections.todo.show_completed_items": "Show completed items",
+        "ssh.connections.todo.hide_completed_items": "Hide completed items",
+        "ssh.connections.todo.presentation_title": "Presentation",
+        "ssh.connections.todo.sidebar_placement": "Cmd+Shift+M panel side",
+        "ssh.connections.todo.sidebar_placement_left": "Left",
+        "ssh.connections.todo.sidebar_placement_right": "Right",
+        "ssh.connections.todo.workspace_overlay_visible": "Show tab quick-look card",
+        "ssh.connections.todo.workspace_overlay_placement": "Tab quick-look position",
+        "ssh.connections.todo.overlay_top_left": "Top Left",
+        "ssh.connections.todo.overlay_top_right": "Top Right",
+        "ssh.connections.todo.overlay_bottom_left": "Bottom Left",
+        "ssh.connections.todo.overlay_bottom_right": "Bottom Right",
+        "ssh.connections.todo.initialize_workspace": "Initialize Todo Workspace",
+        "ssh.connections.todo.initialize_workspace_hint": "Create the todo workspace root, creator note, README, and days directory.",
+        "ssh.connections.todo.saved": "Todo settings saved.",
+        "ssh.connections.todo.initialized_message": "Todo workspace initialized. Created %d file(s), reused %d existing file(s).",
+        "ssh.connections.todo.initialize_failed_message": "Todo workspace initialization failed: %@",
+        "ssh.connections.todo.add_title": "New task title",
+        "ssh.connections.todo.add_notes": "Optional notes",
+        "ssh.connections.todo.add_action": "Add Task",
+        "ssh.connections.todo.empty": "No tasks for the selected day yet.",
+        "ssh.connections.todo.date_yesterday": "Yesterday",
+        "ssh.connections.todo.date_today": "Today",
+        "ssh.connections.todo.date_tomorrow": "Tomorrow",
+        "ssh.connections.todo.summary_title": "Day Summary",
+        "ssh.connections.todo.selected_day": "Selected day: %@",
+        "ssh.connections.todo.focused_workspace_title": "Focused Tab",
+        "ssh.connections.todo.focused_workspace_hint": "This summary tracks tasks assigned to the tab that opened the todo panel.",
+        "ssh.connections.todo.quick_look_title": "Tab Tasks",
+        "ssh.connections.todo.quick_look_empty": "No tasks are assigned to this tab for today.",
+        "ssh.connections.todo.quick_look_manage": "Open Todo Panel",
+        "ssh.connections.todo.quick_look_summary": "%d / %d complete · %d remaining",
+        "ssh.connections.todo.quick_look_more": "%d more task(s)",
+        "ssh.connections.todo.timeline_title": "Timeline",
+        "ssh.connections.todo.timeline_created": "Created %@",
+        "ssh.connections.todo.timeline_created_completed": "Created %@ · Completed %@",
+        "ssh.connections.todo.save_settings": "Save Todo Settings",
+        "ssh.connections.todo.panel_title": "Todo",
+        "ssh.connections.todo.panel_subtitle": "Manage today's tasks without leaving the current tab.",
+        "ssh.connections.todo.panel_open_settings": "Open Todo Settings",
+        "ssh.connections.todo.panel_close": "Close",
+        "ssh.connections.todo.action_save": "Save",
+        "ssh.connections.todo.action_complete": "Complete",
+        "ssh.connections.todo.action_edit": "Edit",
+        "ssh.connections.todo.action_reset": "Reset",
+        "ssh.connections.todo.assignment_clear": "Remove Tab Assignment",
+        "ssh.connections.todo.assignment_no_tabs": "No live tabs available",
+        "ssh.connections.todo.assignment_unassigned": "Unassigned",
+        "ssh.connections.todo.assignment_unavailable": "Assigned Tab Unavailable",
+        "ssh.connections.todo.title_required": "Enter a task title before saving notes.",
+        "ssh.connections.todo.sync_stale_action": "Sync Unfinished",
+        "ssh.connections.todo.sync_stale_empty": "No stale unfinished tasks need to be synced into today.",
+        "ssh.connections.todo.sync_stale_success": "Synced %d stale unfinished task pointer(s) into today.",
+        "ssh.connections.todo.stale_pointer": "Stale unfinished from %@",
         "ssh.connections.learning.title": "Learning Settings",
         "ssh.connections.learning.subtitle": "Configure how selected terminal text is summarized and written into your project knowledge files.",
         "ssh.connections.learning.enable": "Enable Learn action",
@@ -292,8 +365,8 @@ enum AppLocalization {
         "about.github": "GitHub",
         "settings.title": "Settings",
         "settings.body": "Language can be configured here. For advanced terminal settings, edit $HOME/.config/ghodex/config.ghodex and restart GhoDex.",
-        "settings.tab.general": "General",
-        "settings.tab.browser": "Browser",
+        "settings.general.tab": "General",
+        "settings.gateway.tab": "Gateway",
         "settings.language.title": "App Language",
         "AI Terminal Manager…": "AI Terminal Manager…",
         "Settings Panel…": "Settings Panel…",
@@ -327,6 +400,25 @@ enum AppLocalization {
         "settings.browser.picker_message": "Choose the browser profile directory that Browser tabs should reuse.",
         "settings.browser.invalid_runtime_path": "Choose an existing CEF runtime directory before saving.",
         "settings.browser.runtime_picker_message": "Choose the CEF runtime directory that Browser tabs should use.",
+        "settings.gateway.title": "Control Gateway",
+        "settings.gateway.description": "Run the mobile pairing gateway directly inside GhoDex. Changes apply immediately and persist across launches.",
+        "settings.gateway.enabled": "Enable gateway on app launch",
+        "settings.gateway.show_qr_on_launch": "Show pairing QR when GhoDex launches",
+        "settings.gateway.listen_host": "Listen Host",
+        "settings.gateway.listen_host.help": "Use 127.0.0.1 for USB plus adb reverse, or 0.0.0.0 / a reachable LAN IP for direct phone access.",
+        "settings.gateway.port": "Port",
+        "settings.gateway.port.help": "The fixed port keeps one active gateway per machine. If another instance already owns it, this instance stays passive.",
+        "settings.gateway.pairing_host": "Pairing QR Host",
+        "settings.gateway.pairing_host.placeholder": "Auto-detect from current LAN address",
+        "settings.gateway.pairing_host.help": "Optional override for the host embedded in the pairing QR. Leave blank to auto-detect.",
+        "settings.gateway.status": "Status",
+        "settings.gateway.status.disabled": "Disabled",
+        "settings.gateway.status.pending": "Applying settings...",
+        "settings.gateway.status.listening": "Listening on %@:%d",
+        "settings.gateway.status.failed": "Failed to start: %@",
+        "settings.gateway.apply": "Apply Gateway Settings",
+        "settings.gateway.show_qr": "Show Pairing QR",
+        "settings.gateway.pending_changes": "Unsaved gateway changes are waiting to be applied.",
         "app.allow_execute": "Allow GhoDex to execute \"%@\"?",
         "app.undo_action": "Undo %@",
         "app.redo_action": "Redo %@",
@@ -433,6 +525,13 @@ enum AppLocalization {
         "ai.manager.workspaces.host": "主机",
         "ai.manager.workspaces.directory": "目录",
         "ai.manager.workspaces.save": "保存工作区",
+        "ai.manager.workspaces.save_action": "保存工作区...",
+        "ai.manager.workspaces.save_prompt": "保存当前顶层标签页布局，以便后续从新建标签选择器中重新打开。",
+        "ai.manager.workspaces.saved_section": "已保存工作区",
+        "ai.manager.workspaces.saved_item": "已保存工作区",
+        "ai.manager.workspaces.replace_title": "工作区已存在",
+        "ai.manager.workspaces.replace_message": "名为“%@”的工作区已存在。要替换它吗？",
+        "ai.manager.workspaces.replace": "替换",
         "ai.manager.workspaces.empty": "还没有保存任何工作区。",
         "ai.manager.open": "打开",
         "ai.manager.sessions": "会话",
@@ -476,6 +575,11 @@ enum AppLocalization {
         "ai.manager.error.local_mcd_commands_empty": "请至少填写一条启动命令。",
         "ai.manager.error.workspace_name_empty": "工作区名称不能为空。",
         "ai.manager.error.workspace_directory_empty": "工作区目录不能为空。",
+        "ai.manager.error.workspace_empty": "工作区为空。",
+        "ai.manager.error.workspace_duplicate_name": "已存在同名工作区。",
+        "ai.manager.error.saved_workspace_empty_pane": "已保存工作区包含空面板。",
+        "ai.manager.error.saved_workspace_unknown_host": "已保存工作区引用了未知主机。",
+        "ai.manager.error.could_not_save_workspace": "无法保存工作区",
         "ai.manager.error.session_unavailable": "选中的终端会话已不可用。",
         "ai.manager.error.input_empty": "输入不能为空。",
         "ai.manager.error.command_empty": "命令不能为空。",
@@ -554,9 +658,69 @@ enum AppLocalization {
         "ssh.connections.new_tab_picker.search": "搜索本地和 SSH 连接",
         "ssh.connections.new_tab_picker.quick_connect": "⌘1-9 快速连接",
         "ssh.connections.tab.connections": "连接中心",
+        "ssh.connections.tab.todo": "待办",
         "ssh.connections.tab.learning": "学习设置",
         "ssh.connections.page.connections.title": "连接中心",
         "ssh.connections.page.connections.subtitle": "管理已保存 SSH 连接、复用 Keychain 密码，并快速回到活动中的远程会话。",
+        "ssh.connections.todo.title": "待办工作区",
+        "ssh.connections.todo.subtitle": "用手动优先的方式管理今日任务，并把每日任务文件保存在本地。",
+        "ssh.connections.todo.enable": "启用待办工作流",
+        "ssh.connections.todo.workspace_root_path": "待办根目录",
+        "ssh.connections.todo.workspace_required": "必须先填写待办根目录。",
+        "ssh.connections.todo.day_file_path": "当前日期文件路径",
+        "ssh.connections.todo.show_completed_items": "显示已完成任务",
+        "ssh.connections.todo.presentation_title": "展示方式",
+        "ssh.connections.todo.sidebar_placement": "Cmd+Shift+M 面板位置",
+        "ssh.connections.todo.sidebar_placement_left": "左侧",
+        "ssh.connections.todo.sidebar_placement_right": "右侧",
+        "ssh.connections.todo.workspace_overlay_visible": "显示标签页快速卡片",
+        "ssh.connections.todo.workspace_overlay_placement": "标签页快速卡片位置",
+        "ssh.connections.todo.overlay_top_left": "左上角",
+        "ssh.connections.todo.overlay_top_right": "右上角",
+        "ssh.connections.todo.overlay_bottom_left": "左下角",
+        "ssh.connections.todo.overlay_bottom_right": "右下角",
+        "ssh.connections.todo.initialize_workspace": "初始化待办工作区",
+        "ssh.connections.todo.initialize_workspace_hint": "创建 todo 根目录、creator 说明、README 和 days 目录。",
+        "ssh.connections.todo.saved": "待办设置已保存。",
+        "ssh.connections.todo.initialized_message": "待办工作区初始化完成：新建 %d 个文件，复用 %d 个已存在文件。",
+        "ssh.connections.todo.initialize_failed_message": "待办工作区初始化失败：%@",
+        "ssh.connections.todo.add_title": "新任务标题",
+        "ssh.connections.todo.add_notes": "可选备注",
+        "ssh.connections.todo.add_action": "添加任务",
+        "ssh.connections.todo.empty": "当前选择日期还没有任务。",
+        "ssh.connections.todo.date_yesterday": "昨天",
+        "ssh.connections.todo.date_today": "今天",
+        "ssh.connections.todo.date_tomorrow": "明天",
+        "ssh.connections.todo.summary_title": "日期汇总",
+        "ssh.connections.todo.selected_day": "当前日期：%@",
+        "ssh.connections.todo.focused_workspace_title": "当前标签页",
+        "ssh.connections.todo.focused_workspace_hint": "这里显示唤起当前待办面板的标签页所分配任务的完成情况。",
+        "ssh.connections.todo.quick_look_title": "标签页任务",
+        "ssh.connections.todo.quick_look_empty": "这个标签页今天还没有分配任务。",
+        "ssh.connections.todo.quick_look_manage": "打开待办面板",
+        "ssh.connections.todo.quick_look_summary": "已完成 %d / %d · 剩余 %d",
+        "ssh.connections.todo.quick_look_more": "还有 %d 个任务",
+        "ssh.connections.todo.timeline_title": "时间轴",
+        "ssh.connections.todo.timeline_created": "创建于 %@",
+        "ssh.connections.todo.timeline_created_completed": "创建于 %@ · 完成于 %@",
+        "ssh.connections.todo.save_settings": "保存待办设置",
+        "ssh.connections.todo.panel_title": "待办",
+        "ssh.connections.todo.panel_subtitle": "不离开当前标签页就能查看和管理今日任务。",
+        "ssh.connections.todo.panel_open_settings": "打开待办设置",
+        "ssh.connections.todo.panel_close": "关闭",
+        "ssh.connections.todo.action_save": "保存",
+        "ssh.connections.todo.action_complete": "完成",
+        "ssh.connections.todo.action_edit": "编辑",
+        "ssh.connections.todo.action_reset": "重置",
+        "ssh.connections.todo.assignment_clear": "移除标签页分配",
+        "ssh.connections.todo.assignment_no_tabs": "当前没有可分配的活动标签页",
+        "ssh.connections.todo.assignment_unassigned": "未分配",
+        "ssh.connections.todo.assignment_unavailable": "已分配标签页不可用",
+        "ssh.connections.todo.title_required": "请先填写任务标题，再保存备注。",
+        "ssh.connections.todo.sync_stale_action": "同步未完成",
+        "ssh.connections.todo.sync_stale_empty": "没有需要同步到今天的陈旧未完成任务。",
+        "ssh.connections.todo.sync_stale_success": "已将 %d 个陈旧未完成任务指针同步到今天。",
+        "ssh.connections.todo.stale_pointer": "陈旧未完成任务，来自 %@",
         "ssh.connections.learning.title": "学习参数",
         "ssh.connections.learning.subtitle": "配置如何把终端选中文本总结并写入项目知识文件。",
         "ssh.connections.learning.enable": "启用学习动作",
@@ -621,8 +785,8 @@ enum AppLocalization {
         "about.github": "GitHub",
         "settings.title": "设置",
         "settings.body": "这里目前可配置应用语言。若要修改高级终端配置，请编辑 $HOME/.config/ghodex/config.ghodex，然后重启 GhoDex。",
-        "settings.tab.general": "通用",
-        "settings.tab.browser": "浏览器",
+        "settings.general.tab": "通用",
+        "settings.gateway.tab": "网关",
         "settings.language.title": "应用语言",
         "AI Terminal Manager…": "AI 终端管理器…",
         "Settings Panel…": "设置面板…",
@@ -656,6 +820,25 @@ enum AppLocalization {
         "settings.browser.picker_message": "选择 Browser tab 需要复用的浏览器 Profile 目录。",
         "settings.browser.invalid_runtime_path": "保存前请选择一个已存在的 CEF runtime 目录。",
         "settings.browser.runtime_picker_message": "选择 Browser tab 要使用的 CEF runtime 根目录。",
+        "settings.gateway.title": "控制网关",
+        "settings.gateway.description": "直接在 GhoDex 内运行移动端配对网关。修改会立即生效，并在下次启动时继续保留。",
+        "settings.gateway.enabled": "启动应用时自动启用网关",
+        "settings.gateway.show_qr_on_launch": "启动 GhoDex 时自动显示配对二维码",
+        "settings.gateway.listen_host": "监听地址",
+        "settings.gateway.listen_host.help": "USB 调试配合 adb reverse 时用 127.0.0.1；手机直连时用 0.0.0.0 或可达的局域网 IP。",
+        "settings.gateway.port": "端口",
+        "settings.gateway.port.help": "固定端口可以保证一台机器只保留一个活动网关。如果端口已被别的实例占用，这个实例会保持被动状态。",
+        "settings.gateway.pairing_host": "配对二维码主机地址",
+        "settings.gateway.pairing_host.placeholder": "默认自动探测当前局域网地址",
+        "settings.gateway.pairing_host.help": "可选。覆盖二维码里编码的主机地址；留空时自动探测。",
+        "settings.gateway.status": "状态",
+        "settings.gateway.status.disabled": "已禁用",
+        "settings.gateway.status.pending": "正在应用设置...",
+        "settings.gateway.status.listening": "正在监听 %@:%d",
+        "settings.gateway.status.failed": "启动失败：%@",
+        "settings.gateway.apply": "应用网关设置",
+        "settings.gateway.show_qr": "显示配对二维码",
+        "settings.gateway.pending_changes": "还有未应用的网关变更。",
         "app.allow_execute": "允许 GhoDex 执行“%@”吗？",
         "app.undo_action": "撤销 %@",
         "app.redo_action": "重做 %@",
@@ -836,6 +1019,7 @@ enum AppLocalization {
         "Close All Windows?": "关闭所有窗口？",
         "Quit GhoDex?": "退出 GhoDex？",
         "All terminal sessions will be terminated.": "所有终端会话都将被终止。",
+        "All open tabs and terminal sessions will be closed.": "所有打开的标签页和终端会话都将被关闭。",
         "Close GhoDex": "关闭 GhoDex",
         "Failed to Set Default Terminal": "设置默认终端失败",
         "Warning: Potentially Unsafe Paste": "警告：可能存在风险的粘贴",
@@ -1179,8 +1363,8 @@ enum L10n {
     enum Settings {
         nonisolated static var title: String { AppLocalization.localizedString("settings.title") }
         nonisolated static var body: String { AppLocalization.localizedString("settings.body") }
-        nonisolated static var generalTabTitle: String { AppLocalization.localizedString("settings.tab.general") }
-        nonisolated static var browserTabTitle: String { AppLocalization.localizedString("settings.tab.browser") }
+        nonisolated static var generalTab: String { AppLocalization.localizedString("settings.general.tab") }
+        nonisolated static var gatewayTab: String { AppLocalization.localizedString("settings.gateway.tab") }
         nonisolated static var languageTitle: String { AppLocalization.localizedString("settings.language.title") }
         nonisolated static var languageDescription: String { AppLocalization.localizedString("settings.language.description") }
         nonisolated static var languageOptionSystem: String { AppLocalization.localizedString("settings.language.option.system") }
@@ -1211,6 +1395,25 @@ enum L10n {
         nonisolated static var browserPickerMessage: String { AppLocalization.localizedString("settings.browser.picker_message") }
         nonisolated static var browserInvalidRuntimePath: String { AppLocalization.localizedString("settings.browser.invalid_runtime_path") }
         nonisolated static var browserRuntimePickerMessage: String { AppLocalization.localizedString("settings.browser.runtime_picker_message") }
+        nonisolated static var gatewayTitle: String { AppLocalization.localizedString("settings.gateway.title") }
+        nonisolated static var gatewayDescription: String { AppLocalization.localizedString("settings.gateway.description") }
+        nonisolated static var gatewayEnabled: String { AppLocalization.localizedString("settings.gateway.enabled") }
+        nonisolated static var gatewayShowQrOnLaunch: String { AppLocalization.localizedString("settings.gateway.show_qr_on_launch") }
+        nonisolated static var gatewayListenHost: String { AppLocalization.localizedString("settings.gateway.listen_host") }
+        nonisolated static var gatewayListenHostHelp: String { AppLocalization.localizedString("settings.gateway.listen_host.help") }
+        nonisolated static var gatewayPort: String { AppLocalization.localizedString("settings.gateway.port") }
+        nonisolated static var gatewayPortHelp: String { AppLocalization.localizedString("settings.gateway.port.help") }
+        nonisolated static var gatewayPairingHost: String { AppLocalization.localizedString("settings.gateway.pairing_host") }
+        nonisolated static var gatewayPairingHostPlaceholder: String { AppLocalization.localizedString("settings.gateway.pairing_host.placeholder") }
+        nonisolated static var gatewayPairingHostHelp: String { AppLocalization.localizedString("settings.gateway.pairing_host.help") }
+        nonisolated static var gatewayStatus: String { AppLocalization.localizedString("settings.gateway.status") }
+        nonisolated static var gatewayStatusDisabled: String { AppLocalization.localizedString("settings.gateway.status.disabled") }
+        nonisolated static var gatewayStatusPending: String { AppLocalization.localizedString("settings.gateway.status.pending") }
+        nonisolated static func gatewayStatusListening(_ host: String, _ port: Int) -> String { AppLocalization.localizedString("settings.gateway.status.listening", host, port) }
+        nonisolated static func gatewayStatusFailed(_ error: String) -> String { AppLocalization.localizedString("settings.gateway.status.failed", error) }
+        nonisolated static var gatewayApply: String { AppLocalization.localizedString("settings.gateway.apply") }
+        nonisolated static var gatewayShowQr: String { AppLocalization.localizedString("settings.gateway.show_qr") }
+        nonisolated static var gatewayPendingChanges: String { AppLocalization.localizedString("settings.gateway.pending_changes") }
     }
 
     enum App {
@@ -1226,6 +1429,7 @@ enum L10n {
         nonisolated static var quitGhostty: String { AppLocalization.localizedText("Quit GhoDex?") }
         nonisolated static var closeAllWindows: String { AppLocalization.localizedText("Close All Windows") }
         nonisolated static var allSessionsTerminated: String { AppLocalization.localizedText("All terminal sessions will be terminated.") }
+        nonisolated static var allTabsAndSessionsClosed: String { AppLocalization.localizedText("All open tabs and terminal sessions will be closed.") }
         nonisolated static var leaveBlankRestoreDefault: String { AppLocalization.localizedText("Leave blank to restore the default.") }
         nonisolated static var cannotCreateNewTab: String { AppLocalization.localizedText("Cannot Create New Tab") }
         nonisolated static var closeTerminal: String { AppLocalization.localizedText("Close Terminal?") }
@@ -1295,9 +1499,86 @@ enum L10n {
         nonisolated static var newTabPickerSearch: String { AppLocalization.localizedString("ssh.connections.new_tab_picker.search") }
         nonisolated static var newTabPickerQuickConnect: String { AppLocalization.localizedString("ssh.connections.new_tab_picker.quick_connect") }
         nonisolated static var tabConnections: String { AppLocalization.localizedString("ssh.connections.tab.connections") }
+        nonisolated static var tabTodo: String { AppLocalization.localizedString("ssh.connections.tab.todo") }
         nonisolated static var tabLearning: String { AppLocalization.localizedString("ssh.connections.tab.learning") }
         nonisolated static var connectionsPageTitle: String { AppLocalization.localizedString("ssh.connections.page.connections.title") }
         nonisolated static var connectionsPageSubtitle: String { AppLocalization.localizedString("ssh.connections.page.connections.subtitle") }
+        nonisolated static var todoTitle: String { AppLocalization.localizedString("ssh.connections.todo.title") }
+        nonisolated static var todoSubtitle: String { AppLocalization.localizedString("ssh.connections.todo.subtitle") }
+        nonisolated static var todoEnable: String { AppLocalization.localizedString("ssh.connections.todo.enable") }
+        nonisolated static var todoWorkspaceRootPath: String { AppLocalization.localizedString("ssh.connections.todo.workspace_root_path") }
+        nonisolated static var todoWorkspaceRequired: String { AppLocalization.localizedString("ssh.connections.todo.workspace_required") }
+        nonisolated static var todoDayFilePath: String { AppLocalization.localizedString("ssh.connections.todo.day_file_path") }
+        nonisolated static var todoShowCompletedItems: String { AppLocalization.localizedString("ssh.connections.todo.show_completed_items") }
+        nonisolated static var todoHideCompletedItems: String { AppLocalization.localizedString("ssh.connections.todo.hide_completed_items") }
+        nonisolated static var todoPresentationTitle: String { AppLocalization.localizedString("ssh.connections.todo.presentation_title") }
+        nonisolated static var todoSidebarPlacement: String { AppLocalization.localizedString("ssh.connections.todo.sidebar_placement") }
+        nonisolated static var todoSidebarPlacementLeft: String { AppLocalization.localizedString("ssh.connections.todo.sidebar_placement_left") }
+        nonisolated static var todoSidebarPlacementRight: String { AppLocalization.localizedString("ssh.connections.todo.sidebar_placement_right") }
+        nonisolated static var todoWorkspaceOverlayVisible: String { AppLocalization.localizedString("ssh.connections.todo.workspace_overlay_visible") }
+        nonisolated static var todoWorkspaceOverlayPlacement: String { AppLocalization.localizedString("ssh.connections.todo.workspace_overlay_placement") }
+        nonisolated static var todoOverlayTopLeft: String { AppLocalization.localizedString("ssh.connections.todo.overlay_top_left") }
+        nonisolated static var todoOverlayTopRight: String { AppLocalization.localizedString("ssh.connections.todo.overlay_top_right") }
+        nonisolated static var todoOverlayBottomLeft: String { AppLocalization.localizedString("ssh.connections.todo.overlay_bottom_left") }
+        nonisolated static var todoOverlayBottomRight: String { AppLocalization.localizedString("ssh.connections.todo.overlay_bottom_right") }
+        nonisolated static var todoInitializeWorkspace: String { AppLocalization.localizedString("ssh.connections.todo.initialize_workspace") }
+        nonisolated static var todoInitializeWorkspaceHint: String { AppLocalization.localizedString("ssh.connections.todo.initialize_workspace_hint") }
+        nonisolated static var todoSaved: String { AppLocalization.localizedString("ssh.connections.todo.saved") }
+        nonisolated static func todoInitializedMessage(_ createdCount: Int, _ reusedCount: Int) -> String {
+            AppLocalization.localizedString("ssh.connections.todo.initialized_message", createdCount, reusedCount)
+        }
+        nonisolated static func todoInitializeFailedMessage(_ detail: String) -> String {
+            AppLocalization.localizedString("ssh.connections.todo.initialize_failed_message", detail)
+        }
+        nonisolated static var todoAddTitle: String { AppLocalization.localizedString("ssh.connections.todo.add_title") }
+        nonisolated static var todoAddNotes: String { AppLocalization.localizedString("ssh.connections.todo.add_notes") }
+        nonisolated static var todoAddAction: String { AppLocalization.localizedString("ssh.connections.todo.add_action") }
+        nonisolated static var todoEmpty: String { AppLocalization.localizedString("ssh.connections.todo.empty") }
+        nonisolated static var todoDateYesterday: String { AppLocalization.localizedString("ssh.connections.todo.date_yesterday") }
+        nonisolated static var todoDateToday: String { AppLocalization.localizedString("ssh.connections.todo.date_today") }
+        nonisolated static var todoDateTomorrow: String { AppLocalization.localizedString("ssh.connections.todo.date_tomorrow") }
+        nonisolated static var todoSummaryTitle: String { AppLocalization.localizedString("ssh.connections.todo.summary_title") }
+        nonisolated static func todoSelectedDay(_ value: String) -> String { AppLocalization.localizedString("ssh.connections.todo.selected_day", value) }
+        nonisolated static var todoFocusedWorkspaceTitle: String { AppLocalization.localizedString("ssh.connections.todo.focused_workspace_title") }
+        nonisolated static var todoFocusedWorkspaceHint: String { AppLocalization.localizedString("ssh.connections.todo.focused_workspace_hint") }
+        nonisolated static var todoQuickLookTitle: String { AppLocalization.localizedString("ssh.connections.todo.quick_look_title") }
+        nonisolated static var todoQuickLookEmpty: String { AppLocalization.localizedString("ssh.connections.todo.quick_look_empty") }
+        nonisolated static var todoQuickLookManage: String { AppLocalization.localizedString("ssh.connections.todo.quick_look_manage") }
+        nonisolated static func todoQuickLookSummary(_ completedCount: Int, _ totalCount: Int, _ remainingCount: Int) -> String {
+            AppLocalization.localizedString("ssh.connections.todo.quick_look_summary", completedCount, totalCount, remainingCount)
+        }
+        nonisolated static func todoQuickLookMore(_ count: Int) -> String {
+            AppLocalization.localizedString("ssh.connections.todo.quick_look_more", count)
+        }
+        nonisolated static var todoTimelineTitle: String { AppLocalization.localizedString("ssh.connections.todo.timeline_title") }
+        nonisolated static func todoTimelineCreated(_ created: String) -> String {
+            AppLocalization.localizedString("ssh.connections.todo.timeline_created", created)
+        }
+        nonisolated static func todoTimelineCreatedCompleted(_ created: String, _ completed: String) -> String {
+            AppLocalization.localizedString("ssh.connections.todo.timeline_created_completed", created, completed)
+        }
+        nonisolated static var todoSaveSettings: String { AppLocalization.localizedString("ssh.connections.todo.save_settings") }
+        nonisolated static var todoPanelTitle: String { AppLocalization.localizedString("ssh.connections.todo.panel_title") }
+        nonisolated static var todoPanelSubtitle: String { AppLocalization.localizedString("ssh.connections.todo.panel_subtitle") }
+        nonisolated static var todoPanelOpenSettings: String { AppLocalization.localizedString("ssh.connections.todo.panel_open_settings") }
+        nonisolated static var todoPanelClose: String { AppLocalization.localizedString("ssh.connections.todo.panel_close") }
+        nonisolated static var todoActionSave: String { AppLocalization.localizedString("ssh.connections.todo.action_save") }
+        nonisolated static var todoActionComplete: String { AppLocalization.localizedString("ssh.connections.todo.action_complete") }
+        nonisolated static var todoActionEdit: String { AppLocalization.localizedString("ssh.connections.todo.action_edit") }
+        nonisolated static var todoActionReset: String { AppLocalization.localizedString("ssh.connections.todo.action_reset") }
+        nonisolated static var todoAssignmentClear: String { AppLocalization.localizedString("ssh.connections.todo.assignment_clear") }
+        nonisolated static var todoAssignmentNoTabs: String { AppLocalization.localizedString("ssh.connections.todo.assignment_no_tabs") }
+        nonisolated static var todoAssignmentUnassigned: String { AppLocalization.localizedString("ssh.connections.todo.assignment_unassigned") }
+        nonisolated static var todoAssignmentUnavailable: String { AppLocalization.localizedString("ssh.connections.todo.assignment_unavailable") }
+        nonisolated static var todoTitleRequired: String { AppLocalization.localizedString("ssh.connections.todo.title_required") }
+        nonisolated static var todoSyncStaleAction: String { AppLocalization.localizedString("ssh.connections.todo.sync_stale_action") }
+        nonisolated static var todoSyncStaleEmpty: String { AppLocalization.localizedString("ssh.connections.todo.sync_stale_empty") }
+        nonisolated static func todoSyncStaleSuccess(_ count: Int) -> String {
+            AppLocalization.localizedString("ssh.connections.todo.sync_stale_success", count)
+        }
+        nonisolated static func todoStalePointer(_ day: String) -> String {
+            AppLocalization.localizedString("ssh.connections.todo.stale_pointer", day)
+        }
         nonisolated static var learningTitle: String { AppLocalization.localizedString("ssh.connections.learning.title") }
         nonisolated static var learningSubtitle: String { AppLocalization.localizedString("ssh.connections.learning.subtitle") }
         nonisolated static var learningEnable: String { AppLocalization.localizedString("ssh.connections.learning.enable") }
@@ -1466,6 +1747,13 @@ enum L10n {
         nonisolated static var host: String { AppLocalization.localizedString("ai.manager.workspaces.host") }
         nonisolated static var directory: String { AppLocalization.localizedString("ai.manager.workspaces.directory") }
         nonisolated static var saveWorkspace: String { AppLocalization.localizedString("ai.manager.workspaces.save") }
+        nonisolated static var saveWorkspaceAction: String { AppLocalization.localizedString("ai.manager.workspaces.save_action") }
+        nonisolated static var saveWorkspacePrompt: String { AppLocalization.localizedString("ai.manager.workspaces.save_prompt") }
+        nonisolated static var savedWorkspacesSection: String { AppLocalization.localizedString("ai.manager.workspaces.saved_section") }
+        nonisolated static var savedWorkspaceItem: String { AppLocalization.localizedString("ai.manager.workspaces.saved_item") }
+        nonisolated static var replaceWorkspaceTitle: String { AppLocalization.localizedString("ai.manager.workspaces.replace_title") }
+        nonisolated static func replaceWorkspaceMessage(_ name: String) -> String { AppLocalization.localizedString("ai.manager.workspaces.replace_message", name) }
+        nonisolated static var replaceWorkspace: String { AppLocalization.localizedString("ai.manager.workspaces.replace") }
         nonisolated static var workspacesEmpty: String { AppLocalization.localizedString("ai.manager.workspaces.empty") }
         nonisolated static var open: String { AppLocalization.localizedString("ai.manager.open") }
         nonisolated static var sessions: String { AppLocalization.localizedString("ai.manager.sessions") }
@@ -1509,6 +1797,11 @@ enum L10n {
         nonisolated static var localMCDCommandsEmpty: String { AppLocalization.localizedString("ai.manager.error.local_mcd_commands_empty") }
         nonisolated static var workspaceNameEmpty: String { AppLocalization.localizedString("ai.manager.error.workspace_name_empty") }
         nonisolated static var workspaceDirectoryEmpty: String { AppLocalization.localizedString("ai.manager.error.workspace_directory_empty") }
+        nonisolated static var workspaceEmpty: String { AppLocalization.localizedString("ai.manager.error.workspace_empty") }
+        nonisolated static var workspaceDuplicateName: String { AppLocalization.localizedString("ai.manager.error.workspace_duplicate_name") }
+        nonisolated static var savedWorkspaceEmptyPane: String { AppLocalization.localizedString("ai.manager.error.saved_workspace_empty_pane") }
+        nonisolated static var savedWorkspaceUnknownHost: String { AppLocalization.localizedString("ai.manager.error.saved_workspace_unknown_host") }
+        nonisolated static var couldNotSaveWorkspace: String { AppLocalization.localizedString("ai.manager.error.could_not_save_workspace") }
         nonisolated static var sessionUnavailable: String { AppLocalization.localizedString("ai.manager.error.session_unavailable") }
         nonisolated static var inputEmpty: String { AppLocalization.localizedString("ai.manager.error.input_empty") }
         nonisolated static var commandEmpty: String { AppLocalization.localizedString("ai.manager.error.command_empty") }

@@ -1,0 +1,19 @@
+diff --git a/node_modules/@react-native-picker/picker/android/build.gradle b/node_modules/@react-native-picker/picker/android/build.gradle
+index 155b3a8..2789709 100644
+--- a/node_modules/@react-native-picker/picker/android/build.gradle
++++ b/node_modules/@react-native-picker/picker/android/build.gradle
+@@ -4,12 +4,13 @@ buildscript {
+         rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
+     }
+     repositories {
++        mavenLocal()
+         google()
+         mavenCentral()
+     }
+ 
+     dependencies {
+-        classpath("com.android.tools.build:gradle:7.2.0")
++        classpath("com.android.tools.build:gradle:8.5.2")
+     }
+ }
+ 

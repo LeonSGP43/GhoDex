@@ -1,0 +1,27 @@
+diff --git a/node_modules/react-native-quick-base64/android/build.gradle b/node_modules/react-native-quick-base64/android/build.gradle
+index 6a104e7..87bd6b3 100644
+--- a/node_modules/react-native-quick-base64/android/build.gradle
++++ b/node_modules/react-native-quick-base64/android/build.gradle
+@@ -4,12 +4,13 @@ buildscript {
+   }
+ 
+   repositories {
++    mavenLocal()
+     google()
+     mavenCentral()
+   }
+ 
+   dependencies {
+-    classpath "com.android.tools.build:gradle:8.7.2"
++    classpath "com.android.tools.build:gradle:8.5.2"
+     // noinspection DifferentKotlinGradleVersion
+     classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:${getExtOrDefault('kotlinVersion')}"
+   }
+@@ -34,6 +35,7 @@ def resolveBuildType() {
+ 
+ android {
+   namespace 'com.reactnativequickbase64'
++  ndkVersion getExtOrDefault("ndkVersion")
+ 
+   compileSdkVersion getExtOrIntegerDefault("compileSdkVersion")
+ 

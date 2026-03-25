@@ -7,6 +7,10 @@ protocol GhosttyAppDelegate: AnyObject {
     /// Called when a callback needs access to a specific surface. This should return nil
     /// when the surface is no longer valid.
     func findSurface(forUUID uuid: UUID) -> Ghostty.SurfaceView?
+
+    /// Open a markdown document inside the app, tabbed into the given parent window when possible.
+    @MainActor
+    func openMarkdownDocument(at fileURL: URL, tabbedInto parentWindow: NSWindow?)
     #endif
 }
 
@@ -460,6 +464,12 @@ extension Ghostty {
         }
 
         /// Returns the GhosttyState from the given userdata value.
+        static private func appState(from app: ghostty_app_t) -> App? {
+            guard let app_ud = ghostty_app_userdata(app) else { return nil }
+            return Unmanaged<App>.fromOpaque(app_ud).takeUnretainedValue()
+        }
+
+        /// Returns the GhosttyState from the given userdata value.
         static private func appState(fromView view: SurfaceView) -> App? {
             guard let surface = view.surface else { return nil }
             guard let app = ghostty_surface_app(surface) else { return nil }
@@ -628,7 +638,7 @@ extension Ghostty {
                 checkForUpdates(app)
 
             case GHOSTTY_ACTION_OPEN_URL:
-                return openURL(action.action.open_url)
+                return openURL(app, target: target, action.action.open_url)
 
             case GHOSTTY_ACTION_UNDO:
                 return undo(app, target: target)
@@ -707,23 +717,53 @@ extension Ghostty {
         }
 
         private static func openURL(
+            _ app: ghostty_app_t,
+            target: ghostty_target_s,
             _ v: ghostty_action_open_url_s
         ) -> Bool {
             let action = Ghostty.Action.OpenURL(c: v)
 
-            // If the URL doesn't have a valid scheme we assume its a file path. The URL
-            // initializer will gladly take invalid URLs (e.g. plain file paths) and turn
-            // them into schema-less URLs, but these won't open properly in text editors.
-            // See: https://github.com/ghostty-org/ghostty/issues/8763
-            let url: URL
-            if let candidate = URL(string: action.url), candidate.scheme != nil {
-                url = candidate
-            } else {
-                // Expand ~ to the user's home directory so that file paths
-                // like ~/Documents/file.txt resolve correctly.
-                let expandedPath = NSString(string: action.url).standardizingPath
-                url = URL(filePath: expandedPath)
+            let sourceSurface: SurfaceView? = {
+                guard target.tag == GHOSTTY_TARGET_SURFACE,
+                      let surface = target.target.surface else { return nil }
+                return surfaceView(from: surface)
+            }()
+
+            let workingDirectory = sourceSurface?.pwd
+            let url = MarkdownDocumentTarget.resolveURL(
+                rawValue: action.url,
+                workingDirectory: workingDirectory
+            )
+
+            if let markdownTarget = MarkdownDocumentTarget.resolve(
+                rawValue: action.url,
+                kind: action.kind,
+                workingDirectory: workingDirectory
+            ),
+               let appState = appState(from: app),
+               let delegate = appState.delegate {
+                let parentWindow = sourceSurface?.window ?? TerminalController.preferredParent?.window ?? NSApp.keyWindow
+                Task { @MainActor in
+                    delegate.openMarkdownDocument(
+                        at: markdownTarget.fileURL,
+                        tabbedInto: parentWindow
+                    )
+                }
+                return true
             }
+
+            return openURL(v, workingDirectory: workingDirectory)
+        }
+
+        private static func openURL(
+            _ v: ghostty_action_open_url_s,
+            workingDirectory: String? = nil
+        ) -> Bool {
+            let action = Ghostty.Action.OpenURL(c: v)
+            let url = MarkdownDocumentTarget.resolveURL(
+                rawValue: action.url,
+                workingDirectory: workingDirectory
+            )
 
             switch action.kind {
             case .text:
@@ -1671,16 +1711,14 @@ extension Ghostty {
                     guard let surfaceView = self.surfaceView(from: surface) else { return false }
                     if let controller = selectedBaseTerminalController(for: surfaceView.window) {
                         if let terminalController = controller as? TerminalController {
-                            terminalController.changeTitleContext(nil)
-                            return true
+                            return terminalController.promptSurfaceTitle()
                         }
                         controller.promptTabTitle()
                         return true
                     }
                     if let window = surfaceView.window,
                        let controller = window.windowController as? TerminalController {
-                        controller.changeTitleContext(nil)
-                        return true
+                        return controller.promptSurfaceTitle()
                     }
                     surfaceView.promptTitle()
                     return true
@@ -1697,7 +1735,7 @@ extension Ghostty {
                         ?? selectedBaseTerminalController(for: NSApp.mainWindow)
                     else { return false }
                     if let terminalController = controller as? TerminalController {
-                        terminalController.changeTitleContext(nil)
+                        terminalController.promptTabTitle()
                         return true
                     }
                     controller.promptTabTitle()
@@ -1710,7 +1748,7 @@ extension Ghostty {
                         ?? (surfaceView.window?.windowController as? BaseTerminalController)
                     else { return false }
                     if let terminalController = controller as? TerminalController {
-                        terminalController.changeTitleContext(nil)
+                        terminalController.promptTabTitle()
                         return true
                     }
                     controller.promptTabTitle()

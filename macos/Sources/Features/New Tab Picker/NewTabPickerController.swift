@@ -15,7 +15,7 @@ final class NewTabPickerController: NSWindowController {
         self.hostingView = NSHostingView(rootView: AnyView(EmptyView()))
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 520),
+            contentRect: NSRect(x: 0, y: 0, width: 860, height: 640),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -26,7 +26,7 @@ final class NewTabPickerController: NSWindowController {
         window.isMovableByWindowBackground = true
         window.standardWindowButton(.zoomButton)?.isHidden = true
         window.standardWindowButton(.miniaturizeButton)?.isHidden = true
-        window.minSize = NSSize(width: 560, height: 460)
+        window.minSize = NSSize(width: 760, height: 560)
         window.contentView = hostingView
 
         super.init(window: window)
@@ -56,21 +56,26 @@ final class NewTabPickerController: NSWindowController {
 
     func show(
         relativeTo parentWindow: NSWindow?,
+        mode: NewTabPickerMode = .topLevel,
         title: String = L10n.AITerminalManager.newTab,
         subtitle: String = L10n.SSHConnections.newTabPickerSubtitle,
         includeBrowserEntry: Bool = true,
         onOpenHost: ((AITerminalHost) -> Void)? = nil,
-        onOpenBrowser: (() -> Void)? = nil
+        onOpenBrowser: (() -> Void)? = nil,
+        onOpenWorkspace: ((AITerminalSavedWorkspaceTemplate) -> Void)? = nil
     ) {
         store.refresh()
         referenceWindow = parentWindow
         presentationID = UUID()
         hostingView.rootView = makeRootView(
+            mode: mode,
             title: title,
             subtitle: subtitle,
             includeBrowserEntry: includeBrowserEntry,
             onOpenHost: onOpenHost,
-            onOpenBrowser: onOpenBrowser)
+            onOpenBrowser: onOpenBrowser,
+            onOpenWorkspace: onOpenWorkspace
+        )
         syncChrome()
 
         guard let window else { return }
@@ -93,14 +98,17 @@ final class NewTabPickerController: NSWindowController {
     }
 
     private func makeRootView(
+        mode: NewTabPickerMode = .topLevel,
         title: String = L10n.AITerminalManager.newTab,
         subtitle: String = L10n.SSHConnections.newTabPickerSubtitle,
         includeBrowserEntry: Bool = true,
         onOpenHost: ((AITerminalHost) -> Void)? = nil,
-        onOpenBrowser: (() -> Void)? = nil
+        onOpenBrowser: (() -> Void)? = nil,
+        onOpenWorkspace: ((AITerminalSavedWorkspaceTemplate) -> Void)? = nil
     ) -> AnyView {
         AnyView(
             NewTabPickerView(
+                mode: mode,
                 title: title,
                 subtitle: subtitle,
                 onClose: { [weak self] in
@@ -113,7 +121,8 @@ final class NewTabPickerController: NSWindowController {
                 },
                 includeBrowserEntry: includeBrowserEntry,
                 onOpenHost: onOpenHost,
-                onOpenBrowser: onOpenBrowser
+                onOpenBrowser: onOpenBrowser,
+                onOpenWorkspace: onOpenWorkspace
             )
             .id(presentationID)
             .environmentObject(store)

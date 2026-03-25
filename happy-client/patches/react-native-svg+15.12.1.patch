@@ -1,0 +1,19 @@
+diff --git a/node_modules/react-native-svg/android/build.gradle b/node_modules/react-native-svg/android/build.gradle
+index 6496bae..32ffccf 100644
+--- a/node_modules/react-native-svg/android/build.gradle
++++ b/node_modules/react-native-svg/android/build.gradle
+@@ -4,12 +4,13 @@ buildscript {
+     // module dependency in an application project.
+     if (project == rootProject) {
+         repositories {
++            mavenLocal()
+             mavenCentral()
+             google()
+         }
+ 
+         dependencies {
+-            classpath("com.android.tools.build:gradle:7.4.2")
++            classpath("com.android.tools.build:gradle:8.5.2")
+             classpath "com.diffplug.spotless:spotless-plugin-gradle:6.17.0"
+         }
+     }

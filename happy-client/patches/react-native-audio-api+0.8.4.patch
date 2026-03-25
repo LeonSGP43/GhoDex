@@ -1,0 +1,19 @@
+diff --git a/node_modules/react-native-audio-api/android/build.gradle b/node_modules/react-native-audio-api/android/build.gradle
+index e3068c7..ec0c87e 100644
+--- a/node_modules/react-native-audio-api/android/build.gradle
++++ b/node_modules/react-native-audio-api/android/build.gradle
+@@ -3,12 +3,13 @@ import org.apache.tools.ant.taskdefs.condition.Os
+ 
+ buildscript {
+   repositories {
++    mavenLocal()
+     google()
+     mavenCentral()
+   }
+ 
+   dependencies {
+-    classpath "com.android.tools.build:gradle:7.2.2"
++    classpath "com.android.tools.build:gradle:8.5.2"
+   }
+ }
+ 

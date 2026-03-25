@@ -336,6 +336,9 @@ extension Notification.Name {
     static let ghosttyColorDidChange = Notification.Name("com.leongong.ghodex.ghosttyColorDidChange")
     static let GhosttyColorChangeKey = ghosttyColorDidChange.rawValue
 
+    /// Todo state change for global quick-view and per-tab progress surfaces.
+    static let ghodexTodoStateDidChange = Notification.Name("com.leongong.ghodex.todoStateDidChange")
+
     /// Goto tab. Has tab index in the userinfo.
     static let ghosttyMoveTab = Notification.Name("com.leongong.ghodex.moveTab")
     static let GhosttyMoveTabKey = ghosttyMoveTab.rawValue
@@ -436,6 +439,9 @@ extension Ghostty.Notification {
 
     /// Notification sent to the split root to equalize split sizes
     static let didEqualizeSplits = Notification.Name("com.leongong.ghodex.didEqualizeSplits")
+
+    /// Notification sent after AppKit creates a new split surface from an existing one.
+    static let didCreateSplitSurface = Notification.Name("com.leongong.ghodex.didCreateSplitSurface")
 
     /// Notification that renderer health changed
     static let didUpdateRendererHealth = Notification.Name("com.leongong.ghodex.didUpdateRendererHealth")

@@ -13,6 +13,15 @@ zig-out/
 /build.zig.zon.bak
 /result*
 /.nixos-test-history
+/android/.gradle/
+/android/local.properties
+/android/app/build/
+/happy-client/node_modules/
+/happy-client/.expo/
+/happy-client/.expo-shared/
+/happy-client/android/
+/happy-client/dist/
+/happy-client/ios/
 example/*.wasm
 test/ghostty
 test/cases/**/*.actual.png
@@ -25,4 +34,4 @@ glad.zip
 /ghostty.qcow2
 
 vgcore.*
-
+default.profraw

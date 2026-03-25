@@ -495,11 +495,25 @@ private final class PaneNativeTabStripHostView: NSView {
     }
 }
 
+private final class PaneNativeTabHitButton: NSButton {
+    var onMiddleClick: (() -> Void)?
+
+    override func otherMouseUp(with event: NSEvent) {
+        guard event.buttonNumber == 2 else {
+            super.otherMouseUp(with: event)
+            return
+        }
+
+        onMiddleClick?()
+    }
+}
+
 private final class PaneNativeTabButtonView: NSView {
     private let tabID: UUID
     private let onFocus: () -> Void
     private let onSelect: (UUID) -> Void
     private let onClose: (UUID) -> Void
+    private let allowsMiddleClickClose: Bool
 
     init(
         tabID: UUID,
@@ -514,6 +528,7 @@ private final class PaneNativeTabButtonView: NSView {
         self.onFocus = onFocus
         self.onSelect = onSelect
         self.onClose = onClose
+        self.allowsMiddleClickClose = showsCloseButton
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
@@ -525,7 +540,7 @@ private final class PaneNativeTabButtonView: NSView {
             : NSColor.clear
         ).cgColor
 
-        let selectButton = NSButton(title: title, target: self, action: #selector(handleSelect(_:)))
+        let selectButton = PaneNativeTabHitButton(title: title, target: self, action: #selector(handleSelect(_:)))
         selectButton.translatesAutoresizingMaskIntoConstraints = false
         selectButton.isBordered = false
         selectButton.setButtonType(.momentaryChange)
@@ -534,13 +549,15 @@ private final class PaneNativeTabButtonView: NSView {
         selectButton.contentTintColor = isActive ? .labelColor : .secondaryLabelColor
         selectButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         selectButton.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        selectButton.onMiddleClick = { [weak self] in self?.handleMiddleClick() }
 
-        let closeButton = NSButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: AppLocalization.localizedText("Close Pane Tab")) ?? NSImage(), target: self, action: #selector(handleClose(_:)))
+        let closeButton = PaneNativeTabHitButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: AppLocalization.localizedText("Close Pane Tab")) ?? NSImage(), target: self, action: #selector(handleClose(_:)))
         closeButton.translatesAutoresizingMaskIntoConstraints = false
         closeButton.isBordered = false
         closeButton.setButtonType(.momentaryChange)
         closeButton.contentTintColor = .secondaryLabelColor
         closeButton.isHidden = !showsCloseButton
+        closeButton.onMiddleClick = { [weak self] in self?.handleMiddleClick() }
 
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -578,6 +595,21 @@ private final class PaneNativeTabButtonView: NSView {
     @objc private func handleClose(_ sender: Any?) {
         onFocus()
         onClose(tabID)
+    }
+
+    private func handleMiddleClick() {
+        guard allowsMiddleClickClose else { return }
+        onFocus()
+        onClose(tabID)
+    }
+
+    override func otherMouseUp(with event: NSEvent) {
+        guard event.buttonNumber == 2 else {
+            super.otherMouseUp(with: event)
+            return
+        }
+
+        handleMiddleClick()
     }
 
     func updateMaximumWidth(_ width: CGFloat) {

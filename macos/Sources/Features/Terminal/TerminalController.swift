@@ -520,6 +520,96 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     static func newTab(
         _ ghostty: Ghostty.App,
         from parent: NSWindow? = nil,
+        tree: SplitTree<TerminalPane>
+    ) -> TerminalController? {
+        guard let parent,
+              let parentController = parent.windowController as? TerminalController else {
+            return newWindow(ghostty, tree: tree)
+        }
+
+        if let fullscreenStyle = parentController.fullscreenStyle,
+           fullscreenStyle.isFullscreen && !fullscreenStyle.supportsTabs {
+            let alert = NSAlert()
+            alert.messageText = L10n.App.cannotCreateNewTab
+            alert.informativeText = L10n.App.newTabsUnsupportedFullscreen
+            alert.addButton(withTitle: L10n.App.ok)
+            alert.alertStyle = .warning
+            alert.beginSheetModal(for: parent)
+            return nil
+        }
+
+        let controller = TerminalController.init(ghostty, withSurfaceTree: tree)
+        guard let window = controller.window else { return controller }
+
+        if parent.isMiniaturized { parent.deminiaturize(self) }
+
+        if let tg = parent.tabGroup,
+           tg.windows.firstIndex(of: window) != nil {
+            tg.removeWindow(window)
+        }
+
+        if window.tabbingMode != .disallowed {
+            switch ghostty.config.windowNewTabPosition {
+            case "end":
+                if let last = parent.tabGroup?.windows.last {
+                    last.addTabbedWindowSafely(window, ordered: .above)
+                } else {
+                    fallthrough
+                }
+
+            case "current": fallthrough
+            default:
+                parent.addTabbedWindowSafely(window, ordered: .above)
+            }
+        }
+
+        DispatchQueue.main.async {
+            if !window.styleMask.contains(.fullScreen) &&
+                window.tabGroup?.windows.count ?? 1 == 1 {
+                let hasFixedPos = controller.derivedConfig.windowPositionX != nil && controller.derivedConfig.windowPositionY != nil
+                Self.applyCascade(to: window, hasFixedPos: hasFixedPos)
+            }
+
+            controller.showWindow(self)
+            window.makeKeyAndOrderFront(self)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            controller.relabelTabs()
+        }
+
+        if let undoManager = parentController.undoManager {
+            undoManager.setActionName("New Tab")
+            undoManager.registerUndo(
+                withTarget: controller,
+                expiresAfter: controller.undoExpiration
+            ) { target in
+                DispatchQueue.main.async {
+                    undoManager.disableUndoRegistration {
+                        target.closeTab(nil)
+                    }
+                }
+
+                undoManager.registerUndo(
+                    withTarget: ghostty,
+                    expiresAfter: target.undoExpiration
+                ) { ghostty in
+                    _ = TerminalController.newTab(
+                        ghostty,
+                        from: parent,
+                        tree: tree
+                    )
+                }
+            }
+        }
+
+        return controller
+    }
+
+    static func newTab(
+        _ ghostty: Ghostty.App,
+        from parent: NSWindow? = nil,
         withBaseConfig baseConfig: Ghostty.SurfaceConfiguration? = nil
     ) -> TerminalController? {
         // Making sure that we're dealing with a TerminalController. If not,
@@ -1438,6 +1528,13 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         ghostty.newPaneTab(surface: surface)
     }
 
+    @discardableResult
+    func promptSurfaceTitle() -> Bool {
+        guard let surface = effectiveFocusedSurface() else { return false }
+        surface.promptTitle()
+        return true
+    }
+
     @IBAction func previousPaneTab(_ sender: Any?) {
         guard let focusedSurface = effectiveFocusedSurface() else { return }
         cyclePaneTab(from: focusedSurface, direction: .previous)
@@ -1486,6 +1583,10 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         } else {
             promptTabTitle()
         }
+    }
+
+    @IBAction func changeSurfaceTitle(_ sender: Any?) {
+        _ = promptSurfaceTitle()
     }
 
     @IBAction func closeTab(_ sender: Any?) {
@@ -1863,6 +1964,9 @@ extension TerminalController {
         case #selector(previousPaneTab(_:)),
             #selector(nextPaneTab(_:)):
             return hasMultiplePaneTabs(for: focusedSurface)
+
+        case #selector(changeSurfaceTitle(_:)):
+            return effectiveFocusedSurface() != nil
 
         case #selector(closeTabsOnTheRight):
             guard let window, let tabGroup = window.tabGroup else { return false }

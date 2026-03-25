@@ -37,7 +37,10 @@ class BaseTerminalController: NSWindowController,
 
     /// The currently focused surface.
     var focusedSurface: Ghostty.SurfaceView? {
-        didSet { syncFocusToSurfaceTree() }
+        didSet {
+            syncFocusToSurfaceTree()
+            NotificationCenter.default.post(name: .ghodexTerminalFontSizeDidChange, object: self)
+        }
     }
 
     /// The tree of splits within this terminal window.
@@ -50,6 +53,9 @@ class BaseTerminalController: NSWindowController,
 
     /// Set if the terminal view should show the update overlay.
     @Published var updateOverlayIsVisible: Bool = false
+
+    /// Whether the in-window Todo sidebar is presented for this workspace.
+    @Published var todoSidebarIsPresented: Bool = false
 
     /// True when any surface in this controller currently has an active bell.
     @Published private(set) var bell: Bool = false
@@ -294,6 +300,12 @@ class BaseTerminalController: NSWindowController,
             moveFocusTo: newView,
             moveFocusFrom: oldView,
             undoAction: "New Split")
+
+        NotificationCenter.default.post(
+            name: Ghostty.Notification.didCreateSplitSurface,
+            object: newView,
+            userInfo: ["sourceSurface": oldView]
+        )
 
         return newView
     }
@@ -1477,16 +1489,19 @@ class BaseTerminalController: NSWindowController,
     @IBAction func increaseFontSize(_ sender: Any) {
         guard let surface = focusedSurface?.surface else { return }
         ghostty.changeFontSize(surface: surface, .increase(1))
+        NotificationCenter.default.post(name: .ghodexTerminalFontSizeDidChange, object: self)
     }
 
     @IBAction func decreaseFontSize(_ sender: Any) {
         guard let surface = focusedSurface?.surface else { return }
         ghostty.changeFontSize(surface: surface, .decrease(1))
+        NotificationCenter.default.post(name: .ghodexTerminalFontSizeDidChange, object: self)
     }
 
     @IBAction func resetFontSize(_ sender: Any) {
         guard let surface = focusedSurface?.surface else { return }
         ghostty.changeFontSize(surface: surface, .reset)
+        NotificationCenter.default.post(name: .ghodexTerminalFontSizeDidChange, object: self)
     }
 
     @IBAction func toggleCommandPalette(_ sender: Any?) {
@@ -1542,6 +1557,10 @@ class BaseTerminalController: NSWindowController,
             self.splitPreserveZoom = config.splitPreserveZoom
         }
     }
+}
+
+extension Notification.Name {
+    static let ghodexTerminalFontSizeDidChange = Notification.Name("com.leongong.ghodex.terminal-font-size-did-change")
 }
 
 extension BaseTerminalController: NSMenuItemValidation {

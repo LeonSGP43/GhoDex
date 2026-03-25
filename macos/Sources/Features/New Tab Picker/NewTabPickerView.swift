@@ -4,12 +4,14 @@ struct NewTabPickerView: View {
     @EnvironmentObject private var store: AITerminalManagerStore
     @EnvironmentObject private var theme: GhosttyChromeTheme
 
+    let mode: NewTabPickerMode
     let title: String
     let subtitle: String
     let onClose: () -> Void
     let includeBrowserEntry: Bool
     let onOpenHost: ((AITerminalHost) -> Void)?
     let onOpenBrowser: (() -> Void)?
+    let onOpenWorkspace: ((AITerminalSavedWorkspaceTemplate) -> Void)?
 
     @State private var searchText = ""
     @State private var selectedID: String?
@@ -38,7 +40,7 @@ struct NewTabPickerView: View {
                 emptyState
             } else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 16) {
                         if !browserEntries.isEmpty {
                             section(title: nil, entries: browserEntries)
                         }
@@ -59,17 +61,21 @@ struct NewTabPickerView: View {
                             section(title: L10n.AITerminalManager.savedHosts, entries: savedEntries)
                         }
 
+                        if !savedWorkspaceEntries.isEmpty {
+                            section(title: L10n.AITerminalManager.savedWorkspacesSection, entries: savedWorkspaceEntries)
+                        }
+
                         if !importedEntries.isEmpty {
                             section(title: L10n.AITerminalManager.importedHosts, entries: importedEntries)
                         }
                     }
-                    .padding(20)
+                    .padding(16)
                 }
             }
 
             footer
         }
-        .frame(width: 620, height: 520)
+        .frame(width: 860, height: 640)
         .background(GhosttyTintedBackground().ignoresSafeArea())
         .environment(\.colorScheme, theme.colorScheme)
         .overlay(shortcutLayer)
@@ -96,15 +102,15 @@ struct NewTabPickerView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(.system(size: 22, weight: .semibold))
+                .font(.system(size: 21, weight: .semibold))
 
             Text(subtitle)
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 20)
-        .padding(.bottom, 16)
+        .padding(.horizontal, 16)
+        .padding(.top, 16)
+        .padding(.bottom, 12)
     }
 
     private var emptyState: some View {
@@ -127,7 +133,7 @@ struct NewTabPickerView: View {
         title: String?,
         entries: [NewTabPickerEntry]
     ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             if let title {
                 Text(title)
                     .font(.caption.weight(.semibold))
@@ -136,7 +142,7 @@ struct NewTabPickerView: View {
                     .tracking(0.6)
             }
 
-            VStack(spacing: 10) {
+            VStack(spacing: 8) {
                 ForEach(entries) { entry in
                     row(for: entry)
                 }
@@ -148,13 +154,13 @@ struct NewTabPickerView: View {
         Button {
             open(entry)
         } label: {
-            HStack(spacing: 14) {
+            HStack(spacing: 12) {
                 shortcutBadge(entry.shortcutIndex)
 
-                VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
-                        Text(entry.title)
-                            .font(.headline)
+                        Text(primaryTitle(for: entry))
+                            .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
 
@@ -172,7 +178,7 @@ struct NewTabPickerView: View {
                     }
 
                     Text(primarySubtitle(for: entry))
-                        .font(.callout)
+                        .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
@@ -183,11 +189,12 @@ struct NewTabPickerView: View {
                     .font(.body.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
             }
-            .padding(16)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(rowBackground(for: entry), in: RoundedRectangle(cornerRadius: 16))
+            .background(rowBackground(for: entry), in: RoundedRectangle(cornerRadius: 14))
             .overlay(
-                RoundedRectangle(cornerRadius: 16)
+                RoundedRectangle(cornerRadius: 14)
                     .stroke(rowBorder(for: entry), lineWidth: 1)
             )
         }
@@ -199,12 +206,12 @@ struct NewTabPickerView: View {
         let title = shortcutIndex.map(String.init) ?? "·"
 
         return Text(title)
-            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .font(.system(size: 12, weight: .semibold, design: .rounded))
             .foregroundStyle(.secondary)
-            .frame(width: 28, height: 28)
+            .frame(width: 24, height: 24)
             .background(
                 Color.white.opacity(theme.isLight ? 0.82 : 0.08),
-                in: RoundedRectangle(cornerRadius: 9)
+                in: RoundedRectangle(cornerRadius: 8)
             )
     }
 
@@ -221,8 +228,8 @@ struct NewTabPickerView: View {
             }
             .keyboardShortcut(.cancelAction)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
         .background(Color.white.opacity(theme.isLight ? 0.32 : 0.03))
     }
 
@@ -265,8 +272,8 @@ struct NewTabPickerView: View {
     }
 
     private var entries: [NewTabPickerEntry] {
-        let hostEntries = store.newTabPickerEntries()
-        let allEntries = NewTabPickerModel.withBrowserEntry(hostEntries, includeBrowserEntry: includeBrowserEntry)
+        let baseEntries = store.newTabPickerEntries(mode: mode)
+        let allEntries = NewTabPickerModel.withBrowserEntry(baseEntries, includeBrowserEntry: includeBrowserEntry)
         return NewTabPickerModel.filteredEntries(allEntries, query: searchText)
     }
 
@@ -290,6 +297,10 @@ struct NewTabPickerView: View {
         entries.filter { $0.section == .imported }
     }
 
+    private var savedWorkspaceEntries: [NewTabPickerEntry] {
+        entries.filter { $0.section == .savedWorkspaces }
+    }
+
     private func moveSelection(_ offset: Int) {
         guard !entries.isEmpty else { return }
 
@@ -304,22 +315,47 @@ struct NewTabPickerView: View {
     }
 
     private func open(_ entry: NewTabPickerEntry) {
-        switch entry.destination {
+        switch entry.kind {
         case .browser:
             onOpenBrowser?()
-
         case .host(let host):
             if let onOpenHost {
                 onOpenHost(host)
             } else {
                 store.openInNewTab(host: host)
             }
+        case .savedWorkspace(let workspace):
+            if let onOpenWorkspace {
+                onOpenWorkspace(workspace)
+            } else {
+                store.open(savedWorkspaceTemplate: workspace)
+            }
         }
         onClose()
     }
 
+    private func primaryTitle(for entry: NewTabPickerEntry) -> String {
+        switch entry.kind {
+        case .browser:
+            return AppLocalization.localizedText("Browser")
+        case .host(let host):
+            return host.name
+        case .savedWorkspace(let workspace):
+            return workspace.name
+        }
+    }
+
     private func primarySubtitle(for entry: NewTabPickerEntry) -> String {
-        entry.subtitle
+        switch entry.kind {
+        case .browser:
+            return AppLocalization.localizedText("Open a web page inside a GhoDex tab")
+        case .host(let host):
+            return host.connectionTarget ?? host.displaySubtitle
+        case .savedWorkspace(let workspace):
+            let paneLabel = workspace.paneCount == 1 ? "1 pane" : "\(workspace.paneCount) panes"
+            let tabLabel = workspace.tabCount == 1 ? "1 tab" : "\(workspace.tabCount) tabs"
+            return "\(paneLabel) · \(tabLabel)"
+        }
     }
 
     private func sourceLabel(for entry: NewTabPickerEntry) -> String? {
@@ -336,11 +372,25 @@ struct NewTabPickerView: View {
             return L10n.AITerminalManager.savedHostSource
         case .imported:
             return L10n.AITerminalManager.importedHostSource
+        case .savedWorkspaces:
+            return L10n.AITerminalManager.savedWorkspaceItem
         }
     }
 
     private func iconName(for entry: NewTabPickerEntry) -> String {
-        entry.iconName
+        switch entry.kind {
+        case .browser:
+            return "globe"
+        case .host(let host):
+            switch host.transport {
+            case .local, .localmcd:
+                return "laptopcomputer"
+            case .ssh:
+                return "arrow.up.right.square"
+            }
+        case .savedWorkspace:
+            return "square.grid.2x2"
+        }
     }
 
     private func rowBackground(for entry: NewTabPickerEntry) -> Color {

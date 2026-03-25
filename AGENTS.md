@@ -16,6 +16,17 @@ A file for [guiding coding agents](https://agents.md/).
 - **Formatting (Swift)**: `swiftlint lint --fix`
 - **Formatting (other)**: `prettier -w .`
 
+## Android Install Policy
+
+- For `happy-client` Android changes, the default delivery path is:
+  `build the APK` -> `install it to the connected phone with adb`.
+- Do not stop after compilation just to ask whether the package should be
+  installed.
+- After a successful Android build, proactively run the install step against
+  the currently connected device unless the user explicitly says not to.
+- If the device-side package installer shows a confirmation screen, continue
+  driving the install flow instead of handing the APK path back to the user.
+
 ## Directory Structure
 
 - Shared Zig core: `src/`
@@ -68,12 +79,27 @@ A file for [guiding coding agents](https://agents.md/).
 
 ## Worktree Development Policy
 
+- The current primary coordination worktree is
+  `/Users/leongong/Desktop/LeonProjects/GhoDex` on branch `main`. Treat this
+  directory as the main worktree unless the user explicitly redefines it.
 - Use a dedicated Git worktree for any non-trivial task that may overlap with
   other active work, agents, or terminals. Do not use branch switching and
   stash juggling as the default parallel-development workflow.
 - Treat the main worktree as the coordination and integration worktree. When
   worktree mode is active, use the main worktree to review, merge, and clean up
   worktrees. Do not spread one task across multiple worktrees.
+- The main worktree is for coordination, shared fixes, integration, release
+  preparation, and final verification. Do not use the main worktree as the
+  default place for long-running feature development or parallel experiments.
+- New features, risky experiments, and any non-trivial task that can overlap
+  with other work must start in a dedicated task worktree created from `main`.
+- Shared or foundational fixes that should benefit every active branch should
+  be implemented once in the main worktree as an atomic commit. Do not hand-edit
+  the same shared fix across multiple worktrees.
+- After a shared fix lands in `main`, each active task worktree must sync from
+  `main` with `merge`, `rebase`, or a targeted `cherry-pick` as appropriate for
+  that branch. The default expectation is to propagate shared fixes by syncing
+  branches, not by repeating edits.
 - Each newly created worktree must be registered in `treelog.md` using
   `name + purpose` in a short form. Keep the purpose concise and specific so
   later agents can identify ownership quickly.

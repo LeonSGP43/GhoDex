@@ -51,6 +51,7 @@
                 <outlet property="menuReadonly" destination="xpe-ia-Yjw" id="MMT-Sl-AfD"/>
                 <outlet property="menuRedo" destination="EX8-lB-4s7" id="wON-2J-yT1"/>
                 <outlet property="menuReloadConfig" destination="KKH-XX-5py" id="Wvp-7J-wqX"/>
+                <outlet property="menuSaveWorkspace" destination="T6a-Xn-7L2" id="0iQ-uz-qmT"/>
                 <outlet property="menuResetFontSize" destination="Jah-MY-aLX" id="ger-qM-wrm"/>
                 <outlet property="menuReturnToDefaultSize" destination="Gbx-Vi-OGC" id="po9-qC-Iz6"/>
                 <outlet property="menuSecureInput" destination="oC6-w4-qI7" id="PCc-pe-Mda"/>
@@ -94,11 +95,6 @@
                                 </connections>
                             </menuItem>
                             <menuItem isSeparatorItem="YES" id="VOq-y0-SEH"/>
-                            <menuItem title="Preferences…" id="BOF-NM-1cW">
-                                <connections>
-                                    <action selector="showSettings:" target="bbz-4X-AYv" id="X65-fg-iWU"/>
-                                </connections>
-                            </menuItem>
                             <menuItem title="Open Config" id="r1H-kf-o0x">
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>
@@ -188,6 +184,12 @@
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>
                                     <action selector="newPaneTab:" target="-1" id="KoW-K7-hw5"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="Save Workspace..." keyEquivalent="S" id="T6a-Xn-7L2">
+                                <modifierMask key="keyEquivalentModifierMask" shift="YES" command="YES"/>
+                                <connections>
+                                    <action selector="saveWorkspace:" target="-1" id="Y0K-i5-Y1n"/>
                                 </connections>
                             </menuItem>
                             <menuItem title="Previous Pane Tab" keyEquivalent="," id="Q0d-Jg-TLh">
@@ -378,13 +380,13 @@
                             <menuItem title="Change Tab Title..." id="iac-lh-Cl7">
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>
-                                    <action selector="changeTitleContext:" target="-1" id="Jhl-9P-bMj"/>
+                                    <action selector="changeTabTitle:" target="-1" id="Jhl-9P-bMj"/>
                                 </connections>
                             </menuItem>
                             <menuItem title="Change Terminal Title..." id="24I-xg-qIq">
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>
-                                    <action selector="changeTitleContext:" target="-1" id="XuL-QB-Q9l"/>
+                                    <action selector="changeSurfaceTitle:" target="-1" id="XuL-QB-Q9l"/>
                                 </connections>
                             </menuItem>
                             <menuItem title="Terminal Read-only" id="xpe-ia-Yjw">

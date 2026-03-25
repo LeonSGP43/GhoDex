@@ -6,8 +6,15 @@
   the underlying GhoDex library.
 - Use `macos/build.nu` to build the macOS app, do not use `zig build`
   (except to build the underlying library as mentioned above).
-  - Build: `macos/build.nu [--scheme Ghostty] [--configuration Debug] [--action build]`
-  - Output: `macos/build/<configuration>/Ghostty.app` (e.g. `macos/build/Debug/Ghostty.app`)
+  - Build: `macos/build.nu [--scheme GhoDex] [--configuration Debug] [--action build]`
+  - Output: `macos/build/<configuration>/GhoDex.app` (e.g. `macos/build/Debug/GhoDex.app`)
+  - The script bootstraps `macos/GhoDexKit.xcframework` automatically when the
+    Xcode-linked library is missing in a clean worktree.
+  - The script also pins `DerivedData` to `macos/build/DerivedData` so each
+    worktree gets an isolated debug/test build cache instead of reusing stale
+    global Xcode artifacts.
+  - Prefer `Debug` for local testing because it builds `GhoDex[DEBUG]` with the
+    debug bundle identifier instead of colliding with an installed release app.
 - Run unit tests directly with `macos/build.nu --action test`
 
 ## AppleScript
@@ -25,10 +32,10 @@
   (1) Build with `macos/build.nu`
   (2) Launch and activate the app via osascript using the absolute path
       to the built app bundle:
-      `osascript -e 'tell application "<absolute path to build/Debug/Ghostty.app>" to activate'`
+      `osascript -e 'tell application "<absolute path to build/Debug/GhoDex.app>" to activate'`
   (3) Wait a few seconds for the app to fully launch and open a terminal.
   (4) Run test scripts with `osascript`, always targeting the app by
       its absolute path (not by name) to avoid calling the wrong
       application.
   (5) When done, quit via:
-      `osascript -e 'tell application "<absolute path to build/Debug/Ghostty.app>" to quit'`
+      `osascript -e 'tell application "<absolute path to build/Debug/GhoDex.app>" to quit'`

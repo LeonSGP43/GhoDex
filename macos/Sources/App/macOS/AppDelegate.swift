@@ -1,9 +1,11 @@
 import AppKit
+import CoreImage
 import SwiftUI
 import UserNotifications
 import OSLog
 import Sparkle
 import GhoDexKit
+import Darwin
 
 class AppDelegate: NSObject,
                     ObservableObject,
@@ -23,12 +25,14 @@ class AppDelegate: NSObject,
     @IBOutlet private var menuCheckForUpdates: NSMenuItem?
     @IBOutlet private var menuOpenConfig: NSMenuItem?
     @IBOutlet private var menuSettingsPanel: NSMenuItem?
+    private var menuTodoWorkspace: NSMenuItem?
     @IBOutlet private var menuReloadConfig: NSMenuItem?
     @IBOutlet private var menuSecureInput: NSMenuItem?
     @IBOutlet private var menuQuit: NSMenuItem?
 
     @IBOutlet private var menuNewWindow: NSMenuItem?
     @IBOutlet private var menuNewTab: NSMenuItem?
+    @IBOutlet private var menuSaveWorkspace: NSMenuItem?
     @IBOutlet private var menuSplitRight: NSMenuItem?
     @IBOutlet private var menuSplitLeft: NSMenuItem?
     @IBOutlet private var menuSplitDown: NSMenuItem?
@@ -138,13 +142,186 @@ class AppDelegate: NSObject,
         updateController.viewModel
     }
 
-    @MainActor lazy var aiTerminalManagerStore = AITerminalManagerStore(
-        appDelegateProvider: { [weak self] in self }
+    @MainActor private var _aiTerminalManagerStore: AITerminalManagerStore?
+    @MainActor private var markdownDocumentControllers: [UUID: MarkdownDocumentController] = [:]
+
+    @MainActor var aiTerminalManagerStore: AITerminalManagerStore {
+        if let store = _aiTerminalManagerStore {
+            return store
+        }
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { [weak self] in self }
+        )
+        _aiTerminalManagerStore = store
+        return store
+    }
+
+    @MainActor var existingAITerminalManagerStore: AITerminalManagerStore? {
+        _aiTerminalManagerStore
+    }
+
+    @Published private(set) var controlHarnessGatewaySettings = ControlHarnessGatewayAppSettings.load()
+    @Published private(set) var controlHarnessGatewayStatusMessage = ""
+
+    @MainActor lazy var controlHarnessAuditLogger = ControlHarnessAuditLogger(
+        bundleID: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex"
+    )
+
+    lazy var controlHarnessAuth = ControlHarnessAuth(
+        storageURL: ControlHarnessAuditLogger
+            .baseDirectory(bundleID: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex")
+            .appendingPathComponent("gateway-auth.json", isDirectory: false)
+    )
+
+    @MainActor lazy var controlHarnessSampleStore = ControlHarnessSampleStore()
+
+    lazy var controlHarnessPerformanceMonitor = ControlHarnessPerformanceMonitor()
+
+    @MainActor lazy var controlHarnessCore = ControlHarnessCore(
+        appDelegate: self,
+        auditLogger: controlHarnessAuditLogger,
+        sampleStore: controlHarnessSampleStore
+    )
+
+    @MainActor
+    private func controlHarnessReply(
+        _ request: ControlHarnessRequest,
+        socketPath: String
+    ) -> ControlHarnessServiceReply {
+        if request.command == "events.subscribe" {
+            return .subscription(controlHarnessCore.handleSubscription(request, socketPath: socketPath))
+        }
+        return .single(controlHarnessCore.handle(request, socketPath: socketPath))
+    }
+
+    @MainActor
+    func applyHostInstanceEnvironment(
+        to config: inout Ghostty.SurfaceConfiguration
+    ) {
+        GhoDexHostInstanceEnvironment.inject(
+            into: &config.environmentVariables,
+            controlSocketPath: controlHarnessService.socketURL.path,
+            processID: ProcessInfo.processInfo.processIdentifier,
+            bundleID: Bundle.main.bundleIdentifier,
+            executablePath: Bundle.main.executableURL?.path ?? ProcessInfo.processInfo.arguments.first
+        )
+    }
+
+    @MainActor
+    func controlHarnessManagedState(for terminalID: UUID) -> AITerminalManagedState? {
+        aiTerminalManagerStore.sessions
+            .first(where: { $0.id == terminalID })?
+            .managedState
+    }
+
+    @MainActor
+    func controlHarnessGatewayAccessDecision(
+        _ request: ControlHarnessRequest
+    ) -> ControlHarnessGateway.RequestAuthorization {
+        switch request.command {
+        case "handshake", "snapshot", "read-terminal", "events.subscribe":
+            return .allow
+
+        case "send-text", "run-command", "close-terminal":
+            guard let rawTerminalID = request.terminalID,
+                  let terminalID = UUID(uuidString: rawTerminalID) else {
+                let error = ControlHarnessCoreError.invalidArgument("terminal_id is required")
+                return .deny(
+                    errorCode: error.code,
+                    errorMessage: error.localizedDescription
+                )
+            }
+
+            let managedState = controlHarnessManagedState(for: terminalID) ?? .manual
+
+            switch managedState {
+            case .observed, .managedActive:
+                return .allow
+            case .managedWaitingApproval:
+                return .deny(
+                    errorCode: "approval_required",
+                    errorMessage: "Remote \(request.command) requires desktop approval for terminal_id=\(rawTerminalID)"
+                )
+            case .manual:
+                if request.command == "close-terminal" {
+                    return .deny(
+                        errorCode: "remote_policy_blocked",
+                        errorMessage: "Remote \(request.command) is disabled for terminal state \(managedState.rawValue)"
+                    )
+                }
+                return .allow
+            case .managedPaused, .managedCompleted, .managedFailed:
+                return .deny(
+                    errorCode: "remote_policy_blocked",
+                    errorMessage: "Remote \(request.command) is disabled for terminal state \(managedState.rawValue)"
+                )
+            }
+
+        case "new-tab", "close-tab", "rename-tab":
+            return .allow
+
+        default:
+            return .allow
+        }
+    }
+
+    lazy var controlHarnessService = ControlHarnessService(
+        bundleID: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
+        requestHandler: { [weak self] request, socketPath in
+            guard let self else {
+                return .single(ControlHarnessResponse(
+                    requestID: request.requestID,
+                    status: "error",
+                    result: nil,
+                    errorCode: ControlHarnessCoreError.appUnavailable.code,
+                    errorMessage: ControlHarnessCoreError.appUnavailable.localizedDescription
+                ))
+            }
+            return self.controlHarnessReply(request, socketPath: socketPath)
+        }
+    )
+
+    @MainActor lazy var controlHarnessReadSampler = ControlHarnessReadSampler(
+        bundleID: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
+        sampleStore: controlHarnessSampleStore,
+        performanceMonitor: controlHarnessPerformanceMonitor,
+        inventoryProvider: { [weak self] in
+            self?.controlHarnessSamplingTargets() ?? []
+        }
+    )
+
+    lazy var controlHarnessGateway = ControlHarnessGateway(
+        bundleID: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
+        configuration: controlHarnessGatewaySettings.resolvedConfiguration(),
+        authManager: controlHarnessAuth,
+        requestHandler: { [weak self] request, socketPath in
+            guard let self else {
+                return .single(ControlHarnessResponse(
+                    requestID: request.requestID,
+                    status: "error",
+                    result: nil,
+                    errorCode: ControlHarnessCoreError.appUnavailable.code,
+                    errorMessage: ControlHarnessCoreError.appUnavailable.localizedDescription
+                ))
+            }
+            return self.controlHarnessReply(request, socketPath: socketPath)
+        },
+        requestAuthorizer: { [weak self] request in
+            guard let self else {
+                return .deny(
+                    errorCode: ControlHarnessCoreError.appUnavailable.code,
+                    errorMessage: ControlHarnessCoreError.appUnavailable.localizedDescription
+                )
+            }
+            return self.controlHarnessGatewayAccessDecision(request)
+        },
+        performanceMonitor: controlHarnessPerformanceMonitor
     )
 
     @MainActor lazy var sshConnectionsController = SSHConnectionsController(
-        store: aiTerminalManagerStore,
-        appDelegate: self
+        appDelegate: self,
+        store: aiTerminalManagerStore
     )
 
     @MainActor lazy var newTabPickerController = NewTabPickerController(
@@ -153,7 +330,6 @@ class AppDelegate: NSObject,
 
     @MainActor lazy var settingsController = SettingsController(appDelegate: self)
     private let browserControlIPCService = BrowserControlIPCService()
-
     /// The elapsed time since the process was started
     var timeSinceLaunch: TimeInterval {
         return ProcessInfo.processInfo.systemUptime - applicationLaunchTime
@@ -173,6 +349,12 @@ class AppDelegate: NSObject,
     @Published private(set) var browserProfilePathOverride: String?
     @Published private(set) var browserRuntimePathOverride: String?
 
+    private var remotePairingQRMenuItem: NSMenuItem?
+    private var remotePairingQRCodeWindow: NSWindow?
+    private var remotePairingQRCodeWindowCloseObserver: NSObjectProtocol?
+    private var remotePairingQRCodePayloadJSON: String?
+    private var remotePairingQRCodePairingCode: String?
+
     override init() {
 #if DEBUG
         ghostty = Ghostty.App(configPath: ProcessInfo.processInfo.environment["GHOSTTY_CONFIG_PATH"])
@@ -187,6 +369,7 @@ class AppDelegate: NSObject,
     // MARK: - NSApplicationDelegate
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        ControlHarnessGatewayAppSettings.registerDefaults()
         UserDefaults.standard.register(defaults: [
             // Disable the automatic full screen menu item because we handle
             // it manually.
@@ -221,6 +404,11 @@ class AppDelegate: NSObject,
 
         // Initial config loading
         ghosttyConfigDidChange(config: ghostty.config)
+
+        controlHarnessReadSampler.start()
+        controlHarnessService.startIfNeeded()
+        controlHarnessGateway.startIfNeeded()
+        refreshControlHarnessGatewayStatus()
 
         // Start our update checker.
         updateController.startUpdater()
@@ -322,7 +510,14 @@ class AppDelegate: NSObject,
         }
 
         // Setup our menu
+        setupMenuLocalization()
         setupMenuImages()
+        installRemotePairingQRMenuItemIfNeeded()
+        if shouldShowRemotePairingQROnLaunch() {
+            DispatchQueue.main.async { [weak self] in
+                self?.showRemotePairingQRCode(nil)
+            }
+        }
 
         // Setup signal handlers
         setupSignals()
@@ -421,13 +616,14 @@ class AppDelegate: NSObject,
             }
         }
 
-        // If our app says we don't need to confirm, we can exit now.
-        if !ghostty.needsConfirmQuit { return .terminateNow }
-
         // We have some visible window. Show an app-wide modal to confirm quitting.
+        // GhoDex contains more than terminal surfaces, so quitting the app should
+        // always be an explicit choice when the user still has visible UI open.
         let alert = NSAlert()
         alert.messageText = L10n.App.quitGhostty
-        alert.informativeText = L10n.App.allSessionsTerminated
+        alert.informativeText = ghostty.needsConfirmQuit
+            ? L10n.App.allSessionsTerminated
+            : L10n.App.allTabsAndSessionsClosed
         alert.addButton(withTitle: L10n.App.closeGhostty)
         alert.addButton(withTitle: L10n.App.cancel)
         alert.alertStyle = .warning
@@ -441,6 +637,10 @@ class AppDelegate: NSObject,
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        controlHarnessReadSampler.stop()
+        controlHarnessService.stop()
+        controlHarnessGateway.stop()
+
         // We have no notifications we want to persist after death,
         // so remove them all now. In the future we may want to be
         // more selective and only remove surface-targeted notifications.
@@ -460,12 +660,6 @@ class AppDelegate: NSObject,
             NSApp.terminate(nil)
         } catch {
             Self.logger.error("Failed to relaunch GhoDex: \(error.localizedDescription)")
-        }
-    }
-
-    @IBAction func showSettings(_ sender: Any?) {
-        Task { @MainActor in
-            settingsController.show()
         }
     }
 
@@ -600,6 +794,504 @@ class AppDelegate: NSObject,
         signals.append(sigusr2)
     }
 
+    /// Setup localized titles for menu items that are created in xib but need
+    /// to track our runtime language selection.
+    private func setupMenuLocalization() {
+        installTodoWorkspaceMenuItemIfNeeded()
+        menuTodoWorkspace?.title = L10n.SSHConnections.todoPanelTitle
+        menuSaveWorkspace?.title = L10n.AITerminalManager.saveWorkspaceAction
+    }
+
+    private func installRemotePairingQRMenuItemIfNeeded() {
+        guard remotePairingQRMenuItem == nil,
+              let appMenu = resolveApplicationMenu() else {
+            return
+        }
+
+        let menuItem = NSMenuItem(
+            title: "Show Remote Pairing QR...",
+            action: #selector(showRemotePairingQRCode(_:)),
+            keyEquivalent: ""
+        )
+        menuItem.target = self
+        menuItem.setImageIfDesired(systemSymbolName: "qrcode")
+
+        let insertionIndex: Int
+        if let menuSettingsPanel, appMenu.index(of: menuSettingsPanel) >= 0 {
+            insertionIndex = appMenu.index(of: menuSettingsPanel) + 1
+        } else {
+            insertionIndex = min(4, appMenu.items.count)
+        }
+
+        appMenu.insertItem(menuItem, at: insertionIndex)
+        remotePairingQRMenuItem = menuItem
+    }
+
+    private func resolveApplicationMenu() -> NSMenu? {
+        if let menu = menuSettingsPanel?.menu ?? menuAbout?.menu {
+            return menu
+        }
+
+        let bundleMenuTitle = (Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? "GhoDex"
+        if let matchedMenu = NSApp.mainMenu?.items.first(where: { $0.title == bundleMenuTitle })?.submenu {
+            return matchedMenu
+        }
+
+        return NSApp.mainMenu?.item(at: 1)?.submenu
+    }
+
+    private func shouldShowRemotePairingQROnLaunch() -> Bool {
+        if controlHarnessGatewaySettings.showPairingQrOnLaunch {
+            return true
+        }
+
+        guard let rawValue = ProcessInfo.processInfo.environment["GHODEX_CONTROL_HARNESS_PAIRING_QR_ON_LAUNCH"] else {
+            return false
+        }
+
+        switch rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "1", "true", "yes", "on":
+            return true
+        default:
+            return false
+        }
+    }
+
+    @objc
+    func showRemotePairingQRCode(_ sender: Any?) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            do {
+                try await self.presentRemotePairingQRCode()
+            } catch {
+                self.presentRemotePairingQRCodeError(error.localizedDescription)
+            }
+        }
+    }
+
+    @MainActor
+    private func presentRemotePairingQRCode() async throws {
+        guard controlHarnessGateway.configuration.isEnabled else {
+            throw RemotePairingQRCodeError.gatewayDisabled
+        }
+
+        guard let port = controlHarnessGateway.listenerPort, port > 0 else {
+            throw RemotePairingQRCodeError.gatewayListenerUnavailable
+        }
+
+        let host = try preferredGatewayPairingHost()
+        let pairing = try await controlHarnessAuth.beginPairing(
+            client: "android-qr",
+            requestedScopes: ["observe", "mutate"]
+        )
+
+        let payload = RemotePairingQRCodePayload(
+            host: host,
+            port: port,
+            pairingCode: pairing.pairingCode,
+            expiresAt: pairing.expiresAt,
+            scopes: pairing.scopes
+        )
+        let payloadJSON = try payload.serialized()
+        presentRemotePairingQRCodeWindow(
+            payloadJSON: payloadJSON,
+            host: host,
+            port: port,
+            pairingCode: pairing.pairingCode,
+            expiresAt: pairing.expiresAt
+        )
+    }
+
+    @MainActor
+    private func presentRemotePairingQRCodeWindow(
+        payloadJSON: String,
+        host: String,
+        port: UInt16,
+        pairingCode: String,
+        expiresAt: String
+    ) {
+        closeRemotePairingQRCodeWindow(nil)
+        remotePairingQRCodePayloadJSON = payloadJSON
+        remotePairingQRCodePairingCode = pairingCode
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: 478),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Remote Pairing QR"
+        window.isReleasedWhenClosed = false
+        window.level = .floating
+        window.center()
+        window.contentView = makeRemotePairingWindowContentView(
+            payloadJSON: payloadJSON,
+            host: host,
+            port: port,
+            pairingCode: pairingCode,
+            expiresAt: expiresAt
+        )
+
+        remotePairingQRCodeWindowCloseObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak self, weak window] _ in
+            guard let self else { return }
+            if self.remotePairingQRCodeWindow === window {
+                self.remotePairingQRCodeWindow = nil
+                self.remotePairingQRCodePayloadJSON = nil
+                self.remotePairingQRCodePairingCode = nil
+            }
+            if let observer = self.remotePairingQRCodeWindowCloseObserver {
+                NotificationCenter.default.removeObserver(observer)
+                self.remotePairingQRCodeWindowCloseObserver = nil
+            }
+        }
+
+        remotePairingQRCodeWindow = window
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    @MainActor
+    private func makeRemotePairingWindowContentView(
+        payloadJSON: String,
+        host: String,
+        port: UInt16,
+        pairingCode: String,
+        expiresAt: String
+    ) -> NSView {
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: 478))
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.spacing = 12
+        stack.alignment = .centerX
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let titleLabel = NSTextField(labelWithString: "Scan this QR code in GhoDex Remote.")
+        titleLabel.alignment = .center
+        titleLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        titleLabel.maximumNumberOfLines = 2
+        titleLabel.lineBreakMode = .byWordWrapping
+        stack.addArrangedSubview(titleLabel)
+
+        let subtitleLabel = NSTextField(labelWithString: "It fills host, port, and a short-lived pairing code automatically.")
+        subtitleLabel.alignment = .center
+        subtitleLabel.textColor = .secondaryLabelColor
+        subtitleLabel.maximumNumberOfLines = 2
+        subtitleLabel.lineBreakMode = .byWordWrapping
+        stack.addArrangedSubview(subtitleLabel)
+
+        let accessoryView = makeRemotePairingAccessoryView(
+            payloadJSON: payloadJSON,
+            host: host,
+            port: port,
+            pairingCode: pairingCode,
+            expiresAt: expiresAt
+        )
+        accessoryView.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(accessoryView)
+
+        let buttonStack = NSStackView()
+        buttonStack.orientation = .horizontal
+        buttonStack.spacing = 8
+        buttonStack.distribution = .fillEqually
+        buttonStack.translatesAutoresizingMaskIntoConstraints = false
+
+        let closeButton = NSButton(title: "Close", target: self, action: #selector(closeRemotePairingQRCodeWindow(_:)))
+        let copyJSONButton = NSButton(title: "Copy Pairing JSON", target: self, action: #selector(copyRemotePairingQRCodePayloadJSON(_:)))
+        let copyCodeButton = NSButton(title: "Copy Pairing Code", target: self, action: #selector(copyRemotePairingQRCodePairingCode(_:)))
+        [closeButton, copyJSONButton, copyCodeButton].forEach { button in
+            button.bezelStyle = .rounded
+            button.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+            buttonStack.addArrangedSubview(button)
+        }
+        stack.addArrangedSubview(buttonStack)
+
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 18),
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 18),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -18),
+            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -18),
+            accessoryView.widthAnchor.constraint(equalToConstant: 340),
+            buttonStack.widthAnchor.constraint(equalTo: stack.widthAnchor),
+        ])
+
+        return container
+    }
+
+    @MainActor
+    @objc
+    private func closeRemotePairingQRCodeWindow(_ sender: Any?) {
+        if let observer = remotePairingQRCodeWindowCloseObserver {
+            NotificationCenter.default.removeObserver(observer)
+            remotePairingQRCodeWindowCloseObserver = nil
+        }
+        remotePairingQRCodeWindow?.close()
+        remotePairingQRCodeWindow = nil
+        remotePairingQRCodePayloadJSON = nil
+        remotePairingQRCodePairingCode = nil
+    }
+
+    @MainActor
+    @objc
+    private func copyRemotePairingQRCodePayloadJSON(_ sender: Any?) {
+        guard let payloadJSON = remotePairingQRCodePayloadJSON else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(payloadJSON, forType: .string)
+    }
+
+    @MainActor
+    @objc
+    private func copyRemotePairingQRCodePairingCode(_ sender: Any?) {
+        guard let pairingCode = remotePairingQRCodePairingCode else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(pairingCode, forType: .string)
+    }
+
+    @MainActor
+    private func makeRemotePairingAccessoryView(
+        payloadJSON: String,
+        host: String,
+        port: UInt16,
+        pairingCode: String,
+        expiresAt: String
+    ) -> NSView {
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 410))
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.spacing = 12
+        stack.alignment = .centerX
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let imageView = NSImageView()
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.image = makeRemotePairingQRCodeImage(from: payloadJSON)
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        imageView.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        imageView.heightAnchor.constraint(equalToConstant: 260).isActive = true
+        stack.addArrangedSubview(imageView)
+
+        let summary = NSTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 110))
+        summary.isEditable = false
+        summary.isSelectable = true
+        summary.drawsBackground = false
+        summary.string = """
+        host: \(host):\(port)
+        pairing_code: \(pairingCode)
+        expires_at: \(expiresAt)
+        """
+
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 320, height: 110))
+        scrollView.hasVerticalScroller = true
+        scrollView.borderType = .bezelBorder
+        scrollView.documentView = summary
+        stack.addArrangedSubview(scrollView)
+
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: container.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+
+        return container
+    }
+
+    @MainActor
+    private func makeRemotePairingQRCodeImage(from payloadJSON: String) -> NSImage? {
+        guard let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
+        filter.setValue(Data(payloadJSON.utf8), forKey: "inputMessage")
+        filter.setValue("M", forKey: "inputCorrectionLevel")
+
+        guard let outputImage = filter.outputImage?.transformed(by: .init(scaleX: 8, y: 8)) else {
+            return nil
+        }
+
+        let representation = NSCIImageRep(ciImage: outputImage)
+        let image = NSImage(size: representation.size)
+        image.addRepresentation(representation)
+        return image
+    }
+
+    private func preferredGatewayPairingHost() throws -> String {
+        let listenHost = controlHarnessGateway.configuration.listenHost
+        switch listenHost {
+        case "127.0.0.1", "localhost", "::1":
+            throw RemotePairingQRCodeError.loopbackOnlyListener
+        case "0.0.0.0", "::", "":
+            if let override = preferredGatewayPairingHostOverride() {
+                return override
+            }
+            guard let address = firstNonLoopbackIPv4Address() else {
+                throw RemotePairingQRCodeError.noAdvertisableAddress
+            }
+            return address
+        default:
+            if let override = preferredGatewayPairingHostOverride() {
+                return override
+            }
+            return listenHost
+        }
+    }
+
+    private func preferredGatewayPairingHostOverride() -> String? {
+        if let override = ProcessInfo.processInfo.environment["GHODEX_CONTROL_HARNESS_PAIRING_QR_HOST"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           override.isEmpty == false {
+            return override
+        }
+
+        guard let host = controlHarnessGatewaySettings.normalizedPairingAdvertiseHost else {
+            return nil
+        }
+        switch host {
+        case "127.0.0.1", "localhost", "::1":
+            return nil
+        default:
+            return host
+        }
+    }
+
+    private func firstNonLoopbackIPv4Address() -> String? {
+        var addressList: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&addressList) == 0, let firstAddress = addressList else {
+            return nil
+        }
+        defer { freeifaddrs(addressList) }
+
+        var cursor: UnsafeMutablePointer<ifaddrs>? = firstAddress
+        while let current = cursor {
+            defer { cursor = current.pointee.ifa_next }
+
+            guard let socketAddress = current.pointee.ifa_addr else {
+                continue
+            }
+
+            let family = socketAddress.pointee.sa_family
+            if family != UInt8(AF_INET) {
+                continue
+            }
+
+            let flags = Int32(current.pointee.ifa_flags)
+            if (flags & IFF_LOOPBACK) != 0 {
+                continue
+            }
+
+            var hostBuffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            let result = getnameinfo(
+                socketAddress,
+                socklen_t(socketAddress.pointee.sa_len),
+                &hostBuffer,
+                socklen_t(hostBuffer.count),
+                nil,
+                0,
+                NI_NUMERICHOST
+            )
+            if result == 0 {
+                let address = String(cString: hostBuffer)
+                if address.isEmpty == false {
+                    return address
+                }
+            }
+        }
+
+        return nil
+    }
+
+    @MainActor
+    private func presentRemotePairingQRCodeError(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = "Remote Pairing QR Unavailable"
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
+    private struct RemotePairingQRCodePayload: Encodable {
+        let version = 1
+        let kind = "ghodex.gateway.pairing"
+        let transport = "tcp"
+        let host: String
+        let port: UInt16
+        let pairingCode: String
+        let expiresAt: String
+        let scopes: [String]
+
+        enum CodingKeys: String, CodingKey {
+            case version
+            case kind
+            case transport
+            case host
+            case port
+            case pairingCode = "pairing_code"
+            case expiresAt = "expires_at"
+            case scopes
+        }
+
+        func serialized() throws -> String {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            return String(decoding: try encoder.encode(self), as: UTF8.self)
+        }
+    }
+
+    private enum RemotePairingQRCodeError: LocalizedError {
+        case gatewayDisabled
+        case gatewayListenerUnavailable
+        case loopbackOnlyListener
+        case noAdvertisableAddress
+
+        var errorDescription: String? {
+            switch self {
+            case .gatewayDisabled:
+                return "The control gateway is disabled. Enable it in Settings > Gateway first."
+            case .gatewayListenerUnavailable:
+                return "The control gateway listener port is not available yet."
+            case .loopbackOnlyListener:
+                return "The control gateway is bound to loopback only. Change the listen host or pairing QR host in Settings > Gateway, or set GHODEX_CONTROL_HARNESS_PAIRING_QR_HOST, before generating a pairing QR."
+            case .noAdvertisableAddress:
+                return "No non-loopback IPv4 address was found for the pairing QR."
+            }
+        }
+    }
+
+    @MainActor
+    func saveControlHarnessGatewaySettings(_ settings: ControlHarnessGatewayAppSettings) {
+        let sanitized = settings.sanitized()
+        sanitized.save()
+        controlHarnessGatewaySettings = sanitized
+        controlHarnessGateway.applyConfiguration(sanitized.resolvedConfiguration())
+        refreshControlHarnessGatewayStatus()
+    }
+
+    @MainActor
+    func refreshControlHarnessGatewayStatus() {
+        if !controlHarnessGateway.configuration.isEnabled {
+            controlHarnessGatewayStatusMessage = L10n.Settings.gatewayStatusDisabled
+            return
+        }
+
+        if let port = controlHarnessGateway.listenerPort, port > 0 {
+            controlHarnessGatewayStatusMessage = L10n.Settings.gatewayStatusListening(
+                controlHarnessGateway.configuration.listenHost,
+                Int(port)
+            )
+            return
+        }
+
+        if let error = controlHarnessGateway.lastStartupError, error.isEmpty == false {
+            controlHarnessGatewayStatusMessage = L10n.Settings.gatewayStatusFailed(error)
+            return
+        }
+
+        controlHarnessGatewayStatusMessage = L10n.Settings.gatewayStatusPending
+    }
     /// Setup all the images for our menu items.
     private func setupMenuImages() {
         // Note: This COULD Be done all in the xib file, but I find it easier to
@@ -608,10 +1300,12 @@ class AppDelegate: NSObject,
         self.menuCheckForUpdates?.setImageIfDesired(systemSymbolName: "square.and.arrow.down")
         self.menuOpenConfig?.setImageIfDesired(systemSymbolName: "gear")
         self.menuSettingsPanel?.setImageIfDesired(systemSymbolName: "slider.horizontal.3")
+        self.menuTodoWorkspace?.setImageIfDesired(systemSymbolName: "checklist")
         self.menuReloadConfig?.setImageIfDesired(systemSymbolName: "arrow.trianglehead.2.clockwise.rotate.90")
         self.menuSecureInput?.setImageIfDesired(systemSymbolName: "lock.display")
         self.menuNewWindow?.setImageIfDesired(systemSymbolName: "macwindow.badge.plus")
         self.menuNewTab?.setImageIfDesired(systemSymbolName: "macwindow")
+        self.menuSaveWorkspace?.setImageIfDesired(systemSymbolName: "square.and.arrow.down")
         self.menuSplitRight?.setImageIfDesired(systemSymbolName: "rectangle.righthalf.inset.filled")
         self.menuSplitLeft?.setImageIfDesired(systemSymbolName: "rectangle.leadinghalf.inset.filled")
         self.menuSplitUp?.setImageIfDesired(systemSymbolName: "rectangle.tophalf.inset.filled")
@@ -733,6 +1427,24 @@ class AppDelegate: NSObject,
         guard let menuItem else { return }
         menuItem.keyEquivalent = ""
         menuItem.keyEquivalentModifierMask = []
+    }
+
+    private func installTodoWorkspaceMenuItemIfNeeded() {
+        guard menuTodoWorkspace == nil,
+              let settingsItem = menuSettingsPanel,
+              let menu = settingsItem.menu else { return }
+
+        let item = NSMenuItem(
+            title: L10n.SSHConnections.todoPanelTitle,
+            action: #selector(showTodoWorkspace(_:)),
+            keyEquivalent: "m"
+        )
+        item.target = self
+        item.keyEquivalentModifierMask = [.command, .shift]
+
+        let insertionIndex = menu.index(of: settingsItem) + 1
+        menu.insertItem(item, at: max(insertionIndex, 0))
+        menuTodoWorkspace = item
     }
 
     // MARK: Notifications and Events
@@ -1334,6 +2046,93 @@ class AppDelegate: NSObject,
         return nil
     }
 
+    func controlHarnessReadableSurface(for terminalID: UUID) -> (any ControlHarnessReadableSurface)? {
+        findSurface(forUUID: terminalID)
+    }
+
+    @MainActor
+    func controlHarnessSamplingTargets() -> [ControlHarnessSamplerTarget] {
+        let managedStates = Dictionary(uniqueKeysWithValues: aiTerminalManagerStore.sessions.map {
+            ($0.id, $0.managedState)
+        })
+
+        return TerminalController.all.flatMap { controller in
+            controller.allSurfaces.map { surface in
+                let isFocused = controller.focusedSurface?.id == surface.id
+                let isVisible = controller.visibleSurfaces.contains(where: { $0.id == surface.id })
+                let managedState = managedStates[surface.id] ?? .manual
+                return ControlHarnessSamplerTarget(
+                    terminalID: surface.id.uuidString,
+                    surface: surface,
+                    activityClass: .init(
+                        managedState: managedState,
+                        isFocused: isFocused,
+                        isVisible: isVisible
+                    )
+                )
+            }
+        }
+    }
+
+    @MainActor
+    func controlHarnessSamplingActivityClass(for terminalID: UUID) -> ControlHarnessSamplingActivityClass? {
+        controlHarnessSamplingTargets()
+            .first(where: { $0.terminalID == terminalID.uuidString })?
+            .activityClass
+    }
+
+    @MainActor
+    func openMarkdownDocument(at fileURL: URL, tabbedInto parentWindow: NSWindow?) {
+        guard let target = MarkdownDocumentTarget(fileURL: fileURL) else {
+            NSWorkspace.shared.open(fileURL)
+            return
+        }
+
+        let controllerID = UUID()
+        let controller = MarkdownDocumentController(
+            appDelegate: self,
+            target: target
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.markdownDocumentControllers.removeValue(forKey: controllerID)
+            }
+        }
+
+        markdownDocumentControllers[controllerID] = controller
+        controller.show(tabbedInto: parentWindow)
+    }
+
+    @MainActor
+    func controlHarnessSendText(_ text: String, to terminalID: UUID) -> Bool {
+        guard let surface = findSurface(forUUID: terminalID) else {
+            return false
+        }
+
+        surface.aiManagerSendText(text)
+        return true
+    }
+
+    @MainActor
+    func controlHarnessRunCommand(_ command: String, to terminalID: UUID) -> Bool {
+        guard let surface = findSurface(forUUID: terminalID) else {
+            return false
+        }
+
+        surface.aiManagerRunCommand(command)
+        return true
+    }
+
+    @MainActor
+    func controlHarnessCloseTerminal(_ terminalID: UUID) -> Bool {
+        guard let surface = findSurface(forUUID: terminalID),
+              let nativeSurface = surface.surface else {
+            return false
+        }
+
+        ghostty.requestClose(surface: nativeSurface)
+        return true
+    }
+
     // MARK: - Dock Menu
 
     private func reloadDockMenu() {
@@ -1404,6 +2203,115 @@ class AppDelegate: NSObject,
         activeTerminalController()?.newPaneTab(sender)
     }
 
+    @IBAction func saveWorkspace(_ sender: Any?) {
+        guard let controller = saveWorkspaceController(for: sender) else { return }
+        presentSaveWorkspacePrompt(for: controller)
+    }
+
+    @MainActor
+    private func saveWorkspaceController(for sender: Any?) -> TerminalController? {
+        if let controller = sender as? TerminalController {
+            return controller
+        }
+
+        if let window = sender as? NSWindow {
+            return window.windowController as? TerminalController
+        }
+
+        if let menuItem = sender as? NSMenuItem {
+            if let controller = menuItem.representedObject as? TerminalController {
+                return controller
+            }
+
+            if let window = menuItem.representedObject as? NSWindow {
+                return window.windowController as? TerminalController
+            }
+        }
+
+        return activeTerminalController()
+    }
+
+    @MainActor
+    private func presentSaveWorkspacePrompt(for controller: TerminalController) {
+        let alert = NSAlert()
+        alert.messageText = L10n.AITerminalManager.saveWorkspaceAction
+        alert.informativeText = L10n.AITerminalManager.saveWorkspacePrompt
+        alert.alertStyle = .informational
+
+        let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        textField.stringValue = controller.titleOverride?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? controller.titleOverride ?? ""
+            : (controller.window?.title ?? "")
+        alert.accessoryView = textField
+        alert.addButton(withTitle: L10n.AITerminalManager.saveWorkspace)
+        alert.addButton(withTitle: L10n.Common.cancel)
+        alert.window.initialFirstResponder = textField
+
+        guard let window = controller.window else { return }
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            self.saveWorkspace(controller, name: textField.stringValue, in: window)
+        }
+    }
+
+    @MainActor
+    private func saveWorkspace(
+        _ controller: TerminalController,
+        name: String,
+        in window: NSWindow
+    ) {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let existing = aiTerminalManagerStore.existingSavedWorkspaceTemplate(named: trimmedName) {
+            presentReplaceWorkspacePrompt(
+                for: controller,
+                name: trimmedName,
+                existingTemplate: existing,
+                in: window
+            )
+            return
+        }
+
+        aiTerminalManagerStore.saveCurrentWorkspace(from: controller, name: trimmedName)
+        presentSaveWorkspaceErrorIfNeeded(in: window)
+    }
+
+    @MainActor
+    private func presentReplaceWorkspacePrompt(
+        for controller: TerminalController,
+        name: String,
+        existingTemplate: AITerminalSavedWorkspaceTemplate,
+        in window: NSWindow
+    ) {
+        let alert = NSAlert()
+        alert.messageText = L10n.AITerminalManager.replaceWorkspaceTitle
+        alert.informativeText = L10n.AITerminalManager.replaceWorkspaceMessage(name)
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: L10n.AITerminalManager.replaceWorkspace)
+        alert.addButton(withTitle: L10n.Common.cancel)
+
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            self.aiTerminalManagerStore.saveCurrentWorkspace(
+                from: controller,
+                name: name,
+                replacingID: existingTemplate.id
+            )
+            self.presentSaveWorkspaceErrorIfNeeded(in: window)
+        }
+    }
+
+    @MainActor
+    private func presentSaveWorkspaceErrorIfNeeded(in window: NSWindow) {
+        guard let message = aiTerminalManagerStore.lastError else { return }
+
+        let errorAlert = NSAlert()
+        errorAlert.messageText = L10n.AITerminalManager.couldNotSaveWorkspace
+        errorAlert.informativeText = message
+        errorAlert.alertStyle = .warning
+        errorAlert.addButton(withTitle: L10n.App.ok)
+        errorAlert.beginSheetModal(for: window)
+    }
+
     @IBAction func changeTitleContext(_ sender: Any?) {
         activeTopLevelTabController(preferred: NSApp.keyWindow)?.promptTabTitle()
     }
@@ -1428,15 +2336,19 @@ class AppDelegate: NSObject,
         if let window {
             newTabPickerController.show(
                 relativeTo: window,
+                mode: .topLevel,
                 includeBrowserEntry: true,
-                onOpenBrowser: browserAction)
+                onOpenBrowser: browserAction
+            )
             return
         }
 
         newTabPickerController.show(
             relativeTo: nil,
+            mode: .topLevel,
             includeBrowserEntry: true,
-            onOpenBrowser: browserAction)
+            onOpenBrowser: browserAction
+        )
     }
 
     @MainActor
@@ -1453,6 +2365,7 @@ class AppDelegate: NSObject,
         if let window {
             newTabPickerController.show(
                 relativeTo: window,
+                mode: .paneChild,
                 title: AppLocalization.localizedText("New Pane Tab"),
                 subtitle: L10n.SSHConnections.newTabPickerSubtitle,
                 includeBrowserEntry: false,
@@ -1719,6 +2632,9 @@ extension AppDelegate: NSMenuItemValidation {
             // Float on top items only active if the key window is a primary
             // terminal window (not quick terminal).
             return NSApp.keyWindow is TerminalWindow
+
+        case #selector(saveWorkspace(_:)):
+            return saveWorkspaceController(for: item) != nil
 
         case #selector(undo(_:)):
             if undoManager.canUndo {

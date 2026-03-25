@@ -3,6 +3,7 @@
 check_for_updates: false
 
 excluded:
+  - .zig-cache
   - build
 
 disabled_rules:

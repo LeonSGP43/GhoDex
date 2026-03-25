@@ -1,0 +1,18 @@
+diff --git a/node_modules/react-native-reanimated/android/build.gradle b/node_modules/react-native-reanimated/android/build.gradle
+index 86bace7..dba2dbf 100644
+--- a/node_modules/react-native-reanimated/android/build.gradle
++++ b/node_modules/react-native-reanimated/android/build.gradle
+@@ -138,11 +138,12 @@ def reactNativeArchitectures() {
+ 
+ buildscript {
+     repositories {
++        mavenLocal()
+         google()
+         mavenCentral()
+     }
+     dependencies {
+-        classpath "com.android.tools.build:gradle:8.2.1"
++        classpath "com.android.tools.build:gradle:8.5.2"
+         classpath "de.undercouch:gradle-download-task:5.6.0"
+         classpath "com.diffplug.spotless:spotless-plugin-gradle:6.25.0"
+     }

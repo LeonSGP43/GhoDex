@@ -1,0 +1,20 @@
+diff --git a/node_modules/react-native-safe-area-context/android/build.gradle b/node_modules/react-native-safe-area-context/android/build.gradle
+index f324b9a..53c4d89 100644
+--- a/node_modules/react-native-safe-area-context/android/build.gradle
++++ b/node_modules/react-native-safe-area-context/android/build.gradle
+@@ -2,13 +2,14 @@ buildscript {
+     def kotlin_version = rootProject.ext.has('kotlinVersion') ? rootProject.ext.get('kotlinVersion') : project.properties['RNSAC_kotlinVersion']
+ 
+     repositories {
++        mavenLocal()
+         mavenCentral()
+         google()
+     }
+ 
+     dependencies {
+         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version")
+-        classpath("com.android.tools.build:gradle:7.3.1")
++        classpath("com.android.tools.build:gradle:8.5.2")
+         classpath("com.diffplug.spotless:spotless-plugin-gradle:6.11.0")
+     }
+ }

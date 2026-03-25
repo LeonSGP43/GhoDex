@@ -265,6 +265,103 @@ struct AITerminalWorkspaceTemplate: Identifiable, Codable, Hashable, Sendable {
     var directory: String
 }
 
+enum AITerminalSavedWorkspaceSplitDirection: String, Codable, Hashable, Sendable {
+    case horizontal
+    case vertical
+}
+
+struct AITerminalSavedWorkspaceTab: Identifiable, Codable, Hashable, Sendable {
+    let id: String
+    var hostID: String
+    var directory: String?
+
+    init(
+        id: String = "workspace-tab:\(UUID().uuidString)",
+        hostID: String,
+        directory: String? = nil
+    ) {
+        self.id = id
+        self.hostID = hostID
+        self.directory = directory
+    }
+}
+
+struct AITerminalSavedWorkspacePane: Identifiable, Codable, Hashable, Sendable {
+    let id: String
+    var tabs: [AITerminalSavedWorkspaceTab]
+    var activeTabIndex: Int
+
+    init(
+        id: String = "workspace-pane:\(UUID().uuidString)",
+        tabs: [AITerminalSavedWorkspaceTab],
+        activeTabIndex: Int = 0
+    ) {
+        self.id = id
+        self.tabs = tabs
+        self.activeTabIndex = activeTabIndex
+    }
+
+    var normalizedActiveTabIndex: Int {
+        guard !tabs.isEmpty else { return 0 }
+        return min(max(activeTabIndex, 0), tabs.count - 1)
+    }
+}
+
+indirect enum AITerminalSavedWorkspaceNode: Codable, Hashable, Sendable {
+    case pane(AITerminalSavedWorkspacePane)
+    case split(Split)
+
+    struct Split: Codable, Hashable, Sendable {
+        var direction: AITerminalSavedWorkspaceSplitDirection
+        var ratio: Double
+        var left: AITerminalSavedWorkspaceNode
+        var right: AITerminalSavedWorkspaceNode
+    }
+
+    var paneCount: Int {
+        switch self {
+        case .pane:
+            return 1
+        case .split(let split):
+            return split.left.paneCount + split.right.paneCount
+        }
+    }
+
+    var tabCount: Int {
+        switch self {
+        case .pane(let pane):
+            return pane.tabs.count
+        case .split(let split):
+            return split.left.tabCount + split.right.tabCount
+        }
+    }
+}
+
+struct AITerminalSavedWorkspaceTemplate: Identifiable, Codable, Hashable, Sendable {
+    let id: String
+    var name: String
+    var root: AITerminalSavedWorkspaceNode
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(
+        id: String = "saved-workspace:\(UUID().uuidString)",
+        name: String,
+        root: AITerminalSavedWorkspaceNode,
+        createdAt: Date = .now,
+        updatedAt: Date = .now
+    ) {
+        self.id = id
+        self.name = name
+        self.root = root
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    var paneCount: Int { root.paneCount }
+    var tabCount: Int { root.tabCount }
+}
+
 enum AITerminalHeartbeatTaskType: String, Codable, CaseIterable, Sendable {
     case exec
     case script
@@ -342,6 +439,269 @@ struct AITerminalHeartbeatQueueSettings: Codable, Hashable, Sendable {
         try container.encode(enabled, forKey: .enabled)
         try container.encode(heartbeatIntervalSeconds, forKey: .heartbeatIntervalSeconds)
         try container.encode(maxConcurrentTasks, forKey: .maxConcurrentTasks)
+    }
+}
+
+enum AITerminalTodoSidebarEdge: String, CaseIterable, Codable, Hashable, Identifiable, Sendable {
+    case leading
+    case trailing
+
+    var id: String { rawValue }
+
+    static func normalized(_ value: String?) -> Self {
+        guard let rawValue = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let edge = Self(rawValue: rawValue) else {
+            return .leading
+        }
+        return edge
+    }
+}
+
+enum AITerminalTodoOverlayCorner: String, CaseIterable, Codable, Hashable, Identifiable, Sendable {
+    case topLeading = "top-leading"
+    case topTrailing = "top-trailing"
+    case bottomLeading = "bottom-leading"
+    case bottomTrailing = "bottom-trailing"
+
+    var id: String { rawValue }
+
+    static func normalized(_ value: String?) -> Self {
+        guard let rawValue = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let corner = Self(rawValue: rawValue) else {
+            return .topLeading
+        }
+        return corner
+    }
+}
+
+struct AITerminalTodoSettings: Codable, Hashable, Sendable {
+    var enabled: Bool
+    var workspaceRootPath: String
+    var showCompletedItems: Bool
+    var selectedDateAnchor: String
+    var sidebarEdge: AITerminalTodoSidebarEdge
+    var workspaceOverlayVisible: Bool
+    var workspaceOverlayCorner: AITerminalTodoOverlayCorner
+
+    static let workspaceDirectoryName = "gho_todolist_workspace"
+    static var defaultWorkspaceRootPath: String {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Desktop", isDirectory: true)
+            .appendingPathComponent("LeonProjects", isDirectory: true)
+            .appendingPathComponent("gho_workspace", isDirectory: true)
+            .appendingPathComponent(workspaceDirectoryName, isDirectory: true)
+            .path
+    }
+    static let dayFilenameFormatter = ISO8601DateFormatter.todoDayFormatter
+    static let defaultSelectedDateAnchor = dayFilenameFormatter.string(from: .now)
+
+    init(
+        enabled: Bool = true,
+        workspaceRootPath: String = AITerminalTodoSettings.defaultWorkspaceRootPath,
+        showCompletedItems: Bool = true,
+        selectedDateAnchor: String = AITerminalTodoSettings.defaultSelectedDateAnchor,
+        sidebarEdge: AITerminalTodoSidebarEdge = .leading,
+        workspaceOverlayVisible: Bool = false,
+        workspaceOverlayCorner: AITerminalTodoOverlayCorner = .topLeading
+    ) {
+        self.enabled = enabled
+        self.workspaceRootPath = workspaceRootPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.showCompletedItems = showCompletedItems
+        self.selectedDateAnchor = Self.normalizedDateAnchor(selectedDateAnchor)
+        self.sidebarEdge = sidebarEdge
+        self.workspaceOverlayVisible = workspaceOverlayVisible
+        self.workspaceOverlayCorner = workspaceOverlayCorner
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case workspaceRootPath
+        case showCompletedItems
+        case selectedDateAnchor
+        case sidebarEdge
+        case workspaceOverlayVisible
+        case workspaceOverlayCorner
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        workspaceRootPath = (
+            try container.decodeIfPresent(String.self, forKey: .workspaceRootPath)
+        )?.trimmingCharacters(in: .whitespacesAndNewlines) ?? Self.defaultWorkspaceRootPath
+        showCompletedItems = try container.decodeIfPresent(Bool.self, forKey: .showCompletedItems) ?? true
+        selectedDateAnchor = Self.normalizedDateAnchor(
+            try container.decodeIfPresent(String.self, forKey: .selectedDateAnchor)
+            ?? Self.defaultSelectedDateAnchor
+        )
+        sidebarEdge = try container.decodeIfPresent(
+            AITerminalTodoSidebarEdge.self,
+            forKey: .sidebarEdge
+        ) ?? .leading
+        workspaceOverlayVisible = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .workspaceOverlayVisible
+        ) ?? false
+        workspaceOverlayCorner = try container.decodeIfPresent(
+            AITerminalTodoOverlayCorner.self,
+            forKey: .workspaceOverlayCorner
+        ) ?? .topLeading
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(enabled, forKey: .enabled)
+        try container.encode(workspaceRootPath, forKey: .workspaceRootPath)
+        try container.encode(showCompletedItems, forKey: .showCompletedItems)
+        try container.encode(selectedDateAnchor, forKey: .selectedDateAnchor)
+        try container.encode(sidebarEdge, forKey: .sidebarEdge)
+        try container.encode(workspaceOverlayVisible, forKey: .workspaceOverlayVisible)
+        try container.encode(workspaceOverlayCorner, forKey: .workspaceOverlayCorner)
+    }
+
+    static func normalizedDateAnchor(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let parsed = dayFilenameFormatter.date(from: trimmed) else {
+            return defaultSelectedDateAnchor
+        }
+        return dayFilenameFormatter.string(from: parsed)
+    }
+
+    static func date(fromDayString value: String) -> Date? {
+        dayFilenameFormatter.date(from: normalizedDateAnchor(value))
+    }
+
+    static func dayString(from date: Date) -> String {
+        dayFilenameFormatter.string(from: date)
+    }
+
+    func dayFilePath(for date: Date) -> String {
+        URL(fileURLWithPath: workspaceRootPath, isDirectory: true)
+            .appendingPathComponent("days", isDirectory: true)
+            .appendingPathComponent("\(Self.dayString(from: date)).json", isDirectory: false)
+            .path
+    }
+}
+
+struct AITerminalTodoItem: Identifiable, Codable, Hashable, Sendable {
+    var sourceItem: AITerminalTodoSourceReference?
+    let id: UUID
+    var title: String
+    var notes: String
+    var assignedWorkspaceID: UUID?
+    var isCompleted: Bool
+    var completedAt: Date?
+    var createdAt: Date
+    var updatedAt: Date
+    var sortOrder: Int
+
+    init(
+        sourceItem: AITerminalTodoSourceReference? = nil,
+        id: UUID = UUID(),
+        title: String,
+        notes: String = "",
+        assignedWorkspaceID: UUID? = nil,
+        isCompleted: Bool = false,
+        completedAt: Date? = nil,
+        createdAt: Date = .now,
+        updatedAt: Date = .now,
+        sortOrder: Int = 0
+    ) {
+        self.sourceItem = sourceItem
+        self.id = id
+        self.title = title
+        self.notes = notes
+        self.assignedWorkspaceID = assignedWorkspaceID
+        self.isCompleted = isCompleted
+        self.completedAt = completedAt
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.sortOrder = sortOrder
+    }
+
+    var isCarryForwardPointer: Bool {
+        sourceItem != nil
+    }
+}
+
+struct AITerminalTodoSourceReference: Codable, Hashable, Sendable {
+    var day: String
+    var itemID: UUID
+
+    init(day: String, itemID: UUID) {
+        self.day = AITerminalTodoSettings.normalizedDateAnchor(day)
+        self.itemID = itemID
+    }
+}
+
+struct AITerminalTodoDayDocument: Codable, Hashable, Sendable {
+    var date: String
+    var updatedAt: Date
+    var items: [AITerminalTodoItem]
+
+    init(
+        date: String = AITerminalTodoSettings.defaultSelectedDateAnchor,
+        updatedAt: Date = .now,
+        items: [AITerminalTodoItem] = []
+    ) {
+        self.date = AITerminalTodoSettings.normalizedDateAnchor(date)
+        self.updatedAt = updatedAt
+        self.items = items
+    }
+
+    var completionRate: Double {
+        guard !items.isEmpty else { return 0 }
+        let completedCount = items.filter(\.isCompleted).count
+        return Double(completedCount) / Double(items.count)
+    }
+
+    var orderedItems: [AITerminalTodoItem] {
+        items.sorted {
+            if $0.sortOrder != $1.sortOrder {
+                return $0.sortOrder < $1.sortOrder
+            }
+            if $0.createdAt != $1.createdAt {
+                return $0.createdAt < $1.createdAt
+            }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+    }
+}
+
+struct AITerminalTodoWorkspaceTarget: Identifiable, Hashable, Sendable {
+    let workspaceID: UUID
+    var title: String
+    var subtitle: String
+    var isFocused: Bool
+
+    var id: UUID { workspaceID }
+}
+
+struct AITerminalTodoWorkspaceProgressSummary: Hashable, Sendable {
+    let workspaceID: UUID
+    var completedCount: Int
+    var totalCount: Int
+
+    var completionRate: Double {
+        guard totalCount > 0 else { return 0 }
+        return Double(completedCount) / Double(totalCount)
+    }
+
+    var remainingCount: Int {
+        max(totalCount - completedCount, 0)
+    }
+}
+
+struct AITerminalTodoWorkspaceSnapshot: Hashable, Sendable {
+    let workspaceID: UUID
+    var items: [AITerminalTodoItem]
+
+    var summary: AITerminalTodoWorkspaceProgressSummary {
+        .init(
+            workspaceID: workspaceID,
+            completedCount: items.filter(\.isCompleted).count,
+            totalCount: items.count
+        )
     }
 }
 
@@ -652,20 +1012,24 @@ struct AITerminalManagerConfiguration: Codable, Sendable {
     var favoriteHostIDs: [String]
     var recentHosts: [AITerminalRecentHostRecord]
     var workspaces: [AITerminalWorkspaceTemplate]
+    var savedWorkspaceTemplates: [AITerminalSavedWorkspaceTemplate]
     var heartbeatQueueSettings: AITerminalHeartbeatQueueSettings
     var heartbeatTasks: [AITerminalHeartbeatTask]
+    var todoSettings: AITerminalTodoSettings
     var learningSettings: AITerminalLearningSettings
     var learningLogs: [AITerminalLearningLogEntry]
 
     init(
-        schemaVersion: Int = 5,
+        schemaVersion: Int = 7,
         savedHosts: [AITerminalHost] = [],
         importedHostOverrides: [AITerminalHost] = [],
         favoriteHostIDs: [String] = [],
         recentHosts: [AITerminalRecentHostRecord] = [],
         workspaces: [AITerminalWorkspaceTemplate] = [],
+        savedWorkspaceTemplates: [AITerminalSavedWorkspaceTemplate] = [],
         heartbeatQueueSettings: AITerminalHeartbeatQueueSettings = .init(),
         heartbeatTasks: [AITerminalHeartbeatTask] = [],
+        todoSettings: AITerminalTodoSettings = .init(),
         learningSettings: AITerminalLearningSettings = .init(),
         learningLogs: [AITerminalLearningLogEntry] = []
     ) {
@@ -675,8 +1039,10 @@ struct AITerminalManagerConfiguration: Codable, Sendable {
         self.favoriteHostIDs = favoriteHostIDs
         self.recentHosts = recentHosts
         self.workspaces = workspaces
+        self.savedWorkspaceTemplates = savedWorkspaceTemplates
         self.heartbeatQueueSettings = heartbeatQueueSettings
         self.heartbeatTasks = heartbeatTasks
+        self.todoSettings = todoSettings
         self.learningSettings = learningSettings
         self.learningLogs = learningLogs
     }
@@ -688,8 +1054,10 @@ struct AITerminalManagerConfiguration: Codable, Sendable {
         case favoriteHostIDs
         case recentHosts
         case workspaces
+        case savedWorkspaceTemplates
         case heartbeatQueueSettings
         case heartbeatTasks
+        case todoSettings
         case learningSettings
         case learningLogs
         case hosts
@@ -705,8 +1073,10 @@ struct AITerminalManagerConfiguration: Codable, Sendable {
         favoriteHostIDs = try container.decodeIfPresent([String].self, forKey: .favoriteHostIDs) ?? []
         recentHosts = try container.decodeIfPresent([AITerminalRecentHostRecord].self, forKey: .recentHosts) ?? []
         workspaces = try container.decodeIfPresent([AITerminalWorkspaceTemplate].self, forKey: .workspaces) ?? []
+        savedWorkspaceTemplates = try container.decodeIfPresent([AITerminalSavedWorkspaceTemplate].self, forKey: .savedWorkspaceTemplates) ?? []
         heartbeatQueueSettings = try container.decodeIfPresent(AITerminalHeartbeatQueueSettings.self, forKey: .heartbeatQueueSettings) ?? .init()
         heartbeatTasks = try container.decodeIfPresent([AITerminalHeartbeatTask].self, forKey: .heartbeatTasks) ?? []
+        todoSettings = try container.decodeIfPresent(AITerminalTodoSettings.self, forKey: .todoSettings) ?? .init()
         learningSettings = try container.decodeIfPresent(AITerminalLearningSettings.self, forKey: .learningSettings) ?? .init()
         learningLogs = try container.decodeIfPresent([AITerminalLearningLogEntry].self, forKey: .learningLogs) ?? []
     }
@@ -719,11 +1089,22 @@ struct AITerminalManagerConfiguration: Codable, Sendable {
         try container.encode(favoriteHostIDs, forKey: .favoriteHostIDs)
         try container.encode(recentHosts, forKey: .recentHosts)
         try container.encode(workspaces, forKey: .workspaces)
+        try container.encode(savedWorkspaceTemplates, forKey: .savedWorkspaceTemplates)
         try container.encode(heartbeatQueueSettings, forKey: .heartbeatQueueSettings)
         try container.encode(heartbeatTasks, forKey: .heartbeatTasks)
+        try container.encode(todoSettings, forKey: .todoSettings)
         try container.encode(learningSettings, forKey: .learningSettings)
         try container.encode(learningLogs, forKey: .learningLogs)
     }
+}
+
+private extension ISO8601DateFormatter {
+    static let todoDayFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withFullDate]
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        return formatter
+    }()
 }
 
 struct AITerminalLaunchRegistration: Hashable, Sendable {

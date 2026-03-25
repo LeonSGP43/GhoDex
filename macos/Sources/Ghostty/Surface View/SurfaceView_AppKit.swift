@@ -386,7 +386,10 @@ extension Ghostty {
             ) { [weak self] event in self?.localEventHandler(event) }
 
             // Setup our surface. This will also initialize all the terminal IO.
-            let surface_cfg = baseConfig ?? SurfaceConfiguration()
+            var surface_cfg = baseConfig ?? SurfaceConfiguration()
+            if let appDelegate = NSApp.delegate as? AppDelegate {
+                appDelegate.applyHostInstanceEnvironment(to: &surface_cfg)
+            }
             let surface = surface_cfg.withCValue(view: self) { surface_cfg_c in
                 ghostty_surface_new(app, &surface_cfg_c)
             }
@@ -1472,8 +1475,19 @@ extension Ghostty {
             // in a row without storing it all.
             var item: NSMenuItem
 
-            // If we have a selection, add copy and learn.
-            let hasSelection = (self.accessibilitySelectedText()?.isEmpty == false)
+            let selectedText = self.accessibilitySelectedText()?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let hasSelection = selectedText?.isEmpty == false
+            let selectedPathTarget: LocalPathTarget? = {
+                guard let selectedText,
+                      !selectedText.isEmpty else { return nil }
+                return LocalPathTarget.resolve(
+                    rawValue: selectedText,
+                    workingDirectory: pwd
+                )
+            }()
+
+            // If we have a selection, add copy and related context actions.
             if hasSelection {
                 menu.addItem(withTitle: AppLocalization.localizedText("Copy"), action: #selector(copy(_:)), keyEquivalent: "")
 
@@ -1483,6 +1497,16 @@ extension Ghostty {
                     keyEquivalent: ""
                 )
                 item.setImageIfDesired(systemSymbolName: "book.closed")
+
+                if let selectedPathTarget {
+                    item = menu.addItem(
+                        withTitle: AppLocalization.localizedText("Show in Finder"),
+                        action: #selector(revealSelectionInFinder(_:)),
+                        keyEquivalent: ""
+                    )
+                    item.representedObject = selectedPathTarget.fileURL
+                    item.setImageIfDesired(systemSymbolName: "folder")
+                }
             }
             menu.addItem(withTitle: AppLocalization.localizedText("Paste"), action: #selector(paste(_:)), keyEquivalent: "")
 
@@ -1527,6 +1551,23 @@ extension Ghostty {
             let action = "paste_from_clipboard"
             if !ghostty_surface_binding_action(surface, action, UInt(action.lengthOfBytes(using: .utf8))) {
                 AppDelegate.logger.warning("action failed action=\(action)")
+            }
+        }
+
+        @IBAction func revealSelectionInFinder(_ sender: Any?) {
+            guard let item = sender as? NSMenuItem,
+                  let fileURL = item.representedObject as? URL else { return }
+
+            var isDirectory = ObjCBool(false)
+            guard FileManager.default.fileExists(atPath: fileURL.path, isDirectory: &isDirectory) else {
+                NSSound.beep()
+                return
+            }
+
+            if isDirectory.boolValue {
+                NSWorkspace.shared.open(fileURL)
+            } else {
+                NSWorkspace.shared.activateFileViewerSelecting([fileURL])
             }
         }
 
@@ -2558,18 +2599,59 @@ extension Ghostty.SurfaceView: NSTextInputClient {
 
 extension Ghostty.SurfaceView {
     @MainActor
-    func aiManagerVisibleText() -> String {
-        cachedVisibleContents.get()
+    func aiManagerVisibleText(refresh: Bool = false) -> (content: String, cacheAgeMs: Int) {
+        if refresh {
+            return (readAIManagerText(tag: GHOSTTY_POINT_VIEWPORT), 0)
+        }
+        let content = cachedVisibleContents.get()
+        return (content, cachedVisibleContents.cacheAgeMilliseconds() ?? 0)
     }
 
     @MainActor
-    func aiManagerScreenText() -> String {
-        cachedScreenContents.get()
+    func aiManagerScreenText(refresh: Bool = false) -> (content: String, cacheAgeMs: Int) {
+        if refresh {
+            return (readAIManagerText(tag: GHOSTTY_POINT_SCREEN), 0)
+        }
+        let content = cachedScreenContents.get()
+        return (content, cachedScreenContents.cacheAgeMilliseconds() ?? 0)
     }
 
     @MainActor
     func aiManagerSendText(_ text: String) {
         surfaceModel?.sendText(text)
+    }
+
+    @MainActor
+    func aiManagerRunCommand(_ command: String) {
+        let trimmed = command.trimmingCharacters(in: .newlines)
+        guard !trimmed.isEmpty else { return }
+        surfaceModel?.sendText(trimmed)
+        surfaceModel?.sendKeyEvent(.init(key: .enter, action: .press))
+        surfaceModel?.sendKeyEvent(.init(key: .enter, action: .release))
+    }
+
+    @MainActor
+    private func readAIManagerText(tag: ghostty_point_tag_e) -> String {
+        guard let surface else { return "" }
+        var text = ghostty_text_s()
+        let selection = ghostty_selection_s(
+            top_left: ghostty_point_s(
+                tag: tag,
+                coord: GHOSTTY_POINT_COORD_TOP_LEFT,
+                x: 0,
+                y: 0
+            ),
+            bottom_right: ghostty_point_s(
+                tag: tag,
+                coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
+                x: 0,
+                y: 0
+            ),
+            rectangle: false
+        )
+        guard ghostty_surface_read_text(surface, selection, &text) else { return "" }
+        defer { ghostty_surface_free_text(surface, &text) }
+        return String(cString: text.text)
     }
 }
 
@@ -2837,6 +2919,16 @@ extension Ghostty.SurfaceView {
 
 }
 
+extension Ghostty.SurfaceView {
+    var quicklookFontPointSize: CGFloat? {
+        guard let surface, let fontRaw = ghostty_surface_quicklook_font(surface) else { return nil }
+        let font = Unmanaged<CTFont>.fromOpaque(fontRaw)
+        let pointSize = CTFontGetSize(font.takeUnretainedValue())
+        font.release()
+        return pointSize > 0 ? pointSize : nil
+    }
+}
+
 /// Caches a value for some period of time, evicting it automatically when that time expires.
 /// We use this to cache our surface content. This probably should be extracted some day
 /// to a more generic helper.
@@ -2845,6 +2937,7 @@ class CachedValue<T> {
     private let fetch: () -> T
     private let duration: Duration
     private var expiryTask: Task<Void, Never>?
+    private var fetchedAt: ContinuousClock.Instant?
 
     init(duration: Duration, fetch: @escaping () -> T) {
         self.duration = duration
@@ -2865,12 +2958,14 @@ class CachedValue<T> {
         let now = ContinuousClock.now
         let expires = now + duration
         self.value = result
+        self.fetchedAt = now
 
         // Schedule a task to clear the value
         expiryTask = Task { [weak self] in
             do {
                 try await Task.sleep(until: expires)
                 self?.value = nil
+                self?.fetchedAt = nil
                 self?.expiryTask = nil
             } catch {
                 // Task was cancelled, do nothing
@@ -2878,5 +2973,15 @@ class CachedValue<T> {
         }
 
         return result
+    }
+
+    func cacheAgeMilliseconds() -> Int? {
+        guard let fetchedAt else { return nil }
+        let duration = fetchedAt.duration(to: ContinuousClock.now)
+        let components = duration.components
+        let secondsMs = components.seconds * 1_000
+        let attosecondsMs = components.attoseconds / 1_000_000_000_000_000
+        let totalMs = secondsMs + attosecondsMs
+        return max(Int(totalMs), 0)
     }
 }

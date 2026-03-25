@@ -1,0 +1,103 @@
+diff --git a/node_modules/expo-modules-core/android/build.gradle b/node_modules/expo-modules-core/android/build.gradle
+index 61ed6d6..0cb4139 100644
+--- a/node_modules/expo-modules-core/android/build.gradle
++++ b/node_modules/expo-modules-core/android/build.gradle
+@@ -9,6 +9,7 @@ buildscript {
+   ext.shouldIncludeCompose = coreFeatures.contains("compose")
+ 
+   repositories {
++    mavenLocal()
+     mavenCentral()
+   }
+ 
+diff --git a/node_modules/expo-modules-core/expo-module-gradle-plugin/.gradle/8.10.2/executionHistory/executionHistory.bin b/node_modules/expo-modules-core/expo-module-gradle-plugin/.gradle/8.10.2/executionHistory/executionHistory.bin
+new file mode 100644
+index 0000000..422a14e
+Binary files /dev/null and b/node_modules/expo-modules-core/expo-module-gradle-plugin/.gradle/8.10.2/executionHistory/executionHistory.bin differ
+diff --git a/node_modules/expo-modules-core/expo-module-gradle-plugin/.gradle/8.10.2/executionHistory/executionHistory.lock b/node_modules/expo-modules-core/expo-module-gradle-plugin/.gradle/8.10.2/executionHistory/executionHistory.lock
+new file mode 100644
+index 0000000..c22720d
+Binary files /dev/null and b/node_modules/expo-modules-core/expo-module-gradle-plugin/.gradle/8.10.2/executionHistory/executionHistory.lock differ
+diff --git a/node_modules/expo-modules-core/expo-module-gradle-plugin/.gradle/buildOutputCleanup/buildOutputCleanup.lock b/node_modules/expo-modules-core/expo-module-gradle-plugin/.gradle/buildOutputCleanup/buildOutputCleanup.lock
+new file mode 100644
+index 0000000..b35d595
+Binary files /dev/null and b/node_modules/expo-modules-core/expo-module-gradle-plugin/.gradle/buildOutputCleanup/buildOutputCleanup.lock differ
+diff --git a/node_modules/expo-modules-core/expo-module-gradle-plugin/.gradle/buildOutputCleanup/cache.properties b/node_modules/expo-modules-core/expo-module-gradle-plugin/.gradle/buildOutputCleanup/cache.properties
+new file mode 100644
+index 0000000..48a415b
+--- /dev/null
++++ b/node_modules/expo-modules-core/expo-module-gradle-plugin/.gradle/buildOutputCleanup/cache.properties
+@@ -0,0 +1,2 @@
++#Mon Mar 23 12:45:01 CST 2026
++gradle.version=8.10.2
+diff --git a/node_modules/expo-modules-core/expo-module-gradle-plugin/.gradle/buildOutputCleanup/outputFiles.bin b/node_modules/expo-modules-core/expo-module-gradle-plugin/.gradle/buildOutputCleanup/outputFiles.bin
+new file mode 100644
+index 0000000..a4de414
+Binary files /dev/null and b/node_modules/expo-modules-core/expo-module-gradle-plugin/.gradle/buildOutputCleanup/outputFiles.bin differ
+diff --git a/node_modules/expo-modules-core/expo-module-gradle-plugin/.gradle/file-system.probe b/node_modules/expo-modules-core/expo-module-gradle-plugin/.gradle/file-system.probe
+new file mode 100644
+index 0000000..5c83cd5
+Binary files /dev/null and b/node_modules/expo-modules-core/expo-module-gradle-plugin/.gradle/file-system.probe differ
+diff --git a/node_modules/expo-modules-core/expo-module-gradle-plugin/build.gradle.kts b/node_modules/expo-modules-core/expo-module-gradle-plugin/build.gradle.kts
+index 9697cea..2de42e0 100644
+--- a/node_modules/expo-modules-core/expo-module-gradle-plugin/build.gradle.kts
++++ b/node_modules/expo-modules-core/expo-module-gradle-plugin/build.gradle.kts
+@@ -1,12 +1,15 @@
+ import org.gradle.api.tasks.testing.logging.TestExceptionFormat
+ import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+ 
++val localM2 = "${System.getProperty("user.home")}/.m2/repository"
++
+ plugins {
+-  kotlin("jvm") version "2.1.20"
++  kotlin("jvm") version "2.0.21"
+   id("java-gradle-plugin")
+ }
+ 
+ repositories {
++  mavenLocal()
+   google()
+   mavenCentral()
+ }
+@@ -28,9 +31,9 @@ val isExpoAutolinkingSettingsPluginAvailable = expoAutolinkingSettingsPlugin ==
+ 
+ dependencies {
+   implementation(gradleApi())
+-  compileOnly("com.android.tools.build:gradle:8.5.0")
++  compileOnly("com.android.tools.build:gradle:8.5.2")
+   implementation("com.facebook.react:react-native-gradle-plugin")
+-  implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
++  implementation(files("${localM2}/org/jetbrains/kotlinx/kotlinx-serialization-json/1.6.3/kotlinx-serialization-json-1.6.3.jar"))
+ 
+   if (isExpoAutolinkingSettingsPluginAvailable) {
+     implementation("expo.modules:expo-autolinking-plugin-shared")
+diff --git a/node_modules/expo-modules-core/expo-module-gradle-plugin/build/pluginDescriptors/expo-module-gradle-plugin.properties b/node_modules/expo-modules-core/expo-module-gradle-plugin/build/pluginDescriptors/expo-module-gradle-plugin.properties
+new file mode 100644
+index 0000000..08df140
+--- /dev/null
++++ b/node_modules/expo-modules-core/expo-module-gradle-plugin/build/pluginDescriptors/expo-module-gradle-plugin.properties
+@@ -0,0 +1 @@
++implementation-class=expo.modules.plugin.ExpoModulesGradlePlugin
+diff --git a/node_modules/expo-modules-core/expo-module-gradle-plugin/build/resources/main/META-INF/gradle-plugins/expo-module-gradle-plugin.properties b/node_modules/expo-modules-core/expo-module-gradle-plugin/build/resources/main/META-INF/gradle-plugins/expo-module-gradle-plugin.properties
+new file mode 100644
+index 0000000..08df140
+--- /dev/null
++++ b/node_modules/expo-modules-core/expo-module-gradle-plugin/build/resources/main/META-INF/gradle-plugins/expo-module-gradle-plugin.properties
+@@ -0,0 +1 @@
++implementation-class=expo.modules.plugin.ExpoModulesGradlePlugin
+diff --git a/node_modules/expo-modules-core/expo-module-gradle-plugin/settings.gradle.kts b/node_modules/expo-modules-core/expo-module-gradle-plugin/settings.gradle.kts
+new file mode 100644
+index 0000000..6dd7476
+--- /dev/null
++++ b/node_modules/expo-modules-core/expo-module-gradle-plugin/settings.gradle.kts
+@@ -0,0 +1,10 @@
++pluginManagement {
++  repositories {
++    mavenLocal()
++    google()
++    mavenCentral()
++    gradlePluginPortal()
++  }
++}
++
++rootProject.name = "expo-module-gradle-plugin"

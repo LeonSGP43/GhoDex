@@ -1,9 +1,43 @@
 import Cocoa
 import SwiftUI
 
-final class SSHConnectionsController: NSWindowController, NSWindowDelegate {
+enum SSHConnectionsPanelTab: String, CaseIterable, Identifiable {
+    case connections
+    case todo
+    case learning
+    case taskQueue
+    case browser
+    case preferences
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .connections:
+            return L10n.SSHConnections.tabConnections
+        case .todo:
+            return L10n.SSHConnections.tabTodo
+        case .learning:
+            return L10n.SSHConnections.tabLearning
+        case .taskQueue:
+            return "Task Queue"
+        case .browser:
+            return L10n.Settings.browserTitle
+        case .preferences:
+            return L10n.Settings.title
+        }
+    }
+}
+
+@MainActor
+final class SSHConnectionsPresentationState: ObservableObject {
+    @Published var selectedTab: SSHConnectionsPanelTab = .connections
+    @Published var todoFocusedWorkspaceID: UUID?
+}
+
+final class SSHConnectionsController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
     private let store: AITerminalManagerStore
-    private unowned let appDelegate: AppDelegate
+    private let presentationState = SSHConnectionsPresentationState()
 
     static func windowsAreInSameTabGroup(_ lhs: NSWindow?, _ rhs: NSWindow?) -> Bool {
         guard
@@ -14,9 +48,8 @@ final class SSHConnectionsController: NSWindowController, NSWindowDelegate {
         return lhsGroup === rhsGroup
     }
 
-    init(store: AITerminalManagerStore, appDelegate: AppDelegate) {
+    init(appDelegate: AppDelegate, store: AITerminalManagerStore) {
         self.store = store
-        self.appDelegate = appDelegate
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1400, height: 860),
@@ -33,7 +66,7 @@ final class SSHConnectionsController: NSWindowController, NSWindowDelegate {
         }
         window.center()
         window.contentView = NSHostingView(
-            rootView: SSHConnectionsView()
+            rootView: SSHConnectionsView(presentation: presentationState)
                 .environmentObject(store)
                 .environmentObject(appDelegate)
         )
@@ -47,7 +80,13 @@ final class SSHConnectionsController: NSWindowController, NSWindowDelegate {
         fatalError("init(coder:) is not supported for SSHConnectionsController")
     }
 
-    func show(tabbedInto parentWindow: NSWindow? = TerminalController.preferredParent?.window) {
+    func show(
+        tab selectedTab: SSHConnectionsPanelTab = .connections,
+        todoFocusedWorkspaceID: UUID? = nil,
+        tabbedInto parentWindow: NSWindow? = TerminalController.preferredParent?.window
+    ) {
+        presentationState.selectedTab = selectedTab
+        presentationState.todoFocusedWorkspaceID = todoFocusedWorkspaceID
         store.refresh()
 
         if let window,
@@ -67,5 +106,35 @@ final class SSHConnectionsController: NSWindowController, NSWindowDelegate {
 
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @IBAction func newTab(_ sender: Any?) {
+        guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
+        appDelegate.showNewTabPicker(from: window)
+    }
+
+    @IBAction override func newWindowForTab(_ sender: Any?) {
+        newTab(sender)
+    }
+
+    @IBAction func close(_ sender: Any?) {
+        window?.close()
+    }
+
+    @IBAction func closeTab(_ sender: Any?) {
+        window?.close()
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(newTab(_:)),
+            #selector(newWindowForTab(_:)):
+            return window != nil
+        case #selector(close(_:)),
+            #selector(closeTab(_:)):
+            return window != nil
+        default:
+            return true
+        }
     }
 }

@@ -44,6 +44,8 @@ class TerminalWindow: NSWindow {
 
     /// Sets up our tab context menu
     private var tabMenuObserver: NSObjectProtocol?
+    private var todoObserver: NSObjectProtocol?
+    private let todoQuickLookPopover = NSPopover()
 
     /// Handles inline tab title editing for this host window.
     private(set) lazy var tabTitleEditor = TabTitleEditor(
@@ -184,9 +186,12 @@ class TerminalWindow: NSWindow {
         stackView.alignment = .centerY
         stackView.addArrangedSubview(tabBellIndicator)
         stackView.addArrangedSubview(tabColorIndicator)
+        stackView.addArrangedSubview(todoSummaryButton)
         stackView.addArrangedSubview(keyEquivalentLabel)
         stackView.addArrangedSubview(resetZoomTabButton)
         tab.accessoryView = stackView
+        installTodoObserverIfNeeded()
+        updateTodoSummaryButton()
 
         // Get our saved level
         level = UserDefaults.standard.value(forKey: Self.defaultLevelKey) as? NSWindow.Level ?? .normal
@@ -232,6 +237,7 @@ class TerminalWindow: NSWindow {
     override func becomeKey() {
         super.becomeKey()
         resetZoomTabButton.contentTintColor = .controlAccentColor
+        updateTodoSummaryButton()
     }
 
     override func resignKey() {
@@ -251,6 +257,7 @@ class TerminalWindow: NSWindow {
             tabBarDidDisappear()
         }
         viewModel.isMainWindow = true
+        updateTodoSummaryButton()
     }
 
     override func resignMain() {
@@ -386,6 +393,17 @@ class TerminalWindow: NSWindow {
         return label
     }()
 
+    private lazy var todoSummaryButton: NSButton = {
+        let button = NSButton(title: "", target: self, action: #selector(toggleTodoQuickLookFromTabAccessory(_:)))
+        button.isHidden = true
+        button.isBordered = false
+        button.bezelStyle = .inline
+        button.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
+        button.contentTintColor = .controlAccentColor
+        button.translatesAutoresizingMaskIntoConstraints = false
+        return button
+    }()
+
     // MARK: Surface Zoom
 
     /// Set to true if a surface is currently zoomed to show the reset zoom button.
@@ -419,6 +437,88 @@ class TerminalWindow: NSWindow {
         button.widthAnchor.constraint(equalToConstant: 20).isActive = true
         button.heightAnchor.constraint(equalToConstant: 20).isActive = true
         return button
+    }
+
+    private func installTodoObserverIfNeeded() {
+        guard todoObserver == nil else { return }
+        todoObserver = NotificationCenter.default.addObserver(
+            forName: .ghodexTodoStateDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateTodoSummaryButton()
+        }
+    }
+
+    private func updateTodoSummaryButton() {
+        guard
+            let appDelegate = NSApp.delegate as? AppDelegate,
+            let store = appDelegate.existingAITerminalManagerStore,
+            let workspaceID = terminalController?.workspaceID
+        else {
+            todoSummaryButton.isHidden = true
+            todoQuickLookPopover.performClose(nil)
+            return
+        }
+
+        let summary = store.todoWorkspaceSummary(for: workspaceID)
+        guard summary.totalCount > 0 else {
+            todoSummaryButton.isHidden = true
+            todoQuickLookPopover.performClose(nil)
+            return
+        }
+
+        todoSummaryButton.title = "Todo \(summary.completedCount)/\(summary.totalCount)"
+        todoSummaryButton.toolTip = L10n.SSHConnections.todoTitle
+        todoSummaryButton.isHidden = false
+    }
+
+    @objc private func toggleTodoQuickLookFromTabAccessory(_ sender: Any?) {
+        if todoQuickLookPopover.isShown {
+            todoQuickLookPopover.performClose(sender)
+            return
+        }
+
+        guard
+            let appDelegate = NSApp.delegate as? AppDelegate,
+            let workspaceID = terminalController?.workspaceID
+        else {
+            return
+        }
+
+        let trimmedTitle = terminalController?.titleOverride?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let workspaceTitle = trimmedTitle.isEmpty ? title : trimmedTitle
+        let content = TodoQuickLookView(
+            store: appDelegate.aiTerminalManagerStore,
+            workspaceID: workspaceID,
+            workspaceTitle: workspaceTitle.isEmpty ? "Tab" : workspaceTitle,
+            openManager: { [weak self] in
+                self?.todoQuickLookPopover.performClose(nil)
+                guard let self else { return }
+                _ = appDelegate.toggleTodoSidebar(
+                    focusedWorkspaceID: workspaceID,
+                    from: self
+                )
+            }
+        )
+        let hostingController = NSHostingController(rootView: content)
+        hostingController.view.frame = NSRect(x: 0, y: 0, width: 360, height: 300)
+        todoQuickLookPopover.contentViewController = hostingController
+        todoQuickLookPopover.behavior = .transient
+        todoQuickLookPopover.animates = true
+        todoQuickLookPopover.show(
+            relativeTo: todoSummaryButton.bounds,
+            of: todoSummaryButton,
+            preferredEdge: .maxY
+        )
+    }
+
+    @objc private func openTodoWorkspaceFromTabAccessory(_ sender: Any?) {
+        guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
+        _ = appDelegate.toggleTodoSidebar(
+            focusedWorkspaceID: terminalController?.workspaceID,
+            from: self
+        )
     }
 
     // MARK: Title Text
@@ -614,6 +714,9 @@ class TerminalWindow: NSWindow {
         if let observer = tabMenuObserver {
             NotificationCenter.default.removeObserver(observer)
         }
+        if let observer = todoObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
 
     // MARK: Config
@@ -655,6 +758,133 @@ class TerminalWindow: NSWindow {
                 self.windowCornerRadius = 16
             }
         }
+    }
+}
+
+@MainActor
+private struct TodoQuickLookView: View {
+    let store: AITerminalManagerStore
+    let workspaceID: UUID
+    let workspaceTitle: String
+    let openManager: () -> Void
+    @State private var snapshot: AITerminalTodoWorkspaceSnapshot
+
+    init(
+        store: AITerminalManagerStore,
+        workspaceID: UUID,
+        workspaceTitle: String,
+        openManager: @escaping () -> Void
+    ) {
+        self.store = store
+        self.workspaceID = workspaceID
+        self.workspaceTitle = workspaceTitle
+        self.openManager = openManager
+        _snapshot = State(initialValue: store.todoWorkspaceSnapshot(for: workspaceID, on: .now))
+    }
+
+    private var summary: AITerminalTodoWorkspaceProgressSummary {
+        snapshot.summary
+    }
+
+    private var items: [AITerminalTodoItem] {
+        snapshot.items
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(L10n.SSHConnections.todoQuickLookTitle)
+                    .font(.headline)
+
+                Text(workspaceTitle)
+                    .font(.title3.weight(.semibold))
+
+                Text(L10n.SSHConnections.todoQuickLookSummary(
+                    summary.completedCount,
+                    summary.totalCount,
+                    summary.remainingCount
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            if items.isEmpty {
+                Text(L10n.SSHConnections.todoQuickLookEmpty)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 12)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(items.prefix(6), id: \.id) { item in
+                            todoRow(item)
+                        }
+
+                        if items.count > 6 {
+                            Text(L10n.SSHConnections.todoQuickLookMore(items.count - 6))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .frame(maxHeight: 180)
+            }
+
+            Button(L10n.SSHConnections.todoQuickLookManage) {
+                openManager()
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(14)
+        .frame(width: 340, alignment: .leading)
+        .onAppear(perform: reloadSnapshot)
+        .onReceive(NotificationCenter.default.publisher(
+            for: .ghodexTodoStateDidChange,
+            object: store
+        )) { _ in
+            reloadSnapshot()
+        }
+    }
+
+    private func todoRow(_ item: AITerminalTodoItem) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Button {
+                guard store.setTodoItemCompleted(
+                    id: item.id,
+                    isCompleted: !item.isCompleted,
+                    for: .now
+                ) != nil else {
+                    return
+                }
+                reloadSnapshot()
+            } label: {
+                Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(item.isCompleted ? Color.green : Color.secondary)
+                    .font(.body)
+            }
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title)
+                    .font(.callout.weight(.semibold))
+                    .strikethrough(item.isCompleted, color: .secondary)
+
+                if !item.notes.isEmpty {
+                    Text(item.notes)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func reloadSnapshot() {
+        snapshot = store.todoWorkspaceSnapshot(for: workspaceID, on: .now)
     }
 }
 
@@ -750,6 +980,7 @@ private struct TabBellIndicatorView: View {
 
 extension TerminalWindow {
     private static let closeTabsOnRightMenuItemIdentifier = NSUserInterfaceItemIdentifier("com.leongong.ghodex.closeTabsOnTheRightMenuItem")
+    private static let saveWorkspaceMenuItemIdentifier = NSUserInterfaceItemIdentifier("com.leongong.ghodex.saveWorkspaceMenuItem")
     private static let changeTitleMenuItemIdentifier = NSUserInterfaceItemIdentifier("com.leongong.ghodex.changeTitleMenuItem")
     private static let tabColorSeparatorIdentifier = NSUserInterfaceItemIdentifier("com.leongong.ghodex.tabColorSeparator")
 
@@ -809,6 +1040,7 @@ extension TerminalWindow {
     private func appendTabModifierSection(to menu: NSMenu, target: TerminalController?) {
         menu.removeItems(withIdentifiers: [
             Self.tabColorSeparatorIdentifier,
+            Self.saveWorkspaceMenuItemIdentifier,
             Self.changeTitleMenuItemIdentifier,
             Self.tabColorPaletteIdentifier
         ])
@@ -816,6 +1048,17 @@ extension TerminalWindow {
         let separator = NSMenuItem.separator()
         separator.identifier = Self.tabColorSeparatorIdentifier
         menu.addItem(separator)
+
+        let saveWorkspaceItem = NSMenuItem(
+            title: L10n.AITerminalManager.saveWorkspaceAction,
+            action: #selector(AppDelegate.saveWorkspace(_:)),
+            keyEquivalent: ""
+        )
+        saveWorkspaceItem.identifier = Self.saveWorkspaceMenuItemIdentifier
+        saveWorkspaceItem.target = NSApp.delegate
+        saveWorkspaceItem.representedObject = target?.window
+        saveWorkspaceItem.setImageIfDesired(systemSymbolName: "square.and.arrow.down")
+        menu.addItem(saveWorkspaceItem)
 
         // Rename Tab...
         let changeTitleItem = NSMenuItem(

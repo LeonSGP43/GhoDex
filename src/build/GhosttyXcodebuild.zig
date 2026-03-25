@@ -50,6 +50,16 @@ pub fn init(
 
     const env = try std.process.getEnvMap(b.allocator);
     const app_path = b.fmt("macos/build/{s}/GhoDex.app", .{xc_config});
+    const xctest_derived_data = b.fmt("/tmp/ghodex-zig-xcodebuild-test-{s}", .{switch (builtin.cpu.arch) {
+        .aarch64 => "arm64",
+        .x86_64 => "x86_64",
+        else => @panic("unsupported macOS arch"),
+    }});
+    const xctest_destination = b.fmt("platform=macOS,arch={s}", .{switch (builtin.cpu.arch) {
+        .aarch64 => "arm64",
+        .x86_64 => "x86_64",
+        else => @panic("unsupported macOS arch"),
+    }});
 
     // Our step to build the Ghostty macOS app.
     const build = build: {
@@ -57,6 +67,7 @@ pub fn init(
         // we create a new empty environment.
         const env_map = try b.allocator.create(std.process.EnvMap);
         env_map.* = .init(b.allocator);
+        if (env.get("HOME")) |v| try env_map.put("HOME", v);
         if (env.get("PATH")) |v| try env_map.put("PATH", v);
 
         const step = RunStep.create(b, "xcodebuild");
@@ -95,6 +106,7 @@ pub fn init(
     const xctest = xctest: {
         const env_map = try b.allocator.create(std.process.EnvMap);
         env_map.* = .init(b.allocator);
+        if (env.get("HOME")) |v| try env_map.put("HOME", v);
         if (env.get("PATH")) |v| try env_map.put("PATH", v);
 
         const step = RunStep.create(b, "xcodebuild test");
@@ -108,10 +120,18 @@ pub fn init(
             "GhoDex.xcodeproj",
             "-scheme",
             "GhoDex",
+            "-configuration",
+            xc_config,
+            "-destination",
+            xctest_destination,
+            "-derivedDataPath",
+            xctest_derived_data,
             "-skip-testing",
             "GhosttyUITests",
         });
-        if (xc_arch) |arch| step.addArgs(&.{ "-arch", arch });
+
+        // The explicit destination already selects the host architecture.
+        // Passing -arch again makes xcodebuild reject the invocation.
 
         // We need the xcframework
         deps.xcframework.addStepDependencies(&step.step);

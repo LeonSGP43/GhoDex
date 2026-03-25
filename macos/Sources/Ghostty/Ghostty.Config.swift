@@ -754,6 +754,10 @@ extension Ghostty {
             repeatableStrings(for: "ghodex-workspace")
         }
 
+        var ghodexSavedWorkspaceTemplates: [String] {
+            repeatableStrings(for: "ghodex-saved-workspace-template")
+        }
+
         var ghodexHeartbeatTasks: [String] {
             repeatableStrings(for: "ghodex-heartbeat-task")
         }
@@ -804,6 +808,34 @@ extension Ghostty {
 
         var ghodexBrowserRemoteDebugPort: Int {
             Int(uint(for: "ghodex-browser-remote-debug-port", default: 0))
+        }
+
+        var ghodexTodoEnabled: Bool {
+            bool(for: "ghodex-todo-enabled", default: true)
+        }
+
+        var ghodexTodoWorkspaceRootPath: String? {
+            optionalString(for: "ghodex-todo-workspace-root-path")
+        }
+
+        var ghodexTodoShowCompletedItems: Bool {
+            bool(for: "ghodex-todo-show-completed-items", default: true)
+        }
+
+        var ghodexTodoSelectedDateAnchor: String? {
+            optionalString(for: "ghodex-todo-selected-date-anchor")
+        }
+
+        var ghodexTodoSidebarEdge: String? {
+            optionalString(for: "ghodex-todo-sidebar-edge")
+        }
+
+        var ghodexTodoWorkspaceOverlayVisible: Bool {
+            bool(for: "ghodex-todo-workspace-overlay-visible", default: false)
+        }
+
+        var ghodexTodoWorkspaceOverlayCorner: String? {
+            optionalString(for: "ghodex-todo-workspace-overlay-corner")
         }
 
         var ghodexHeartbeatEnabled: Bool {

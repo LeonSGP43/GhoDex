@@ -1,6 +1,17 @@
 import Foundation
 
+enum NewTabPickerMode: Hashable {
+    case topLevel
+    case paneChild
+}
+
 struct NewTabPickerEntry: Identifiable, Hashable {
+    enum Kind: Hashable {
+        case browser
+        case host(AITerminalHost)
+        case savedWorkspace(AITerminalSavedWorkspaceTemplate)
+    }
+
     enum Section: Hashable {
         case browser
         case local
@@ -8,55 +19,21 @@ struct NewTabPickerEntry: Identifiable, Hashable {
         case recent
         case saved
         case imported
+        case savedWorkspaces
     }
 
-    enum Destination: Hashable {
-        case browser
-        case host(AITerminalHost)
-    }
-
-    let destination: Destination
+    let kind: Kind
     let section: Section
     let shortcutIndex: Int?
 
     var id: String {
-        switch destination {
+        switch kind {
         case .browser:
             return "browser"
         case .host(let host):
             return host.id
-        }
-    }
-
-    var title: String {
-        switch destination {
-        case .browser:
-            return AppLocalization.localizedText("Browser")
-        case .host(let host):
-            return host.name
-        }
-    }
-
-    var subtitle: String {
-        switch destination {
-        case .browser:
-            return AppLocalization.localizedText("Open a web page inside a GhoDex tab")
-        case .host(let host):
-            return host.connectionTarget ?? host.displaySubtitle
-        }
-    }
-
-    var iconName: String {
-        switch destination {
-        case .browser:
-            return "globe"
-        case .host(let host):
-            switch host.transport {
-            case .local, .localmcd:
-                return "laptopcomputer"
-            case .ssh:
-                return "arrow.up.right.square"
-            }
+        case .savedWorkspace(let workspace):
+            return workspace.id
         }
     }
 }
@@ -89,10 +66,12 @@ enum NewTabPickerModel {
         recentHosts: [AITerminalHost],
         savedHosts: [AITerminalHost],
         importedHosts: [AITerminalHost],
+        savedWorkspaceTemplates: [AITerminalSavedWorkspaceTemplate] = [],
+        mode: NewTabPickerMode = .topLevel,
         hasStoredPassword: (AITerminalHost) -> Bool
     ) -> [NewTabPickerEntry] {
         var entries: [NewTabPickerEntry] = [
-            .init(destination: .host(.local), section: .local, shortcutIndex: 1),
+            .init(kind: .host(.local), section: .local, shortcutIndex: 1),
         ]
         var seen: Set<String> = [AITerminalHost.local.id]
         var shortcutIndex = 2
@@ -102,7 +81,7 @@ enum NewTabPickerModel {
                 guard seen.insert(host.id).inserted else { continue }
                 guard isLaunchable(host: host, hasStoredPassword: hasStoredPassword(host)) else { continue }
                 entries.append(.init(
-                    destination: .host(host),
+                    kind: .host(host),
                     section: section,
                     shortcutIndex: shortcutIndex <= 9 ? shortcutIndex : nil
                 ))
@@ -115,6 +94,17 @@ enum NewTabPickerModel {
         append(savedHosts, section: .saved)
         append(importedHosts, section: .imported)
 
+        if mode == .topLevel {
+            for workspace in savedWorkspaceTemplates {
+                entries.append(.init(
+                    kind: .savedWorkspace(workspace),
+                    section: .savedWorkspaces,
+                    shortcutIndex: shortcutIndex <= 9 ? shortcutIndex : nil
+                ))
+                shortcutIndex += 1
+            }
+        }
+
         return entries
     }
 
@@ -125,12 +115,11 @@ enum NewTabPickerModel {
         guard includeBrowserEntry else { return entries }
 
         var result = entries
-        let browserEntry = NewTabPickerEntry(destination: .browser, section: .browser, shortcutIndex: 1)
-        result.insert(browserEntry, at: 0)
+        result.insert(.init(kind: .browser, section: .browser, shortcutIndex: 1), at: 0)
 
         return result.enumerated().map { index, entry in
             .init(
-                destination: entry.destination,
+                kind: entry.kind,
                 section: entry.section,
                 shortcutIndex: index < 9 ? index + 1 : nil
             )
@@ -144,22 +133,51 @@ enum NewTabPickerModel {
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedQuery.isEmpty else { return entries }
 
-        return entries.filter { matches(entry: $0, query: normalizedQuery) }
+        return entries.filter {
+            switch $0.kind {
+            case .browser:
+                return matchesBrowser(query: normalizedQuery)
+            case .host(let host):
+                return matches(host: host, query: normalizedQuery)
+            case .savedWorkspace(let workspace):
+                return matches(workspace: workspace, query: normalizedQuery)
+            }
+        }
     }
 
-    private static func matches(entry: NewTabPickerEntry, query: String) -> Bool {
-        switch entry.destination {
-        case .browser:
-            return entry.title.localizedCaseInsensitiveContains(query)
-                || entry.subtitle.localizedCaseInsensitiveContains(query)
+    private static func matchesBrowser(query: String) -> Bool {
+        AppLocalization.localizedText("Browser").localizedCaseInsensitiveContains(query)
+            || AppLocalization
+            .localizedText("Open a web page inside a GhoDex tab")
+            .localizedCaseInsensitiveContains(query)
+    }
 
-        case .host(let host):
-            return host.name.localizedCaseInsensitiveContains(query)
-                || host.displaySubtitle.localizedCaseInsensitiveContains(query)
-                || (host.sshAlias?.localizedCaseInsensitiveContains(query) ?? false)
-                || (host.hostname?.localizedCaseInsensitiveContains(query) ?? false)
-                || (host.user?.localizedCaseInsensitiveContains(query) ?? false)
-                || host.startupCommands.contains(where: { $0.localizedCaseInsensitiveContains(query) })
+    private static func matches(host: AITerminalHost, query: String) -> Bool {
+        host.name.localizedCaseInsensitiveContains(query)
+            || host.displaySubtitle.localizedCaseInsensitiveContains(query)
+            || (host.sshAlias?.localizedCaseInsensitiveContains(query) ?? false)
+            || (host.hostname?.localizedCaseInsensitiveContains(query) ?? false)
+            || (host.user?.localizedCaseInsensitiveContains(query) ?? false)
+            || host.startupCommands.contains(where: { $0.localizedCaseInsensitiveContains(query) })
+    }
+
+    private static func matches(workspace: AITerminalSavedWorkspaceTemplate, query: String) -> Bool {
+        guard !workspace.name.localizedCaseInsensitiveContains(query) else { return true }
+        return savedWorkspaceSearchTokens(for: workspace).contains {
+            $0.localizedCaseInsensitiveContains(query)
         }
+    }
+
+    private static func savedWorkspaceSearchTokens(for workspace: AITerminalSavedWorkspaceTemplate) -> [String] {
+        func tokens(from node: AITerminalSavedWorkspaceNode) -> [String] {
+            switch node {
+            case .pane(let pane):
+                return pane.tabs.compactMap { $0.directory } + pane.tabs.map(\.hostID)
+            case .split(let split):
+                return tokens(from: split.left) + tokens(from: split.right)
+            }
+        }
+
+        return tokens(from: workspace.root)
     }
 }
