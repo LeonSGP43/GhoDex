@@ -143,7 +143,7 @@ export default function DevScreen() {
             <ItemGroup title="App Information">
                 <Item
                     title="Version"
-                    detail={Constants.expoConfig?.version || '1.0.0'}
+                    detail={Application.nativeApplicationVersion || Constants.expoConfig?.version || '1.0.0'}
                 />
                 <Item
                     title="Build Number"

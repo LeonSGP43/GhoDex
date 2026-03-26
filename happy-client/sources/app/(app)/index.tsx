@@ -15,11 +15,12 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { renderAnsiText } from '@/ghodex/ansi';
+import { getCurrentLanguage } from '@/text';
 import {
     closeTab as closeGatewayTab,
     createTab as createGatewayTab,
@@ -148,11 +149,11 @@ function tabHasDistinctTitle(tab: TabRow): boolean {
     return !tab.terminals.some((terminal) => labelsMatch(tabTitle, terminal.title));
 }
 
-function fallbackTabLabel(tab: TabRow): string {
-    return tab.windowNumber > 0 ? `Tab ${tab.windowNumber}` : 'Tab';
+function fallbackTabLabel(tab: TabRow, tabLabel: string): string {
+    return tab.windowNumber > 0 ? `${tabLabel} ${tab.windowNumber}` : tabLabel;
 }
 
-function tabPrimaryLabel(tab: TabRow, preferredTerminal: TerminalRow | null): string {
+function tabPrimaryLabel(tab: TabRow, preferredTerminal: TerminalRow | null, tabLabel: string): string {
     const tabTitle = tab.title?.trim();
     const terminalTitle = preferredTerminal?.title?.trim();
 
@@ -160,7 +161,7 @@ function tabPrimaryLabel(tab: TabRow, preferredTerminal: TerminalRow | null): st
         if (tabHasDistinctTitle(tab) && tabTitle) {
             return tabTitle;
         }
-        return fallbackTabLabel(tab);
+        return fallbackTabLabel(tab, tabLabel);
     }
 
     if (tabTitle && !labelsMatch(tabTitle, terminalTitle)) {
@@ -172,12 +173,17 @@ function tabPrimaryLabel(tab: TabRow, preferredTerminal: TerminalRow | null): st
     if (tabTitle) {
         return tabTitle;
     }
-    return fallbackTabLabel(tab);
+    return fallbackTabLabel(tab, tabLabel);
 }
 
-function tabSecondaryLabel(tab: TabRow, preferredTerminal: TerminalRow | null, primaryLabel: string): string | null {
+function tabSecondaryLabel(
+    tab: TabRow,
+    preferredTerminal: TerminalRow | null,
+    primaryLabel: string,
+    terminalsCountLabel: (count: number) => string,
+): string | null {
     if (tab.terminals.length > 1) {
-        return `${tab.terminals.length} terminals`;
+        return terminalsCountLabel(tab.terminals.length);
     }
 
     const tabTitle = tab.title?.trim();
@@ -278,9 +284,86 @@ function renameTabErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : 'Unexpected gateway error';
 }
 
+function getWorkspaceCopy(language = getCurrentLanguage()) {
+    if (language === 'zh-Hans') {
+        return {
+            syncLive: '实时连接',
+            syncReconnecting: (ms: number) => `实时重连中，${ms}ms 回退`,
+            syncPolling: (ms: number) => `${ms}ms 轮询`,
+            sidebarSummary: (tabs: number, terminals: number) => `${tabs} 个标签，${terminals} 个终端`,
+            terminalsCount: (count: number) => `${count} 个终端`,
+            loadingWorkspace: '正在加载 GhoDex 工作区…',
+            noTerminalText: '还没有抓取到终端文本，点击刷新后再试。',
+            openSidebarHint: '打开左侧边栏并选择一个终端会话。',
+            renamePlaceholder: '标签标题',
+            noActivePairing: '尚未绑定设备',
+            workspaceTabs: '工作区标签',
+            noTabDataYet: '还没有标签数据',
+            noTabDataBody: '先绑定这台手机，再重新打开侧边栏管理桌面标签和切换终端。',
+            device: '设备',
+            settings: '设置',
+            chooseTerminal: '选择终端',
+            remoteTitle: 'GhoDex Remote',
+            pairDesktopFirst: '先绑定桌面端',
+            pairDesktopBody: '首页只保留终端工作区。设备绑定与连接控制放在 Device，应用偏好放在 Settings。',
+            openDevice: '打开设备',
+            openSettings: '设置',
+            selectTerminalFromSidebar: '从侧边栏选择一个终端',
+            commandPlaceholder: '运行单行命令，或直接粘贴多行内容。',
+            tabLabel: '标签',
+            paste: '粘贴',
+            run: '运行',
+            renameTab: '重命名标签',
+            renameHint: '留空会恢复为桌面端自动管理的默认标题。',
+            cancel: '取消',
+            save: '保存',
+            liveBadge: '实时',
+            reconnectingBadge: '重连中',
+        };
+    }
+
+    return {
+        syncLive: 'Live stream',
+        syncReconnecting: (ms: number) => `Live reconnecting, ${ms}ms fallback`,
+        syncPolling: (ms: number) => `${ms}ms polling`,
+        sidebarSummary: (tabs: number, terminals: number) => `${tabs} tabs, ${terminals} terminals`,
+        terminalsCount: (count: number) => `${count} terminals`,
+        loadingWorkspace: 'Loading GhoDex workspace…',
+        noTerminalText: 'No terminal text captured yet. Refresh the terminal to fetch the visible surface.',
+        openSidebarHint: 'Open the left sidebar and choose a terminal session.',
+        renamePlaceholder: 'Tab title',
+        noActivePairing: 'No active pairing yet',
+        workspaceTabs: 'Workspace Tabs',
+        noTabDataYet: 'No tab data yet',
+        noTabDataBody: 'Pair the phone first, then reopen the sidebar to manage desktop tabs and switch terminal sessions.',
+        device: 'Device',
+        settings: 'Settings',
+        chooseTerminal: 'Choose terminal',
+        remoteTitle: 'GhoDex Remote',
+        pairDesktopFirst: 'Pair your desktop first',
+        pairDesktopBody: 'The home screen stays focused on the terminal panel. Device pairing and connection controls live under Device, while app preferences stay in Settings.',
+        openDevice: 'Open Device',
+        openSettings: 'Settings',
+        selectTerminalFromSidebar: 'Select a terminal from the sidebar',
+        commandPlaceholder: 'Run one line, paste real multi-line blocks.',
+        tabLabel: 'Tab',
+        paste: 'Paste',
+        run: 'Run',
+        renameTab: 'Rename Tab',
+        renameHint: 'Leave the field empty to restore the desktop-managed automatic title.',
+        cancel: 'Cancel',
+        save: 'Save',
+        liveBadge: 'Live',
+        reconnectingBadge: 'Reconnecting',
+    };
+}
+
 export default function GhoDexWorkspaceScreen() {
     const { theme } = useUnistyles();
     const router = useRouter();
+    const isFocused = useIsFocused();
+    const currentLanguage = getCurrentLanguage();
+    const copy = React.useMemo(() => getWorkspaceCopy(currentLanguage), [currentLanguage]);
     const insets = useSafeAreaInsets();
     const { width } = useWindowDimensions();
     const [loaded, setLoaded] = React.useState(false);
@@ -315,8 +398,14 @@ export default function GhoDexWorkspaceScreen() {
     const tabCount = snapshot?.tabs.length ?? 0;
     const terminalCount = snapshot?.terminals.length ?? 0;
     const syncLabel = session.liveUpdatesEnabled
-        ? (subscriptionOpen ? 'Live stream' : `Live reconnecting, ${session.pollIntervalMs}ms fallback`)
-        : `${session.pollIntervalMs}ms polling`;
+        ? (subscriptionOpen ? copy.syncLive : copy.syncReconnecting(session.pollIntervalMs))
+        : copy.syncPolling(session.pollIntervalMs);
+    const terminalDisplayText = selectedTerminal
+        ? (terminalContent || copy.noTerminalText)
+        : copy.openSidebarHint;
+    const renameTabPlaceholder = renameTabTarget
+        ? tabPrimaryLabel(renameTabTarget, pickPreferredTerminalInTab(renameTabTarget), copy.tabLabel)
+        : copy.renamePlaceholder;
     const sidebarTranslateX = React.useMemo(() => (
         sidebarProgress.interpolate({
             inputRange: [0, 1],
@@ -341,11 +430,16 @@ export default function GhoDexWorkspaceScreen() {
             outputRange: [0, 1],
         })
     ), [sidebarProgress]);
+    const renderedTerminalContent = React.useMemo(
+        () => renderAnsiText(terminalDisplayText),
+        [terminalDisplayText],
+    );
 
     const sessionRef = React.useRef(session);
     const snapshotRef = React.useRef<SnapshotResult | null>(snapshot);
     const selectedTerminalRef = React.useRef<TerminalRow | null>(selectedTerminal);
     const selectedTerminalIdRef = React.useRef<string | null>(selectedTerminalId);
+    const sidebarVisibleRef = React.useRef(sidebarVisible);
     const terminalViewRef = React.useRef<TerminalReadResult | null>(terminalView);
     const subscriptionSequenceRef = React.useRef(0);
     const liveReadInFlightRef = React.useRef(false);
@@ -372,6 +466,10 @@ export default function GhoDexWorkspaceScreen() {
     }, [selectedTerminal, selectedTerminalId]);
 
     React.useEffect(() => {
+        sidebarVisibleRef.current = sidebarVisible;
+    }, [sidebarVisible]);
+
+    React.useEffect(() => {
         terminalViewRef.current = terminalView;
         subscriptionSequenceRef.current = Math.max(subscriptionSequenceRef.current, terminalView?.lastSequence ?? 0);
     }, [terminalView]);
@@ -384,6 +482,12 @@ export default function GhoDexWorkspaceScreen() {
             useNativeDriver: true,
         }).start();
     }, [sidebarProgress, sidebarVisible]);
+
+    React.useEffect(() => {
+        if (!isFocused) {
+            setSidebarVisible(false);
+        }
+    }, [isFocused]);
 
     const runAction = React.useCallback(async (action: BusyAction, task: () => Promise<void>) => {
         setBusyAction(action);
@@ -586,7 +690,7 @@ export default function GhoDexWorkspaceScreen() {
             snapshotRefreshTimerRef.current = null;
             const activeSession = sessionRef.current;
             const authToken = activeSession.authToken.trim();
-            if (!authToken) {
+            if (!authToken || sidebarVisibleRef.current) {
                 return;
             }
             void refreshSnapshotRef.current?.(authToken, selectedTerminalIdRef.current);
@@ -602,7 +706,7 @@ export default function GhoDexWorkspaceScreen() {
         const activeSession = sessionRef.current;
         const authToken = activeSession.authToken.trim();
         const currentTerminal = selectedTerminalRef.current;
-        if (!authToken || !currentTerminal) {
+        if (!authToken || !currentTerminal || sidebarVisibleRef.current) {
             return;
         }
 
@@ -703,6 +807,7 @@ export default function GhoDexWorkspaceScreen() {
 
     const hydrateSession = React.useCallback(async () => {
         const stored = await loadStoredSession();
+        sessionRef.current = stored;
         setSession(stored);
         setLoaded(true);
 
@@ -714,11 +819,13 @@ export default function GhoDexWorkspaceScreen() {
             setTerminalContent('');
             setSubscriptionOpen(false);
             setAuthorizationRequired(false);
+            setErrorMessage(null);
             return;
         }
 
         try {
             await refreshSnapshotImpl(authToken, selectedTerminalIdRef.current);
+            setErrorMessage(null);
         } catch (error) {
             if (isGatewayAuthError(error)) {
                 setAuthorizationRequired(true);
@@ -955,7 +1062,7 @@ export default function GhoDexWorkspaceScreen() {
 
     React.useEffect(() => {
         const authToken = session.authToken.trim();
-        if (!loaded || !authToken || !session.liveUpdatesEnabled || authorizationRequired) {
+        if (!isFocused || !loaded || !authToken || !session.liveUpdatesEnabled || authorizationRequired || sidebarVisible) {
             setSubscriptionOpen(false);
             return;
         }
@@ -1015,11 +1122,22 @@ export default function GhoDexWorkspaceScreen() {
             }
             unsubscribe?.();
         };
-    }, [authorizationRequired, handleSubscriptionEnvelope, loaded, session.authToken, session.host, session.liveUpdatesEnabled, session.pollIntervalMs, session.port]);
+    }, [
+        authorizationRequired,
+        handleSubscriptionEnvelope,
+        isFocused,
+        loaded,
+        session.authToken,
+        session.host,
+        session.liveUpdatesEnabled,
+        session.pollIntervalMs,
+        session.port,
+        sidebarVisible,
+    ]);
 
     React.useEffect(() => {
         const authToken = session.authToken.trim();
-        if (!loaded || !authToken || !selectedTerminal || authorizationRequired) {
+        if (!isFocused || !loaded || !authToken || !selectedTerminal || authorizationRequired || sidebarVisible) {
             return;
         }
         if (session.liveUpdatesEnabled && subscriptionOpen) {
@@ -1080,15 +1198,26 @@ export default function GhoDexWorkspaceScreen() {
                 clearTimeout(timer);
             }
         };
-    }, [authorizationRequired, busyAction, loadTerminalViewImpl, loaded, selectedTerminal, session.authToken, session.liveUpdatesEnabled, session.pollIntervalMs, subscriptionOpen, terminalView]);
+    }, [
+        authorizationRequired,
+        busyAction,
+        isFocused,
+        loadTerminalViewImpl,
+        loaded,
+        selectedTerminal,
+        session.authToken,
+        session.liveUpdatesEnabled,
+        session.pollIntervalMs,
+        sidebarVisible,
+        subscriptionOpen,
+        terminalView,
+    ]);
 
     const openDevice = React.useCallback(() => {
-        setSidebarVisible(false);
         router.push('/gateway');
     }, [router]);
 
     const openSettings = React.useCallback(() => {
-        setSidebarVisible(false);
         router.push('/settings');
     }, [router]);
 
@@ -1096,17 +1225,10 @@ export default function GhoDexWorkspaceScreen() {
         return (
             <View style={styles.loadingScreen}>
                 <ActivityIndicator size="large" color={theme.colors.button.primary.background} />
-                <Text style={styles.loadingText}>Loading GhoDex workspace…</Text>
+                <Text style={styles.loadingText}>{copy.loadingWorkspace}</Text>
             </View>
         );
     }
-
-    const terminalDisplayText = selectedTerminal
-        ? (terminalContent || 'No terminal text captured yet. Refresh the terminal to fetch the visible surface.')
-        : 'Open the left sidebar and choose a terminal session.';
-    const renameTabPlaceholder = renameTabTarget
-        ? tabPrimaryLabel(renameTabTarget, pickPreferredTerminalInTab(renameTabTarget))
-        : 'Tab title';
 
     return (
         <View style={styles.screen}>
@@ -1126,7 +1248,7 @@ export default function GhoDexWorkspaceScreen() {
                     <View style={styles.sidebarHeaderCopy}>
                         <Text style={styles.sidebarTitle}>GhoDex</Text>
                         <Text style={styles.sidebarSubtitle}>
-                            {paired ? `${tabCount} tabs, ${terminalCount} terminals` : 'No active pairing yet'}
+                            {paired ? copy.sidebarSummary(tabCount, terminalCount) : copy.noActivePairing}
                         </Text>
                     </View>
                     <WorkspaceIconButton
@@ -1136,14 +1258,14 @@ export default function GhoDexWorkspaceScreen() {
                     />
                 </View>
 
-                <Text style={styles.sidebarSectionTitle}>Workspace Tabs</Text>
+                <Text style={styles.sidebarSectionTitle}>{copy.workspaceTabs}</Text>
                 <ScrollView contentContainerStyle={styles.sidebarList} showsVerticalScrollIndicator={false} style={styles.sidebarScroll}>
                     {paired && snapshot?.tabs.length ? snapshot.tabs.map((tab) => {
                         const preferredTerminal = pickPreferredTerminalInTab(tab);
                         const tabActive = tab.tabId === selectedTab?.tabId;
                         const showTerminalList = tab.terminals.length > 1;
-                        const primaryLabel = tabPrimaryLabel(tab, preferredTerminal);
-                        const secondaryLabel = tabSecondaryLabel(tab, preferredTerminal, primaryLabel);
+                        const primaryLabel = tabPrimaryLabel(tab, preferredTerminal, copy.tabLabel);
+                        const secondaryLabel = tabSecondaryLabel(tab, preferredTerminal, primaryLabel, copy.terminalsCount);
 
                         return (
                             <View
@@ -1166,12 +1288,15 @@ export default function GhoDexWorkspaceScreen() {
                                             pressed ? styles.sidebarTerminalItemPressed : null,
                                         ]}
                                     >
-                                        <Text numberOfLines={1} style={[
-                                            styles.sidebarTabTitle,
-                                            tabActive ? styles.sidebarTabTitleActive : null,
-                                        ]}>
-                                            {primaryLabel}
-                                        </Text>
+                                        <View style={styles.sidebarTabTitleRow}>
+                                            <Text numberOfLines={1} style={[
+                                                styles.sidebarTabTitle,
+                                                tabActive ? styles.sidebarTabTitleActive : null,
+                                            ]}>
+                                                {primaryLabel}
+                                            </Text>
+                                            {tab.hasBell ? <View style={styles.sidebarTabBellDot} /> : null}
+                                        </View>
                                         {secondaryLabel ? (
                                             <Text numberOfLines={1} style={[
                                                 styles.sidebarTabMeta,
@@ -1240,9 +1365,9 @@ export default function GhoDexWorkspaceScreen() {
                         );
                     }) : (
                         <View style={styles.sidebarEmpty}>
-                            <Text style={styles.sidebarEmptyTitle}>No tab data yet</Text>
+                            <Text style={styles.sidebarEmptyTitle}>{copy.noTabDataYet}</Text>
                             <Text style={styles.sidebarEmptyText}>
-                                Pair the phone first, then reopen the sidebar to manage desktop tabs and switch terminal sessions.
+                                {copy.noTabDataBody}
                             </Text>
                         </View>
                     )}
@@ -1250,8 +1375,8 @@ export default function GhoDexWorkspaceScreen() {
 
                 <View style={styles.sidebarFooter}>
                     <View style={styles.sidebarQuickRow}>
-                        <SidebarQuickAction icon="qr-code-outline" label="Device" onPress={openDevice} />
-                        <SidebarQuickAction icon="settings-outline" label="Settings" onPress={openSettings} />
+                        <SidebarQuickAction icon="qr-code-outline" label={copy.device} onPress={openDevice} />
+                        <SidebarQuickAction icon="settings-outline" label={copy.settings} onPress={openSettings} />
                     </View>
                     <View style={styles.sidebarStatus}>
                         <Text style={styles.sidebarStatusLine}>{session.host}:{session.port}</Text>
@@ -1275,7 +1400,7 @@ export default function GhoDexWorkspaceScreen() {
                     <WorkspaceIconButton icon="menu-outline" onPress={() => setSidebarVisible((current) => !current)} />
                     <View style={styles.headerCopy}>
                         <Text numberOfLines={1} style={styles.headerTitle}>
-                            {selectedTerminal?.title || (paired ? 'Choose terminal' : 'GhoDex Remote')}
+                            {selectedTerminal?.title || (paired ? copy.chooseTerminal : copy.remoteTitle)}
                         </Text>
                         <Text numberOfLines={1} style={styles.headerSubtitle}>
                             {selectedTerminal?.workingDirectory || syncLabel}
@@ -1297,10 +1422,10 @@ export default function GhoDexWorkspaceScreen() {
                     <View style={styles.workspaceStage}>
                         {!paired ? (
                             <View style={styles.emptyStage}>
-                                <SurfaceCard title="Pair your desktop first" subtitle="The home screen stays focused on the terminal panel. Device pairing and connection controls live under Device, while app preferences stay in Settings.">
+                                <SurfaceCard title={copy.pairDesktopFirst} subtitle={copy.pairDesktopBody}>
                                     <View style={styles.emptyActions}>
-                                        <ActionButton label="Open Device" onPress={openDevice} />
-                                        <ActionButton kind="secondary" label="Settings" onPress={openSettings} />
+                                        <ActionButton label={copy.openDevice} onPress={openDevice} />
+                                        <ActionButton kind="secondary" label={copy.openSettings} onPress={openSettings} />
                                     </View>
                                 </SurfaceCard>
                             </View>
@@ -1308,10 +1433,16 @@ export default function GhoDexWorkspaceScreen() {
                             <View style={styles.terminalShell}>
                                 <View style={styles.terminalToolbar}>
                                     <Text numberOfLines={1} style={styles.terminalToolbarPath}>
-                                        {selectedTerminal?.workingDirectory || 'Select a terminal from the sidebar'}
+                                        {selectedTerminal?.workingDirectory || copy.selectTerminalFromSidebar}
                                     </Text>
                                     <View style={styles.terminalToolbarActions}>
-                                        <SyncBadge live={session.liveUpdatesEnabled} open={subscriptionOpen} pollIntervalMs={session.pollIntervalMs} />
+                                        <SyncBadge
+                                            live={session.liveUpdatesEnabled}
+                                            liveLabel={copy.liveBadge}
+                                            open={subscriptionOpen}
+                                            pollIntervalMs={session.pollIntervalMs}
+                                            reconnectingLabel={copy.reconnectingBadge}
+                                        />
                                         <WorkspaceMiniAction
                                             busy={busyAction === 'terminal-read' || busyAction === 'snapshot'}
                                             icon="sync-outline"
@@ -1323,7 +1454,7 @@ export default function GhoDexWorkspaceScreen() {
                                 <View style={styles.terminalViewport}>
                                     <ScrollView nestedScrollEnabled style={styles.terminalScroll}>
                                         <Text selectable style={styles.terminalContent}>
-                                            {renderAnsiText(terminalDisplayText)}
+                                            {renderedTerminalContent}
                                         </Text>
                                     </ScrollView>
                                 </View>
@@ -1339,7 +1470,7 @@ export default function GhoDexWorkspaceScreen() {
                                     autoCorrect={false}
                                     multiline
                                     onChangeText={setTerminalCommand}
-                                    placeholder="Run one line, paste real multi-line blocks."
+                                    placeholder={copy.commandPlaceholder}
                                     placeholderTextColor={theme.colors.input.placeholder}
                                     style={styles.commandInput}
                                     value={terminalCommand}
@@ -1347,7 +1478,7 @@ export default function GhoDexWorkspaceScreen() {
                                 <View style={styles.commandActions}>
                                     <WorkspaceSubmitButton
                                         busy={busyAction === 'terminal-command' || busyAction === 'terminal-send-text'}
-                                        label={shouldPasteRawInput(terminalCommand) ? 'Paste' : 'Run'}
+                                        label={shouldPasteRawInput(terminalCommand) ? copy.paste : copy.run}
                                         onPress={handleSubmitInput}
                                     />
                                 </View>
@@ -1374,10 +1505,8 @@ export default function GhoDexWorkspaceScreen() {
                         style={styles.renameModalKeyboard}
                     >
                         <View style={[styles.renameModalCard, { marginBottom: Math.max(insets.bottom, 16) }]}>
-                            <Text style={styles.renameModalTitle}>Rename Tab</Text>
-                            <Text style={styles.renameModalSubtitle}>
-                                Leave the field empty to restore the desktop-managed automatic title.
-                            </Text>
+                            <Text style={styles.renameModalTitle}>{copy.renameTab}</Text>
+                            <Text style={styles.renameModalSubtitle}>{copy.renameHint}</Text>
                             <TextInput
                                 autoCapitalize="none"
                                 autoCorrect={false}
@@ -1397,11 +1526,11 @@ export default function GhoDexWorkspaceScreen() {
                                 <Text style={styles.renameModalErrorText}>{renameTabError}</Text>
                             ) : null}
                             <View style={styles.renameModalActions}>
-                                <ActionButton compact kind="secondary" label="Cancel" onPress={dismissRenameTab} />
+                                <ActionButton compact kind="secondary" label={copy.cancel} onPress={dismissRenameTab} />
                                 <ActionButton
                                     busy={busyAction === 'tab-rename'}
                                     compact
-                                    label="Save"
+                                    label={copy.save}
                                     onPress={handleSubmitRenameTab}
                                 />
                             </View>
@@ -1496,11 +1625,13 @@ function SidebarQuickAction(props: {
 
 function SyncBadge(props: {
     live: boolean;
+    liveLabel: string;
     open: boolean;
     pollIntervalMs: number;
+    reconnectingLabel: string;
 }) {
     const label = props.live
-        ? (props.open ? 'Live' : 'Reconnecting')
+        ? (props.open ? props.liveLabel : props.reconnectingLabel)
         : `${props.pollIntervalMs}ms`;
     return (
         <View style={[
@@ -1810,13 +1941,25 @@ const styles = StyleSheet.create((theme) => ({
         flex: 1,
         gap: 3,
     },
+    sidebarTabTitleRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
     sidebarTabTitle: {
+        flex: 1,
         color: theme.colors.text,
         fontSize: 15,
         fontWeight: '800',
     },
     sidebarTabTitleActive: {
         color: theme.colors.text,
+    },
+    sidebarTabBellDot: {
+        width: 9,
+        height: 9,
+        borderRadius: 999,
+        backgroundColor: theme.colors.status.connected,
     },
     sidebarTabMeta: {
         color: theme.colors.textSecondary,

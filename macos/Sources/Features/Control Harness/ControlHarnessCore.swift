@@ -219,6 +219,7 @@ private struct ControlTabSnapshot: Encodable {
     let title: String
     let isFocused: Bool
     let isMainWindow: Bool
+    let hasBell: Bool
     let terminals: [ControlTerminalSnapshot]
 
     enum CodingKeys: String, CodingKey {
@@ -228,6 +229,7 @@ private struct ControlTabSnapshot: Encodable {
         case title
         case isFocused = "is_focused"
         case isMainWindow = "is_main_window"
+        case hasBell = "has_bell"
         case terminals
     }
 }
@@ -503,9 +505,11 @@ private struct ControlTabCreatedEventPayload: Encodable {
 
 private struct ControlTabUpdatedEventPayload: Encodable {
     let title: String?
+    let hasBell: Bool?
 
     enum CodingKeys: String, CodingKey {
         case title
+        case hasBell = "has_bell"
     }
 }
 
@@ -672,6 +676,7 @@ final class ControlHarnessCore {
     private let surfaceResolver: @MainActor (UUID) -> (any ControlHarnessReadableSurface)?
     private let samplingActivityResolver: @MainActor (UUID) -> ControlHarnessSamplingActivityClass?
     private let now: @MainActor () -> Date
+    private var terminalWindowBellObserver: NSObjectProtocol?
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
         category: "ControlHarnessCore"
@@ -724,6 +729,19 @@ final class ControlHarnessCore {
             appDelegate?.controlHarnessSamplingActivityClass(for: terminalID)
         }
         self.now = now
+        self.terminalWindowBellObserver = NotificationCenter.default.addObserver(
+            forName: .terminalWindowBellDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            self?.handleTerminalWindowBellDidChange(notification)
+        }
+    }
+
+    deinit {
+        if let terminalWindowBellObserver {
+            NotificationCenter.default.removeObserver(terminalWindowBellObserver)
+        }
     }
 
     func handleSubscription(
@@ -1132,6 +1150,7 @@ final class ControlHarnessCore {
                 title: controller.titleOverride ?? window.title,
                 isFocused: window.isKeyWindow,
                 isMainWindow: window.isMainWindow,
+                hasBell: controller.bell,
                 terminals: terminals
             )
         }
@@ -1251,7 +1270,7 @@ final class ControlHarnessCore {
             event: "tab.updated",
             requestID: request.requestID,
             resource: .init(type: "tab", id: tabID, generation: generation),
-            payload: AnyEncodable(ControlTabUpdatedEventPayload(title: normalizedTitle))
+            payload: AnyEncodable(ControlTabUpdatedEventPayload(title: normalizedTitle, hasBell: controller.bell))
         )
 
         return .init(
@@ -1678,6 +1697,23 @@ final class ControlHarnessCore {
             snapshot: snapshot
         )
     }
+
+    private func handleTerminalWindowBellDidChange(_ notification: Notification) {
+        guard let controller = notification.object as? TerminalController else {
+            return
+        }
+
+        let tabID = controller.workspaceID.uuidString
+        let generation = generations.advanceTabGeneration(for: tabID)
+        let hasBell = (notification.userInfo?[Notification.Name.terminalWindowHasBellKey] as? Bool) ?? controller.bell
+        _ = eventHub.emit(
+            event: "tab.updated",
+            requestID: nil,
+            resource: .init(type: "tab", id: tabID, generation: generation),
+            payload: AnyEncodable(ControlTabUpdatedEventPayload(title: nil, hasBell: hasBell))
+        )
+    }
+
     private static func applyChangedRowBudget(
         _ rows: [ControlHarnessReadChangedRow],
         maxLines: Int?

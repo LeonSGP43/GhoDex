@@ -102,6 +102,22 @@ export const settingsDefaults: Settings = {
 };
 Object.freeze(settingsDefaults);
 
+function normalizePreferredLanguage(value: string | null | undefined): string | null | undefined {
+    if (value === undefined) {
+        return undefined;
+    }
+
+    if (value === null || value === 'en') {
+        return value;
+    }
+
+    if (value === 'zh' || value === 'zh-Hans' || value === 'zh-Hant') {
+        return 'zh-Hans';
+    }
+
+    return null;
+}
+
 //
 // Resolving
 //
@@ -122,10 +138,9 @@ export function settingsParse(settings: unknown): Settings {
         return { ...settingsDefaults, ...unknownFields };
     }
 
-    // Migration: Convert old 'zh' language code to 'zh-Hans'
-    if (parsed.data.preferredLanguage === 'zh') {
-        console.log('[Settings Migration] Converting language code from "zh" to "zh-Hans"');
-        parsed.data.preferredLanguage = 'zh-Hans';
+    const normalizedPreferredLanguage = normalizePreferredLanguage(parsed.data.preferredLanguage);
+    if (normalizedPreferredLanguage !== undefined) {
+        parsed.data.preferredLanguage = normalizedPreferredLanguage;
     }
 
     // Merge defaults, parsed settings, and preserve unknown fields

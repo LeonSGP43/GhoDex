@@ -1,5 +1,5 @@
 /**
- * Centralized language configuration for the Happy app
+ * Centralized language configuration for the GhoDex mobile client
  * This file contains all supported languages, their metadata, and configuration
  * 
  * When adding a new language:
@@ -12,7 +12,7 @@
 /**
  * Supported language codes
  */
-export type SupportedLanguage = 'en' | 'ru' | 'pl' | 'es' | 'it' | 'pt' | 'ca' | 'zh-Hans' | 'zh-Hant' | 'ja';
+export type SupportedLanguage = 'en' | 'zh-Hans';
 
 /**
  * Language metadata interface
@@ -32,50 +32,10 @@ export const SUPPORTED_LANGUAGES: Record<SupportedLanguage, LanguageInfo> = {
         nativeName: 'English',
         englishName: 'English'
     },
-    ru: {
-        code: 'ru',
-        nativeName: 'Русский',
-        englishName: 'Russian'
-    },
-    pl: {
-        code: 'pl',
-        nativeName: 'Polski',
-        englishName: 'Polish'
-    },
-    es: {
-        code: 'es',
-        nativeName: 'Español',
-        englishName: 'Spanish'
-    },
-    it: {
-        code: 'it',
-        nativeName: 'Italiano',
-        englishName: 'Italian'
-    },
-    pt: {
-        code: 'pt',
-        nativeName: 'Português',
-        englishName: 'Portuguese'
-    },
-    ca: {
-        code: 'ca',
-        nativeName: 'Català',
-        englishName: 'Catalan'
-    },
     'zh-Hans': {
         code: 'zh-Hans',
         nativeName: '中文(简体)',
         englishName: 'Chinese (Simplified)'
-    },
-'zh-Hant': {
-        code: 'zh-Hant',
-        nativeName: '中文(繁體)',
-        englishName: 'Chinese (Traditional)'
-    },
-    ja: {
-        code: 'ja',
-        nativeName: '日本語',
-        englishName: 'Japanese'
     }
 } as const;
 

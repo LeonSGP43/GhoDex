@@ -1,3 +1,7 @@
+const fs = require('node:fs');
+const path = require('node:path');
+
+const appConfigDir = __dirname;
 const variant = process.env.APP_ENV || 'development';
 const name = {
     development: "GhoDex Remote (dev)",
@@ -9,12 +13,15 @@ const bundleId = {
     preview: "com.leongong.ghodex.remote.preview",
     production: "com.leongong.ghodex.remote"
 }[variant];
+const repoVersion = fs.readFileSync(path.join(appConfigDir, '..', 'VERSION'), 'utf8').trim();
+const [major, minor, patch] = repoVersion.split('.').map((value) => Number.parseInt(value, 10));
+const androidVersionCode = (major * 10000) + (minor * 100) + patch;
 
-export default {
+module.exports = {
     expo: {
         name,
         slug: "ghodex-remote",
-        version: "0.1.0",
+        version: repoVersion,
         runtimeVersion: "1",
         orientation: "default",
         icon: "./sources/assets/images/icon.png",
@@ -38,6 +45,7 @@ export default {
             }
         },
         android: {
+            versionCode: androidVersionCode,
             adaptiveIcon: {
                 foregroundImage: "./sources/assets/images/icon-adaptive.png",
                 monochromeImage: "./sources/assets/images/icon-monochrome.png",

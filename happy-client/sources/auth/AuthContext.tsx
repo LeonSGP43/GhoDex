@@ -20,6 +20,11 @@ export function AuthProvider({ children, initialCredentials }: { children: React
     const [isAuthenticated, setIsAuthenticated] = useState(!!initialCredentials);
     const [credentials, setCredentials] = useState<AuthCredentials | null>(initialCredentials);
 
+    useEffect(() => {
+        setCredentials(initialCredentials);
+        setIsAuthenticated(!!initialCredentials);
+    }, [initialCredentials]);
+
     // Update global auth state when local state changes
     useEffect(() => {
         setCurrentAuth(credentials ? { isAuthenticated, credentials, login, logout } : null);

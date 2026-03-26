@@ -307,8 +307,8 @@ export const darkTheme = {
         },
         button: {
             primary: {
-                background: '#000000',
-                tint: '#FFFFFF',
+                background: '#FFFFFF',
+                tint: '#000000',
                 disabled: '#C0C0C0',
             },
             secondary: {

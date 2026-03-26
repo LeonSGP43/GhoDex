@@ -10,10 +10,10 @@ export const INITIAL_GATEWAY_SESSION: StoredSession = {
     scopes: [],
     requestedScopes: [...DEFAULT_REQUESTED_SCOPES],
     liveUpdatesEnabled: true,
-    pollIntervalMs: 120,
+    pollIntervalMs: 500,
 };
 
-export const POLL_INTERVAL_OPTIONS = [30, 60, 120, 250, 500, 1000] as const;
+export const POLL_INTERVAL_OPTIONS = [250, 500, 1000, 2000] as const;
 
 export function sanitizePort(raw: string | number): number {
     const normalized = typeof raw === 'number' ? String(raw) : raw;
@@ -33,5 +33,5 @@ export function sanitizePollInterval(raw: string | number): number {
     if (!Number.isFinite(normalized)) {
         return INITIAL_GATEWAY_SESSION.pollIntervalMs;
     }
-    return Math.max(30, Math.min(Math.trunc(normalized), 2000));
+    return Math.max(250, Math.min(Math.trunc(normalized), 2000));
 }

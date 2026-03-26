@@ -25,15 +25,16 @@ export function ActionButton({
             style={({ pressed }) => [
                 styles.button,
                 compact ? styles.buttonCompact : null,
-                kind === 'secondary' ? styles.secondaryButton : styles.primaryButton,
+                styles.primaryButton,
+                kind === 'secondary' ? styles.secondaryButton : null,
                 pressed ? styles.buttonPressed : null,
                 busy ? styles.buttonDisabled : null,
             ]}
         >
             {busy ? (
-                <ActivityIndicator color={kind === 'secondary' ? theme.colors.text : theme.colors.button.primary.tint} />
+                <ActivityIndicator color={theme.colors.button.primary.tint} />
             ) : (
-                <Text style={kind === 'secondary' ? styles.secondaryButtonText : styles.primaryButtonText}>{label}</Text>
+                <Text style={styles.primaryButtonText}>{label}</Text>
             )}
         </Pressable>
     );
@@ -109,9 +110,8 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.button.primary.background,
     },
     secondaryButton: {
-        backgroundColor: theme.colors.surfaceHigh,
         borderWidth: 1,
-        borderColor: theme.colors.divider,
+        borderColor: theme.colors.button.primary.background,
     },
     buttonPressed: {
         opacity: 0.88,
@@ -121,11 +121,6 @@ const styles = StyleSheet.create((theme) => ({
     },
     primaryButtonText: {
         color: theme.colors.button.primary.tint,
-        fontSize: 15,
-        fontWeight: '700',
-    },
-    secondaryButtonText: {
-        color: theme.colors.text,
         fontSize: 15,
         fontWeight: '700',
     },

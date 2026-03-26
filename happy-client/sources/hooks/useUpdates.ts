@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AppState, AppStateStatus, Platform } from 'react-native';
+import { AppState, AppStateStatus, DevSettings, Platform } from 'react-native';
 import * as Updates from 'expo-updates';
 
 export function useUpdates() {
@@ -52,6 +52,12 @@ export function useUpdates() {
     const reloadApp = async () => {
         if (Platform.OS === 'web') {
             window.location.reload();
+            return;
+        }
+
+        if (__DEV__) {
+            DevSettings.reload();
+            return;
         } else {
             try {
                 await Updates.reloadAsync();

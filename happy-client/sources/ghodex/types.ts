@@ -50,6 +50,7 @@ export interface TabRow {
     title: string | null;
     focused: boolean;
     isMainWindow: boolean;
+    hasBell: boolean;
     terminals: TerminalRow[];
 }
 

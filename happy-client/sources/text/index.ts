@@ -1,13 +1,5 @@
 import { en, type Translations, type TranslationStructure } from './_default';
-import { ru } from './translations/ru';
-import { pl } from './translations/pl';
-import { es } from './translations/es';
-import { it } from './translations/it';
-import { pt } from './translations/pt';
-import { ca } from './translations/ca';
 import { zhHans } from './translations/zh-Hans';
-import { zhHant } from './translations/zh-Hant';
-import { ja } from './translations/ja';
 import * as Localization from 'expo-localization';
 import { loadSettings } from '@/sync/persistence';
 import { type SupportedLanguage, SUPPORTED_LANGUAGES, SUPPORTED_LANGUAGE_CODES, DEFAULT_LANGUAGE } from './_all';
@@ -74,76 +66,49 @@ export { SUPPORTED_LANGUAGES, SUPPORTED_LANGUAGE_CODES, DEFAULT_LANGUAGE, getLan
  */
 const translations: Record<SupportedLanguage, TranslationStructure> = {
     en,
-    ru, // TypeScript will enforce that ru matches the TranslationStructure type exactly
-    pl, // TypeScript will enforce that pl matches the TranslationStructure type exactly
-    es, // TypeScript will enforce that es matches the TranslationStructure type exactly
-    it, // TypeScript will enforce that it matches the TranslationStructure type exactly
-    pt, // TypeScript will enforce that pt matches the TranslationStructure type exactly
-    ca, // TypeScript will enforce that ca matches the TranslationStructure type exactly
     'zh-Hans': zhHans, // TypeScript will enforce that zh matches the TranslationStructure type exactly
-'zh-Hant': zhHant, // TypeScript will enforce that zh-Hant matches the TranslationStructure type exactly
-    ja, // TypeScript will enforce that ja matches the TranslationStructure type exactly
 };
 
 // Compile-time check: ensure all supported languages have translations
 const _typeCheck: Record<SupportedLanguage, TranslationStructure> = translations;
 
-//
-// Resolve language
-//
+function normalizeSupportedLanguage(value: string | null | undefined): SupportedLanguage | null {
+    if (!value) {
+        return null;
+    }
 
-let currentLanguage: SupportedLanguage = DEFAULT_LANGUAGE;
+    if (value === 'en') {
+        return 'en';
+    }
 
-// Read from settings
-let settings = loadSettings();
-let found = false;
-if (settings.settings.preferredLanguage && settings.settings.preferredLanguage in translations) {
-    currentLanguage = settings.settings.preferredLanguage as SupportedLanguage;
-    found = true;
-    console.log(`[i18n] Using preferred language: ${currentLanguage}`);
+    if (value === 'zh' || value === 'zh-Hans' || value === 'zh-Hant') {
+        return 'zh-Hans';
+    }
+
+    return null;
 }
 
-// Read from device
-if (!found) {
-    let locales = Localization.getLocales();
-    console.log(`[i18n] Device locales:`, locales.map(l => l.languageCode));
-    for (let l of locales) {
-        if (l.languageCode) {
-            // Expo added special handling for Chinese variants using script code https://github.com/expo/expo/pull/34984
-            if (l.languageCode === 'zh') {
-                let chineseVariant: string | null = null;
-
-                // We only have translations for simplified Chinese right now, but looking for help with traditional Chinese.
-                if (l.languageScriptCode === 'Hans') {
-                    chineseVariant = 'zh-Hans';
-                } else if (l.languageScriptCode === 'Hant') {
-                    chineseVariant = 'zh-Hant';
-                }
-
-                console.log(`[i18n] Chinese script code: ${l.languageScriptCode} -> ${chineseVariant}`);
-
-                if (chineseVariant && chineseVariant in translations) {
-                    currentLanguage = chineseVariant as SupportedLanguage;
-                    console.log(`[i18n] Using Chinese variant: ${currentLanguage}`);
-                    break;
-                }
-
-                currentLanguage = 'zh-Hans';
-                console.log(`[i18n] Falling back to simplified Chinese: zh-Hans`);
-                break;
-            }
-
-            // Direct match for non-Chinese languages
-            if (l.languageCode in translations) {
-                currentLanguage = l.languageCode as SupportedLanguage;
-                console.log(`[i18n] Using device locale: ${currentLanguage}`);
-                break;
-            }
+function resolveDeviceLanguage(): SupportedLanguage {
+    const locales = Localization.getLocales();
+    for (const locale of locales) {
+        if (locale.languageCode === 'zh') {
+            return 'zh-Hans';
+        }
+        if (locale.languageCode === 'en') {
+            return 'en';
         }
     }
+    return DEFAULT_LANGUAGE;
 }
 
-console.log(`[i18n] Final language: ${currentLanguage}`);
+function resolveCurrentLanguage(): SupportedLanguage {
+    const settings = loadSettings();
+    const preferredLanguage = normalizeSupportedLanguage(settings.settings.preferredLanguage);
+    if (preferredLanguage) {
+        return preferredLanguage;
+    }
+    return resolveDeviceLanguage();
+}
 
 /**
  * Main translation function with strict typing
@@ -172,7 +137,7 @@ export function t<K extends TranslationKey>(
 ): string {
     try {
         // Get current language translations
-        const currentTranslations = translations[currentLanguage];
+        const currentTranslations = translations[resolveCurrentLanguage()];
 
         // Navigate to the value using dot notation
         const keys = key.split('.');
@@ -211,5 +176,5 @@ export function t<K extends TranslationKey>(
  * Useful for debugging and language-aware components
  */
 export function getCurrentLanguage(): SupportedLanguage {
-    return currentLanguage;
+    return resolveCurrentLanguage();
 }

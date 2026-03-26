@@ -40,6 +40,7 @@ import { fetchFeed } from './apiFeed';
 import { FeedItem } from './feedTypes';
 import { UserProfile } from './friendTypes';
 import { resolveMessageModeMeta } from './messageMeta';
+import { delay } from '@/utils/time';
 
 type V3GetSessionMessagesResponse = {
     messages: ApiMessage[];
@@ -60,6 +61,8 @@ type OutboxMessage = {
     localId: string;
     content: string;
 };
+
+const INITIAL_READY_TIMEOUT_MS = 4000;
 
 class Sync {
     private static readonly BACKGROUND_SEND_TIMEOUT_MS = 30_000;
@@ -212,14 +215,22 @@ class Sync {
         this.feedSync.invalidate();
         log.log('🔄 #init: All syncs invalidated, including artifacts');
 
-        // Wait for both sessions and machines to load, then mark as ready
-        Promise.all([
-            this.sessionsSync.awaitQueue(),
-            this.machinesSync.awaitQueue()
-        ]).then(() => {
-            storage.getState().applyReady();
-        }).catch((error) => {
+        // Do not block first paint forever if the first sync pass keeps retrying.
+        // After a rebuild the network/socket/bootstrap path often cold-starts slower
+        // than the UI, so we let the app render after a short grace period and keep
+        // the real sync retries running in the background.
+        Promise.race([
+            Promise.all([
+                this.sessionsSync.awaitQueue(),
+                this.machinesSync.awaitQueue()
+            ]),
+            delay(INITIAL_READY_TIMEOUT_MS).then(() => {
+                log.log(`⏱️ #init: Initial data readiness timed out after ${INITIAL_READY_TIMEOUT_MS}ms; continuing with background sync`);
+            }),
+        ]).catch((error) => {
             console.error('Failed to load initial data:', error);
+        }).finally(() => {
+            storage.getState().applyReady();
         });
     }
 

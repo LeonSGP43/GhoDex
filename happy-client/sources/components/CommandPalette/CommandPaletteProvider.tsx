@@ -45,22 +45,12 @@ export function CommandPaletteProvider({ children }: { children: React.ReactNode
             {
                 id: 'settings',
                 title: 'Settings',
-                subtitle: 'Configure your preferences',
+                subtitle: 'Change theme and app language',
                 icon: 'settings-outline',
                 category: 'Navigation',
                 shortcut: '⌘,',
                 action: () => {
                     router.push('/settings');
-                }
-            },
-            {
-                id: 'account',
-                title: 'Account',
-                subtitle: 'Manage your account',
-                icon: 'person-circle-outline',
-                category: 'Navigation',
-                action: () => {
-                    router.push('/settings/account');
                 }
             },
             {

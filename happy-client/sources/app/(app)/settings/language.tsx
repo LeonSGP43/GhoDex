@@ -6,8 +6,6 @@ import { ItemList } from '@/components/ItemList';
 import { useSettingMutable } from '@/sync/storage';
 import { useUnistyles } from 'react-native-unistyles';
 import { t, getLanguageNativeName, SUPPORTED_LANGUAGES, SUPPORTED_LANGUAGE_CODES, type SupportedLanguage } from '@/text';
-import { Modal } from '@/modal';
-import { useUpdates } from '@/hooks/useUpdates';
 import * as Localization from 'expo-localization';
 
 type LanguageOption = 'auto' | SupportedLanguage;
@@ -18,17 +16,23 @@ interface LanguageItem {
     subtitle?: string;
 }
 
+function getDetectedLanguageCode(): SupportedLanguage {
+    const deviceLocale = Localization.getLocales()?.[0]?.languageTag ?? 'en-US';
+    const deviceLanguage = deviceLocale.split('-')[0].toLowerCase();
+    if (deviceLanguage === 'zh') {
+        return 'zh-Hans';
+    }
+    return deviceLanguage in SUPPORTED_LANGUAGES ? deviceLanguage as SupportedLanguage : 'en';
+}
+
 export default function LanguageSettingsScreen() {
     const { theme } = useUnistyles();
     const [preferredLanguage, setPreferredLanguage] = useSettingMutable('preferredLanguage');
-    const { reloadApp } = useUpdates();
+    const iconColor = theme.colors.textSecondary;
+    const selectedColor = theme.colors.button.primary.background;
 
     // Get device locale for automatic detection
-    const deviceLocale = Localization.getLocales()?.[0]?.languageTag ?? 'en-US';
-    const deviceLanguage = deviceLocale.split('-')[0].toLowerCase();
-    const detectedLanguageName = deviceLanguage in SUPPORTED_LANGUAGES ? 
-                                 getLanguageNativeName(deviceLanguage as keyof typeof SUPPORTED_LANGUAGES) : 
-                                 getLanguageNativeName('en');
+    const detectedLanguageName = getLanguageNativeName(getDetectedLanguageCode());
 
     // Current selection
     const currentSelection: LanguageOption = preferredLanguage === null ? 'auto' : 
@@ -48,27 +52,13 @@ export default function LanguageSettingsScreen() {
         }))
     ];
 
-    const handleLanguageChange = async (newLanguage: LanguageOption) => {
+    const handleLanguageChange = (newLanguage: LanguageOption) => {
         if (newLanguage === currentSelection) {
-            return; // No change
+            return;
         }
 
-        // Show confirmation modal
-        const confirmed = await Modal.confirm(
-            t('settingsLanguage.needsRestart'),
-            t('settingsLanguage.needsRestartMessage')
-        );
-
-        if (confirmed) {
-            // Update the preference
-            const newPreference = newLanguage === 'auto' ? null : newLanguage;
-            setPreferredLanguage(newPreference);
-
-            // Small delay to ensure setting is saved
-            setTimeout(() => {
-                reloadApp();
-            }, 100);
-        }
+        const newPreference = newLanguage === 'auto' ? null : newLanguage;
+        setPreferredLanguage(newPreference);
     };
 
     return (
@@ -85,14 +75,14 @@ export default function LanguageSettingsScreen() {
                         icon={<Ionicons 
                             name="language-outline" 
                             size={29} 
-                            color="#007AFF" 
+                            color={iconColor}
                         />}
                         rightElement={
                             currentSelection === option.key ? (
                                 <Ionicons 
                                     name="checkmark" 
                                     size={20} 
-                                    color="#007AFF" 
+                                    color={selectedColor}
                                 />
                             ) : null
                         }

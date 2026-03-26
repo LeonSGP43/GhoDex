@@ -1,7 +1,9 @@
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
+import { delay } from '@/utils/time';
 
 const STORAGE_KEY = 'ghodex.gateway.session.v1';
+const STORED_SESSION_TIMEOUT_MS = 1500;
 
 export interface StoredSession {
     host: string;
@@ -35,6 +37,16 @@ function cloneDefaultSession(): StoredSession {
     };
 }
 
+function cloneStoredSession(session: StoredSession): StoredSession {
+    return {
+        ...session,
+        scopes: [...session.scopes],
+        requestedScopes: [...session.requestedScopes],
+    };
+}
+
+let cachedSession: StoredSession | null = null;
+
 function sanitizeStoredSession(value: unknown): StoredSession {
     if (!value || typeof value !== 'object') {
         return cloneDefaultSession();
@@ -67,7 +79,13 @@ async function getStoredValue(): Promise<string | null> {
     if (Platform.OS === 'web') {
         return localStorage.getItem(STORAGE_KEY);
     }
-    return SecureStore.getItemAsync(STORAGE_KEY);
+    return Promise.race([
+        SecureStore.getItemAsync(STORAGE_KEY),
+        delay(STORED_SESSION_TIMEOUT_MS).then(() => {
+            console.warn(`Timed out loading stored GhoDex session after ${STORED_SESSION_TIMEOUT_MS}ms`);
+            return null;
+        }),
+    ]);
 }
 
 async function setStoredValue(value: string): Promise<void> {
@@ -78,24 +96,36 @@ async function setStoredValue(value: string): Promise<void> {
     await SecureStore.setItemAsync(STORAGE_KEY, value);
 }
 
+export function getCachedStoredSession(): StoredSession {
+    return cachedSession ? cloneStoredSession(cachedSession) : cloneDefaultSession();
+}
+
 export async function loadStoredSession(): Promise<StoredSession> {
+    if (cachedSession) {
+        return cloneStoredSession(cachedSession);
+    }
+
     try {
         const stored = await getStoredValue();
-        if (!stored) {
-            return cloneDefaultSession();
-        }
-        return sanitizeStoredSession(JSON.parse(stored));
+        const nextSession = stored ? sanitizeStoredSession(JSON.parse(stored)) : cloneDefaultSession();
+        cachedSession = cloneStoredSession(nextSession);
+        return cloneStoredSession(nextSession);
     } catch (error) {
         console.warn('Failed to load stored GhoDex session', error);
-        return cloneDefaultSession();
+        const nextSession = cloneDefaultSession();
+        cachedSession = cloneStoredSession(nextSession);
+        return nextSession;
     }
 }
 
 export async function saveStoredSession(session: StoredSession): Promise<void> {
-    await setStoredValue(JSON.stringify(sanitizeStoredSession(session)));
+    const sanitizedSession = sanitizeStoredSession(session);
+    cachedSession = cloneStoredSession(sanitizedSession);
+    await setStoredValue(JSON.stringify(sanitizedSession));
 }
 
 export async function clearStoredSession(): Promise<void> {
+    cachedSession = cloneDefaultSession();
     if (Platform.OS === 'web') {
         localStorage.removeItem(STORAGE_KEY);
         return;

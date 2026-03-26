@@ -275,6 +275,7 @@ function parseTabRows(result: Record<string, unknown>): TabRow[] {
             title: readString(tabObject, 'title'),
             focused: readBoolean(tabObject, 'is_focused'),
             isMainWindow: readBoolean(tabObject, 'is_main_window'),
+            hasBell: readBoolean(tabObject, 'has_bell'),
             terminals,
         }];
     });
