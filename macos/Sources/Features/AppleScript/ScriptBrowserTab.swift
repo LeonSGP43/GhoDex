@@ -2,11 +2,12 @@ import AppKit
 import Combine
 import Foundation
 
-/// AppleScript-facing wrapper around one Browser tab controller.
+/// AppleScript-facing wrapper around one top-level Browser context container.
 ///
-/// The scripting surface intentionally targets the active page inside the
-/// browser tab model so command-style automation can control the visible page
-/// without leaking the internal page-stack implementation into AppleScript.
+/// The current implementation still uses `BrowserTabController` as the UI
+/// container, so this wrapper preserves the legacy browser-tab scripting name
+/// while routing both `browser.tab.v1` and `browser.context.v2` requests onto
+/// the same controller-backed context object.
 @MainActor
 @objc(GhosttyScriptBrowserTab)
 final class ScriptBrowserTab: NSObject {
@@ -737,6 +738,18 @@ extension ScriptBrowserTab {
         )
     }
 
+    var contextSummary: BrowserExternalContextSummary {
+        let controller = controller
+        return BrowserExternalContextSummary(
+            id: stableID,
+            title: controller?.model.pageTitle ?? "",
+            url: controller?.model.displayedURL ?? "",
+            activePageID: controller?.model.selectedPageID.uuidString,
+            pageCount: controller?.model.pages.count ?? 0,
+            isFrontmost: BrowserTabController.frontmostControllerID == stableID
+        )
+    }
+
     var pageSummaries: [BrowserExternalPageSummary] {
         guard let controller else { return [] }
         return controller.model.pages.map { page in
@@ -754,9 +767,50 @@ extension ScriptBrowserTab {
         pageSummaries.first(where: \.isActive)
     }
 
+    func activateContext() -> Result<BrowserExternalContextSummary, BrowserControlError> {
+        guard let controller else {
+            return .failure(.pageNotFound("No Browser context is available for activation."))
+        }
+
+        controller.activateContext()
+        return .success(contextSummary)
+    }
+
+    func newPage(initialURL rawURL: String?) -> Result<BrowserExternalPageSummary, BrowserControlError> {
+        guard let controller else {
+            return .failure(.pageNotFound("No Browser context is available for page creation."))
+        }
+
+        let page: BrowserPageState?
+        if let rawURL, !rawURL.isEmpty {
+            page = controller.model.openURLInNewTab(rawURL, activate: true)
+        } else {
+            controller.model.newPageTab()
+            page = controller.model.activePage
+        }
+
+        guard let page else {
+            return .failure(.internalFailure("The Browser context could not create a new page."))
+        }
+
+        guard let summary = controller.model.pages.first(where: { $0.id == page.id }).map({ page in
+            BrowserExternalPageSummary(
+                id: page.id.uuidString,
+                title: page.pageTitle,
+                url: page.displayedURL,
+                isActive: page.id == controller.model.selectedPageID,
+                documentRevision: page.documentRevision
+            )
+        }) else {
+            return .failure(.internalFailure("The new Browser page summary could not be resolved."))
+        }
+
+        return .success(summary)
+    }
+
     func activatePage(pageID rawPageID: String) -> Result<BrowserExternalPageSummary, BrowserControlError> {
         guard let controller else {
-            return .failure(.pageNotFound("No Browser tab is available for page activation."))
+            return .failure(.pageNotFound("No Browser context is available for page activation."))
         }
 
         guard let pageID = UUID(uuidString: rawPageID) else {
@@ -773,6 +827,58 @@ extension ScriptBrowserTab {
         }
 
         return .success(summary)
+    }
+
+    func closePage(pageID rawPageID: String?) -> Result<BrowserExternalPageCloseResult, BrowserControlError> {
+        guard let controller else {
+            return .failure(.pageNotFound("No Browser context is available for page closure."))
+        }
+
+        let targetPageID: UUID
+        if let rawPageID, !rawPageID.isEmpty {
+            guard let parsed = UUID(uuidString: rawPageID) else {
+                return .failure(.invalidRequest("The pageID payload must be a UUID string."))
+            }
+            targetPageID = parsed
+        } else if let activePageID = controller.model.activePage?.id {
+            targetPageID = activePageID
+        } else {
+            return .failure(.internalFailure("No active browser page is available for closure."))
+        }
+
+        guard controller.model.pages.contains(where: { $0.id == targetPageID }) else {
+            return .failure(.pageNotFound("No browser page exists for \(targetPageID.uuidString)."))
+        }
+
+        guard controller.model.pages.count > 1 else {
+            return .failure(.invalidRequest("closePage requires at least two pages in the Browser context; use closeContext to close the last page."))
+        }
+
+        controller.model.closePage(targetPageID)
+
+        return .success(
+            BrowserExternalPageCloseResult(
+                closedPageID: targetPageID.uuidString,
+                remainingPageCount: controller.model.pages.count,
+                activePageID: controller.model.activePage?.id.uuidString
+            )
+        )
+    }
+
+    func closeContext() -> Result<BrowserExternalContextCloseResult, BrowserControlError> {
+        guard let controller else {
+            return .failure(.pageNotFound("No Browser context is available for closure."))
+        }
+
+        let closedContextID = stableID
+        let closedPageCount = controller.model.pages.count
+        controller.closeContextImmediately()
+        return .success(
+            BrowserExternalContextCloseResult(
+                closedContextID: closedContextID,
+                closedPageCount: closedPageCount
+            )
+        )
     }
 
     static func parseRequestedPageID(from request: BrowserExternalCommandRequest) -> Result<UUID?, BrowserExternalCommandError> {
@@ -878,7 +984,7 @@ extension ScriptBrowserTab {
         for request: BrowserExternalCommandRequest
     ) -> Result<ResolvedExternalPageTarget, BrowserExternalCommandError> {
         guard let browserTab = browserTab(for: request) else {
-            return .failure(.invalidRequest("The browserTabID does not resolve to a live Browser tab."))
+            return .failure(.invalidRequest("The browserContextID/browserTabID does not resolve to a live Browser context."))
         }
 
         let requestedPageID: UUID?
@@ -891,7 +997,7 @@ extension ScriptBrowserTab {
 
         guard let page = browserTab.requestedPage(requestedPageID) else {
             if let requestedPageID {
-                return .failure(.invalidRequest("The pageID does not resolve to a live browser page in this Browser tab."))
+                return .failure(.invalidRequest("The pageID does not resolve to a live browser page in this Browser context."))
             }
             return .failure(.internalFailure("No active browser page is available."))
         }
@@ -1148,9 +1254,70 @@ extension ScriptBrowserTab {
                     error: .internalFailure("The browser tab list could not be serialized as JSON.")
                 )
             }
+        case .listContexts:
+            do {
+                return .success(
+                    for: request,
+                    resultJSON: try jsonString(from: NSApp.browserContextsForExternalControl.map(\.contextSummary))
+                )
+            } catch {
+                return .failure(
+                    for: request,
+                    error: .internalFailure("The browser context list could not be serialized as JSON.")
+                )
+            }
+        case .getContext:
+            guard let browserTab = browserTab(for: request) else {
+                return .failure(for: request, error: .invalidRequest("The browserContextID/browserTabID does not resolve to a live Browser context."))
+            }
+
+            do {
+                return .success(for: request, resultJSON: try jsonString(from: browserTab.contextSummary))
+            } catch {
+                return .failure(
+                    for: request,
+                    error: .internalFailure("The browser context summary could not be serialized as JSON.")
+                )
+            }
+        case .newContext:
+            guard let appDelegate = NSApp.delegate as? AppDelegate else {
+                return .failure(for: request, error: .internalFailure("The GhoDex app delegate is unavailable."))
+            }
+
+            let initialURL: URL?
+            if let rawURL = request.payload["url"], !rawURL.isEmpty {
+                let normalizedURL = BrowserPaths.normalizedURLString(
+                    rawURL,
+                    fallback: BrowserTabController.defaultHomePageURL(for: appDelegate.ghostty).absoluteString
+                )
+                guard let url = URL(string: normalizedURL) else {
+                    return .failure(for: request, error: .invalidRequest("The Browser context URL is invalid."))
+                }
+                initialURL = url
+            } else {
+                initialURL = nil
+            }
+
+            let controller = BrowserTabController.newWindow(appDelegate.ghostty, initialURL: initialURL)
+            let browserTab = ScriptBrowserTab(controller: controller)
+            switch browserTab.waitForActivePageBridgeSynchronously() {
+            case .success:
+                break
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
+
+            do {
+                return .success(for: request, resultJSON: try jsonString(from: browserTab.contextSummary))
+            } catch {
+                return .failure(
+                    for: request,
+                    error: .internalFailure("The new Browser context summary could not be serialized as JSON.")
+                )
+            }
         case .listPages:
             guard let browserTab = browserTab(for: request) else {
-                return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
+                return .failure(for: request, error: .invalidRequest("The browserContextID/browserTabID does not resolve to a live Browser context."))
             }
 
             do {
@@ -1161,9 +1328,27 @@ extension ScriptBrowserTab {
                     error: .internalFailure("The browser page list could not be serialized as JSON.")
                 )
             }
+        case .newPageInContext:
+            guard let browserTab = browserTab(for: request) else {
+                return .failure(for: request, error: .invalidRequest("The browserContextID/browserTabID does not resolve to a live Browser context."))
+            }
+
+            switch browserTab.newPage(initialURL: request.payload["url"]) {
+            case let .success(summary):
+                do {
+                    return .success(for: request, resultJSON: try jsonString(from: summary))
+                } catch {
+                    return .failure(
+                        for: request,
+                        error: .internalFailure("The new Browser page summary could not be serialized as JSON.")
+                    )
+                }
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
         case .getActivePage:
             guard let browserTab = browserTab(for: request) else {
-                return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
+                return .failure(for: request, error: .invalidRequest("The browserContextID/browserTabID does not resolve to a live Browser context."))
             }
             guard let summary = browserTab.activePageSummary else {
                 return .failure(for: request, error: .internalFailure("No active browser page is available."))
@@ -1194,10 +1379,10 @@ extension ScriptBrowserTab {
             }
         case .activatePage:
             guard let browserTab = browserTab(for: request) else {
-                return .failure(for: request, error: .invalidRequest("The browserTabID does not resolve to a live Browser tab."))
+                return .failure(for: request, error: .invalidRequest("The browserContextID/browserTabID does not resolve to a live Browser context."))
             }
-            guard let rawPageID = request.payload["pageID"], !rawPageID.isEmpty else {
-                return .failure(for: request, error: .invalidRequest("The activatePage command requires a non-empty pageID payload."))
+            guard let rawPageID = request.payload["pageID"] ?? request.pageID, !rawPageID.isEmpty else {
+                return .failure(for: request, error: .invalidRequest("The activatePage command requires a non-empty pageID payload or pageID field."))
             }
 
             switch browserTab.activatePage(pageID: rawPageID) {
@@ -1208,6 +1393,60 @@ extension ScriptBrowserTab {
                     return .failure(
                         for: request,
                         error: .internalFailure("The activated browser page summary could not be serialized as JSON.")
+                    )
+                }
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
+        case .closePage:
+            guard let browserTab = browserTab(for: request) else {
+                return .failure(for: request, error: .invalidRequest("The browserContextID/browserTabID does not resolve to a live Browser context."))
+            }
+
+            switch browserTab.closePage(pageID: request.payload["pageID"] ?? request.pageID) {
+            case let .success(result):
+                do {
+                    return .success(for: request, resultJSON: try jsonString(from: result))
+                } catch {
+                    return .failure(
+                        for: request,
+                        error: .internalFailure("The Browser page close result could not be serialized as JSON.")
+                    )
+                }
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
+        case .activateContext:
+            guard let browserTab = browserTab(for: request) else {
+                return .failure(for: request, error: .invalidRequest("The browserContextID/browserTabID does not resolve to a live Browser context."))
+            }
+
+            switch browserTab.activateContext() {
+            case let .success(summary):
+                do {
+                    return .success(for: request, resultJSON: try jsonString(from: summary))
+                } catch {
+                    return .failure(
+                        for: request,
+                        error: .internalFailure("The activated Browser context summary could not be serialized as JSON.")
+                    )
+                }
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
+        case .closeContext:
+            guard let browserTab = browserTab(for: request) else {
+                return .failure(for: request, error: .invalidRequest("The browserContextID/browserTabID does not resolve to a live Browser context."))
+            }
+
+            switch browserTab.closeContext() {
+            case let .success(result):
+                do {
+                    return .success(for: request, resultJSON: try jsonString(from: result))
+                } catch {
+                    return .failure(
+                        for: request,
+                        error: .internalFailure("The Browser context close result could not be serialized as JSON.")
                     )
                 }
             case let .failure(error):
@@ -1239,39 +1478,41 @@ extension ScriptBrowserTab {
         case .getDOMSnapshot:
             return routeExternalDOMCommand(request, command: .getDOMSnapshot)
         case .newTab:
-            guard let appDelegate = NSApp.delegate as? AppDelegate else {
-                return .failure(for: request, error: .internalFailure("The GhoDex app delegate is unavailable."))
-            }
-
-            let initialURL: URL?
-            if let rawURL = request.payload["url"], !rawURL.isEmpty {
-                let normalizedURL = BrowserPaths.normalizedURLString(
-                    rawURL,
-                    fallback: BrowserTabController.defaultHomePageURL(for: appDelegate.ghostty).absoluteString
-                )
-                guard let url = URL(string: normalizedURL) else {
-                    return .failure(for: request, error: .invalidRequest("The Browser tab URL is invalid."))
-                }
-                initialURL = url
-            } else {
-                initialURL = nil
-            }
-
-            let controller = BrowserTabController.newWindow(appDelegate.ghostty, initialURL: initialURL)
-            let browserTab = ScriptBrowserTab(controller: controller)
-            switch browserTab.waitForActivePageBridgeSynchronously() {
-            case .success:
-                break
-            case let .failure(error):
-                return .failure(for: request, error: error.externalCommandError)
+            let compatibilityRequest = BrowserExternalCommandRequest(
+                id: request.id,
+                version: request.version,
+                command: .newContext,
+                browserTabID: request.browserTabID,
+                browserContextID: request.browserContextID,
+                pageID: request.pageID,
+                frameName: request.frameName,
+                documentRevision: request.documentRevision,
+                payload: request.payload
+            )
+            let contextResponse = routeExternalCommand(compatibilityRequest)
+            guard contextResponse.ok,
+                  let resultJSON = contextResponse.resultJSON,
+                  let data = resultJSON.data(using: .utf8),
+                  let contextSummary = try? JSONDecoder().decode(BrowserExternalContextSummary.self, from: data)
+            else {
+                return contextResponse
             }
 
             do {
-                return .success(for: request, resultJSON: try jsonString(from: browserTab.tabSummary))
+                return .success(
+                    for: request,
+                    resultJSON: try jsonString(
+                        from: BrowserExternalTabSummary(
+                            id: contextSummary.id,
+                            title: contextSummary.title,
+                            url: contextSummary.url
+                        )
+                    )
+                )
             } catch {
                 return .failure(
                     for: request,
-                    error: .internalFailure("The new Browser tab summary could not be serialized as JSON.")
+                    error: .internalFailure("The compatibility Browser tab summary could not be serialized as JSON.")
                 )
             }
         case .loadURL:
@@ -1295,6 +1536,39 @@ extension ScriptBrowserTab {
                 }
             case let .failure(error):
                 return .failure(for: request, error: error.externalCommandError)
+            }
+        case .goBack:
+            switch routeExternalDOMCommand(request, command: .goBack) {
+            case let response where response.ok:
+                do {
+                    return .success(for: request, resultJSON: try jsonString(from: BrowserExternalMutationAck(accepted: true, operation: "goBack")))
+                } catch {
+                    return .failure(for: request, error: .internalFailure("The goBack acknowledgment could not be serialized as JSON."))
+                }
+            case let response:
+                return response
+            }
+        case .goForward:
+            switch routeExternalDOMCommand(request, command: .goForward) {
+            case let response where response.ok:
+                do {
+                    return .success(for: request, resultJSON: try jsonString(from: BrowserExternalMutationAck(accepted: true, operation: "goForward")))
+                } catch {
+                    return .failure(for: request, error: .internalFailure("The goForward acknowledgment could not be serialized as JSON."))
+                }
+            case let response:
+                return response
+            }
+        case .reload:
+            switch routeExternalDOMCommand(request, command: .reload) {
+            case let response where response.ok:
+                do {
+                    return .success(for: request, resultJSON: try jsonString(from: BrowserExternalMutationAck(accepted: true, operation: "reload")))
+                } catch {
+                    return .failure(for: request, error: .internalFailure("The reload acknowledgment could not be serialized as JSON."))
+                }
+            case let response:
+                return response
             }
         case .getCookies:
             let target: ResolvedExternalPageTarget
@@ -1413,7 +1687,11 @@ extension ScriptBrowserTab {
             }
 
             do {
-                let subscription = BrowserExternalEventBroker.shared.subscribe(to: controller, kinds: requestedEventKinds)
+                let subscription = BrowserExternalEventBroker.shared.subscribe(
+                    to: controller,
+                    kinds: requestedEventKinds,
+                    version: request.version
+                )
                 return .success(for: request, resultJSON: try jsonString(from: subscription))
             } catch let error as BrowserExternalCommandError {
                 return .failure(for: request, error: error)
@@ -1442,7 +1720,11 @@ extension ScriptBrowserTab {
                 return .failure(for: request, error: .invalidRequest("The event drain limit is invalid."))
             }
 
-            guard let result = BrowserExternalEventBroker.shared.drain(subscriptionID: requestedSubscriptionID, limit: limit) else {
+            guard let result = BrowserExternalEventBroker.shared.drain(
+                subscriptionID: requestedSubscriptionID,
+                limit: limit,
+                version: request.version
+            ) else {
                 return .failure(
                     for: request,
                     error: .invalidRequest("The subscriptionID does not resolve to a live browser event subscription.")
@@ -1475,7 +1757,10 @@ extension ScriptBrowserTab {
             }
 
             do {
-                return .success(for: request, resultJSON: try jsonString(from: BrowserExternalSubscriptionAck()))
+                return .success(
+                    for: request,
+                    resultJSON: try jsonString(from: BrowserExternalSubscriptionAck(version: request.version))
+                )
             } catch {
                 return .failure(
                     for: request,
@@ -1486,10 +1771,10 @@ extension ScriptBrowserTab {
     }
 
     static func browserTab(for request: BrowserExternalCommandRequest) -> ScriptBrowserTab? {
-        guard let browserTabID = request.browserTabID, !browserTabID.isEmpty else {
+        guard let browserContextID = request.resolvedBrowserContextID else {
             return nil
         }
-        return NSApp.browserTabsForExternalControl.first(where: { $0.stableID == browserTabID })
+        return NSApp.browserContextsForExternalControl.first(where: { $0.stableID == browserContextID })
     }
 
     private static func debugStatusResult() -> BrowserExternalDebugStatusResult {

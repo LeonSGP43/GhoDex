@@ -12,6 +12,28 @@ The target state is not full Chrome product parity. The target state is:
 - the browser does not expose obvious low-effort automation fingerprints created by our own runtime choices
 - remaining non-goals are explicit product boundaries, not accidental gaps
 
+Browser Context transition note:
+
+- the control-plane top-level object is now being formalized as `browserContext`
+  rather than reusing the overloaded Browser tab/window term
+- the current Browser tab controller remains the UI container during the
+  transition, but new protocol and acceptance work should describe top-level
+  isolation and lifecycle in terms of context/page/frame boundaries
+
+## Execution Rule
+
+All remaining work on this plan must follow atomic development rules.
+
+- one task at a time: do not mix two plan tasks in one implementation slice
+- before starting the next task, finish the current task end-to-end:
+  implementation, durable docs, tests or acceptance evidence, and verification
+- if a task changes behavior, update the relevant protocol/runtime/design docs in
+  the same atomic change
+- if a task cannot yet be covered by an automated test, record the exact
+  acceptance procedure and evidence path before marking it complete
+- do not begin the next phase until the current phase has a clear close-out with
+  code, documentation, and verification artifacts
+
 ## Current Baseline
 
 Current evidence already proves the branch is beyond prototype status:
@@ -169,15 +191,25 @@ Acceptance:
 
 - keep current popup/control/profile proofs reproducible after the `main` sync
 - avoid reopening already-closed routing issues while working on new gaps
+- close the BrowserTab teardown exclusivity crash before deeper Browser Context
+  refactors so the control-plane lifecycle remains stable during later work
+- treat the crash fix itself as one atomic unit:
+  root-cause doc -> implementation -> regression test or acceptance repro ->
+  verification -> only then move on
 
 Exit:
 
 - existing popup and control proofs still pass on the merged branch
+- Browser teardown no longer aborts in the known `isControlBridgeReady`
+  dismantle path
+- teardown fix has durable documentation plus a reproducible verification path
 
 ### Phase 1. Media And Debug Surface
 
 - close H.264 and remote-debug-default questions first
 - remove or justify self-inflicted fingerprinting switches
+- finish media/debug docs and evidence before starting profile service-surface
+  closure
 
 Exit:
 
@@ -187,6 +219,7 @@ Exit:
 
 - compare Chrome-successful dedicated profile behavior versus GhoDex behavior
 - preserve only the web-visible state layers needed for durable login/session reuse
+- finish profile docs and restart acceptance before starting handler-surface work
 
 Exit:
 
@@ -195,6 +228,8 @@ Exit:
 ### Phase 3. Handler Acceptance Matrix
 
 - run or record every high-value browser-service path
+- finish the acceptance matrix and evidence set before starting popup broker
+  closure
 
 Exit:
 
@@ -203,6 +238,7 @@ Exit:
 ### Phase 4. Popup Broker Closure
 
 - expose popup/open-window routing outcomes to external automation
+- finish protocol docs and popup evidence before declaring the plan complete
 
 Exit:
 
@@ -224,6 +260,10 @@ Until then, the branch should be treated as conditionally mergeable for continue
 
 ## Decision Trail
 
+- Fix the BrowserTab teardown crash before adding more lifecycle complexity. A
+  first-class Browser Context model increases object churn around page/context
+  creation and destruction, so leaving a known Swift exclusivity abort in the
+  teardown path would make later isolation work harder to diagnose.
 - Close self-inflicted parity gaps before chasing broad anti-bot claims. If our own flags or runtime defaults create the anomaly, fix that before blaming CEF or websites.
 - Separate Chrome account-service parity from website session parity. The product must preserve website login state; it does not need to impersonate the full Chrome sync stack unless that becomes an explicit requirement.
 - Prefer observable broker events over deeper hidden logging. If a popup regression cannot be diagnosed through the external control plane, automation will stay fragile.

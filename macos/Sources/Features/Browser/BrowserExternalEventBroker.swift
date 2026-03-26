@@ -11,7 +11,8 @@ final class BrowserExternalEventBroker {
 
     func subscribe(
         to controller: BrowserTabController,
-        kinds: Set<BrowserExternalEventKind>
+        kinds: Set<BrowserExternalEventKind>,
+        version: String
     ) -> BrowserExternalEventSubscriptionResult {
         let subscriptionID = UUID()
         let browserTabID = ScriptBrowserTab.stableID(controller: controller)
@@ -22,6 +23,7 @@ final class BrowserExternalEventBroker {
         }
 
         subscriptions[subscriptionID] = Subscription(
+            version: version,
             browserTabID: browserTabID,
             observerToken: observerToken,
             controller: controller,
@@ -31,12 +33,13 @@ final class BrowserExternalEventBroker {
             bufferedEvents: []
         )
 
-        return BrowserExternalEventSubscriptionResult(subscriptionID: subscriptionID)
+        return BrowserExternalEventSubscriptionResult(version: version, subscriptionID: subscriptionID)
     }
 
     func drain(
         subscriptionID: UUID,
-        limit: Int?
+        limit: Int?,
+        version: String
     ) -> BrowserExternalEventDrainResult? {
         guard var subscription = subscriptions[subscriptionID] else {
             return nil
@@ -48,6 +51,7 @@ final class BrowserExternalEventBroker {
         subscription.deliveredCount += drainedEvents.count
 
         let result = BrowserExternalEventDrainResult(
+            version: version,
             subscriptionID: subscriptionID,
             nextCursor: subscription.deliveredCount,
             droppedCount: subscription.droppedCount,
@@ -156,8 +160,10 @@ final class BrowserExternalEventBroker {
 
         appendEvent(
             BrowserExternalEventEnvelope(
+                version: subscription.version,
                 subscriptionID: subscriptionID,
                 browserTabID: browserTabID,
+                browserContextID: browserTabID,
                 kind: externalKind,
                 payload: payload
             ),
@@ -218,8 +224,10 @@ final class BrowserExternalEventBroker {
 
             self.appendEvent(
                 BrowserExternalEventEnvelope(
+                    version: subscription.version,
                     subscriptionID: subscriptionID,
                     browserTabID: browserTabID,
+                    browserContextID: browserTabID,
                     kind: .pageInspectionSnapshot,
                     payload: payload
                 ),
@@ -252,6 +260,7 @@ final class BrowserExternalEventBroker {
     }
 
     private struct Subscription {
+        let version: String
         let browserTabID: String
         let observerToken: UUID
         weak var controller: BrowserTabController?

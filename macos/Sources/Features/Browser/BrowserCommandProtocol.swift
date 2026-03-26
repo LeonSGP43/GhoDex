@@ -2,17 +2,30 @@ import Foundation
 
 enum BrowserCommandProtocolVersion {
     static let v1 = "browser.tab.v1"
+    static let v2 = "browser.context.v2"
+
+    static let supportedVersions: Set<String> = [v1, v2]
 }
 
 enum BrowserExternalCommandKind: String, Codable, Hashable {
     case listTabs
     case newTab
+    case listContexts
+    case getContext
+    case newContext
+    case closeContext
+    case activateContext
     case listPages
+    case newPageInContext
     case getActivePage
     case activatePage
+    case closePage
     case listFrames
     case getDebugStatus
     case loadURL
+    case goBack
+    case goForward
+    case reload
     case getCookies
     case setCookie
     case deleteCookie
@@ -75,6 +88,7 @@ struct BrowserExternalCommandRequest: Identifiable, Hashable, Codable {
     let version: String
     let command: BrowserExternalCommandKind
     let browserTabID: String?
+    let browserContextID: String?
     let pageID: String?
     let frameName: String?
     let documentRevision: Int?
@@ -85,6 +99,7 @@ struct BrowserExternalCommandRequest: Identifiable, Hashable, Codable {
         version: String = BrowserCommandProtocolVersion.v1,
         command: BrowserExternalCommandKind,
         browserTabID: String? = nil,
+        browserContextID: String? = nil,
         pageID: String? = nil,
         frameName: String? = nil,
         documentRevision: Int? = nil,
@@ -94,6 +109,7 @@ struct BrowserExternalCommandRequest: Identifiable, Hashable, Codable {
         self.version = version
         self.command = command
         self.browserTabID = browserTabID
+        self.browserContextID = browserContextID
         self.pageID = pageID
         self.frameName = frameName
         self.documentRevision = documentRevision
@@ -101,12 +117,22 @@ struct BrowserExternalCommandRequest: Identifiable, Hashable, Codable {
     }
 
     func validateVersion() -> BrowserExternalCommandError? {
-        guard version == BrowserCommandProtocolVersion.v1 else {
+        guard BrowserCommandProtocolVersion.supportedVersions.contains(version) else {
             return .unsupportedVersion(
-                "The browser command protocol version \(version) is not supported. Expected \(BrowserCommandProtocolVersion.v1)."
+                "The browser command protocol version \(version) is not supported. Expected one of \(BrowserCommandProtocolVersion.supportedVersions.sorted())."
             )
         }
 
+        return nil
+    }
+
+    var resolvedBrowserContextID: String? {
+        if let browserContextID = browserContextID?.trimmingCharacters(in: .whitespacesAndNewlines), !browserContextID.isEmpty {
+            return browserContextID
+        }
+        if let browserTabID = browserTabID?.trimmingCharacters(in: .whitespacesAndNewlines), !browserTabID.isEmpty {
+            return browserTabID
+        }
         return nil
     }
 }
@@ -124,7 +150,7 @@ struct BrowserExternalCommandResponse: Hashable, Codable {
     ) -> BrowserExternalCommandResponse {
         BrowserExternalCommandResponse(
             id: request.id,
-            version: BrowserCommandProtocolVersion.v1,
+            version: request.version,
             ok: true,
             resultJSON: resultJSON,
             error: nil
@@ -137,7 +163,7 @@ struct BrowserExternalCommandResponse: Hashable, Codable {
     ) -> BrowserExternalCommandResponse {
         BrowserExternalCommandResponse(
             id: request.id,
-            version: BrowserCommandProtocolVersion.v1,
+            version: request.version,
             ok: false,
             resultJSON: nil,
             error: error
@@ -149,6 +175,15 @@ struct BrowserExternalTabSummary: Hashable, Codable {
     let id: String
     let title: String
     let url: String
+}
+
+struct BrowserExternalContextSummary: Hashable, Codable {
+    let id: String
+    let title: String
+    let url: String
+    let activePageID: String?
+    let pageCount: Int
+    let isFrontmost: Bool
 }
 
 struct BrowserExternalPageSummary: Hashable, Codable {
@@ -197,11 +232,28 @@ struct BrowserExternalCookieMutationResult: Hashable, Codable {
     let cookies: [BrowserExternalCookieEntry]
 }
 
+struct BrowserExternalMutationAck: Hashable, Codable {
+    let accepted: Bool
+    let operation: String
+}
+
+struct BrowserExternalPageCloseResult: Hashable, Codable {
+    let closedPageID: String
+    let remainingPageCount: Int
+    let activePageID: String?
+}
+
+struct BrowserExternalContextCloseResult: Hashable, Codable {
+    let closedContextID: String
+    let closedPageCount: Int
+}
+
 struct BrowserExternalEventEnvelope: Identifiable, Hashable, Codable {
     let id: UUID
     let version: String
     let subscriptionID: UUID
     let browserTabID: String
+    let browserContextID: String
     let kind: BrowserExternalEventKind
     let payload: [String: String]
     let createdAt: Date
@@ -211,6 +263,7 @@ struct BrowserExternalEventEnvelope: Identifiable, Hashable, Codable {
         version: String = BrowserCommandProtocolVersion.v1,
         subscriptionID: UUID,
         browserTabID: String,
+        browserContextID: String? = nil,
         kind: BrowserExternalEventKind,
         payload: [String: String],
         createdAt: Date = Date()
@@ -219,6 +272,7 @@ struct BrowserExternalEventEnvelope: Identifiable, Hashable, Codable {
         self.version = version
         self.subscriptionID = subscriptionID
         self.browserTabID = browserTabID
+        self.browserContextID = browserContextID ?? browserTabID
         self.kind = kind
         self.payload = payload
         self.createdAt = createdAt

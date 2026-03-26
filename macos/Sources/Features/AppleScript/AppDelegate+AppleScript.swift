@@ -114,13 +114,22 @@ extension NSApplication {
 
 @MainActor
 extension NSApplication {
+    /// Live Browser contexts for the external command protocol.
+    ///
+    /// The current implementation still uses `BrowserTabController` as the UI
+    /// container, so the context ID is the same stable external identifier
+    /// exposed through the legacy browser-tab compatibility layer.
+    var browserContextsForExternalControl: [ScriptBrowserTab] {
+        BrowserTabController.all.map { ScriptBrowserTab(controller: $0) }
+    }
+
     /// Live Browser tabs for the external command protocol.
     ///
     /// This path is intentionally independent of `macos-applescript` so the
     /// local Browser IPC/CLI control plane keeps working even when AppleScript
     /// automation is disabled in user config.
     var browserTabsForExternalControl: [ScriptBrowserTab] {
-        BrowserTabController.all.map { ScriptBrowserTab(controller: $0) }
+        browserContextsForExternalControl
     }
 
     /// Backing collection for `application.browser tabs`.

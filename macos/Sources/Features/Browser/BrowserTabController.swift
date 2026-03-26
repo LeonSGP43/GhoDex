@@ -11,6 +11,11 @@ final class BrowserTabController: NSWindowController, NSWindowDelegate, TopLevel
         liveControllerOrder.compactMap { liveControllersByID[$0] }
     }
 
+    static var frontmostControllerID: String? {
+        (NSApp.keyWindow?.windowController as? BrowserTabController)?.externalID
+            ?? (NSApp.mainWindow?.windowController as? BrowserTabController)?.externalID
+    }
+
     let externalID = "browser-tab-\(UUID().uuidString.lowercased())"
     let ghostty: Ghostty.App
     let model: BrowserTabModel
@@ -141,6 +146,16 @@ final class BrowserTabController: NSWindowController, NSWindowDelegate, TopLevel
         window?.close()
     }
 
+    func activateContext() {
+        showWindow(nil)
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func closeContextImmediately() {
+        closeTabImmediately(registerRedo: false)
+    }
+
     func window(_ window: NSWindow, willEncodeRestorableState state: NSCoder) {
         BrowserRestorableState(from: self).encode(with: state)
     }
@@ -214,6 +229,10 @@ final class BrowserTabController: NSWindowController, NSWindowDelegate, TopLevel
 
     static func preferredParentWindow() -> NSWindow? {
         NSApp.keyWindow ?? NSApp.mainWindow ?? TerminalController.preferredParent?.window
+    }
+
+    static func lookup(externalID: String) -> BrowserTabController? {
+        liveControllersByID[externalID]
     }
 
     static func closeAllWindowsImmediately() {

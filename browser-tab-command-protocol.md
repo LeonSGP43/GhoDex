@@ -7,6 +7,14 @@
  browser control sessions, and treat the internal Swift/CEF implementation as an
  implementation detail.
 
+Compatibility note:
+
+- `browser.tab.v1` remains supported for existing clients
+- the underlying top-level object is now documented as a Browser Context
+- `browser.tab.v1` identifiers still resolve to that same top-level context
+- the forward-looking object model is documented in
+  `browser-context-command-protocol.md`
+
 The protocol is designed for:
 
 - low-latency local control over a running Browser tab
@@ -64,7 +72,7 @@ Every request is a JSON object with this shape:
 Field notes:
 
 - `id`: caller-generated UUID used to correlate the response
-- `version`: must currently be `browser.tab.v1`
+- `version`: `browser.tab.v1` for compatibility clients
 - `command`: one of the supported command names
 - `browserTabID`: optional tab identifier; required for tab-specific commands
 - `pageID`: optional internal page identifier for page-targeted commands
@@ -121,6 +129,8 @@ Field notes:
 Important semantic note:
 
 - `newTab` creates a new Browser window/controller
+- in the newer object model, that top-level object is a Browser Context
+- `newTab` should now be treated as a compatibility alias for `newContext`
 - it does not append an internal page to an existing Browser tab
 - use `listPages` / `activatePage` to work with the internal pages that already
   exist inside one Browser tab
@@ -178,6 +188,9 @@ targetable through the external command envelope.
 
 - `getDebugStatus`
 - `loadURL`
+- `goBack`
+- `goForward`
+- `reload`
 - `getCookies`
 - `setCookie`
 - `deleteCookie`
@@ -216,6 +229,8 @@ The optional CEF remote debugging lane is a diagnostics surface, not the
 product contract for Browser automation.
 
 - `browser.tab.v1` remains the primary control API for Browser tabs
+- `browser.context.v2` is the new context/page terminology layer for future
+  Browser Control clients
 - Chromium remote debugging stays disabled by default
 - enable it only by setting `ghodex-browser-remote-debug-port` to a positive
   local port in config
