@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(browser): resolve js dialogs without blocking external event drain
+
+- What changed: Reworked `GhoDexCEFBridge.mm` so `OnJSDialog` now registers an asynchronous runtime-prompt continuation instead of synchronously waiting on the external-resolution grace semaphore on the dialog callback thread. External `resolveDialog` requests now resume the pending dialog asynchronously, native dialog fallback still happens after the grace window when no external response arrives, and the JS dialog acceptance harness now tolerates the existing `invalidRequest` stale-request error spelling used by the Browser control protocol.
+- Why: After the launch-time Remote Pairing QR blocker was removed, the JavaScript dialog acceptance harness advanced far enough to show the real runtime-prompt bug: `drainEvents` timed out because the dialog callback path was still synchronously waiting and then potentially running native modal UI before the external control plane had a chance to observe and resolve the prompt.
+- Impact: JavaScript alert / confirm / prompt flows are now externally controllable end to end without starving the Browser event stream. Agents can observe the `requested` event, call `resolveDialog`, receive the matching `resolved` event, and still rely on native fallback if no external resolution arrives in time.
+- Verification: `nu macos/build.nu --configuration Debug --action build`; `python3 -m py_compile scripts/browser_js_dialog_resolution_acceptance.py`; `python3 scripts/browser_js_dialog_resolution_acceptance.py --app /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-browser-context-platform/macos/build/Debug/GhoDex.app --runtime-root '/Users/leongong/Library/Application Support/GhoDex/CEF/current' --output /tmp/ghx-browser-js-dialog-resolution-acceptance-recheck-5.json`
+- Files: `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `scripts/browser_js_dialog_resolution_acceptance.py`, `browser-tab-gap-closure-plan.md`, `browser-tab-acceptance-matrix.md`, `CHANGELOG.md`
+- Decision trail: Keep this slice narrowly focused on JS dialogs instead of generalizing the whole runtime-prompt stack in one commit. The failing harness already covered alert / confirm / prompt deterministically, so the right move was to remove the synchronous wait from that exact path first, prove it end to end, and leave permission/auth/certificate follow-ups as separate acceptance slices.
+
 ### fix(app): keep browser ipc responsive during launch-time pairing QR failures
 
 - What changed: Split Remote Pairing QR requests into `manual` versus `launchPreference` sources, added `RemotePairingQRCodePresentationPolicy`, kept manual failures on visible modal feedback, and changed launch-triggered failures to log without blocking `@MainActor`. Added `RemotePairingQRCodePresentationPolicyTests` plus `scripts/browser_ipc_startup_readiness_acceptance.py`, and updated the Browser gap/acceptance docs to record both the March 27 sample root cause and the passing startup/context recheck artifacts.

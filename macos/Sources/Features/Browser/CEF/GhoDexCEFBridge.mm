@@ -905,13 +905,20 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
 - (void)presentPopupWindow;
 @end
 
+typedef void (^GhoDexCEFRuntimePromptContinuation)(
+    NSDictionary<NSString *, NSString *> * _Nullable resolutionPayload,
+    BOOL externallyResolved,
+    BOOL canceled);
+
 @interface GhoDexCEFRuntimePromptRequest : NSObject
 @property(nonatomic, copy, readonly) NSString *requestID;
 @property(nonatomic, copy, readonly) NSString *kind;
 @property(nonatomic, strong, readonly) dispatch_semaphore_t semaphore;
 @property(nonatomic, copy, nullable) NSDictionary<NSString *, NSString *> *resolutionPayload;
+@property(nonatomic, copy, nullable) GhoDexCEFRuntimePromptContinuation continuation;
 @property(nonatomic) BOOL externallyResolved;
 @property(nonatomic) BOOL canceled;
+@property(nonatomic) BOOL completed;
 - (instancetype)initWithRequestID:(NSString *)requestID
                              kind:(NSString *)kind NS_DESIGNATED_INITIALIZER;
 @end
@@ -940,6 +947,7 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
 - (NSDictionary<NSString *, NSString *> * _Nullable)finishRuntimePromptRequest:(GhoDexCEFRuntimePromptRequest *)request
                                                              externallyResolved:(BOOL *)externallyResolved
                                                                        canceled:(BOOL *)canceled;
+- (void)resumeRuntimePromptRequest:(GhoDexCEFRuntimePromptRequest *)request;
 - (void)loadPendingBootstrapURLIfNeeded;
 @end
 
@@ -952,8 +960,10 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
     _kind = [kind copy];
     _semaphore = dispatch_semaphore_create(0);
     _resolutionPayload = nil;
+    _continuation = nil;
     _externallyResolved = NO;
     _canceled = NO;
+    _completed = NO;
   }
   return self;
 }
@@ -1419,6 +1429,7 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
   [_pendingRuntimePromptRequests removeObjectForKey:request.requestID];
 
   @synchronized(request) {
+    request.completed = YES;
     if (externallyResolved != nullptr) {
       *externallyResolved = request.externallyResolved;
     }
@@ -1426,6 +1437,35 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
       *canceled = request.canceled;
     }
     return request.resolutionPayload;
+  }
+}
+
+- (void)resumeRuntimePromptRequest:(GhoDexCEFRuntimePromptRequest *)request {
+  if (request == nil) {
+    return;
+  }
+
+  __block GhoDexCEFRuntimePromptContinuation continuation = nil;
+  __block NSDictionary<NSString *, NSString *> *resolution_payload = nil;
+  __block BOOL externally_resolved = NO;
+  __block BOOL canceled = NO;
+
+  @synchronized(request) {
+    if (request.completed) {
+      return;
+    }
+    request.completed = YES;
+    continuation = [request.continuation copy];
+    resolution_payload = request.resolutionPayload;
+    externally_resolved = request.externallyResolved;
+    canceled = request.canceled;
+  }
+
+  [_pendingRuntimePromptRequests removeObjectForKey:request.requestID];
+  if (continuation != nil) {
+    continuation(resolution_payload, externally_resolved, canceled);
+  } else {
+    dispatch_semaphore_signal(request.semaphore);
   }
 }
 
@@ -1452,6 +1492,7 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
     return NO;
   }
 
+  BOOL uses_async_continuation = NO;
   @synchronized(request) {
     if (request.externallyResolved || request.canceled) {
       if (error != nullptr) {
@@ -1464,9 +1505,16 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
 
     request.externallyResolved = YES;
     request.resolutionPayload = payload != nil ? [payload copy] : @{};
+    uses_async_continuation = (request.continuation != nil);
   }
 
-  dispatch_semaphore_signal(request.semaphore);
+  if (uses_async_continuation) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [self resumeRuntimePromptRequest:request];
+    });
+  } else {
+    dispatch_semaphore_signal(request.semaphore);
+  }
   return YES;
 }
 
@@ -1479,11 +1527,17 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
   [_pendingRuntimePromptRequests removeAllObjects];
 
   for (GhoDexCEFRuntimePromptRequest *request in pending) {
+    BOOL uses_async_continuation = NO;
     @synchronized(request) {
       request.canceled = YES;
       request.resolutionPayload = nil;
+      uses_async_continuation = (request.continuation != nil);
     }
-    dispatch_semaphore_signal(request.semaphore);
+    if (uses_async_continuation) {
+      [self resumeRuntimePromptRequest:request];
+    } else {
+      dispatch_semaphore_signal(request.semaphore);
+    }
   }
 }
 
@@ -2047,142 +2101,150 @@ bool GhoDexCEFClient::OnJSDialog(CefRefPtr<CefBrowser> browser,
   SetPayloadValue(requested_payload, @"originURL", origin);
   SetPayloadValue(requested_payload, @"defaultPromptText", default_prompt);
   __block GhoDexCEFRuntimePromptRequest *request = nil;
+  CefRefPtr<CefJSDialogCallback> retained_callback = callback;
   RunOnMainThreadSync(^{
     request = [owner_ beginRuntimePromptKind:@"javaScriptDialog" payload:requested_payload];
+    if (request != nil) {
+      request.continuation = ^(NSDictionary<NSString *, NSString *> *resolution_payload,
+                               BOOL externally_resolved,
+                               BOOL canceled) {
+        if (!owner_ || !retained_callback.get()) {
+          return;
+        }
+
+        if (canceled) {
+          retained_callback->Continue(false, CefString());
+          return;
+        }
+
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.alertStyle = NSAlertStyleInformational;
+        alert.informativeText = message.length > 0 ? message : AlertDisplayOrigin(origin);
+
+        switch (dialog_type) {
+        case JSDIALOGTYPE_ALERT: {
+          if (externally_resolved) {
+            BOOL accepted = [resolution_payload[@"accepted"] isEqualToString:@"true"];
+            retained_callback->Continue(accepted, CefString());
+            [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:@{
+              @"requestID": request.requestID,
+              @"phase": @"resolved",
+              @"dialogType": dialog_type_name,
+              @"messageText": message,
+              @"accepted": BoolString(accepted),
+              @"originURL": origin ?: @"",
+            }];
+            return;
+          }
+
+          alert.messageText = [NSString stringWithFormat:@"%@ says", AlertDisplayOrigin(origin)];
+          [alert addButtonWithTitle:@"OK"];
+          BOOL accepted = RunAlert(alert, owner_) == NSAlertFirstButtonReturn;
+          retained_callback->Continue(accepted, CefString());
+          [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:@{
+            @"requestID": request.requestID,
+            @"phase": @"resolved",
+            @"dialogType": dialog_type_name,
+            @"messageText": message,
+            @"accepted": BoolString(accepted),
+            @"originURL": origin ?: @"",
+          }];
+          return;
+        }
+        case JSDIALOGTYPE_CONFIRM: {
+          if (externally_resolved) {
+            BOOL accepted = [resolution_payload[@"accepted"] isEqualToString:@"true"];
+            retained_callback->Continue(accepted, CefString());
+            [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:@{
+              @"requestID": request.requestID,
+              @"phase": @"resolved",
+              @"dialogType": dialog_type_name,
+              @"messageText": message,
+              @"accepted": BoolString(accepted),
+              @"originURL": origin ?: @"",
+            }];
+            return;
+          }
+
+          alert.messageText = [NSString stringWithFormat:@"%@ confirmation", AlertDisplayOrigin(origin)];
+          [alert addButtonWithTitle:@"OK"];
+          [alert addButtonWithTitle:@"Cancel"];
+          BOOL accepted = RunAlert(alert, owner_) == NSAlertFirstButtonReturn;
+          retained_callback->Continue(accepted, CefString());
+          [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:@{
+            @"requestID": request.requestID,
+            @"phase": @"resolved",
+            @"dialogType": dialog_type_name,
+            @"messageText": message,
+            @"accepted": BoolString(accepted),
+            @"originURL": origin ?: @"",
+          }];
+          return;
+        }
+        case JSDIALOGTYPE_PROMPT: {
+          if (externally_resolved) {
+            BOOL accepted = [resolution_payload[@"accepted"] isEqualToString:@"true"];
+            NSString *resolved_input = accepted ? (resolution_payload[@"userInput"] ?: default_prompt) : default_prompt;
+            retained_callback->Continue(accepted, CefString(resolved_input.UTF8String));
+            NSMutableDictionary<NSString *, NSString *> *resolved_payload = [@{
+              @"requestID": request.requestID,
+              @"phase": @"resolved",
+              @"dialogType": dialog_type_name,
+              @"messageText": message,
+              @"accepted": BoolString(accepted),
+              @"originURL": origin ?: @"",
+            } mutableCopy];
+            SetPayloadValue(resolved_payload, @"defaultPromptText", default_prompt);
+            if (accepted) {
+              SetPayloadValue(resolved_payload, @"userInput", resolved_input);
+            }
+            [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:resolved_payload];
+            return;
+          }
+
+          alert.messageText = [NSString stringWithFormat:@"%@ prompt", AlertDisplayOrigin(origin)];
+          NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 320, 24)];
+          field.stringValue = default_prompt ?: @"";
+          alert.accessoryView = field;
+          [alert addButtonWithTitle:@"OK"];
+          [alert addButtonWithTitle:@"Cancel"];
+          BOOL accepted = RunAlert(alert, owner_) == NSAlertFirstButtonReturn;
+          NSString *resolved_input = accepted ? field.stringValue : default_prompt;
+          retained_callback->Continue(accepted, CefString(resolved_input.UTF8String));
+          NSMutableDictionary<NSString *, NSString *> *resolved_payload = [@{
+            @"requestID": request.requestID,
+            @"phase": @"resolved",
+            @"dialogType": dialog_type_name,
+            @"messageText": message,
+            @"accepted": BoolString(accepted),
+            @"originURL": origin ?: @"",
+          } mutableCopy];
+          SetPayloadValue(resolved_payload, @"defaultPromptText", default_prompt);
+          if (accepted) {
+            SetPayloadValue(resolved_payload, @"userInput", resolved_input);
+          }
+          [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:resolved_payload];
+          return;
+        }
+        default:
+          retained_callback->Continue(false, CefString());
+          return;
+        }
+      };
+    }
   });
   if (request == nil) {
     return false;
   }
 
-  dispatch_semaphore_wait(
-      request.semaphore,
-      dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kRuntimePromptExternalResolutionGraceSeconds * NSEC_PER_SEC)));
-
-  __block BOOL externally_resolved = NO;
-  __block BOOL canceled = NO;
-  __block NSDictionary<NSString *, NSString *> *resolution_payload = nil;
-  RunOnMainThreadSync(^{
-    resolution_payload = [owner_ finishRuntimePromptRequest:request
-                                         externallyResolved:&externally_resolved
-                                                   canceled:&canceled];
-  });
-  if (canceled) {
-    callback->Continue(false, CefString());
-    return true;
-  }
-
-  NSAlert *alert = [[NSAlert alloc] init];
-  alert.alertStyle = NSAlertStyleInformational;
-  alert.informativeText = message.length > 0 ? message : AlertDisplayOrigin(origin);
-
-  switch (dialog_type) {
-  case JSDIALOGTYPE_ALERT: {
-    if (externally_resolved) {
-      BOOL accepted = [resolution_payload[@"accepted"] isEqualToString:@"true"];
-      callback->Continue(accepted, CefString());
-      [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:@{
-        @"requestID": request.requestID,
-        @"phase": @"resolved",
-        @"dialogType": dialog_type_name,
-        @"messageText": message,
-        @"accepted": BoolString(accepted),
-        @"originURL": origin ?: @"",
-      }];
-      return true;
-    }
-
-    alert.messageText = [NSString stringWithFormat:@"%@ says", AlertDisplayOrigin(origin)];
-    [alert addButtonWithTitle:@"OK"];
-    BOOL accepted = RunAlert(alert, owner_) == NSAlertFirstButtonReturn;
-    callback->Continue(accepted, CefString());
-    [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:@{
-      @"requestID": request.requestID,
-      @"phase": @"resolved",
-      @"dialogType": dialog_type_name,
-      @"messageText": message,
-      @"accepted": BoolString(accepted),
-      @"originURL": origin ?: @"",
-    }];
-    return true;
-  }
-  case JSDIALOGTYPE_CONFIRM: {
-    if (externally_resolved) {
-      BOOL accepted = [resolution_payload[@"accepted"] isEqualToString:@"true"];
-      callback->Continue(accepted, CefString());
-      [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:@{
-        @"requestID": request.requestID,
-        @"phase": @"resolved",
-        @"dialogType": dialog_type_name,
-        @"messageText": message,
-        @"accepted": BoolString(accepted),
-        @"originURL": origin ?: @"",
-      }];
-      return true;
-    }
-
-    alert.messageText = [NSString stringWithFormat:@"%@ confirmation", AlertDisplayOrigin(origin)];
-    [alert addButtonWithTitle:@"OK"];
-    [alert addButtonWithTitle:@"Cancel"];
-    BOOL accepted = RunAlert(alert, owner_) == NSAlertFirstButtonReturn;
-    callback->Continue(accepted, CefString());
-    [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:@{
-      @"requestID": request.requestID,
-      @"phase": @"resolved",
-      @"dialogType": dialog_type_name,
-      @"messageText": message,
-      @"accepted": BoolString(accepted),
-      @"originURL": origin ?: @"",
-    }];
-    return true;
-  }
-  case JSDIALOGTYPE_PROMPT: {
-    if (externally_resolved) {
-      BOOL accepted = [resolution_payload[@"accepted"] isEqualToString:@"true"];
-      NSString *resolved_input = accepted ? (resolution_payload[@"userInput"] ?: default_prompt) : default_prompt;
-      callback->Continue(accepted, CefString(resolved_input.UTF8String));
-      NSMutableDictionary<NSString *, NSString *> *resolved_payload = [@{
-        @"requestID": request.requestID,
-        @"phase": @"resolved",
-        @"dialogType": dialog_type_name,
-        @"messageText": message,
-        @"accepted": BoolString(accepted),
-        @"originURL": origin ?: @"",
-      } mutableCopy];
-      SetPayloadValue(resolved_payload, @"defaultPromptText", default_prompt);
-      if (accepted) {
-        SetPayloadValue(resolved_payload, @"userInput", resolved_input);
-      }
-      [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:resolved_payload];
-      return true;
-    }
-
-    alert.messageText = [NSString stringWithFormat:@"%@ prompt", AlertDisplayOrigin(origin)];
-    NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 320, 24)];
-    field.stringValue = default_prompt ?: @"";
-    alert.accessoryView = field;
-    [alert addButtonWithTitle:@"OK"];
-    [alert addButtonWithTitle:@"Cancel"];
-    BOOL accepted = RunAlert(alert, owner_) == NSAlertFirstButtonReturn;
-    NSString *resolved_input = accepted ? field.stringValue : default_prompt;
-    callback->Continue(accepted, CefString(resolved_input.UTF8String));
-    NSMutableDictionary<NSString *, NSString *> *resolved_payload = [@{
-      @"requestID": request.requestID,
-      @"phase": @"resolved",
-      @"dialogType": dialog_type_name,
-      @"messageText": message,
-      @"accepted": BoolString(accepted),
-      @"originURL": origin ?: @"",
-    } mutableCopy];
-    SetPayloadValue(resolved_payload, @"defaultPromptText", default_prompt);
-    if (accepted) {
-      SetPayloadValue(resolved_payload, @"userInput", resolved_input);
-    }
-    [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:resolved_payload];
-    return true;
-  }
-  default:
-    return false;
-  }
+  dispatch_after(
+      dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kRuntimePromptExternalResolutionGraceSeconds * NSEC_PER_SEC)),
+      dispatch_get_main_queue(), ^{
+        if (owner_ != nil) {
+          [owner_ resumeRuntimePromptRequest:request];
+        }
+      });
+  return true;
 }
 
 bool GhoDexCEFClient::OnBeforeUnloadDialog(CefRefPtr<CefBrowser> browser,

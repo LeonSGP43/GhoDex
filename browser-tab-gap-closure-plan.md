@@ -291,31 +291,27 @@ Next atomic acceptance slice:
 - keep permission, auth, and certificate acceptance as later slices instead of
   mixing all runtime prompt types into one unverifiable harness
 
-Current blocker:
+Current status:
 
-- the launch-time startup/control-path timeout is now closed for this worktree
-- root cause was confirmed by `/tmp/GhoDex_2026-03-27_014615_6qlP.sample.txt`,
-  which showed the main thread stuck in
-  `AppDelegate.showRemotePairingQRCode(_:)` ->
-  `presentRemotePairingQRCodeError(_:)` -> `NSAlert.runModal()` while Browser
-  IPC requests were waiting on `@MainActor`
-- the fix split Remote Pairing QR requests into `manual` versus
-  `launchPreference` sources so launch-triggered failures log without blocking
-  startup, while manual requests still retain visible modal feedback
-- startup regression evidence now exists in
-  `scripts/browser_ipc_startup_readiness_acceptance.py` and
+- the launch-time startup/control-path timeout is closed for this worktree
+- the first end-to-end runtime-prompt slice is also now closed for JavaScript
+  alert / confirm / prompt dialogs
+- root cause for the earlier startup timeout remains documented by
+  `/tmp/GhoDex_2026-03-27_014615_6qlP.sample.txt`
+- startup regression evidence remains:
+  `scripts/browser_ipc_startup_readiness_acceptance.py`
   `/tmp/ghx-browser-ipc-startup-readiness-acceptance.json`
-- the Browser Context protocol recheck now passes again under the rebuilt
-  Browser-enabled Debug app, backed by
+- Browser Context protocol recheck remains green:
   `/tmp/ghx-browser-context-protocol-acceptance-recheck-3.json`
-- runtime prompt acceptance is still not green, but the blocker has moved
-  deeper: the dedicated JavaScript dialog harness now reaches dialog triggering
-  and then times out at `drainEvents`, which points to the JS dialog runtime
-  handler path still blocking event servicing after startup is already healthy
-- current runtime-prompt blocker artifact:
-  `/tmp/ghx-browser-js-dialog-resolution-acceptance-recheck-3.json`
-- next atomic slice should stay focused on that runtime prompt path rather than
-  reopening Browser Context startup
+- JavaScript dialog resolution is now green end-to-end:
+  `scripts/browser_js_dialog_resolution_acceptance.py`
+  `/tmp/ghx-browser-js-dialog-resolution-acceptance-recheck-5.json`
+- the fix changed `OnJSDialog` from a synchronous grace-period wait into an
+  asynchronous continuation/fallback path, which lets `requested` events drain
+  and `resolveDialog` complete before native UI fallback is considered
+- remaining runtime-prompt work is now the smaller, explicit set: permission,
+  auth, certificate, and other non-JS dialog prompt lanes still need their own
+  acceptance evidence
 
 ### 3.7 Download Control Surface
 

@@ -678,9 +678,10 @@ def run_acceptance(args: argparse.Namespace) -> dict:
                 payload={"requestID": alert_request_id, "accepted": "true"},
             )
             stale_error = stale_alert_retry["response"].get("error") or {}
-            if stale_alert_retry["response"].get("ok") is not False or stale_error.get("code") != "invalid_request":
+            stale_error_code = stale_error.get("code")
+            if stale_alert_retry["response"].get("ok") is not False or stale_error_code not in {"invalid_request", "invalidRequest"}:
                 raise RuntimeError(
-                    "Expected stale resolveDialog retry to fail with invalid_request, "
+                    "Expected stale resolveDialog retry to fail with invalidRequest, "
                     f"got {json.dumps(stale_alert_retry['response'], sort_keys=True)}"
                 )
 
