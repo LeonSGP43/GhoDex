@@ -21,6 +21,8 @@ What is materially working now:
 - managed CEF runtime installation and activation
 - managed runtime supply is now descriptor-driven instead of being permanently
   hardcoded to one Chromium-branded archive
+- the repo now includes a codec-runtime build/install/managed-acceptance
+  workflow instead of relying on undocumented manual supply steps
 - managed, direct, and mirrored profile selection
 - mirrored Chrome web-session reuse, including the isolated Google/Gmail proof
 - runtime settings now explicitly describe the managed/custom runtime media
@@ -86,6 +88,12 @@ Conclusion:
   GhoDex can now read a managed runtime descriptor from
   `GHODEX_CEF_MANAGED_RUNTIME_DESCRIPTOR_PATH` or
   `~/Library/Application Support/GhoDex/CEF/managed-runtime.json`
+- the repo now contains the operational path for that supply step in
+  `scripts/build_codec_enabled_cef_runtime.sh`,
+  `scripts/install_cef_runtime.sh`, and
+  `scripts/browser_media_debug_acceptance.py`
+- the remaining open question is execution evidence on a build-capable host,
+  not missing product support for managed codec-enabled runtimes
 
 ### Tier 1: Product Boundary Choices That Prevent Full Chrome Equivalence
 
@@ -247,14 +255,17 @@ If the target is:
 
 1. Supply and validate a codec-enabled CEF runtime for H.264/video support and
    other high-signal media parity surfaces.
-2. Stage that runtime through the managed runtime descriptor and rerun
+2. Run the repo-owned codec runtime pipeline from
+   `browser-tab-codec-runtime-playbook.md` on a host that satisfies CEF's build
+   prerequisites and disk budget.
+3. Stage that runtime through the managed runtime descriptor and rerun
    `scripts/browser_media_debug_acceptance.py` so the media claim is backed by
    a fresh isolated artifact.
-3. Add dedicated acceptance for the remaining permission/auth/dialog surfaces
+4. Add dedicated acceptance for the remaining permission/auth/dialog surfaces
    that are currently code-backed but not end-to-end proven.
-4. Decide explicitly whether external/mirror mode is meant to stay a
+5. Decide explicitly whether external/mirror mode is meant to stay a
    "web-session reuse" product or evolve toward fuller Chrome-service
    equivalence. That decision should control whether the current
    `disable-*`/`allow-browser-signin=false` launch policy stays in place.
-5. Add a fresh isolated verification lane proving the debug port stays closed
+6. Add a fresh isolated verification lane proving the debug port stays closed
    when unset, so the hardening work is runtime-backed and not only build-backed.
