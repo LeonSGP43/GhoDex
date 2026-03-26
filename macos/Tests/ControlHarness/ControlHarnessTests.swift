@@ -636,6 +636,8 @@ struct ControlHarnessTests {
     private func makeCore(
         delegate: AppDelegate? = nil,
         bundleID: String = "ghdx.tests.control-harness",
+        readStore: ControlHarnessTerminalReadStore? = nil,
+        readAfterWriteStore: ControlHarnessReadAfterWriteStore? = nil,
         sampleStore: ControlHarnessSampleStore? = nil,
         surfaceResolver: (@MainActor (UUID) -> (any ControlHarnessReadableSurface)?)? = nil,
         samplingActivityResolver: (@MainActor (UUID) -> ControlHarnessSamplingActivityClass?)? = nil,
@@ -648,14 +650,16 @@ struct ControlHarnessTests {
         let eventHub = ControlHarnessEventHub(bundleID: bundleID)
         let generations = ControlHarnessGenerationTracker()
         let resolvedSampleStore = sampleStore ?? ControlHarnessSampleStore()
+        let resolvedReadStore = readStore ?? ControlHarnessTerminalReadStore()
+        let resolvedReadAfterWriteStore = readAfterWriteStore ?? ControlHarnessReadAfterWriteStore()
         let core = ControlHarnessCore(
             appDelegate: delegate,
             auditLogger: ControlHarnessAuditLogger(bundleID: bundleID),
             eventHub: eventHub,
             generations: generations,
             idempotencyStore: ControlHarnessIdempotencyStore(),
-            readStore: ControlHarnessTerminalReadStore(),
-            readAfterWriteStore: ControlHarnessReadAfterWriteStore(),
+            readStore: resolvedReadStore,
+            readAfterWriteStore: resolvedReadAfterWriteStore,
             sampleStore: resolvedSampleStore,
             surfaceResolver: surfaceResolver,
             samplingActivityResolver: samplingActivityResolver,
@@ -934,6 +938,82 @@ struct ControlHarnessTests {
         #expect(generations.currentTerminalGeneration(for: terminalID.uuidString) == 1)
     }
 
+    @Test @MainActor func closeTerminalClearsReadRetentionState() {
+        let delegate = RecordingAppDelegate()
+        let terminalID = UUID()
+        let readStore = ControlHarnessTerminalReadStore()
+        let readAfterWriteStore = ControlHarnessReadAfterWriteStore()
+        let sampleStore = ControlHarnessSampleStore()
+
+        _ = readStore.capture(
+            terminalID: terminalID.uuidString,
+            scope: "visible",
+            content: "before close"
+        )
+        sampleStore.store(
+            terminalID: terminalID.uuidString,
+            scope: "visible",
+            content: "sample",
+            consistency: "fresh_visible",
+            cacheAgeMs: 0,
+            capturedAt: Date(),
+            activityClass: .observed,
+            forcedFresh: true
+        )
+        readAfterWriteStore.recordCommandWrite(
+            terminalID: terminalID.uuidString,
+            writeID: "write-close",
+            sequence: 7,
+            commandText: "echo close",
+            visibleFrameID: nil,
+            screenFrameID: nil
+        )
+
+        let (core, eventHub, generations) = makeCore(
+            delegate: delegate,
+            bundleID: "ghdx.tests.close-terminal-cleanup",
+            readStore: readStore,
+            readAfterWriteStore: readAfterWriteStore,
+            sampleStore: sampleStore
+        )
+        let request = ControlHarnessRequest(
+            requestID: "req-close-terminal-cleanup",
+            protocolVersion: nil,
+            command: "close-terminal",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: terminalID.uuidString,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil
+        )
+
+        let response = core.handle(request, socketPath: "/tmp/control-harness-test.sock")
+
+        #expect(response.status == "ok")
+        #expect(delegate.closedTerminals == [terminalID])
+        #expect(readStore.debugSnapshot().totalFrameCount == 0)
+        #expect(readAfterWriteStore.debugEntryCount() == 0)
+        #expect(sampleStore.sample(for: terminalID.uuidString, scope: "visible") == nil)
+        #expect(eventHub.currentSequence() == 1)
+        #expect(generations.currentTerminalGeneration(for: terminalID.uuidString) == 2)
+    }
+
     @Test @MainActor func readTerminalRejectsInvalidCursorBeforeTouchingTheApp() {
         let terminalID = UUID()
         let (core, eventHub, generations) = makeCore(bundleID: "ghdx.tests.read-invalid-cursor")
@@ -1086,6 +1166,156 @@ struct ControlHarnessTests {
                 delta: completed.delta
             ) == true
         )
+    }
+
+    @Test @MainActor func readStoreRemoveTerminalClearsRetainedFrames() {
+        let readStore = ControlHarnessTerminalReadStore()
+        let removedTerminalID = UUID().uuidString
+        let keptTerminalID = UUID().uuidString
+
+        let removedVisible = readStore.capture(
+            terminalID: removedTerminalID,
+            scope: "visible",
+            content: "line 1\nline 2"
+        )
+        _ = readStore.capture(
+            terminalID: removedTerminalID,
+            scope: "screen",
+            content: "screen 1\nscreen 2"
+        )
+        let keptVisible = readStore.capture(
+            terminalID: keptTerminalID,
+            scope: "visible",
+            content: "kept"
+        )
+
+        #expect(readStore.debugSnapshot().totalFrameCount == 3)
+
+        readStore.removeTerminal(removedTerminalID)
+
+        let snapshot = readStore.debugSnapshot()
+        #expect(snapshot.keyCount == 1)
+        #expect(snapshot.totalFrameCount == 1)
+        #expect(readStore.latestFrameID(for: removedTerminalID, scope: "visible") == nil)
+        #expect(readStore.latestFrameID(for: removedTerminalID, scope: "screen") == nil)
+        #expect(readStore.latestFrameID(for: keptTerminalID, scope: "visible") == keptVisible.frameID)
+        #expect(
+            readStore.window(
+                frameID: removedVisible.frameID,
+                cursor: nil,
+                maxLines: nil,
+                maxChars: nil
+            ).text.isEmpty
+        )
+    }
+
+    @Test @MainActor func readStoreGlobalFrameLimitEvictsOldestFramesAcrossKeys() {
+        let readStore = ControlHarnessTerminalReadStore(
+            maxFramesPerKey: 32,
+            maxTotalFrames: 2,
+            maxTotalContentBytes: 1_000_000
+        )
+        let firstTerminalID = UUID().uuidString
+        let secondTerminalID = UUID().uuidString
+        let thirdTerminalID = UUID().uuidString
+
+        let firstFrame = readStore.capture(
+            terminalID: firstTerminalID,
+            scope: "visible",
+            content: "first"
+        )
+        let secondFrame = readStore.capture(
+            terminalID: secondTerminalID,
+            scope: "visible",
+            content: "second"
+        )
+        let thirdFrame = readStore.capture(
+            terminalID: thirdTerminalID,
+            scope: "visible",
+            content: "third"
+        )
+
+        let snapshot = readStore.debugSnapshot()
+        #expect(snapshot.totalFrameCount == 2)
+        #expect(readStore.latestFrameID(for: firstTerminalID, scope: "visible") == nil)
+        #expect(readStore.latestFrameID(for: secondTerminalID, scope: "visible") == secondFrame.frameID)
+        #expect(readStore.latestFrameID(for: thirdTerminalID, scope: "visible") == thirdFrame.frameID)
+        #expect(
+            readStore.window(
+                frameID: firstFrame.frameID,
+                cursor: nil,
+                maxLines: nil,
+                maxChars: nil
+            ).text.isEmpty
+        )
+    }
+
+    @Test @MainActor func readStoreGlobalByteLimitPrefersLatestFrameForActiveKey() {
+        let readStore = ControlHarnessTerminalReadStore(
+            maxFramesPerKey: 32,
+            maxTotalFrames: 32,
+            maxTotalContentBytes: 8
+        )
+        let terminalID = UUID().uuidString
+
+        let firstFrame = readStore.capture(
+            terminalID: terminalID,
+            scope: "visible",
+            content: "1234"
+        )
+        let secondFrame = readStore.capture(
+            terminalID: terminalID,
+            scope: "visible",
+            content: "12345678"
+        )
+
+        let snapshot = readStore.debugSnapshot()
+        #expect(snapshot.totalFrameCount == 1)
+        #expect(snapshot.totalContentBytes == 8)
+        #expect(readStore.latestFrameID(for: terminalID, scope: "visible") == secondFrame.frameID)
+        #expect(
+            readStore.window(
+                frameID: firstFrame.frameID,
+                cursor: nil,
+                maxLines: nil,
+                maxChars: nil
+            ).text.isEmpty
+        )
+        #expect(
+            readStore.window(
+                frameID: secondFrame.frameID,
+                cursor: nil,
+                maxLines: nil,
+                maxChars: nil
+            ).text == "12345678"
+        )
+    }
+
+    @Test func readAfterWriteStoreRemoveTerminalClearsPendingEntries() {
+        let readinessStore = ControlHarnessReadAfterWriteStore()
+
+        readinessStore.recordCommandWrite(
+            terminalID: "terminal-a",
+            writeID: "write-a",
+            sequence: 7,
+            commandText: "echo a",
+            visibleFrameID: "frame-a",
+            screenFrameID: nil
+        )
+        readinessStore.recordCommandWrite(
+            terminalID: "terminal-b",
+            writeID: "write-b",
+            sequence: 8,
+            commandText: "echo b",
+            visibleFrameID: "frame-b",
+            screenFrameID: nil
+        )
+
+        #expect(readinessStore.debugEntryCount() == 2)
+
+        readinessStore.removeTerminal("terminal-a")
+
+        #expect(readinessStore.debugEntryCount() == 1)
     }
 
     @Test @MainActor func readTerminalPrefersSampledStoreWithoutFreshRead() throws {

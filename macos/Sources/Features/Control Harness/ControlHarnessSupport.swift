@@ -173,6 +173,12 @@ private struct ControlHarnessPendingWriteEntry {
 
 @MainActor
 final class ControlHarnessTerminalReadStore {
+    struct DebugSnapshot {
+        let keyCount: Int
+        let totalFrameCount: Int
+        let totalContentBytes: Int
+    }
+
     private struct FrameKey: Hashable {
         let terminalID: String
         let scope: String
@@ -181,25 +187,63 @@ final class ControlHarnessTerminalReadStore {
     private struct Frame {
         let frameID: String
         let parentFrameID: String?
-        let terminalID: String
-        let scope: String
+        let key: FrameKey
         let content: String
-        let lines: [String]
+        let contentBytes: Int
     }
 
     private var nextFrameID: Int64 = 0
     private var latestFrames: [FrameKey: Frame] = [:]
     private var framesByID: [String: Frame] = [:]
     private var frameOrder: [FrameKey: [String]] = [:]
-    private let maxFramesPerKey = 32
+    private var globalFrameOrder: [String] = []
+    private var totalContentBytes = 0
+    private let maxFramesPerKey: Int
+    private let maxTotalFrames: Int
+    private let maxTotalContentBytes: Int
+
+    init(
+        maxFramesPerKey: Int = 32,
+        maxTotalFrames: Int = 256,
+        maxTotalContentBytes: Int = 16 * 1024 * 1024
+    ) {
+        self.maxFramesPerKey = max(1, maxFramesPerKey)
+        self.maxTotalFrames = max(1, maxTotalFrames)
+        self.maxTotalContentBytes = max(1, maxTotalContentBytes)
+    }
 
     func latestFrameID(for terminalID: String, scope: String) -> String? {
         latestFrames[.init(terminalID: terminalID, scope: scope)]?.frameID
     }
 
+    func removeTerminal(_ terminalID: String) {
+        let frameIDs = framesByID.values
+            .filter { $0.key.terminalID == terminalID }
+            .map(\.frameID)
+
+        for frameID in frameIDs {
+            removeFrame(frameID)
+        }
+
+        latestFrames.keys
+            .filter { $0.terminalID == terminalID }
+            .forEach { latestFrames.removeValue(forKey: $0) }
+
+        frameOrder.keys
+            .filter { $0.terminalID == terminalID }
+            .forEach { frameOrder.removeValue(forKey: $0) }
+    }
+
+    func debugSnapshot() -> DebugSnapshot {
+        .init(
+            keyCount: latestFrames.count,
+            totalFrameCount: framesByID.count,
+            totalContentBytes: totalContentBytes
+        )
+    }
+
     func capture(terminalID: String, scope: String, content: String) -> ControlHarnessReadFrameSnapshot {
         let key = FrameKey(terminalID: terminalID, scope: scope)
-        let lines = splitLines(content)
 
         if let latest = latestFrames[key], latest.content == content {
             return .init(
@@ -214,16 +258,15 @@ final class ControlHarnessTerminalReadStore {
         let frame = Frame(
             frameID: frameID,
             parentFrameID: previous?.frameID,
-            terminalID: terminalID,
-            scope: scope,
+            key: key,
             content: content,
-            lines: lines
+            contentBytes: estimatedContentBytes(for: content)
         )
 
         latestFrames[key] = frame
-        framesByID[frameID] = frame
-        frameOrder[key, default: []].append(frameID)
-        pruneFrames(for: key)
+        storeFrame(frame)
+        pruneFrames(for: key, protectedFrameID: frameID)
+        pruneGlobalFrames(protectedFrameID: frameID)
 
         return .init(
             frameID: frameID,
@@ -239,7 +282,7 @@ final class ControlHarnessTerminalReadStore {
         guard let sinceFrameID, let base = framesByID[sinceFrameID] else {
             return .init(kind: "reset", text: frame.content, changedRows: [], hasChanges: !frame.content.isEmpty)
         }
-        guard base.terminalID == frame.terminalID, base.scope == frame.scope else {
+        guard base.key == frame.key else {
             return .init(kind: "reset", text: frame.content, changedRows: [], hasChanges: !frame.content.isEmpty)
         }
         return delta(from: base, to: frame)
@@ -255,7 +298,8 @@ final class ControlHarnessTerminalReadStore {
             return .init(text: "", totalLines: 0, returnedLines: 0, truncated: false, nextCursor: nil)
         }
 
-        let totalLines = frame.lines.count
+        let lines = splitLines(frame.content)
+        let totalLines = lines.count
         let end = min(max(parseCursor(cursor) ?? totalLines, 0), totalLines)
         let start: Int
         if let maxLines {
@@ -264,7 +308,7 @@ final class ControlHarnessTerminalReadStore {
             start = 0
         }
 
-        var text = frame.lines[start..<end].joined(separator: "\n")
+        var text = lines[start..<end].joined(separator: "\n")
         var truncated = start > 0 || end < totalLines
         if let maxChars, maxChars >= 0, text.count > maxChars {
             text = String(text.suffix(maxChars))
@@ -295,9 +339,11 @@ final class ControlHarnessTerminalReadStore {
             return .init(kind: "none", text: "", changedRows: [], hasChanges: false)
         }
 
-        let sharedPrefix = sharedPrefixLineCount(previous.lines, current.lines)
-        if sharedPrefix == previous.lines.count, current.lines.count >= previous.lines.count {
-            let appended = Array(current.lines[sharedPrefix...])
+        let previousLines = splitLines(previous.content)
+        let currentLines = splitLines(current.content)
+        let sharedPrefix = sharedPrefixLineCount(previousLines, currentLines)
+        if sharedPrefix == previousLines.count, currentLines.count >= previousLines.count {
+            let appended = Array(currentLines[sharedPrefix...])
             return .init(
                 kind: "append",
                 text: appended.joined(separator: "\n"),
@@ -309,10 +355,10 @@ final class ControlHarnessTerminalReadStore {
         }
 
         var changedRows: [ControlHarnessReadChangedRow] = []
-        let limit = max(previous.lines.count, current.lines.count)
+        let limit = max(previousLines.count, currentLines.count)
         for index in 0..<limit {
-            let oldLine = index < previous.lines.count ? previous.lines[index] : nil
-            let newLine = index < current.lines.count ? current.lines[index] : nil
+            let oldLine = index < previousLines.count ? previousLines[index] : nil
+            let newLine = index < currentLines.count ? currentLines[index] : nil
             guard oldLine != newLine else { continue }
 
             let kind: String
@@ -340,13 +386,66 @@ final class ControlHarnessTerminalReadStore {
         return .init(kind: "rows", text: summary, changedRows: changedRows, hasChanges: !changedRows.isEmpty)
     }
 
-    private func pruneFrames(for key: FrameKey) {
-        guard var ordered = frameOrder[key], ordered.count > maxFramesPerKey else { return }
-        while ordered.count > maxFramesPerKey {
-            let evicted = ordered.removeFirst()
-            framesByID.removeValue(forKey: evicted)
+    private func storeFrame(_ frame: Frame) {
+        framesByID[frame.frameID] = frame
+        frameOrder[frame.key, default: []].append(frame.frameID)
+        globalFrameOrder.append(frame.frameID)
+        totalContentBytes += frame.contentBytes
+    }
+
+    private func pruneFrames(for key: FrameKey, protectedFrameID: String) {
+        while (frameOrder[key]?.count ?? 0) > maxFramesPerKey {
+            guard let evicted = frameOrder[key]?.first else { break }
+            if evicted == protectedFrameID {
+                break
+            }
+            removeFrame(evicted)
         }
-        frameOrder[key] = ordered
+    }
+
+    private func pruneGlobalFrames(protectedFrameID: String) {
+        while framesByID.count > maxTotalFrames || totalContentBytes > maxTotalContentBytes {
+            guard let evicted = nextEvictionCandidate(protectedFrameID: protectedFrameID) else { break }
+            removeFrame(evicted)
+        }
+    }
+
+    private func nextEvictionCandidate(protectedFrameID: String) -> String? {
+        for frameID in globalFrameOrder {
+            guard frameID != protectedFrameID, let frame = framesByID[frameID] else { continue }
+            if latestFrames[frame.key]?.frameID != frameID {
+                return frameID
+            }
+        }
+
+        return globalFrameOrder.first { $0 != protectedFrameID }
+    }
+
+    private func removeFrame(_ frameID: String) {
+        guard let frame = framesByID.removeValue(forKey: frameID) else { return }
+
+        totalContentBytes = max(0, totalContentBytes - frame.contentBytes)
+
+        if let index = globalFrameOrder.firstIndex(of: frameID) {
+            globalFrameOrder.remove(at: index)
+        }
+
+        if var ordered = frameOrder[frame.key], let index = ordered.firstIndex(of: frameID) {
+            ordered.remove(at: index)
+            if ordered.isEmpty {
+                frameOrder.removeValue(forKey: frame.key)
+            } else {
+                frameOrder[frame.key] = ordered
+            }
+        }
+
+        if latestFrames[frame.key]?.frameID == frameID {
+            if let replacementID = frameOrder[frame.key]?.last, let replacement = framesByID[replacementID] {
+                latestFrames[frame.key] = replacement
+            } else {
+                latestFrames.removeValue(forKey: frame.key)
+            }
+        }
     }
 
     private func makeFrameID() -> String {
@@ -357,6 +456,10 @@ final class ControlHarnessTerminalReadStore {
     private func parseCursor(_ cursor: String?) -> Int? {
         guard let cursor, !cursor.isEmpty else { return nil }
         return Int(cursor)
+    }
+
+    private func estimatedContentBytes(for content: String) -> Int {
+        content.utf8.count
     }
 
     private func splitLines(_ content: String) -> [String] {
@@ -376,6 +479,16 @@ final class ControlHarnessTerminalReadStore {
 final class ControlHarnessReadAfterWriteStore {
     private let queue = DispatchQueue(label: "com.leongong.ghodex.control-harness.read-after-write")
     private var entries: [String: ControlHarnessPendingWriteEntry] = [:]
+
+    func removeTerminal(_ terminalID: String) {
+        queue.sync {
+            entries = entries.filter { $0.value.terminalID != terminalID }
+        }
+    }
+
+    func debugEntryCount() -> Int {
+        queue.sync { entries.count }
+    }
 
     func recordTextWrite(
         terminalID: String,

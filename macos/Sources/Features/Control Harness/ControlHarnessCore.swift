@@ -1500,6 +1500,8 @@ final class ControlHarnessCore {
             throw ControlHarnessCoreError.terminalNotFound(terminalID.uuidString)
         }
         sampleStore.removeTerminal(terminalIDString)
+        readStore.removeTerminal(terminalIDString)
+        readAfterWriteStore.removeTerminal(terminalIDString)
         let generation = generations.advanceTerminalGeneration(for: terminalIDString)
         let sequence = eventHub.emit(
             event: "terminal.closed",

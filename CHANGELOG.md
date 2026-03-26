@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(control-harness): bound retained read frames and clean terminal teardown state
+
+- What changed: Reworked `ControlHarnessTerminalReadStore` so retained frames now store only canonical `content` text instead of both `content` and a persistent `[String]` line cache, added terminal-scoped cleanup on close, and enforced global retention guards with max frame count and max total retained text bytes on top of the existing per-key frame cap. Added matching `ControlHarnessReadAfterWriteStore` terminal cleanup and regression tests covering teardown and global eviction behavior.
+- Why: The harness read path was retaining historical terminal snapshots in memory across repeated reads and terminal churn, which let `MALLOC_SMALL` grow without a process-wide bound and made closed terminals keep contributing to memory usage.
+- Impact: Continuous harness reads now have bounded in-process retention, closed terminals release their cached read state promptly, and repeated read/snapshot workflows fall back to reset semantics after eviction instead of silently growing memory toward tens of gigabytes.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' -only-testing:GhosttyTests/ControlHarnessTests test`
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessSupport.swift`, `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `macos/Tests/ControlHarness/ControlHarnessTests.swift`, `CHANGELOG.md`
+- Decision trail: Keep frame retention in memory for low-latency delta/window reads, but bound it at the store layer so callers do not need to manage cache safety themselves. Prefer evicting old snapshots and resetting client deltas over preserving unlimited historical frames.
+
 ### docs(i18n): add bilingual readme switch and operations guides
 
 - What changed: Updated `README.md` to include explicit Chinese/English language switch links and operations-doc entry links, added an English landing document at `docs/README.en.md`, added bilingual operations playbooks at `docs/OPERATIONS.zh-CN.md` and `docs/OPERATIONS.en.md`, and added `docs/creator.md` for folder provenance.
