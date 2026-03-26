@@ -1,6 +1,7 @@
-import { Stack } from 'expo-router';
+import { Redirect, Stack, useSegments } from 'expo-router';
 import * as React from 'react';
 import { useUnistyles } from 'react-native-unistyles';
+import { isAllowedGhoDexProductRoute, normalizeAppRouteFromSegments } from '@/ghodex/routes';
 
 export const unstable_settings = {
     initialRouteName: 'index',
@@ -8,6 +9,12 @@ export const unstable_settings = {
 
 export default function AppLayout() {
     const { theme } = useUnistyles();
+    const segments = useSegments();
+    const route = React.useMemo(() => normalizeAppRouteFromSegments(segments), [segments]);
+
+    if (!isAllowedGhoDexProductRoute(route, { development: __DEV__ })) {
+        return <Redirect href="/" />;
+    }
 
     return (
         <Stack
@@ -42,6 +49,12 @@ export default function AppLayout() {
                 name="gateway"
                 options={{
                     headerTitle: 'Device',
+                }}
+            />
+            <Stack.Screen
+                name="settings"
+                options={{
+                    headerShown: false,
                 }}
             />
         </Stack>

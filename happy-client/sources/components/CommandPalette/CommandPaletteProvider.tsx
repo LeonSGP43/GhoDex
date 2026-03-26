@@ -5,52 +5,25 @@ import { Modal } from '@/modal';
 import { CommandPalette } from './CommandPalette';
 import { Command } from './types';
 import { useGlobalKeyboard } from '@/hooks/useGlobalKeyboard';
-import { useAuth } from '@/auth/AuthContext';
 import { storage } from '@/sync/storage';
 import { useShallow } from 'zustand/react/shallow';
-import { useNavigateToSession } from '@/hooks/useNavigateToSession';
 
 export function CommandPaletteProvider({ children }: { children: React.ReactNode }) {
     const router = useRouter();
-    const { logout } = useAuth();
-    const sessions = storage(useShallow((state) => state.sessions));
     const commandPaletteEnabled = storage(useShallow((state) => state.localSettings.commandPaletteEnabled));
-    const navigateToSession = useNavigateToSession();
 
     // Define available commands
     const commands = useMemo((): Command[] => {
         const cmds: Command[] = [
-            // Navigation commands
             {
-                id: 'new-session',
-                title: 'New Session',
-                subtitle: 'Start a new chat session',
-                icon: 'add-circle-outline',
-                category: 'Sessions',
-                shortcut: '⌘N',
-                action: () => {
-                    router.navigate('/new');
-                }
-            },
-            {
-                id: 'sessions',
-                title: 'View All Sessions',
-                subtitle: 'Browse your chat history',
-                icon: 'chatbubbles-outline',
-                category: 'Sessions',
+                id: 'workspace',
+                title: 'Workspace',
+                subtitle: 'Open the paired desktop workspace',
+                icon: 'desktop-outline',
+                category: 'Navigation',
+                shortcut: '⌘1',
                 action: () => {
                     router.push('/');
-                }
-            },
-            {
-                id: 'settings',
-                title: 'Settings',
-                subtitle: 'Change theme and app language',
-                icon: 'settings-outline',
-                category: 'Navigation',
-                shortcut: '⌘,',
-                action: () => {
-                    router.push('/settings');
                 }
             },
             {
@@ -59,42 +32,23 @@ export function CommandPaletteProvider({ children }: { children: React.ReactNode
                 subtitle: 'Pair or replace the current desktop device',
                 icon: 'link-outline',
                 category: 'Navigation',
+                shortcut: '⌘2',
                 action: () => {
                     router.push('/gateway');
                 }
             },
-        ];
-
-        // Add session-specific commands
-        const recentSessions = Object.values(sessions)
-            .sort((a, b) => b.updatedAt - a.updatedAt)
-            .slice(0, 5);
-
-        recentSessions.forEach(session => {
-            const sessionName = session.metadata?.name || `Session ${session.id.slice(0, 6)}`;
-            cmds.push({
-                id: `session-${session.id}`,
-                title: sessionName,
-                subtitle: session.metadata?.path || 'Switch to session',
-                icon: 'time-outline',
-                category: 'Recent Sessions',
+            {
+                id: 'settings',
+                title: 'Settings',
+                subtitle: 'Change theme and app language',
+                icon: 'settings-outline',
+                category: 'Navigation',
+                shortcut: '⌘3',
                 action: () => {
-                    navigateToSession(session.id);
+                    router.push('/settings');
                 }
-            });
-        });
-
-        // System commands
-        cmds.push({
-            id: 'sign-out',
-            title: 'Sign Out',
-            subtitle: 'Sign out of your account',
-            icon: 'log-out-outline',
-            category: 'System',
-            action: async () => {
-                await logout();
-            }
-        });
+            },
+        ];
 
         // Dev commands (if in development)
         if (__DEV__) {
@@ -111,7 +65,7 @@ export function CommandPaletteProvider({ children }: { children: React.ReactNode
         }
 
         return cmds;
-    }, [router, logout, sessions]);
+    }, [router]);
 
     const showCommandPalette = useCallback(() => {
         if (Platform.OS !== 'web' || !commandPaletteEnabled) return;

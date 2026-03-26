@@ -1,8 +1,8 @@
 {
-  "name": "ghodex-happy-client",
+  "name": "ghodex-remote-client",
   "main": "index.ts",
   "version": "0.1.0",
-  "description": "GhoDex remote-control mobile client shell forked from happy-app.",
+  "description": "GhoDex mobile remote client.",
   "expo": {
     "autolinking": {
       "exclude": [

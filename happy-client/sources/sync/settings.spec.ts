@@ -47,6 +47,22 @@ describe('settings', () => {
             });
         });
 
+        it('should strip reserved GhoDex connection fields from parsed settings', () => {
+            const result = settingsParse({
+                preferredLanguage: 'en',
+                host: '192.168.0.20',
+                authToken: 'secret',
+                pairState: 'keep-me',
+                deviceId: 'drop-me',
+            });
+
+            expect(result.preferredLanguage).toBe('en');
+            expect((result as any).host).toBeUndefined();
+            expect((result as any).authToken).toBeUndefined();
+            expect((result as any).deviceId).toBeUndefined();
+            expect((result as any).pairState).toBe('keep-me');
+        });
+
         it('should handle partial settings and merge with defaults', () => {
             const partialSettings = {
                 viewInline: true
@@ -167,6 +183,26 @@ describe('settings', () => {
                 viewInline: false,
                 existingExtra: 'keep me',
                 newExtra: 'add me'
+            });
+        });
+
+        it('should strip reserved GhoDex connection fields from current settings and delta', () => {
+            const currentSettings: any = {
+                viewInline: true,
+                host: '127.0.0.1',
+                existingExtra: 'keep me',
+            };
+            const delta: any = {
+                authToken: 'secret',
+                deviceIdentity: 'drop me',
+                newExtra: 'add me',
+            };
+
+            expect(applySettings(currentSettings, delta)).toEqual({
+                ...settingsDefaults,
+                viewInline: true,
+                existingExtra: 'keep me',
+                newExtra: 'add me',
             });
         });
     });

@@ -1,5 +1,32 @@
 import * as z from 'zod';
 
+const RESERVED_GHODEX_CONNECTION_SETTING_KEYS = new Set([
+    'host',
+    'port',
+    'pairingCode',
+    'authToken',
+    'tokenId',
+    'scopes',
+    'requestedScopes',
+    'liveUpdatesEnabled',
+    'pollIntervalMs',
+    'transportMode',
+    'preferredDesktopId',
+    'desktopId',
+    'desktopIdentity',
+    'deviceId',
+    'deviceIdentity',
+    'pairingState',
+]);
+
+function stripReservedGhoDexConnectionFields<T extends Record<string, unknown>>(value: T): T {
+    const nextValue = { ...value };
+    for (const key of RESERVED_GHODEX_CONNECTION_SETTING_KEYS) {
+        delete nextValue[key];
+    }
+    return nextValue;
+}
+
 //
 // Settings Schema
 //
@@ -128,10 +155,12 @@ export function settingsParse(settings: unknown): Settings {
         return { ...settingsDefaults };
     }
 
-    const parsed = SettingsSchemaPartial.safeParse(settings);
+    const sanitizedSettings = stripReservedGhoDexConnectionFields(settings as Record<string, unknown>);
+
+    const parsed = SettingsSchemaPartial.safeParse(sanitizedSettings);
     if (!parsed.success) {
         // For invalid settings, preserve unknown fields but use defaults for known fields
-        const unknownFields = { ...(settings as any) };
+        const unknownFields = { ...sanitizedSettings };
         // Remove all known schema fields from unknownFields
         const knownFields = Object.keys(SettingsSchema.shape);
         knownFields.forEach(key => delete unknownFields[key]);
@@ -144,7 +173,7 @@ export function settingsParse(settings: unknown): Settings {
     }
 
     // Merge defaults, parsed settings, and preserve unknown fields
-    const unknownFields = { ...(settings as any) };
+    const unknownFields = { ...sanitizedSettings };
     // Remove known fields from unknownFields to preserve only the unknown ones
     Object.keys(parsed.data).forEach(key => delete unknownFields[key]);
 
@@ -158,7 +187,7 @@ export function settingsParse(settings: unknown): Settings {
 
 export function applySettings(settings: Settings, delta: Partial<Settings>): Settings {
     // Original behavior: start with settings, apply delta, fill in missing with defaults
-    const result = { ...settings, ...delta };
+    const result = stripReservedGhoDexConnectionFields({ ...settings, ...delta });
 
     // Fill in any missing fields with defaults
     Object.keys(settingsDefaults).forEach(key => {
