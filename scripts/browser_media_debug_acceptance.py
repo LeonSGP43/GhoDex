@@ -72,6 +72,22 @@ def parse_args() -> argparse.Namespace:
         help="CEF runtime root passed through GHODEX_CEF_ROOT.",
     )
     parser.add_argument(
+        "--managed-runtime-root",
+        default=None,
+        help=(
+            "Stage this runtime into each isolated GHODEX_BROWSER_APP_SUPPORT_ROOT/CEF/current "
+            "and launch without GHODEX_CEF_ROOT so the managed-runtime path is exercised."
+        ),
+    )
+    parser.add_argument(
+        "--managed-runtime-descriptor",
+        default=None,
+        help=(
+            "Optional managed-runtime.json copied into each isolated app-support CEF root "
+            "alongside --managed-runtime-root."
+        ),
+    )
+    parser.add_argument(
         "--mode",
         choices=["managed", "external", "all"],
         default="all",
@@ -240,7 +256,7 @@ def launch_app(
     app_bundle: Path,
     log_path: Path,
     *,
-    runtime_root: str,
+    runtime_root: str | None,
     app_support_root: Path,
     home_dir: Path,
     profile_path: str | None,
@@ -250,7 +266,10 @@ def launch_app(
         raise RuntimeError(f"App executable does not exist: {executable}")
 
     env = os.environ.copy()
-    env["GHODEX_CEF_ROOT"] = runtime_root
+    if runtime_root is not None:
+        env["GHODEX_CEF_ROOT"] = runtime_root
+    else:
+        env.pop("GHODEX_CEF_ROOT", None)
     env["GHODEX_BROWSER_APP_SUPPORT_ROOT"] = str(app_support_root)
     env["HOME"] = str(home_dir)
     env["TMPDIR"] = str(home_dir / "tmp")
@@ -272,6 +291,54 @@ def launch_app(
             stderr=subprocess.STDOUT,
             text=True,
         )
+
+
+def stage_managed_runtime(
+    app_support_root: Path,
+    *,
+    managed_runtime_root: Path,
+    managed_runtime_descriptor: Path | None,
+) -> dict:
+    cef_root = app_support_root / "CEF"
+    cef_root.mkdir(parents=True, exist_ok=True)
+
+    slug = managed_runtime_root.resolve().name
+    if managed_runtime_descriptor is not None:
+        descriptor_payload = json.loads(managed_runtime_descriptor.read_text(encoding="utf-8"))
+        slug = descriptor_payload.get("slug") or slug
+
+    staged_install_root = cef_root / slug
+    if staged_install_root.exists() or staged_install_root.is_symlink():
+        if staged_install_root.is_symlink() or staged_install_root.is_file():
+            staged_install_root.unlink()
+        else:
+            shutil.rmtree(staged_install_root)
+    shutil.copytree(managed_runtime_root.resolve(), staged_install_root, symlinks=True)
+
+    current_link = cef_root / "current"
+    if current_link.exists() or current_link.is_symlink():
+        current_link.unlink()
+    current_link.symlink_to(staged_install_root, target_is_directory=True)
+
+    descriptor_target = cef_root / "managed-runtime.json"
+    copied_descriptor: Path | None
+    if managed_runtime_descriptor is not None:
+        shutil.copyfile(managed_runtime_descriptor, descriptor_target)
+        copied_descriptor = descriptor_target
+    elif descriptor_target.exists():
+        descriptor_target.unlink()
+        copied_descriptor = None
+    else:
+        copied_descriptor = None
+
+    return {
+        "cef_root": str(cef_root),
+        "current": str(current_link),
+        "current_target": str(staged_install_root),
+        "install_root": str(staged_install_root),
+        "install_source": str(managed_runtime_root.resolve()),
+        "descriptor": str(copied_descriptor) if copied_descriptor is not None else None,
+    }
 
 
 def ensure_h264_sample(output_path: Path) -> dict:
@@ -644,7 +711,9 @@ def run_mode(
     mode: str,
     *,
     app_bundle: Path,
-    runtime_root: str,
+    runtime_root: str | None,
+    managed_runtime_root: Path | None,
+    managed_runtime_descriptor: Path | None,
     page_url: str,
     mp4_url: str,
     timeout_ms: int,
@@ -667,10 +736,22 @@ def run_mode(
     else:
         raise RuntimeError(f"Unsupported mode: {mode}")
 
+    runtime_mode = "envOverride"
+    staged_runtime: dict | None = None
+    effective_runtime_root = runtime_root
+    if managed_runtime_root is not None:
+        runtime_mode = "managedAppSupport"
+        effective_runtime_root = None
+        staged_runtime = stage_managed_runtime(
+            app_support_root,
+            managed_runtime_root=managed_runtime_root,
+            managed_runtime_descriptor=managed_runtime_descriptor,
+        )
+
     proc = launch_app(
         app_bundle,
         log_path,
-        runtime_root=runtime_root,
+        runtime_root=effective_runtime_root,
         app_support_root=app_support_root,
         home_dir=home_dir,
         profile_path=configured_profile,
@@ -703,6 +784,9 @@ def run_mode(
         "app_support_root": str(app_support_root),
         "socket_path": socket_path,
         "configured_profile_path": configured_profile,
+        "runtime_mode": runtime_mode,
+        "runtime_override_path": effective_runtime_root,
+        "staged_runtime": staged_runtime,
         "socket_health": socket_ready["response"].get("ok") is True,
         "tab": {
             "id": browser_tab_id,
@@ -737,12 +821,28 @@ def main() -> int:
     args = parse_args()
     app_bundle = Path(os.path.expanduser(args.app)).resolve() if args.app else resolve_default_app().resolve()
     runtime_root = str(Path(os.path.expanduser(args.runtime_root)).resolve())
+    managed_runtime_root = (
+        Path(os.path.expanduser(args.managed_runtime_root)).resolve()
+        if args.managed_runtime_root
+        else None
+    )
+    managed_runtime_descriptor = (
+        Path(os.path.expanduser(args.managed_runtime_descriptor)).resolve()
+        if args.managed_runtime_descriptor
+        else None
+    )
 
     if str(app_bundle) == "/Applications/GhoDex.app":
         raise SystemExit("Refusing to run against /Applications/GhoDex.app. Pass a dedicated build output instead.")
     if not app_bundle.exists():
         raise SystemExit(f"App bundle does not exist: {app_bundle}")
-    if not Path(runtime_root).is_dir():
+    if managed_runtime_descriptor is not None and managed_runtime_root is None:
+        raise SystemExit("--managed-runtime-descriptor requires --managed-runtime-root.")
+    if managed_runtime_root is not None and not managed_runtime_root.is_dir():
+        raise SystemExit(f"Managed runtime root does not exist: {managed_runtime_root}")
+    if managed_runtime_descriptor is not None and not managed_runtime_descriptor.is_file():
+        raise SystemExit(f"Managed runtime descriptor does not exist: {managed_runtime_descriptor}")
+    if managed_runtime_root is None and not Path(runtime_root).is_dir():
         raise SystemExit(f"Runtime root does not exist: {runtime_root}")
 
     modes = ["managed", "external"] if args.mode == "all" else [args.mode]
@@ -753,7 +853,9 @@ def main() -> int:
             run_mode(
                 mode,
                 app_bundle=app_bundle,
-                runtime_root=runtime_root,
+                runtime_root=runtime_root if managed_runtime_root is None else None,
+                managed_runtime_root=managed_runtime_root,
+                managed_runtime_descriptor=managed_runtime_descriptor,
                 page_url=str(server_info["page_url"]),
                 mp4_url=str(server_info["mp4_url"]),
                 timeout_ms=args.page_timeout_ms,
@@ -764,7 +866,9 @@ def main() -> int:
 
         artifact = {
             "app_bundle": str(app_bundle),
-            "runtime_root": runtime_root,
+            "runtime_root": runtime_root if managed_runtime_root is None else None,
+            "managed_runtime_root": str(managed_runtime_root) if managed_runtime_root else None,
+            "managed_runtime_descriptor": str(managed_runtime_descriptor) if managed_runtime_descriptor else None,
             "workspace": str(workspace),
             "server": {
                 "page_url": server_info["page_url"],
