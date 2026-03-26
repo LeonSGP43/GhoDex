@@ -34,8 +34,11 @@ Important consequences:
   does not fix this state by itself
 - merging Browser source changes into `main` does not update any already-built
   `GhoDex.app`
-- the default Xcode project settings still keep `GHODEX_CEF_ENABLED=0`, so a
-  plain build can produce a Browser shell without activating Chromium
+- the supported `nu macos/build.nu` flow now treats CEF as required for the
+  main `GhoDex` app build and fails fast if the configured runtime is missing
+- the low-level Xcode project defaults still keep `GHODEX_CEF_ENABLED=0`, so a
+  plain raw `xcodebuild` or Xcode IDE build can still produce a Browser shell
+  without activating Chromium unless the CEF settings are supplied explicitly
 
 ### 2. Runtime Supply Gate
 
@@ -77,11 +80,26 @@ xcodebuild -project macos/GhoDex.xcodeproj \
 That produced an isolated app bundle with the host-build gate satisfied.
 
 After those commits were merged into `main`, any pre-existing installed app or
-any fresh default build could still show `unsupportedBuild` because:
+any fresh low-level raw build could still show `unsupportedBuild` because:
 
 - source merge and binary rebuild are separate steps
-- the default project configuration remains CEF-disabled unless the build is
+- the raw project configuration remains CEF-disabled unless the build is
   explicitly supplied with the CEF inputs
+
+The supported scripted build path is now:
+
+```bash
+nu macos/build.nu --configuration Debug --action build
+```
+
+That command defaults the main `GhoDex` app to `CEF required`. If the runtime is
+missing, the build stops with a clear error instead of silently emitting an
+`unsupportedBuild` app. If a Browser-disabled build is intentional, it must now
+be explicit:
+
+```bash
+nu macos/build.nu --configuration Debug --action build --cef-mode disabled
+```
 
 ## Failure-State Matrix
 

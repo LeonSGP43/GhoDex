@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(build): default main app builds to fail fast on missing CEF support
+
+- What changed: Updated `macos/build.nu` so the main `GhoDex` app build now defaults to `CEF required` instead of silently downgrading to `GHODEX_CEF_ENABLED=0` when the configured runtime is missing. Added an explicit `--cef-mode auto|required|optional|disabled` switch, with `auto` resolving to `required` for the main app and `disabled` for non-browser targets. Added matching internal agent guidance in `AGENTS.md`, updated `README.md` source-build instructions to explain the Browser/CEF default behavior and runtime prerequisites, and refreshed `browser-tab-runtime-activation.md` so the docs match the new fail-fast path.
+- Why: The previous scripted build flow only inspected the runtime on disk and quietly compiled an `unsupportedBuild` app when the runtime was missing. That let Browser-related work appear merged in source while the actual app bundle still launched without Chromium support, and it gave no compile-time reminder that CEF-specific build intent had been lost.
+- Impact: Normal macOS app builds now align with the Browser-capable product expectation by default. If the runtime root is missing `Chromium Embedded Framework.framework` or the matching `libcef_dll_wrapper.a`, the build stops immediately with a clear explanation instead of shipping a confusing half-enabled Browser shell. Browser-disabled builds remain possible, but they must now be explicit.
+- Verification: `git diff --check`; `nu macos/build.nu --help`; `GHODEX_CEF_ROOT=/tmp/ghx-missing-cef nu macos/build.nu --scheme GhoDex --configuration Debug --action clean` should fail with the new CEF gate message.
+- Files: `macos/build.nu`, `AGENTS.md`, `README.md`, `browser-tab-runtime-activation.md`, `CHANGELOG.md`
+- Decision trail: Keep the authoritative enforcement in `macos/build.nu`, because that is the supported macOS app build entrypoint and the only place that can evaluate runtime paths before compile. Keep raw Xcode defaults as lower-level knobs, but document clearly that the supported build path is fail-fast and Browser-capable by default.
+
 ### docs(browser): explain runtime activation gates and unsupported-build troubleshooting
 
 - What changed: Added `browser-tab-runtime-activation.md` to document the two separate Browser activation gates: the app binary must be built with CEF host support, and a compatible runtime must exist at the configured runtime root. The doc now explains why a Browser tab can still render its shell while showing `compiled without managed Chromium runtime support`, why a CEF-enabled worktree build can succeed while a merged `main` app still fails, and how that differs from later H.264/AAC runtime capability questions. Linked `browser-tab-codec-runtime-playbook.md` back to this activation doc so build-vs-runtime confusion is resolved before codec work starts.

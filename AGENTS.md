@@ -118,6 +118,23 @@ A file for [guiding coding agents](https://agents.md/).
   `patch`: backward-compatible fixes, tuning, and user-visible behavior changes
   that do not break compatibility.
 
+## Browser Build Policy
+
+- Treat Browser/CEF as default-on for the main macOS `GhoDex` app build.
+- Use `nu macos/build.nu` for normal macOS app builds so the build script can
+  enforce the Browser runtime gate and inject the resolved CEF settings.
+- Do not silently hand the user a macOS app bundle that compiles with
+  `GHODEX_CEF_ENABLED=0` unless the user explicitly asked for a Browser-disabled
+  build.
+- If the active task touches Browser/CEF/runtime behavior, assume the user
+  expects a CEF-capable app build unless they say otherwise.
+- If the configured runtime root is missing
+  `Frameworks/Chromium Embedded Framework.framework` or the matching
+  `libcef_dll_wrapper.a`, stop with a clear explanation instead of downgrading to
+  `unsupportedBuild`.
+- If a Browser-disabled build is intentional, make that choice explicit in the
+  command line or in the user-facing report.
+
 ## Worktree Development Policy
 
 - The current primary coordination worktree is

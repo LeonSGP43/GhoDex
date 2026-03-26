@@ -73,6 +73,21 @@ cd GhoDex
 zig build -Demit-macos-app=false
 ```
 
+#### Browser / CEF 默认构建说明
+
+- `nu macos/build.nu` 在 `--scheme GhoDex` 下默认按 `CEF required` 处理。
+- 默认 runtime 根目录是：
+  `~/Library/Application Support/GhoDex/CEF/current`
+- 该目录至少要包含：
+  - `Frameworks/Chromium Embedded Framework.framework`
+  - `lib/Debug/libcef_dll_wrapper.a` 或 `lib/Release/libcef_dll_wrapper.a`
+- 如果 runtime 缺失，`macos/build.nu` 现在会直接失败并给出明确提示，而不是静默编出一个 Browser 处于 `unsupportedBuild` 的 app。
+- 如果你明确就是要构建一个禁用 Browser/CEF 的 app，需要显式传：
+  `--cef-mode disabled`
+- Browser 激活模型与 codec runtime 供给说明见：
+  [`browser-tab-runtime-activation.md`](./browser-tab-runtime-activation.md)
+  和 [`browser-tab-codec-runtime-playbook.md`](./browser-tab-codec-runtime-playbook.md)
+
 #### 构建 macOS App（Debug）
 
 ```bash
@@ -86,6 +101,12 @@ nu macos/build.nu --configuration ReleaseLocal --action build
 ```
 
 #### 无 Nushell 时的替代构建
+
+如果你要构建带 Browser/CEF 能力的主 app，优先使用上面的
+`nu macos/build.nu`。它会统一处理 CEF runtime 检查和构建参数注入。
+
+下面这个裸 `xcodebuild` 示例更适合作为低层调试入口；如果你直接用它来构建
+Browser-enabled app，需要自己传对 CEF 相关参数。
 
 ```bash
 xcodebuild \

@@ -124,6 +124,66 @@ def load-project-version [repo_root: string] {
     $version
 }
 
+def resolve-cef-mode [requested_mode: string, scheme: string] {
+    let normalized = ($requested_mode | str trim | str downcase)
+
+    if ($normalized == "" or $normalized == "auto") {
+        if $scheme == "GhoDex" {
+            "required"
+        } else {
+            "disabled"
+        }
+    } else if ($normalized == "required" or $normalized == "optional" or $normalized == "disabled") {
+        $normalized
+    } else {
+        error make {
+            msg: $"Unsupported --cef-mode value: ($requested_mode)"
+            help: "Use one of: auto, required, optional, disabled."
+        }
+    }
+}
+
+def ensure-cef-gate [
+    repo_root: string,
+    configuration: string,
+    cef_mode: string,
+    cef_root: string,
+    cef_framework: string,
+    cef_wrapper_lib: string,
+] {
+    if $cef_mode != "required" {
+        return
+    }
+
+    let missing_paths = (
+        [
+            { label: "Frameworks/Chromium Embedded Framework.framework", path: $cef_framework },
+            { label: $"lib/($configuration)/libcef_dll_wrapper.a", path: $cef_wrapper_lib },
+        ]
+        | where { |entry| not ($entry.path | path exists) }
+    )
+
+    if ($missing_paths | is-empty) {
+        return
+    }
+
+    let missing_summary = ($missing_paths | each { |entry| $"- ($entry.label): ($entry.path)" } | str join "\n")
+    error make {
+        msg: "CEF runtime is required for the main GhoDex app build, but the configured runtime is incomplete or missing."
+        label: {
+            text: $missing_summary
+            span: (metadata $repo_root).span
+        }
+        help: ([
+            $"Expected runtime root: ($cef_root)",
+            "Install or point GhoDex at a compatible CEF runtime before building.",
+            "The supported Browser-enabled build path now fails fast instead of silently compiling an unsupported build.",
+            "If you intentionally want a no-Browser app build, rerun with `--cef-mode disabled`.",
+            "See `README.md` and `browser-tab-runtime-activation.md` for the CEF activation model."
+        ] | str join "\n")
+    }
+}
+
 def ensure-version-gate [repo_root: string, env_map: record] {
     let gate = (^env -i
         $"HOME=($env_map.HOME)"
@@ -154,6 +214,7 @@ def main [
     --scheme: string = "GhoDex"        # Xcode scheme (GhoDex, GhoDex-iOS, DockTilePlugin)
     --configuration: string = "Debug"  # Build configuration (Debug, Release, ReleaseLocal)
     --action: string = "build"         # xcodebuild action (build, test, clean, etc.)
+    --cef-mode: string = "auto"        # auto=require for GhoDex, disabled for non-browser targets
 ] {
     let macos_dir = $env.FILE_PWD
     let project = ($macos_dir | path join "GhoDex.xcodeproj")
@@ -172,13 +233,21 @@ def main [
     let cef_root = (($env.GHODEX_CEF_ROOT? | default $default_cef_root) | path expand)
     let cef_link_root = ($build_dir | path join "cef-runtime" "current")
     let wrapper_config = if $configuration == "Debug" { "Debug" } else { "Release" }
+    let resolved_cef_mode = (resolve-cef-mode $cef_mode $scheme)
 
     mkdir ($build_dir | path join "cef-runtime")
     ^ln -sfn $cef_root $cef_link_root
 
     let cef_framework = ($cef_link_root | path join "Frameworks" "Chromium Embedded Framework.framework")
     let cef_wrapper_lib = ($cef_link_root | path join "lib" $wrapper_config "libcef_dll_wrapper.a")
-    let cef_enabled = (($cef_framework | path exists) and ($cef_wrapper_lib | path exists))
+    ensure-cef-gate $repo_root $wrapper_config $resolved_cef_mode $cef_root $cef_framework $cef_wrapper_lib
+
+    let cef_runtime_available = (($cef_framework | path exists) and ($cef_wrapper_lib | path exists))
+    let cef_enabled = if $resolved_cef_mode == "disabled" {
+        false
+    } else {
+        $cef_runtime_available
+    }
 
     let skip_testing = if $action == "test" {
         [-skip-testing GhosttyUITests]
