@@ -132,6 +132,14 @@ A file for [guiding coding agents](https://agents.md/).
   `Frameworks/Chromium Embedded Framework.framework` or the matching
   `libcef_dll_wrapper.a`, stop with a clear explanation instead of downgrading to
   `unsupportedBuild`.
+- When Browser/CEF is enabled, treat SQLite and runtime architecture as hard
+  build requirements: the host app must link `libsqlite3`, and if the resolved
+  CEF runtime is single-architecture, narrow the app build to that same
+  architecture instead of attempting a mismatched universal link.
+- If you bypass `macos/build.nu` and call `xcodebuild` directly for a
+  Browser-enabled app, explicitly pass `GHODEX_CEF_OTHER_LDFLAGS=-lsqlite3` and
+  matching architecture settings (`ARCHS`, `ONLY_ACTIVE_ARCH`,
+  `EXCLUDED_ARCHS`, or `-destination`) for the installed runtime.
 - If a Browser-disabled build is intentional, make that choice explicit in the
   command line or in the user-facing report.
 

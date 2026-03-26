@@ -184,6 +184,110 @@ def ensure-cef-gate [
     }
 }
 
+def inspect-binary-architectures [binary_path: string, label: string] {
+    let result = (^lipo -archs $binary_path | complete)
+    if $result.exit_code != 0 {
+        let stderr = ($result.stderr | str trim)
+        error make {
+            msg: $"Failed to inspect architectures for ($label)."
+            help: ([
+                $"Path: ($binary_path)",
+                (if ($stderr | is-empty) { "No lipo output was returned." } else { $stderr })
+            ] | str join "\n")
+        }
+    }
+
+    let arches = (
+        trim-output $result.stdout
+        | split row " "
+        | each { |arch| $arch | str trim }
+        | where { |arch| $arch != "" }
+    )
+
+    if ($arches | is-empty) {
+        error make {
+            msg: $"No architectures reported for ($label)."
+            help: $"Path: ($binary_path)"
+        }
+    }
+
+    $arches
+}
+
+def resolve-cef-arch-build-settings [
+    scheme: string,
+    cef_enabled: bool,
+    cef_framework: string,
+    cef_wrapper_lib: string,
+] {
+    if (not $cef_enabled) or $scheme != "GhoDex" {
+        return {
+            xcodebuild_args: [],
+            framework_arches: [],
+            wrapper_arches: [],
+            common_arches: [],
+        }
+    }
+
+    let framework_binary = ($cef_framework | path join "Chromium Embedded Framework")
+    let framework_arches = (inspect-binary-architectures $framework_binary "CEF framework binary")
+    let wrapper_arches = (inspect-binary-architectures $cef_wrapper_lib "CEF wrapper library")
+    let common_arches = (
+        $framework_arches
+        | where { |arch| $wrapper_arches | any { |candidate| $candidate == $arch } }
+    )
+
+    if ($common_arches | is-empty) {
+        error make {
+            msg: "CEF runtime architecture mismatch."
+            help: ([
+                $"Framework arches: ($framework_arches | str join ', ')",
+                $"Wrapper arches: ($wrapper_arches | str join ', ')",
+                "Install a matching runtime pair or point GHODEX_CEF_ROOT at a compatible runtime."
+            ] | str join "\n")
+        }
+    }
+
+    if (($common_arches | length) == 1) {
+        let arch = ($common_arches | get 0)
+        let excluded_arch = if $arch == "arm64" {
+            "x86_64"
+        } else if $arch == "x86_64" {
+            "arm64"
+        } else {
+            ""
+        }
+        let xcodebuild_args = if $excluded_arch == "" {
+            [
+                -destination $"platform=macOS,arch=($arch)"
+                $"ARCHS=($arch)"
+                "ONLY_ACTIVE_ARCH=YES"
+            ]
+        } else {
+            [
+                -destination $"platform=macOS,arch=($arch)"
+                $"ARCHS=($arch)"
+                "ONLY_ACTIVE_ARCH=YES"
+                $"EXCLUDED_ARCHS=($excluded_arch)"
+            ]
+        }
+
+        return {
+            xcodebuild_args: $xcodebuild_args,
+            framework_arches: $framework_arches,
+            wrapper_arches: $wrapper_arches,
+            common_arches: $common_arches,
+        }
+    }
+
+    {
+        xcodebuild_args: [],
+        framework_arches: $framework_arches,
+        wrapper_arches: $wrapper_arches,
+        common_arches: $common_arches,
+    }
+}
+
 def ensure-version-gate [repo_root: string, env_map: record] {
     let gate = (^env -i
         $"HOME=($env_map.HOME)"
@@ -248,6 +352,7 @@ def main [
     } else {
         $cef_runtime_available
     }
+    let cef_arch_build_settings = (resolve-cef-arch-build-settings $scheme $cef_enabled $cef_framework $cef_wrapper_lib)
 
     let skip_testing = if $action == "test" {
         [-skip-testing GhosttyUITests]
@@ -259,7 +364,7 @@ def main [
         [
             "GHODEX_CEF_ENABLED=1",
             $"GHODEX_CEF_ROOT=($cef_link_root)",
-            'GHODEX_CEF_OTHER_LDFLAGS=',
+            'GHODEX_CEF_OTHER_LDFLAGS=-lsqlite3',
             $"GHODEX_CEF_WRAPPER_LIB=($cef_wrapper_lib)",
         ]
     } else {
@@ -278,6 +383,7 @@ def main [
         -project $project
         -scheme $scheme
         -configuration $configuration
+        ...$cef_arch_build_settings.xcodebuild_args
         -derivedDataPath $derived_data_dir
         $"SYMROOT=($build_dir)"
         $"MARKETING_VERSION=($project_version)"

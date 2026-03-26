@@ -81,6 +81,12 @@ zig build -Demit-macos-app=false
 - 该目录至少要包含：
   - `Frameworks/Chromium Embedded Framework.framework`
   - `lib/Debug/libcef_dll_wrapper.a` 或 `lib/Release/libcef_dll_wrapper.a`
+- Browser host bridge 会直接调用 SQLite API 处理 runtime profile 数据，因此
+  CEF-enabled build 还必须链接系统 `libsqlite3`。
+- `nu macos/build.nu` 现在会自动注入
+  `GHODEX_CEF_OTHER_LDFLAGS=-lsqlite3`；如果当前 runtime 是单架构
+  （例如当前 codec-enabled lane 常见的 `macosarm64`），它也会自动把 app
+  build 收窄到匹配架构，避免 CEF wrapper 和 app slice 发生链接不匹配。
 - 如果 runtime 缺失，`macos/build.nu` 现在会直接失败并给出明确提示，而不是静默编出一个 Browser 处于 `unsupportedBuild` 的 app。
 - 如果你明确就是要构建一个禁用 Browser/CEF 的 app，需要显式传：
   `--cef-mode disabled`
@@ -106,14 +112,24 @@ nu macos/build.nu --configuration ReleaseLocal --action build
 `nu macos/build.nu`。它会统一处理 CEF runtime 检查和构建参数注入。
 
 下面这个裸 `xcodebuild` 示例更适合作为低层调试入口；如果你直接用它来构建
-Browser-enabled app，需要自己传对 CEF 相关参数。
+Browser-enabled app，需要自己传对 CEF 相关参数，并让 app 架构和当前 runtime
+架构一致。对于当前 arm64-only runtime，至少应像下面这样传：
 
 ```bash
+GHODEX_CEF_ROOT="$HOME/Library/Application Support/GhoDex/CEF/current"
+
 xcodebuild \
   -project macos/GhoDex.xcodeproj \
   -scheme GhoDex \
   -configuration Debug \
   -destination 'platform=macOS,arch=arm64' \
+  ARCHS=arm64 \
+  ONLY_ACTIVE_ARCH=YES \
+  EXCLUDED_ARCHS=x86_64 \
+  GHODEX_CEF_ENABLED=1 \
+  GHODEX_CEF_ROOT="$GHODEX_CEF_ROOT" \
+  GHODEX_CEF_OTHER_LDFLAGS=-lsqlite3 \
+  GHODEX_CEF_WRAPPER_LIB="$GHODEX_CEF_ROOT/lib/Debug/libcef_dll_wrapper.a" \
   build
 ```
 

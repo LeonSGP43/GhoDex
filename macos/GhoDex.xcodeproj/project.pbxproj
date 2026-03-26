@@ -783,7 +783,7 @@
 				GHODEX_BUILD_FINGERPRINT = "$(MARKETING_VERSION)+$(CONFIGURATION).unknown.clean.unknown";
 				GHODEX_BUILD_TIMESTAMP = unknown;
 				GHODEX_BUILD_WORKTREE_STATE = clean;
-				GHODEX_CEF_OTHER_LDFLAGS = "";
+				GHODEX_CEF_OTHER_LDFLAGS = "-lsqlite3";
 				GHODEX_CEF_ROOT = "$(HOME)/Library/Application\ Support/GhoDex/CEF/current";
 				GHODEX_CEF_WRAPPER_LIB = "";
 				HEADER_SEARCH_PATHS = (
@@ -1201,7 +1201,7 @@
 				GHODEX_BUILD_FINGERPRINT = "$(MARKETING_VERSION)+$(CONFIGURATION).unknown.clean.unknown";
 				GHODEX_BUILD_TIMESTAMP = unknown;
 				GHODEX_BUILD_WORKTREE_STATE = clean;
-				GHODEX_CEF_OTHER_LDFLAGS = "";
+				GHODEX_CEF_OTHER_LDFLAGS = "-lsqlite3";
 				GHODEX_CEF_ROOT = "$(HOME)/Library/Application\ Support/GhoDex/CEF/current";
 				GHODEX_CEF_WRAPPER_LIB = "";
 				HEADER_SEARCH_PATHS = (
@@ -1277,7 +1277,7 @@
 				GHODEX_BUILD_FINGERPRINT = "$(MARKETING_VERSION)+$(CONFIGURATION).unknown.clean.unknown";
 				GHODEX_BUILD_TIMESTAMP = unknown;
 				GHODEX_BUILD_WORKTREE_STATE = clean;
-				GHODEX_CEF_OTHER_LDFLAGS = "";
+				GHODEX_CEF_OTHER_LDFLAGS = "-lsqlite3";
 				GHODEX_CEF_ROOT = "$(HOME)/Library/Application\ Support/GhoDex/CEF/current";
 				GHODEX_CEF_WRAPPER_LIB = "";
 				HEADER_SEARCH_PATHS = (
