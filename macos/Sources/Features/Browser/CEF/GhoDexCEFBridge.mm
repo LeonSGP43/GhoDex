@@ -36,6 +36,11 @@ NSString * const GhoDexCEFControlErrorDomain = @"com.leongong.ghodex.browser.cef
 - (void)notifyHostedPopupWindowForURL:(NSString *)urlString
                           disposition:(NSInteger)disposition
                           userGesture:(BOOL)userGesture;
+- (BOOL)resolveRuntimePromptRequestID:(NSString *)requestID
+                                 kind:(NSString *)kind
+                              payload:(NSDictionary<NSString *, NSString *> *)payload
+                                error:(NSError * _Nullable * _Nullable)error;
+- (void)cancelPendingRuntimePromptRequests;
 - (void)browserDidClose;
 - (void)loadPendingBootstrapURLIfNeeded;
 @end
@@ -78,6 +83,7 @@ NSString *g_cef_last_initialization_error = nil;
 dispatch_source_t g_message_pump_timer = nullptr;
 constexpr char kEvaluateRequestMessageName[] = "ghodex.browser.evaluate";
 constexpr char kEvaluateResultMessageName[] = "ghodex.browser.evaluate.result";
+constexpr double kRuntimePromptExternalResolutionGraceSeconds = 0.75;
 
 constexpr size_t kEvaluateRequestIDIndex = 0;
 constexpr size_t kEvaluateScriptIndex = 1;
@@ -813,6 +819,7 @@ public:
         dispatch_async(dispatch_get_main_queue(), ^{
           [owner_ failPendingEvaluationRequestsWithCode:GhoDexCEFControlErrorCodeBridgeUnavailable
                                             description:@"The browser page closed before JavaScript evaluation completed."];
+          [owner_ cancelPendingRuntimePromptRequests];
           [owner_ browserDidClose];
         });
       }
@@ -894,6 +901,17 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
 - (void)presentPopupWindow;
 @end
 
+@interface GhoDexCEFRuntimePromptRequest : NSObject
+@property(nonatomic, copy, readonly) NSString *requestID;
+@property(nonatomic, copy, readonly) NSString *kind;
+@property(nonatomic, strong, readonly) dispatch_semaphore_t semaphore;
+@property(nonatomic, copy, nullable) NSDictionary<NSString *, NSString *> *resolutionPayload;
+@property(nonatomic) BOOL externallyResolved;
+@property(nonatomic) BOOL canceled;
+- (instancetype)initWithRequestID:(NSString *)requestID
+                             kind:(NSString *)kind NS_DESIGNATED_INITIALIZER;
+@end
+
 @interface GhoDexCEFView () {
   CefRefPtr<GhoDexCEFClient> _client;
   NSString *_initialURLString;
@@ -901,7 +919,9 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
   BOOL _defersInitialBrowserCreation;
   BOOL _closesWindowWhenBrowserCloses;
   int64_t _nextEvaluationRequestID;
+  int64_t _nextRuntimePromptRequestID;
   NSMutableDictionary<NSString *, GhoDexCEFJavaScriptEvaluationCompletion> *_pendingEvaluationCompletions;
+  NSMutableDictionary<NSString *, GhoDexCEFRuntimePromptRequest *> *_pendingRuntimePromptRequests;
 }
 - (instancetype)initWithInitialURLString:(NSString *)initialURLString
              deferInitialBrowserCreation:(BOOL)deferInitialBrowserCreation NS_DESIGNATED_INITIALIZER;
@@ -911,7 +931,33 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
                               error:(NSError * _Nullable)error;
 - (void)failPendingEvaluationRequestsWithCode:(GhoDexCEFControlErrorCode)code
                                   description:(NSString *)description;
+- (GhoDexCEFRuntimePromptRequest *)beginRuntimePromptKind:(NSString *)kind
+                                                  payload:(NSDictionary<NSString *, NSString *> *)payload;
+- (NSDictionary<NSString *, NSString *> * _Nullable)finishRuntimePromptRequest:(GhoDexCEFRuntimePromptRequest *)request
+                                                             externallyResolved:(BOOL *)externallyResolved
+                                                                       canceled:(BOOL *)canceled;
 - (void)loadPendingBootstrapURLIfNeeded;
+@end
+
+@implementation GhoDexCEFRuntimePromptRequest
+
+- (instancetype)initWithRequestID:(NSString *)requestID kind:(NSString *)kind {
+  self = [super init];
+  if (self) {
+    _requestID = [requestID copy];
+    _kind = [kind copy];
+    _semaphore = dispatch_semaphore_create(0);
+    _resolutionPayload = nil;
+    _externallyResolved = NO;
+    _canceled = NO;
+  }
+  return self;
+}
+
+- (instancetype)init {
+  return [self initWithRequestID:@"" kind:@""];
+}
+
 @end
 
 @implementation GhoDexCEFView
@@ -929,6 +975,7 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
     _defersInitialBrowserCreation = deferInitialBrowserCreation;
     _closesWindowWhenBrowserCloses = NO;
     _pendingEvaluationCompletions = [NSMutableDictionary dictionary];
+    _pendingRuntimePromptRequests = [NSMutableDictionary dictionary];
     self.wantsLayer = YES;
   }
   return self;
@@ -948,6 +995,7 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
   if (self.window == nil) {
     [self failPendingEvaluationRequestsWithCode:GhoDexCEFControlErrorCodeBridgeUnavailable
                                     description:@"The browser page was detached before JavaScript evaluation completed."];
+    [self cancelPendingRuntimePromptRequests];
     if (_client) {
       _client->CloseBrowser();
       _client = nullptr;
@@ -1132,6 +1180,60 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
   return NO;
 }
 
+- (BOOL)resolveDialogRequestID:(NSString *)requestID
+                      accepted:(BOOL)accepted
+                     userInput:(NSString *)userInput
+                         error:(NSError * _Nullable * _Nullable)error {
+  NSMutableDictionary<NSString *, NSString *> *payload = [@{
+    @"accepted": BoolString(accepted),
+  } mutableCopy];
+  SetPayloadValue(payload, @"userInput", userInput);
+  return [self resolveRuntimePromptRequestID:requestID
+                                        kind:@"javaScriptDialog"
+                                     payload:payload
+                                       error:error];
+}
+
+- (BOOL)resolvePermissionRequestID:(NSString *)requestID
+                            result:(NSString *)result
+                             error:(NSError * _Nullable * _Nullable)error {
+  NSDictionary<NSString *, NSString *> *payload = @{
+    @"result": result ?: @"",
+  };
+  return [self resolveRuntimePromptRequestID:requestID
+                                        kind:@"permissionRequest"
+                                     payload:payload
+                                       error:error];
+}
+
+- (BOOL)resolveAuthRequestID:(NSString *)requestID
+                    accepted:(BOOL)accepted
+                    username:(NSString *)username
+                    password:(NSString *)password
+                       error:(NSError * _Nullable * _Nullable)error {
+  NSMutableDictionary<NSString *, NSString *> *payload = [@{
+    @"accepted": BoolString(accepted),
+  } mutableCopy];
+  SetPayloadValue(payload, @"username", username);
+  SetPayloadValue(payload, @"password", password);
+  return [self resolveRuntimePromptRequestID:requestID
+                                        kind:@"authenticationRequest"
+                                     payload:payload
+                                       error:error];
+}
+
+- (BOOL)resolveCertificateRequestID:(NSString *)requestID
+                           accepted:(BOOL)accepted
+                              error:(NSError * _Nullable * _Nullable)error {
+  NSDictionary<NSString *, NSString *> *payload = @{
+    @"accepted": BoolString(accepted),
+  };
+  return [self resolveRuntimePromptRequestID:requestID
+                                        kind:@"certificateWarning"
+                                     payload:payload
+                                       error:error];
+}
+
 - (void)notifyTitle:(NSString *)title {
   [self.delegate cefView:self didUpdateTitle:title];
 }
@@ -1235,6 +1337,104 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
   NSError *error = MakeControlError(code, description);
   for (GhoDexCEFJavaScriptEvaluationCompletion completion in pending.objectEnumerator) {
     completion(nil, error);
+  }
+}
+
+- (GhoDexCEFRuntimePromptRequest *)beginRuntimePromptKind:(NSString *)kind
+                                                  payload:(NSDictionary<NSString *, NSString *> *)payload {
+  NSString *request_id = [NSString stringWithFormat:@"runtime-%lld", ++_nextRuntimePromptRequestID];
+  GhoDexCEFRuntimePromptRequest *request =
+      [[GhoDexCEFRuntimePromptRequest alloc] initWithRequestID:request_id kind:kind];
+  _pendingRuntimePromptRequests[request_id] = request;
+
+  NSMutableDictionary<NSString *, NSString *> *captured_payload =
+      payload != nil ? [payload mutableCopy] : [NSMutableDictionary dictionary];
+  captured_payload[@"requestID"] = request_id;
+  [self notifyRuntimeEventKind:kind payload:captured_payload];
+  return request;
+}
+
+- (NSDictionary<NSString *, NSString *> * _Nullable)finishRuntimePromptRequest:(GhoDexCEFRuntimePromptRequest *)request
+                                                             externallyResolved:(BOOL *)externallyResolved
+                                                                       canceled:(BOOL *)canceled {
+  if (request == nil) {
+    if (externallyResolved != nullptr) {
+      *externallyResolved = NO;
+    }
+    if (canceled != nullptr) {
+      *canceled = NO;
+    }
+    return nil;
+  }
+
+  [_pendingRuntimePromptRequests removeObjectForKey:request.requestID];
+
+  @synchronized(request) {
+    if (externallyResolved != nullptr) {
+      *externallyResolved = request.externallyResolved;
+    }
+    if (canceled != nullptr) {
+      *canceled = request.canceled;
+    }
+    return request.resolutionPayload;
+  }
+}
+
+- (BOOL)resolveRuntimePromptRequestID:(NSString *)requestID
+                                 kind:(NSString *)kind
+                              payload:(NSDictionary<NSString *, NSString *> *)payload
+                                error:(NSError * _Nullable * _Nullable)error {
+  if (requestID.length == 0) {
+    if (error != nullptr) {
+      *error = MakeControlError(
+          GhoDexCEFControlErrorCodeRuntimePromptUnavailable,
+          @"The runtime prompt requestID is required.");
+    }
+    return NO;
+  }
+
+  GhoDexCEFRuntimePromptRequest *request = _pendingRuntimePromptRequests[requestID];
+  if (request == nil || ![request.kind isEqualToString:kind]) {
+    if (error != nullptr) {
+      *error = MakeControlError(
+          GhoDexCEFControlErrorCodeRuntimePromptUnavailable,
+          [NSString stringWithFormat:@"The runtime prompt %@ is no longer pending for %@.", requestID, kind]);
+    }
+    return NO;
+  }
+
+  @synchronized(request) {
+    if (request.externallyResolved || request.canceled) {
+      if (error != nullptr) {
+        *error = MakeControlError(
+            GhoDexCEFControlErrorCodeRuntimePromptUnavailable,
+            [NSString stringWithFormat:@"The runtime prompt %@ can no longer be resolved.", requestID]);
+      }
+      return NO;
+    }
+
+    request.externallyResolved = YES;
+    request.resolutionPayload = payload != nil ? [payload copy] : @{};
+  }
+
+  dispatch_semaphore_signal(request.semaphore);
+  return YES;
+}
+
+- (void)cancelPendingRuntimePromptRequests {
+  if (_pendingRuntimePromptRequests.count == 0) {
+    return;
+  }
+
+  NSArray<GhoDexCEFRuntimePromptRequest *> *pending = _pendingRuntimePromptRequests.allValues;
+  [_pendingRuntimePromptRequests removeAllObjects];
+
+  for (GhoDexCEFRuntimePromptRequest *request in pending) {
+    @synchronized(request) {
+      request.canceled = YES;
+      request.resolutionPayload = nil;
+    }
+    dispatch_semaphore_signal(request.semaphore);
   }
 }
 
@@ -1767,7 +1967,30 @@ bool GhoDexCEFClient::OnJSDialog(CefRefPtr<CefBrowser> browser,
   } mutableCopy];
   SetPayloadValue(requested_payload, @"originURL", origin);
   SetPayloadValue(requested_payload, @"defaultPromptText", default_prompt);
-  [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:requested_payload];
+  __block GhoDexCEFRuntimePromptRequest *request = nil;
+  RunOnMainThreadSync(^{
+    request = [owner_ beginRuntimePromptKind:@"javaScriptDialog" payload:requested_payload];
+  });
+  if (request == nil) {
+    return false;
+  }
+
+  dispatch_semaphore_wait(
+      request.semaphore,
+      dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kRuntimePromptExternalResolutionGraceSeconds * NSEC_PER_SEC)));
+
+  __block BOOL externally_resolved = NO;
+  __block BOOL canceled = NO;
+  __block NSDictionary<NSString *, NSString *> *resolution_payload = nil;
+  RunOnMainThreadSync(^{
+    resolution_payload = [owner_ finishRuntimePromptRequest:request
+                                         externallyResolved:&externally_resolved
+                                                   canceled:&canceled];
+  });
+  if (canceled) {
+    callback->Continue(false, CefString());
+    return true;
+  }
 
   NSAlert *alert = [[NSAlert alloc] init];
   alert.alertStyle = NSAlertStyleInformational;
@@ -1775,11 +1998,26 @@ bool GhoDexCEFClient::OnJSDialog(CefRefPtr<CefBrowser> browser,
 
   switch (dialog_type) {
   case JSDIALOGTYPE_ALERT: {
+    if (externally_resolved) {
+      BOOL accepted = [resolution_payload[@"accepted"] isEqualToString:@"true"];
+      callback->Continue(accepted, CefString());
+      [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:@{
+        @"requestID": request.requestID,
+        @"phase": @"resolved",
+        @"dialogType": dialog_type_name,
+        @"messageText": message,
+        @"accepted": BoolString(accepted),
+        @"originURL": origin ?: @"",
+      }];
+      return true;
+    }
+
     alert.messageText = [NSString stringWithFormat:@"%@ says", AlertDisplayOrigin(origin)];
     [alert addButtonWithTitle:@"OK"];
     BOOL accepted = RunAlert(alert, owner_) == NSAlertFirstButtonReturn;
     callback->Continue(accepted, CefString());
     [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:@{
+      @"requestID": request.requestID,
       @"phase": @"resolved",
       @"dialogType": dialog_type_name,
       @"messageText": message,
@@ -1789,12 +2027,27 @@ bool GhoDexCEFClient::OnJSDialog(CefRefPtr<CefBrowser> browser,
     return true;
   }
   case JSDIALOGTYPE_CONFIRM: {
+    if (externally_resolved) {
+      BOOL accepted = [resolution_payload[@"accepted"] isEqualToString:@"true"];
+      callback->Continue(accepted, CefString());
+      [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:@{
+        @"requestID": request.requestID,
+        @"phase": @"resolved",
+        @"dialogType": dialog_type_name,
+        @"messageText": message,
+        @"accepted": BoolString(accepted),
+        @"originURL": origin ?: @"",
+      }];
+      return true;
+    }
+
     alert.messageText = [NSString stringWithFormat:@"%@ confirmation", AlertDisplayOrigin(origin)];
     [alert addButtonWithTitle:@"OK"];
     [alert addButtonWithTitle:@"Cancel"];
     BOOL accepted = RunAlert(alert, owner_) == NSAlertFirstButtonReturn;
     callback->Continue(accepted, CefString());
     [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:@{
+      @"requestID": request.requestID,
       @"phase": @"resolved",
       @"dialogType": dialog_type_name,
       @"messageText": message,
@@ -1804,6 +2057,26 @@ bool GhoDexCEFClient::OnJSDialog(CefRefPtr<CefBrowser> browser,
     return true;
   }
   case JSDIALOGTYPE_PROMPT: {
+    if (externally_resolved) {
+      BOOL accepted = [resolution_payload[@"accepted"] isEqualToString:@"true"];
+      NSString *resolved_input = accepted ? (resolution_payload[@"userInput"] ?: default_prompt) : default_prompt;
+      callback->Continue(accepted, CefString(resolved_input.UTF8String));
+      NSMutableDictionary<NSString *, NSString *> *resolved_payload = [@{
+        @"requestID": request.requestID,
+        @"phase": @"resolved",
+        @"dialogType": dialog_type_name,
+        @"messageText": message,
+        @"accepted": BoolString(accepted),
+        @"originURL": origin ?: @"",
+      } mutableCopy];
+      SetPayloadValue(resolved_payload, @"defaultPromptText", default_prompt);
+      if (accepted) {
+        SetPayloadValue(resolved_payload, @"userInput", resolved_input);
+      }
+      [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:resolved_payload];
+      return true;
+    }
+
     alert.messageText = [NSString stringWithFormat:@"%@ prompt", AlertDisplayOrigin(origin)];
     NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 320, 24)];
     field.stringValue = default_prompt ?: @"";
@@ -1814,6 +2087,7 @@ bool GhoDexCEFClient::OnJSDialog(CefRefPtr<CefBrowser> browser,
     NSString *resolved_input = accepted ? field.stringValue : default_prompt;
     callback->Continue(accepted, CefString(resolved_input.UTF8String));
     NSMutableDictionary<NSString *, NSString *> *resolved_payload = [@{
+      @"requestID": request.requestID,
       @"phase": @"resolved",
       @"dialogType": dialog_type_name,
       @"messageText": message,
@@ -1843,13 +2117,52 @@ bool GhoDexCEFClient::OnBeforeUnloadDialog(CefRefPtr<CefBrowser> browser,
 
   NSString *message = [NSString stringWithUTF8String:message_text.ToString().c_str() ?: ""];
   NSString *origin = browser.get() ? [NSString stringWithUTF8String:browser->GetMainFrame()->GetURL().ToString().c_str() ?: ""] : @"";
-  [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:@{
-    @"phase": @"requested",
-    @"dialogType": @"beforeUnload",
-    @"messageText": message,
-    @"originURL": origin ?: @"",
-    @"isReload": BoolString(is_reload),
-  }];
+  __block GhoDexCEFRuntimePromptRequest *request = nil;
+  RunOnMainThreadSync(^{
+    request = [owner_ beginRuntimePromptKind:@"javaScriptDialog" payload:@{
+      @"phase": @"requested",
+      @"dialogType": @"beforeUnload",
+      @"messageText": message,
+      @"originURL": origin ?: @"",
+      @"isReload": BoolString(is_reload),
+    }];
+  });
+  if (request == nil) {
+    return false;
+  }
+
+  dispatch_semaphore_wait(
+      request.semaphore,
+      dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kRuntimePromptExternalResolutionGraceSeconds * NSEC_PER_SEC)));
+
+  __block BOOL externally_resolved = NO;
+  __block BOOL canceled = NO;
+  __block NSDictionary<NSString *, NSString *> *resolution_payload = nil;
+  RunOnMainThreadSync(^{
+    resolution_payload = [owner_ finishRuntimePromptRequest:request
+                                         externallyResolved:&externally_resolved
+                                                   canceled:&canceled];
+  });
+  if (canceled) {
+    callback->Continue(false, CefString());
+    return true;
+  }
+
+  if (externally_resolved) {
+    BOOL accepted = [resolution_payload[@"accepted"] isEqualToString:@"true"];
+    callback->Continue(accepted, CefString());
+    [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:@{
+      @"requestID": request.requestID,
+      @"phase": @"resolved",
+      @"dialogType": @"beforeUnload",
+      @"messageText": message,
+      @"originURL": origin ?: @"",
+      @"isReload": BoolString(is_reload),
+      @"accepted": BoolString(accepted),
+    }];
+    return true;
+  }
+
   NSAlert *alert = [[NSAlert alloc] init];
   alert.messageText = is_reload ? @"Reload this page?" : @"Leave this page?";
   alert.informativeText = message.length > 0 ? message : @"Changes you made may not be saved.";
@@ -1859,6 +2172,7 @@ bool GhoDexCEFClient::OnBeforeUnloadDialog(CefRefPtr<CefBrowser> browser,
   BOOL accepted = RunAlert(alert, owner_) == NSAlertFirstButtonReturn;
   callback->Continue(accepted, CefString());
   [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:@{
+    @"requestID": request.requestID,
     @"phase": @"resolved",
     @"dialogType": @"beforeUnload",
     @"messageText": message,
@@ -1883,13 +2197,57 @@ bool GhoDexCEFClient::OnRequestMediaAccessPermission(
 
   NSString *origin = [NSString stringWithUTF8String:requesting_origin.ToString().c_str() ?: ""];
   NSString *permission_label = MediaPermissionDescription(requested_permissions);
-  [owner_ notifyRuntimeEventKind:@"permissionRequest" payload:@{
-    @"phase": @"requested",
-    @"permissionKind": @"media",
-    @"originURL": origin ?: @"",
-    @"requestedPermissions": UInt32String(requested_permissions),
-    @"requestedPermissionsLabel": permission_label,
-  }];
+  __block GhoDexCEFRuntimePromptRequest *request = nil;
+  RunOnMainThreadSync(^{
+    request = [owner_ beginRuntimePromptKind:@"permissionRequest" payload:@{
+      @"phase": @"requested",
+      @"permissionKind": @"media",
+      @"originURL": origin ?: @"",
+      @"requestedPermissions": UInt32String(requested_permissions),
+      @"requestedPermissionsLabel": permission_label,
+    }];
+  });
+  if (request == nil) {
+    return false;
+  }
+
+  dispatch_semaphore_wait(
+      request.semaphore,
+      dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kRuntimePromptExternalResolutionGraceSeconds * NSEC_PER_SEC)));
+
+  __block BOOL externally_resolved = NO;
+  __block BOOL canceled = NO;
+  __block NSDictionary<NSString *, NSString *> *resolution_payload = nil;
+  RunOnMainThreadSync(^{
+    resolution_payload = [owner_ finishRuntimePromptRequest:request
+                                         externallyResolved:&externally_resolved
+                                                   canceled:&canceled];
+  });
+  if (canceled) {
+    callback->Cancel();
+    return true;
+  }
+
+  if (externally_resolved) {
+    NSString *result = resolution_payload[@"result"] ?: @"deny";
+    if ([result isEqualToString:@"allow"]) {
+      callback->Continue(requested_permissions);
+    } else {
+      callback->Cancel();
+      result = [result isEqualToString:@"dismiss"] ? @"dismiss" : @"deny";
+    }
+    [owner_ notifyRuntimeEventKind:@"permissionRequest" payload:@{
+      @"requestID": request.requestID,
+      @"phase": @"resolved",
+      @"permissionKind": @"media",
+      @"originURL": origin ?: @"",
+      @"requestedPermissions": UInt32String(requested_permissions),
+      @"requestedPermissionsLabel": permission_label,
+      @"result": result,
+    }];
+    return true;
+  }
+
   NSAlert *alert = [[NSAlert alloc] init];
   alert.messageText = [NSString stringWithFormat:@"%@ wants to use %@", AlertDisplayOrigin(origin), permission_label];
   alert.informativeText = @"Allow this browser page to access the requested device capabilities?";
@@ -1903,6 +2261,7 @@ bool GhoDexCEFClient::OnRequestMediaAccessPermission(
     callback->Cancel();
   }
   [owner_ notifyRuntimeEventKind:@"permissionRequest" payload:@{
+    @"requestID": request.requestID,
     @"phase": @"resolved",
     @"permissionKind": @"media",
     @"originURL": origin ?: @"",
@@ -1926,14 +2285,61 @@ bool GhoDexCEFClient::OnShowPermissionPrompt(CefRefPtr<CefBrowser> browser,
 
   NSString *origin = [NSString stringWithUTF8String:requesting_origin.ToString().c_str() ?: ""];
   NSString *permission_label = PermissionPromptDescription(requested_permissions);
-  [owner_ notifyRuntimeEventKind:@"permissionRequest" payload:@{
-    @"phase": @"requested",
-    @"permissionKind": @"generic",
-    @"originURL": origin ?: @"",
-    @"requestedPermissions": UInt32String(requested_permissions),
-    @"requestedPermissionsLabel": permission_label,
-    @"promptID": UInt64String(prompt_id),
-  }];
+  __block GhoDexCEFRuntimePromptRequest *request = nil;
+  RunOnMainThreadSync(^{
+    request = [owner_ beginRuntimePromptKind:@"permissionRequest" payload:@{
+      @"phase": @"requested",
+      @"permissionKind": @"generic",
+      @"originURL": origin ?: @"",
+      @"requestedPermissions": UInt32String(requested_permissions),
+      @"requestedPermissionsLabel": permission_label,
+      @"promptID": UInt64String(prompt_id),
+    }];
+  });
+  if (request == nil) {
+    return false;
+  }
+
+  dispatch_semaphore_wait(
+      request.semaphore,
+      dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kRuntimePromptExternalResolutionGraceSeconds * NSEC_PER_SEC)));
+
+  __block BOOL externally_resolved = NO;
+  __block BOOL canceled = NO;
+  __block NSDictionary<NSString *, NSString *> *resolution_payload = nil;
+  RunOnMainThreadSync(^{
+    resolution_payload = [owner_ finishRuntimePromptRequest:request
+                                         externallyResolved:&externally_resolved
+                                                   canceled:&canceled];
+  });
+  if (canceled) {
+    callback->Continue(CEF_PERMISSION_RESULT_DISMISS);
+    return true;
+  }
+
+  if (externally_resolved) {
+    NSString *result = resolution_payload[@"result"] ?: @"dismiss";
+    if ([result isEqualToString:@"allow"]) {
+      callback->Continue(CEF_PERMISSION_RESULT_ACCEPT);
+    } else if ([result isEqualToString:@"deny"]) {
+      callback->Continue(CEF_PERMISSION_RESULT_DENY);
+    } else {
+      result = @"dismiss";
+      callback->Continue(CEF_PERMISSION_RESULT_DISMISS);
+    }
+    [owner_ notifyRuntimeEventKind:@"permissionRequest" payload:@{
+      @"requestID": request.requestID,
+      @"phase": @"resolved",
+      @"permissionKind": @"generic",
+      @"originURL": origin ?: @"",
+      @"requestedPermissions": UInt32String(requested_permissions),
+      @"requestedPermissionsLabel": permission_label,
+      @"promptID": UInt64String(prompt_id),
+      @"result": result,
+    }];
+    return true;
+  }
+
   NSAlert *alert = [[NSAlert alloc] init];
   alert.messageText = [NSString stringWithFormat:@"%@ wants %@", AlertDisplayOrigin(origin), permission_label];
   alert.informativeText = @"Choose whether to allow this permission request.";
@@ -1954,6 +2360,7 @@ bool GhoDexCEFClient::OnShowPermissionPrompt(CefRefPtr<CefBrowser> browser,
     callback->Continue(CEF_PERMISSION_RESULT_DISMISS);
   }
   [owner_ notifyRuntimeEventKind:@"permissionRequest" payload:@{
+    @"requestID": request.requestID,
     @"phase": @"resolved",
     @"permissionKind": @"generic",
     @"originURL": origin ?: @"",
@@ -1987,15 +2394,62 @@ bool GhoDexCEFClient::GetAuthCredentials(CefRefPtr<CefBrowser> browser,
   NSString *scheme_string = (scheme_cstr != nullptr && scheme_cstr[0] != '\0')
       ? [NSString stringWithUTF8String:scheme_cstr]
       : @"authentication";
-  [owner_ notifyRuntimeEventKind:@"authenticationRequest" payload:@{
-    @"phase": @"requested",
-    @"originURL": origin ?: @"",
-    @"host": host_string ?: @"",
-    @"port": IntegerString(port),
-    @"realm": realm_string ?: @"",
-    @"scheme": scheme_string ?: @"authentication",
-    @"isProxy": BoolString(isProxy),
-  }];
+  __block GhoDexCEFRuntimePromptRequest *request = nil;
+  RunOnMainThreadSync(^{
+    request = [owner_ beginRuntimePromptKind:@"authenticationRequest" payload:@{
+      @"phase": @"requested",
+      @"originURL": origin ?: @"",
+      @"host": host_string ?: @"",
+      @"port": IntegerString(port),
+      @"realm": realm_string ?: @"",
+      @"scheme": scheme_string ?: @"authentication",
+      @"isProxy": BoolString(isProxy),
+    }];
+  });
+  if (request == nil) {
+    return false;
+  }
+
+  dispatch_semaphore_wait(
+      request.semaphore,
+      dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kRuntimePromptExternalResolutionGraceSeconds * NSEC_PER_SEC)));
+
+  __block BOOL externally_resolved = NO;
+  __block BOOL canceled = NO;
+  __block NSDictionary<NSString *, NSString *> *resolution_payload = nil;
+  RunOnMainThreadSync(^{
+    resolution_payload = [owner_ finishRuntimePromptRequest:request
+                                         externallyResolved:&externally_resolved
+                                                   canceled:&canceled];
+  });
+  if (canceled) {
+    callback->Cancel();
+    return true;
+  }
+
+  if (externally_resolved) {
+    BOOL accepted = [resolution_payload[@"accepted"] isEqualToString:@"true"];
+    if (accepted) {
+      callback->Continue(
+          CefString((resolution_payload[@"username"] ?: @"").UTF8String),
+          CefString((resolution_payload[@"password"] ?: @"").UTF8String));
+    } else {
+      callback->Cancel();
+    }
+    [owner_ notifyRuntimeEventKind:@"authenticationRequest" payload:@{
+      @"requestID": request.requestID,
+      @"phase": @"resolved",
+      @"originURL": origin ?: @"",
+      @"host": host_string ?: @"",
+      @"port": IntegerString(port),
+      @"realm": realm_string ?: @"",
+      @"scheme": scheme_string ?: @"authentication",
+      @"isProxy": BoolString(isProxy),
+      @"accepted": BoolString(accepted),
+    }];
+    return true;
+  }
+
   dispatch_async(dispatch_get_main_queue(), ^{
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = [NSString stringWithFormat:@"%@ requires %@", host_string.length > 0 ? host_string : AlertDisplayOrigin(origin), scheme_string];
@@ -2021,6 +2475,7 @@ bool GhoDexCEFClient::GetAuthCredentials(CefRefPtr<CefBrowser> browser,
       callback->Cancel();
     }
     [owner notifyRuntimeEventKind:@"authenticationRequest" payload:@{
+      @"requestID": request.requestID,
       @"phase": @"resolved",
       @"originURL": origin ?: @"",
       @"host": host_string ?: @"",
@@ -2047,11 +2502,52 @@ bool GhoDexCEFClient::OnCertificateError(CefRefPtr<CefBrowser> browser,
 
   NSString *url = [NSString stringWithUTF8String:request_url.ToString().c_str() ?: ""];
   NSString *error_code = IntegerString(static_cast<NSInteger>(cert_error));
-  [owner_ notifyRuntimeEventKind:@"certificateWarning" payload:@{
-    @"phase": @"requested",
-    @"requestURL": url ?: @"",
-    @"errorCode": error_code,
-  }];
+  __block GhoDexCEFRuntimePromptRequest *request = nil;
+  RunOnMainThreadSync(^{
+    request = [owner_ beginRuntimePromptKind:@"certificateWarning" payload:@{
+      @"phase": @"requested",
+      @"requestURL": url ?: @"",
+      @"errorCode": error_code,
+    }];
+  });
+  if (request == nil) {
+    return false;
+  }
+
+  dispatch_semaphore_wait(
+      request.semaphore,
+      dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kRuntimePromptExternalResolutionGraceSeconds * NSEC_PER_SEC)));
+
+  __block BOOL externally_resolved = NO;
+  __block BOOL canceled = NO;
+  __block NSDictionary<NSString *, NSString *> *resolution_payload = nil;
+  RunOnMainThreadSync(^{
+    resolution_payload = [owner_ finishRuntimePromptRequest:request
+                                         externallyResolved:&externally_resolved
+                                                   canceled:&canceled];
+  });
+  if (canceled) {
+    callback->Cancel();
+    return true;
+  }
+
+  if (externally_resolved) {
+    BOOL accepted = [resolution_payload[@"accepted"] isEqualToString:@"true"];
+    if (accepted) {
+      callback->Continue();
+    } else {
+      callback->Cancel();
+    }
+    [owner_ notifyRuntimeEventKind:@"certificateWarning" payload:@{
+      @"requestID": request.requestID,
+      @"phase": @"resolved",
+      @"requestURL": url ?: @"",
+      @"errorCode": error_code,
+      @"accepted": BoolString(accepted),
+    }];
+    return true;
+  }
+
   NSAlert *alert = [[NSAlert alloc] init];
   alert.messageText = @"Certificate validation failed";
   alert.informativeText = [NSString stringWithFormat:
@@ -2068,6 +2564,7 @@ bool GhoDexCEFClient::OnCertificateError(CefRefPtr<CefBrowser> browser,
     callback->Cancel();
   }
   [owner_ notifyRuntimeEventKind:@"certificateWarning" payload:@{
+    @"requestID": request.requestID,
     @"phase": @"resolved",
     @"requestURL": url ?: @"",
     @"errorCode": error_code,
@@ -4318,6 +4815,87 @@ NSString * _Nullable GhoDexCEFLastInitializationError(void) {
                                      }];
     completion(nil, error);
   }
+}
+
+- (BOOL)performTrustedClickAtX:(double)x
+                             y:(double)y
+                          error:(NSError * _Nullable * _Nullable)error {
+  (void)x;
+  (void)y;
+  if (error != nil) {
+    *error = [NSError errorWithDomain:GhoDexCEFControlErrorDomain
+                                 code:GhoDexCEFControlErrorCodeBridgeUnavailable
+                             userInfo:@{
+                               NSLocalizedDescriptionKey : @"CEF support is disabled in this build."
+                             }];
+  }
+  return NO;
+}
+
+- (BOOL)resolveDialogRequestID:(NSString *)requestID
+                      accepted:(BOOL)accepted
+                     userInput:(NSString *)userInput
+                         error:(NSError * _Nullable * _Nullable)error {
+  (void)requestID;
+  (void)accepted;
+  (void)userInput;
+  if (error != nil) {
+    *error = [NSError errorWithDomain:GhoDexCEFControlErrorDomain
+                                 code:GhoDexCEFControlErrorCodeBridgeUnavailable
+                             userInfo:@{
+                               NSLocalizedDescriptionKey : @"CEF support is disabled in this build."
+                             }];
+  }
+  return NO;
+}
+
+- (BOOL)resolvePermissionRequestID:(NSString *)requestID
+                            result:(NSString *)result
+                             error:(NSError * _Nullable * _Nullable)error {
+  (void)requestID;
+  (void)result;
+  if (error != nil) {
+    *error = [NSError errorWithDomain:GhoDexCEFControlErrorDomain
+                                 code:GhoDexCEFControlErrorCodeBridgeUnavailable
+                             userInfo:@{
+                               NSLocalizedDescriptionKey : @"CEF support is disabled in this build."
+                             }];
+  }
+  return NO;
+}
+
+- (BOOL)resolveAuthRequestID:(NSString *)requestID
+                    accepted:(BOOL)accepted
+                    username:(NSString *)username
+                    password:(NSString *)password
+                       error:(NSError * _Nullable * _Nullable)error {
+  (void)requestID;
+  (void)accepted;
+  (void)username;
+  (void)password;
+  if (error != nil) {
+    *error = [NSError errorWithDomain:GhoDexCEFControlErrorDomain
+                                 code:GhoDexCEFControlErrorCodeBridgeUnavailable
+                             userInfo:@{
+                               NSLocalizedDescriptionKey : @"CEF support is disabled in this build."
+                             }];
+  }
+  return NO;
+}
+
+- (BOOL)resolveCertificateRequestID:(NSString *)requestID
+                           accepted:(BOOL)accepted
+                              error:(NSError * _Nullable * _Nullable)error {
+  (void)requestID;
+  (void)accepted;
+  if (error != nil) {
+    *error = [NSError errorWithDomain:GhoDexCEFControlErrorDomain
+                                 code:GhoDexCEFControlErrorCodeBridgeUnavailable
+                             userInfo:@{
+                               NSLocalizedDescriptionKey : @"CEF support is disabled in this build."
+                             }];
+  }
+  return NO;
 }
 
 @end

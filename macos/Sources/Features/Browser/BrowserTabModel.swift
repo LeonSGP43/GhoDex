@@ -7,6 +7,10 @@ enum BrowserControlCommandKind: String, Codable, Hashable {
     case goBack
     case goForward
     case reload
+    case resolveDialog
+    case resolvePermission
+    case resolveAuth
+    case resolveCertificate
     case executeJavaScript
     case evaluateJavaScript
     case listFrames
@@ -552,6 +556,7 @@ struct BrowserControlEvent: Identifiable, Hashable, Codable {
 
     static func javaScriptDialog(
         target: BrowserControlTarget,
+        requestID: String,
         phase: String,
         dialogType: String,
         originURL: String?,
@@ -562,6 +567,7 @@ struct BrowserControlEvent: Identifiable, Hashable, Codable {
         userInput: String?
     ) -> BrowserControlEvent {
         var payload: [String: String] = [
+            "requestID": requestID,
             "phase": phase,
             "dialogType": dialogType,
             "messageText": messageText,
@@ -586,6 +592,7 @@ struct BrowserControlEvent: Identifiable, Hashable, Codable {
 
     static func permissionRequest(
         target: BrowserControlTarget,
+        requestID: String,
         phase: String,
         permissionKind: String,
         originURL: String,
@@ -595,6 +602,7 @@ struct BrowserControlEvent: Identifiable, Hashable, Codable {
         result: String?
     ) -> BrowserControlEvent {
         var payload: [String: String] = [
+            "requestID": requestID,
             "phase": phase,
             "permissionKind": permissionKind,
             "originURL": originURL,
@@ -612,6 +620,7 @@ struct BrowserControlEvent: Identifiable, Hashable, Codable {
 
     static func authenticationRequest(
         target: BrowserControlTarget,
+        requestID: String,
         phase: String,
         originURL: String,
         host: String,
@@ -622,6 +631,7 @@ struct BrowserControlEvent: Identifiable, Hashable, Codable {
         accepted: Bool?
     ) -> BrowserControlEvent {
         var payload: [String: String] = [
+            "requestID": requestID,
             "phase": phase,
             "originURL": originURL,
             "host": host,
@@ -638,12 +648,14 @@ struct BrowserControlEvent: Identifiable, Hashable, Codable {
 
     static func certificateWarning(
         target: BrowserControlTarget,
+        requestID: String,
         phase: String,
         requestURL: String,
         errorCode: String,
         accepted: Bool?
     ) -> BrowserControlEvent {
         var payload: [String: String] = [
+            "requestID": requestID,
             "phase": phase,
             "requestURL": requestURL,
             "errorCode": errorCode,

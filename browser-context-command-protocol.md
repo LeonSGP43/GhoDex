@@ -97,6 +97,10 @@ State and events:
 - `setCookie`
 - `deleteCookie`
 - `clearCookies`
+- `resolveDialog`
+- `resolvePermission`
+- `resolveAuth`
+- `resolveCertificate`
 - `subscribeEvents`
 - `drainEvents`
 - `unsubscribeEvents`
@@ -145,5 +149,41 @@ What that proof currently covers:
   visible through `browser.context.v2` `listContexts`
 
 The runtime-service event kinds above are part of the same shared event stream
-and currently have unit coverage for kind mapping and payload shape. Full
-interactive resolve/cancel APIs remain a later slice.
+and currently have unit coverage for kind mapping and payload shape. Runtime
+prompt resolution now extends that same surface for JS dialogs, permission
+prompts, HTTP auth, and certificate warnings.
+
+## Runtime Prompt Resolution
+
+These commands target a live page inside a context and resolve a previously
+emitted runtime prompt by `requestID`.
+
+- `resolveDialog`
+  payload:
+  - `requestID`
+  - `accepted` as `true` or `false`
+  - `userInput` for prompt dialogs when accepting custom text
+- `resolvePermission`
+  payload:
+  - `requestID`
+  - `result` as `allow`, `deny`, or `dismiss`
+- `resolveAuth`
+  payload:
+  - `requestID`
+  - `accepted` as `true` or `false`
+  - `username` when accepting credentials
+  - `password` when accepting credentials
+- `resolveCertificate`
+  payload:
+  - `requestID`
+  - `accepted` as `true` or `false`
+
+Each command returns an acknowledgement containing:
+
+- `requestID`
+- `kind`
+- `resolved`
+
+Requested runtime prompt events now include `requestID` in their payload so the
+external client can bind the follow-up resolve command to the paused runtime
+handler.

@@ -43,6 +43,10 @@ enum BrowserExternalCommandKind: String, Codable, Hashable {
     case subscribeEvents
     case drainEvents
     case unsubscribeEvents
+    case resolveDialog
+    case resolvePermission
+    case resolveAuth
+    case resolveCertificate
 }
 
 enum BrowserExternalEventKind: String, Codable, Hashable {
@@ -240,6 +244,146 @@ struct BrowserExternalCookieMutationResult: Hashable, Codable {
 struct BrowserExternalMutationAck: Hashable, Codable {
     let accepted: Bool
     let operation: String
+}
+
+enum BrowserRuntimePromptResolutionKind: String, Codable, Hashable {
+    case dialog
+    case permission
+    case auth
+    case certificate
+}
+
+struct BrowserRuntimePromptResolutionRequest: Hashable, Codable {
+    let requestID: String
+    let kind: BrowserRuntimePromptResolutionKind
+    let accepted: Bool?
+    let result: String?
+    let userInput: String?
+    let username: String?
+    let password: String?
+
+    var controlPayload: [String: String] {
+        var payload = ["requestID": requestID]
+        if let accepted {
+            payload["accepted"] = accepted ? "true" : "false"
+        }
+        if let result, !result.isEmpty {
+            payload["result"] = result
+        }
+        if let userInput {
+            payload["userInput"] = userInput
+        }
+        if let username {
+            payload["username"] = username
+        }
+        if let password {
+            payload["password"] = password
+        }
+        return payload
+    }
+
+    static func from(
+        command: BrowserExternalCommandKind,
+        payload: [String: String]
+    ) throws -> BrowserRuntimePromptResolutionRequest {
+        switch command {
+        case .resolveDialog:
+            return try dialog(from: payload)
+        case .resolvePermission:
+            return try permission(from: payload)
+        case .resolveAuth:
+            return try auth(from: payload)
+        case .resolveCertificate:
+            return try certificate(from: payload)
+        default:
+            throw BrowserExternalCommandError.invalidRequest(
+                "The \(command.rawValue) command is not a runtime prompt resolution command."
+            )
+        }
+    }
+
+    static func dialog(from payload: [String: String]) throws -> BrowserRuntimePromptResolutionRequest {
+        BrowserRuntimePromptResolutionRequest(
+            requestID: try requestID(from: payload),
+            kind: .dialog,
+            accepted: try requiredBoolean(key: "accepted", from: payload),
+            result: nil,
+            userInput: payload["userInput"],
+            username: nil,
+            password: nil
+        )
+    }
+
+    static func permission(from payload: [String: String]) throws -> BrowserRuntimePromptResolutionRequest {
+        let result = try requiredString(key: "result", from: payload)
+        guard ["allow", "deny", "dismiss"].contains(result) else {
+            throw BrowserExternalCommandError.invalidRequest(
+                "The resolvePermission command requires result to be one of allow, deny, or dismiss."
+            )
+        }
+        return BrowserRuntimePromptResolutionRequest(
+            requestID: try requestID(from: payload),
+            kind: .permission,
+            accepted: nil,
+            result: result,
+            userInput: nil,
+            username: nil,
+            password: nil
+        )
+    }
+
+    static func auth(from payload: [String: String]) throws -> BrowserRuntimePromptResolutionRequest {
+        BrowserRuntimePromptResolutionRequest(
+            requestID: try requestID(from: payload),
+            kind: .auth,
+            accepted: try requiredBoolean(key: "accepted", from: payload),
+            result: nil,
+            userInput: nil,
+            username: payload["username"],
+            password: payload["password"]
+        )
+    }
+
+    static func certificate(from payload: [String: String]) throws -> BrowserRuntimePromptResolutionRequest {
+        BrowserRuntimePromptResolutionRequest(
+            requestID: try requestID(from: payload),
+            kind: .certificate,
+            accepted: try requiredBoolean(key: "accepted", from: payload),
+            result: nil,
+            userInput: nil,
+            username: nil,
+            password: nil
+        )
+    }
+
+    private static func requestID(from payload: [String: String]) throws -> String {
+        try requiredString(key: "requestID", from: payload)
+    }
+
+    private static func requiredString(key: String, from payload: [String: String]) throws -> String {
+        guard let value = payload[key]?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            throw BrowserExternalCommandError.invalidRequest("The \(key) payload is required.")
+        }
+        return value
+    }
+
+    private static func requiredBoolean(key: String, from payload: [String: String]) throws -> Bool {
+        let value = try requiredString(key: key, from: payload).lowercased()
+        switch value {
+        case "true":
+            return true
+        case "false":
+            return false
+        default:
+            throw BrowserExternalCommandError.invalidRequest("The \(key) payload must be true or false.")
+        }
+    }
+}
+
+struct BrowserExternalRuntimeResolutionAck: Hashable, Codable {
+    let requestID: String
+    let kind: BrowserRuntimePromptResolutionKind
+    let resolved: Bool
 }
 
 struct BrowserExternalPageCloseResult: Hashable, Codable {

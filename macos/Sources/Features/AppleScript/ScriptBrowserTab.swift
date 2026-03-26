@@ -980,6 +980,60 @@ extension ScriptBrowserTab {
         }
     }
 
+    private static func routeExternalRuntimePromptResolutionCommand(
+        _ request: BrowserExternalCommandRequest,
+        command: BrowserControlCommandKind
+    ) -> BrowserExternalCommandResponse {
+        let target: ResolvedExternalPageTarget
+        switch resolvePageTarget(for: request) {
+        case let .success(resolved):
+            target = resolved
+        case let .failure(error):
+            return .failure(for: request, error: error)
+        }
+
+        let resolutionRequest: BrowserRuntimePromptResolutionRequest
+        do {
+            resolutionRequest = try BrowserRuntimePromptResolutionRequest.from(
+                command: request.command,
+                payload: request.payload
+            )
+        } catch let error as BrowserExternalCommandError {
+            return .failure(for: request, error: error)
+        } catch {
+            return .failure(for: request, error: .invalidRequest("The runtime prompt resolution payload is invalid."))
+        }
+
+        switch target.browserTab.runExternalDOMCommand(
+            command,
+            payload: resolutionRequest.controlPayload,
+            pageID: target.page.id,
+            frameName: target.frameName,
+            timeoutMS: nil
+        ) {
+        case .success:
+            do {
+                return .success(
+                    for: request,
+                    resultJSON: try jsonString(
+                        from: BrowserExternalRuntimeResolutionAck(
+                            requestID: resolutionRequest.requestID,
+                            kind: resolutionRequest.kind,
+                            resolved: true
+                        )
+                    )
+                )
+            } catch {
+                return .failure(
+                    for: request,
+                    error: .internalFailure("The runtime prompt resolution acknowledgment could not be serialized as JSON.")
+                )
+            }
+        case let .failure(error):
+            return .failure(for: request, error: error.externalCommandError)
+        }
+    }
+
     private static func resolvePageTarget(
         for request: BrowserExternalCommandRequest
     ) -> Result<ResolvedExternalPageTarget, BrowserExternalCommandError> {
@@ -1570,6 +1624,14 @@ extension ScriptBrowserTab {
             case let response:
                 return response
             }
+        case .resolveDialog:
+            return routeExternalRuntimePromptResolutionCommand(request, command: .resolveDialog)
+        case .resolvePermission:
+            return routeExternalRuntimePromptResolutionCommand(request, command: .resolvePermission)
+        case .resolveAuth:
+            return routeExternalRuntimePromptResolutionCommand(request, command: .resolveAuth)
+        case .resolveCertificate:
+            return routeExternalRuntimePromptResolutionCommand(request, command: .resolveCertificate)
         case .getCookies:
             let target: ResolvedExternalPageTarget
             switch resolvePageTarget(for: request) {

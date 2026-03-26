@@ -19,6 +19,7 @@ typedef NS_ENUM(NSInteger, GhoDexCEFControlErrorCode) {
     GhoDexCEFControlErrorCodeBridgeUnavailable = 1,
     GhoDexCEFControlErrorCodeEvaluationUnavailable = 2,
     GhoDexCEFControlErrorCodeEvaluationFailed = 3,
+    GhoDexCEFControlErrorCodeRuntimePromptUnavailable = 4,
 };
 
 typedef void (^GhoDexCEFJavaScriptEvaluationCompletion)(NSString * _Nullable resultJSON, NSError * _Nullable error);
@@ -40,6 +41,21 @@ typedef void (^GhoDexCEFJavaScriptEvaluationCompletion)(NSString * _Nullable res
 - (BOOL)performTrustedClickAtX:(double)x
                              y:(double)y
                           error:(NSError * _Nullable * _Nullable)error;
+- (BOOL)resolveDialogRequestID:(NSString *)requestID
+                      accepted:(BOOL)accepted
+                     userInput:(NSString * _Nullable)userInput
+                         error:(NSError * _Nullable * _Nullable)error;
+- (BOOL)resolvePermissionRequestID:(NSString *)requestID
+                            result:(NSString *)result
+                             error:(NSError * _Nullable * _Nullable)error;
+- (BOOL)resolveAuthRequestID:(NSString *)requestID
+                    accepted:(BOOL)accepted
+                    username:(NSString * _Nullable)username
+                    password:(NSString * _Nullable)password
+                       error:(NSError * _Nullable * _Nullable)error;
+- (BOOL)resolveCertificateRequestID:(NSString *)requestID
+                           accepted:(BOOL)accepted
+                              error:(NSError * _Nullable * _Nullable)error;
 @end
 
 @protocol GhoDexCEFViewDelegate <NSObject>

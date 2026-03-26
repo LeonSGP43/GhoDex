@@ -590,6 +590,7 @@ Payload keys:
 
 - `pageID`
 - `documentRevision`
+- `requestID`
 - `phase` as `requested` or `resolved`
 - `dialogType` as `alert`, `confirm`, `prompt`, or `beforeUnload`
 - `originURL` when available
@@ -608,6 +609,7 @@ Payload keys:
 
 - `pageID`
 - `documentRevision`
+- `requestID`
 - `phase` as `requested` or `resolved`
 - `permissionKind` as `media` or `generic`
 - `originURL`
@@ -625,6 +627,7 @@ Payload keys:
 
 - `pageID`
 - `documentRevision`
+- `requestID`
 - `phase` as `requested` or `resolved`
 - `originURL`
 - `host`
@@ -643,10 +646,61 @@ Payload keys:
 
 - `pageID`
 - `documentRevision`
+- `requestID`
 - `phase` as `requested` or `resolved`
 - `requestURL`
 - `errorCode`
 - `accepted` on resolved events
+
+## Runtime Prompt Resolve Commands
+
+The external Browser control plane can resolve paused runtime prompts through
+typed commands keyed by the event `requestID`.
+
+### `resolveDialog`
+
+Resolve a previously emitted `javaScriptDialog` event.
+
+Payload keys:
+
+- `requestID`
+- `accepted` as `true` or `false`
+- `userInput` for accepted prompt dialogs
+
+### `resolvePermission`
+
+Resolve a previously emitted `permissionRequest` event.
+
+Payload keys:
+
+- `requestID`
+- `result` as `allow`, `deny`, or `dismiss`
+
+### `resolveAuth`
+
+Resolve a previously emitted `authenticationRequest` event.
+
+Payload keys:
+
+- `requestID`
+- `accepted` as `true` or `false`
+- `username` when `accepted=true`
+- `password` when `accepted=true`
+
+### `resolveCertificate`
+
+Resolve a previously emitted `certificateWarning` event.
+
+Payload keys:
+
+- `requestID`
+- `accepted` as `true` or `false`
+
+All four commands return a result with:
+
+- `requestID`
+- `kind`
+- `resolved`
 
 ### `popupRequest` Payload
 

@@ -247,6 +247,42 @@ Acceptance:
 - the acceptance matrix no longer treats these handler surfaces as "implemented
   but externally invisible"
 
+### 3.6 Runtime Prompt Resolution Control
+
+Problem:
+Observability alone is not enough for real automation. JS dialogs, permission
+prompts, HTTP auth challenges, and certificate warnings still resolve only
+through native AppKit UI, which means the external Browser control plane can
+see the pause but cannot continue it. That keeps OAuth, login, and certificate
+triage flows partially manual even though the runtime already has typed
+handlers.
+
+Deliverables:
+
+- add external commands for:
+  - `resolveDialog`
+  - `resolvePermission`
+  - `resolveAuth`
+  - `resolveCertificate`
+- assign a stable `requestID` to each externally visible runtime prompt event
+- route resolve commands to the actual paused CEF callback rather than DOM
+  scripting or synthetic UI clicks
+- preserve normal browser usability by allowing native fallback UI when no
+  external resolution arrives within a short grace window
+- add unit coverage for request parsing, payload shape, and event contract
+
+Acceptance:
+
+- requested runtime prompt events expose a stable `requestID`
+- a matching resolve command can complete the paused CEF handler through IPC and
+  AppleScript entrypoints
+- invalid or stale `requestID` values fail as typed control errors instead of
+  silently no-oping
+- unresolved prompts still remain usable through native browser UI after the
+  external grace window expires
+- teardown clears pending prompt state without leaking callbacks into later page
+  lifecycles
+
 ### 4. Popup And Open-Window Observability
 
 Problem:
@@ -309,6 +345,8 @@ Exit:
 - run or record every high-value browser-service path
 - finish the acceptance matrix and evidence set before starting popup broker
   closure
+- close runtime prompt resolve control before claiming handler-surface
+  completeness for the interactive prompt subset
 
 Exit:
 
