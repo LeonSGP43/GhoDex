@@ -19,6 +19,8 @@ struct ControlHarnessRequest: Codable {
     let requestID: String
     let protocolVersion: String?
     let authToken: String?
+    let transportMode: String?
+    let encryptedPayload: String?
     let command: String
     let date: String?
     let tabID: String?
@@ -37,6 +39,8 @@ struct ControlHarnessRequest: Codable {
     let workspaceID: String?
     let includeCompleted: Bool?
     let client: String?
+    let deviceID: String?
+    let deviceLabel: String?
     let idempotencyKey: String?
     let expectedGeneration: Int?
     let sinceSequence: Int64?
@@ -54,6 +58,8 @@ struct ControlHarnessRequest: Codable {
         case requestID = "request_id"
         case protocolVersion = "protocol_version"
         case authToken = "auth_token"
+        case transportMode = "transport_mode"
+        case encryptedPayload = "encrypted_payload"
         case command
         case date
         case tabID = "tab_id"
@@ -72,6 +78,8 @@ struct ControlHarnessRequest: Codable {
         case workspaceID = "workspace_id"
         case includeCompleted = "include_completed"
         case client
+        case deviceID = "device_id"
+        case deviceLabel = "device_label"
         case idempotencyKey = "idempotency_key"
         case expectedGeneration = "expected_generation"
         case sinceSequence = "since_sequence"
@@ -90,6 +98,8 @@ struct ControlHarnessRequest: Codable {
         requestID: String,
         protocolVersion: String?,
         authToken: String? = nil,
+        transportMode: String? = nil,
+        encryptedPayload: String? = nil,
         command: String,
         date: String? = nil,
         tabID: String?,
@@ -108,6 +118,8 @@ struct ControlHarnessRequest: Codable {
         workspaceID: String? = nil,
         includeCompleted: Bool? = nil,
         client: String?,
+        deviceID: String? = nil,
+        deviceLabel: String? = nil,
         idempotencyKey: String?,
         expectedGeneration: Int?,
         sinceSequence: Int64?,
@@ -124,6 +136,8 @@ struct ControlHarnessRequest: Codable {
         self.requestID = requestID
         self.protocolVersion = protocolVersion
         self.authToken = authToken
+        self.transportMode = transportMode
+        self.encryptedPayload = encryptedPayload
         self.command = command
         self.date = date
         self.tabID = tabID
@@ -142,6 +156,8 @@ struct ControlHarnessRequest: Codable {
         self.workspaceID = workspaceID
         self.includeCompleted = includeCompleted
         self.client = client
+        self.deviceID = deviceID
+        self.deviceLabel = deviceLabel
         self.idempotencyKey = idempotencyKey
         self.expectedGeneration = expectedGeneration
         self.sinceSequence = sinceSequence
@@ -1442,6 +1458,9 @@ final class ControlHarnessCore {
             maxLines: request.maxLines,
             maxChars: request.maxChars
         )
+        let changedRows = mode == "delta"
+            ? delta.changedRows
+            : Self.applyChangedRowBudget(delta.changedRows, maxLines: request.maxLines)
 
         let responseContent: String
         let contentKind: String
@@ -1491,7 +1510,7 @@ final class ControlHarnessCore {
             hasChanges: delta.hasChanges,
             deltaKind: delta.kind,
             deltaText: delta.text.isEmpty ? nil : Self.applyTextBudget(delta.text, maxChars: request.maxChars),
-            changedRows: Self.applyChangedRowBudget(delta.changedRows, maxLines: request.maxLines),
+            changedRows: changedRows,
             totalLines: window.totalLines,
             returnedLines: window.returnedLines,
             truncated: mode == "snapshot" ? window.truncated : false,

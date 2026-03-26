@@ -24,6 +24,12 @@ struct ControlHarnessTokenIssueResult: Encodable, Sendable {
     let tokenID: String
     let client: String
     let scopes: [String]
+    let desktopID: String
+    let desktopLabel: String
+    let preferredDesktopID: String
+    let transportMode: String
+    let publicEndpoint: String?
+    let transportSharedSecret: String?
     let issuedAt: String
     let expiresAt: String
 
@@ -32,6 +38,12 @@ struct ControlHarnessTokenIssueResult: Encodable, Sendable {
         case tokenID = "token_id"
         case client
         case scopes
+        case desktopID = "desktop_id"
+        case desktopLabel = "desktop_label"
+        case preferredDesktopID = "preferred_desktop_id"
+        case transportMode = "transport_mode"
+        case publicEndpoint = "public_endpoint"
+        case transportSharedSecret = "transport_shared_secret"
         case issuedAt = "issued_at"
         case expiresAt = "expires_at"
     }
@@ -41,6 +53,10 @@ struct ControlHarnessTokenStatusResult: Encodable, Sendable {
     let tokenID: String
     let client: String
     let scopes: [String]
+    let desktopID: String
+    let desktopLabel: String
+    let preferredDesktopID: String
+    let transportMode: String
     let issuedAt: String
     let expiresAt: String
     let revokedAt: String?
@@ -49,10 +65,23 @@ struct ControlHarnessTokenStatusResult: Encodable, Sendable {
         case tokenID = "token_id"
         case client
         case scopes
+        case desktopID = "desktop_id"
+        case desktopLabel = "desktop_label"
+        case preferredDesktopID = "preferred_desktop_id"
+        case transportMode = "transport_mode"
         case issuedAt = "issued_at"
         case expiresAt = "expires_at"
         case revokedAt = "revoked_at"
     }
+}
+
+struct ControlHarnessRegisteredDeviceResult: Sendable {
+    let deviceID: String
+    let displayLabel: String
+    let trustState: String
+    let lastSeenAt: String?
+    let transportMode: String
+    let capabilityFlags: [String]
 }
 
 actor ControlHarnessAuth {
@@ -99,13 +128,21 @@ actor ControlHarnessAuth {
         let subjectID: String
         let pairingCode: String
         let client: String
+        let deviceLabel: String
         let scopes: Set<ControlHarnessAuthScope>
         let createdAt: Date
         let expiresAt: Date
     }
 
     private struct PersistedState: Codable {
+        var desktopIdentity: StoredDesktopIdentity?
         var tokens: [StoredToken]
+        var devices: [StoredDevice]?
+    }
+
+    private struct StoredDesktopIdentity: Codable, Sendable {
+        var desktopID: String
+        var desktopLabel: String
     }
 
     private struct StoredToken: Codable, Sendable {
@@ -113,10 +150,73 @@ actor ControlHarnessAuth {
         var token: String
         var tokenID: String
         var client: String
+        var transportSharedSecret: String
         var scopes: [ControlHarnessAuthScope]
         var issuedAt: Date
         var expiresAt: Date
         var revokedAt: Date?
+
+        enum CodingKeys: String, CodingKey {
+            case subjectID
+            case token
+            case tokenID
+            case client
+            case transportSharedSecret
+            case scopes
+            case issuedAt
+            case expiresAt
+            case revokedAt
+        }
+
+        init(
+            subjectID: String,
+            token: String,
+            tokenID: String,
+            client: String,
+            transportSharedSecret: String,
+            scopes: [ControlHarnessAuthScope],
+            issuedAt: Date,
+            expiresAt: Date,
+            revokedAt: Date?
+        ) {
+            self.subjectID = subjectID
+            self.token = token
+            self.tokenID = tokenID
+            self.client = client
+            self.transportSharedSecret = transportSharedSecret
+            self.scopes = scopes
+            self.issuedAt = issuedAt
+            self.expiresAt = expiresAt
+            self.revokedAt = revokedAt
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            subjectID = try container.decode(String.self, forKey: .subjectID)
+            token = try container.decode(String.self, forKey: .token)
+            tokenID = try container.decode(String.self, forKey: .tokenID)
+            client = try container.decode(String.self, forKey: .client)
+            transportSharedSecret = try container.decodeIfPresent(String.self, forKey: .transportSharedSecret)
+                ?? ControlHarnessGatewaySecureChannel.makeTransportSharedSecret()
+            scopes = try container.decode([ControlHarnessAuthScope].self, forKey: .scopes)
+            issuedAt = try container.decode(Date.self, forKey: .issuedAt)
+            expiresAt = try container.decode(Date.self, forKey: .expiresAt)
+            revokedAt = try container.decodeIfPresent(Date.self, forKey: .revokedAt)
+        }
+    }
+
+    private enum StoredDeviceTrustState: String, Codable, Sendable {
+        case trusted
+        case revoked
+    }
+
+    private struct StoredDevice: Codable, Sendable {
+        var deviceID: String
+        var displayLabel: String
+        var trustState: StoredDeviceTrustState
+        var lastSeenAt: Date?
+        var transportMode: String
+        var capabilityFlags: [String]
     }
 
     private let storageURL: URL
@@ -125,6 +225,8 @@ actor ControlHarnessAuth {
 
     private var pairingRecords: [String: PairingRecord] = [:]
     private var tokensByValue: [String: StoredToken] = [:]
+    private var desktopIdentity: StoredDesktopIdentity
+    private var devicesByID: [String: StoredDevice] = [:]
 
     init(
         storageURL: URL,
@@ -134,25 +236,30 @@ actor ControlHarnessAuth {
         self.storageURL = storageURL
         self.configuration = configuration
         self.now = now
+        self.desktopIdentity = Self.makeDefaultDesktopIdentity()
         loadPersistedState()
     }
 
     func beginPairing(
         client: String?,
-        requestedScopes: [String]?
+        requestedScopes: [String]?,
+        deviceID: String? = nil,
+        deviceLabel: String? = nil
     ) throws -> ControlHarnessPairingBeginResult {
         pruneExpiredState(referenceDate: now())
 
         let pairingCode = Self.makeTokenString()
-        let subjectID = UUID().uuidString.lowercased()
         let normalizedClient = Self.normalizedClientName(client)
+        let normalizedDeviceID = Self.normalizedDeviceID(deviceID) ?? UUID().uuidString.lowercased()
+        let normalizedDeviceLabel = Self.normalizedDeviceLabel(deviceLabel) ?? normalizedClient
         let scopes = try Self.normalizeScopes(requestedScopes)
         let createdAt = now()
         let expiresAt = createdAt.addingTimeInterval(configuration.pairingCodeTTLSeconds)
         pairingRecords[pairingCode] = PairingRecord(
-            subjectID: subjectID,
+            subjectID: normalizedDeviceID,
             pairingCode: pairingCode,
             client: normalizedClient,
+            deviceLabel: normalizedDeviceLabel,
             scopes: scopes,
             createdAt: createdAt,
             expiresAt: expiresAt
@@ -181,7 +288,8 @@ actor ControlHarnessAuth {
             subjectID: record.subjectID,
             client: record.client,
             scopes: record.scopes,
-            issuedAt: currentTime
+            issuedAt: currentTime,
+            deviceDisplayLabel: record.deviceLabel
         )
         try persist()
         return issued
@@ -209,6 +317,12 @@ actor ControlHarnessAuth {
         guard stored.revokedAt == nil, stored.expiresAt > currentTime else {
             tokensByValue.removeValue(forKey: token)
             try? persist()
+            return .deny(
+                errorCode: "unauthorized",
+                errorMessage: "The gateway auth token is invalid, expired, or revoked"
+            )
+        }
+        if devicesByID[stored.subjectID]?.trustState == .revoked {
             return .deny(
                 errorCode: "unauthorized",
                 errorMessage: "The gateway auth token is invalid, expired, or revoked"
@@ -253,7 +367,8 @@ actor ControlHarnessAuth {
             subjectID: stored.subjectID,
             client: stored.client,
             scopes: Set(stored.scopes),
-            issuedAt: currentTime
+            issuedAt: currentTime,
+            deviceDisplayLabel: devicesByID[stored.subjectID]?.displayLabel ?? stored.client
         )
         try persist()
         return issued
@@ -275,7 +390,7 @@ actor ControlHarnessAuth {
         stored.revokedAt = currentTime
         tokensByValue[token] = stored
         try persist()
-        return Self.tokenStatus(from: stored)
+        return tokenStatus(from: stored)
     }
 
     func tokenStatus(for token: String) throws -> ControlHarnessTokenStatusResult {
@@ -290,23 +405,101 @@ actor ControlHarnessAuth {
             try? persist()
             throw ControlHarnessAuthError.invalidToken
         }
-        return Self.tokenStatus(from: stored)
+        return tokenStatus(from: stored)
+    }
+
+    func transportSharedSecret(for token: String) throws -> String {
+        let currentTime = now()
+        pruneExpiredState(referenceDate: currentTime)
+
+        guard let stored = tokensByValue[token] else {
+            throw ControlHarnessAuthError.invalidToken
+        }
+        guard stored.revokedAt == nil, stored.expiresAt > currentTime else {
+            tokensByValue.removeValue(forKey: token)
+            try? persist()
+            throw ControlHarnessAuthError.invalidToken
+        }
+        return stored.transportSharedSecret
+    }
+
+    func listDevices() -> [ControlHarnessRegisteredDeviceResult] {
+        pruneExpiredState(referenceDate: now())
+        return devicesByID.values
+            .sorted(by: { lhs, rhs in
+                if lhs.displayLabel == rhs.displayLabel {
+                    return lhs.deviceID < rhs.deviceID
+                }
+                return lhs.displayLabel.localizedCaseInsensitiveCompare(rhs.displayLabel) == .orderedAscending
+            })
+            .map(Self.registeredDeviceResult(from:))
+    }
+
+    func revokeDevice(deviceID: String) throws -> ControlHarnessRegisteredDeviceResult {
+        guard let normalizedDeviceID = Self.normalizedDeviceID(deviceID),
+              var device = devicesByID[normalizedDeviceID] else {
+            throw ControlHarnessAuthError.deviceNotFound
+        }
+
+        let currentTime = now()
+        device.trustState = .revoked
+        devicesByID[normalizedDeviceID] = device
+
+        for (tokenValue, var token) in tokensByValue where token.subjectID == normalizedDeviceID && token.revokedAt == nil {
+            token.revokedAt = currentTime
+            tokensByValue[tokenValue] = token
+        }
+
+        try persist()
+        return Self.registeredDeviceResult(from: device)
+    }
+
+    func recordDeviceActivity(token: String, transportMode: String?) throws {
+        let currentTime = now()
+        pruneExpiredState(referenceDate: currentTime)
+
+        guard let stored = tokensByValue[token],
+              stored.revokedAt == nil,
+              stored.expiresAt > currentTime else {
+            throw ControlHarnessAuthError.invalidToken
+        }
+
+        ensureDeviceExists(
+            deviceID: stored.subjectID,
+            displayLabel: devicesByID[stored.subjectID]?.displayLabel ?? stored.client,
+            trustState: .trusted,
+            lastSeenAt: currentTime,
+            transportMode: Self.sanitizeTransportMode(transportMode),
+            capabilityFlags: devicesByID[stored.subjectID]?.capabilityFlags ?? []
+        )
+        try persist()
     }
 
     private func issueToken(
         subjectID: String,
         client: String,
         scopes: Set<ControlHarnessAuthScope>,
-        issuedAt: Date
+        issuedAt: Date,
+        deviceDisplayLabel: String
     ) throws -> ControlHarnessTokenIssueResult {
         let token = Self.makeTokenString()
         let tokenID = UUID().uuidString.lowercased()
         let expiresAt = issuedAt.addingTimeInterval(configuration.tokenTTLSeconds)
+        let transportSharedSecret = try ControlHarnessGatewaySecureChannel.makeTransportSharedSecret()
+        ensureDeviceExists(
+            deviceID: subjectID,
+            displayLabel: deviceDisplayLabel,
+            trustState: .trusted,
+            lastSeenAt: issuedAt,
+            transportMode: "lan",
+            capabilityFlags: devicesByID[subjectID]?.capabilityFlags ?? []
+        )
         let stored = StoredToken(
             subjectID: subjectID,
             token: token,
             tokenID: tokenID,
             client: client,
+            transportSharedSecret: transportSharedSecret,
             scopes: Array(scopes).sorted(by: { $0.rawValue < $1.rawValue }),
             issuedAt: issuedAt,
             expiresAt: expiresAt,
@@ -318,6 +511,12 @@ actor ControlHarnessAuth {
             tokenID: tokenID,
             client: client,
             scopes: Self.sortedScopeStrings(scopes),
+            desktopID: desktopIdentity.desktopID,
+            desktopLabel: desktopIdentity.desktopLabel,
+            preferredDesktopID: desktopIdentity.desktopID,
+            transportMode: "lan",
+            publicEndpoint: nil,
+            transportSharedSecret: transportSharedSecret,
             issuedAt: Self.iso8601(issuedAt),
             expiresAt: Self.iso8601(expiresAt)
         )
@@ -326,7 +525,16 @@ actor ControlHarnessAuth {
     private func loadPersistedState() {
         guard let data = try? Data(contentsOf: storageURL) else { return }
         guard let state = try? JSONDecoder().decode(PersistedState.self, from: data) else { return }
+        if let restoredIdentity = state.desktopIdentity,
+           restoredIdentity.desktopID.isEmpty == false,
+           restoredIdentity.desktopLabel.isEmpty == false {
+            desktopIdentity = restoredIdentity
+        }
         tokensByValue = Dictionary(uniqueKeysWithValues: state.tokens.map { ($0.token, $0) })
+        devicesByID = Dictionary(
+            uniqueKeysWithValues: (state.devices ?? []).map { ($0.deviceID, $0) }
+        )
+        backfillDevicesFromTokens()
         pruneExpiredState(referenceDate: now())
     }
 
@@ -340,7 +548,11 @@ actor ControlHarnessAuth {
             attributes: nil
         )
 
-        let state = PersistedState(tokens: tokensByValue.values.sorted(by: { $0.tokenID < $1.tokenID }))
+        let state = PersistedState(
+            desktopIdentity: desktopIdentity,
+            tokens: tokensByValue.values.sorted(by: { $0.tokenID < $1.tokenID }),
+            devices: devicesByID.values.sorted(by: { $0.deviceID < $1.deviceID })
+        )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(state)
@@ -360,6 +572,7 @@ actor ControlHarnessAuth {
             }
             return true
         }
+        backfillDevicesFromTokens()
     }
 
     private static func normalizedClientName(_ client: String?) -> String {
@@ -368,6 +581,18 @@ actor ControlHarnessAuth {
             return trimmed
         }
         return "paired-client"
+    }
+
+    private static func normalizedDeviceID(_ rawValue: String?) -> String? {
+        guard let rawValue else { return nil }
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func normalizedDeviceLabel(_ rawValue: String?) -> String? {
+        guard let rawValue else { return nil }
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private static func normalizeScopes(_ requestedScopes: [String]?) throws -> Set<ControlHarnessAuthScope> {
@@ -390,15 +615,52 @@ actor ControlHarnessAuth {
         return scopes
     }
 
-    private static func tokenStatus(from stored: StoredToken) -> ControlHarnessTokenStatusResult {
+    private func tokenStatus(from stored: StoredToken) -> ControlHarnessTokenStatusResult {
         ControlHarnessTokenStatusResult(
             tokenID: stored.tokenID,
             client: stored.client,
-            scopes: sortedScopeStrings(Set(stored.scopes)),
-            issuedAt: iso8601(stored.issuedAt),
-            expiresAt: iso8601(stored.expiresAt),
-            revokedAt: stored.revokedAt.map(iso8601)
+            scopes: Self.sortedScopeStrings(Set(stored.scopes)),
+            desktopID: desktopIdentity.desktopID,
+            desktopLabel: desktopIdentity.desktopLabel,
+            preferredDesktopID: desktopIdentity.desktopID,
+            transportMode: "lan",
+            issuedAt: Self.iso8601(stored.issuedAt),
+            expiresAt: Self.iso8601(stored.expiresAt),
+            revokedAt: stored.revokedAt.map(Self.iso8601)
         )
+    }
+
+    private func ensureDeviceExists(
+        deviceID: String,
+        displayLabel: String,
+        trustState: StoredDeviceTrustState,
+        lastSeenAt: Date?,
+        transportMode: String,
+        capabilityFlags: [String]
+    ) {
+        let existing = devicesByID[deviceID]
+        let normalizedLabel = Self.normalizedDeviceLabel(displayLabel) ?? existing?.displayLabel ?? "Unknown device"
+        devicesByID[deviceID] = StoredDevice(
+            deviceID: deviceID,
+            displayLabel: normalizedLabel,
+            trustState: trustState,
+            lastSeenAt: lastSeenAt ?? existing?.lastSeenAt,
+            transportMode: Self.sanitizeTransportMode(transportMode),
+            capabilityFlags: capabilityFlags
+        )
+    }
+
+    private func backfillDevicesFromTokens() {
+        for token in tokensByValue.values {
+            ensureDeviceExists(
+                deviceID: token.subjectID,
+                displayLabel: devicesByID[token.subjectID]?.displayLabel ?? token.client,
+                trustState: devicesByID[token.subjectID]?.trustState ?? .trusted,
+                lastSeenAt: devicesByID[token.subjectID]?.lastSeenAt ?? token.issuedAt,
+                transportMode: devicesByID[token.subjectID]?.transportMode ?? "lan",
+                capabilityFlags: devicesByID[token.subjectID]?.capabilityFlags ?? []
+            )
+        }
     }
 
     private static func sortedScopeStrings(_ scopes: Set<ControlHarnessAuthScope>) -> [String] {
@@ -409,6 +671,32 @@ actor ControlHarnessAuth {
         let first = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         let second = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         return "\(first)\(second)"
+    }
+
+    private static func makeDefaultDesktopIdentity() -> StoredDesktopIdentity {
+        let desktopLabel = Host.current().localizedName?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedLabel = (desktopLabel?.isEmpty == false ? desktopLabel! : ProcessInfo.processInfo.hostName)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return StoredDesktopIdentity(
+            desktopID: UUID().uuidString.lowercased(),
+            desktopLabel: resolvedLabel.isEmpty ? "GhoDex Desktop" : resolvedLabel
+        )
+    }
+
+    private static func sanitizeTransportMode(_ rawValue: String?) -> String {
+        rawValue == "relay" ? "relay" : "lan"
+    }
+
+    private static func registeredDeviceResult(from stored: StoredDevice) -> ControlHarnessRegisteredDeviceResult {
+        ControlHarnessRegisteredDeviceResult(
+            deviceID: stored.deviceID,
+            displayLabel: stored.displayLabel,
+            trustState: stored.trustState.rawValue,
+            lastSeenAt: stored.lastSeenAt.map(Self.iso8601),
+            transportMode: sanitizeTransportMode(stored.transportMode),
+            capabilityFlags: stored.capabilityFlags
+        )
     }
 
     private static func iso8601(_ date: Date) -> String {
@@ -423,6 +711,7 @@ enum ControlHarnessAuthError: LocalizedError {
     case expiredPairingCode
     case invalidScope(String)
     case invalidToken
+    case deviceNotFound
 
     var errorDescription: String? {
         switch self {
@@ -434,6 +723,8 @@ enum ControlHarnessAuthError: LocalizedError {
             return "Unsupported auth scope: \(scope)"
         case .invalidToken:
             return "The gateway auth token is invalid, expired, or revoked"
+        case .deviceNotFound:
+            return "The requested device is not registered"
         }
     }
 }

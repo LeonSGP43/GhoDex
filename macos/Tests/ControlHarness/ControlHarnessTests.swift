@@ -135,12 +135,24 @@ private struct ControlHarnessTokenIssuePayload: Decodable {
     let tokenID: String
     let client: String
     let scopes: [String]
+    let desktopID: String
+    let desktopLabel: String
+    let preferredDesktopID: String
+    let transportMode: String
+    let publicEndpoint: String?
+    let transportSharedSecret: String?
 
     enum CodingKeys: String, CodingKey {
         case token
         case tokenID = "token_id"
         case client
         case scopes
+        case desktopID = "desktop_id"
+        case desktopLabel = "desktop_label"
+        case preferredDesktopID = "preferred_desktop_id"
+        case transportMode = "transport_mode"
+        case publicEndpoint = "public_endpoint"
+        case transportSharedSecret = "transport_shared_secret"
     }
 }
 
@@ -149,13 +161,55 @@ private struct ControlHarnessTokenStatusPayload: Decodable {
     let client: String
     let scopes: [String]
     let revokedAt: String?
+    let desktopID: String
+    let desktopLabel: String
+    let preferredDesktopID: String
+    let transportMode: String
 
     enum CodingKeys: String, CodingKey {
         case tokenID = "token_id"
         case client
         case scopes
         case revokedAt = "revoked_at"
+        case desktopID = "desktop_id"
+        case desktopLabel = "desktop_label"
+        case preferredDesktopID = "preferred_desktop_id"
+        case transportMode = "transport_mode"
     }
+}
+
+private struct ControlHarnessSecureEnvelopePayload: Codable, Equatable {
+    let requestID: String
+    let status: String
+
+    enum CodingKeys: String, CodingKey {
+        case requestID = "request_id"
+        case status
+    }
+}
+
+private struct ControlHarnessDeviceRegistryPayload: Decodable, Equatable {
+    let deviceID: String
+    let displayLabel: String
+    let trustState: String
+    let lastSeenAt: String?
+    let currentConnectionState: String
+    let transportMode: String
+    let capabilityFlags: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case deviceID = "device_id"
+        case displayLabel = "display_label"
+        case trustState = "trust_state"
+        case lastSeenAt = "last_seen_at"
+        case currentConnectionState = "current_connection_state"
+        case transportMode = "transport_mode"
+        case capabilityFlags = "capability_flags"
+    }
+}
+
+private struct ControlHarnessDeviceRegistryListPayload: Decodable {
+    let devices: [ControlHarnessDeviceRegistryPayload]
 }
 
 private enum ControlHarnessSocketSupport {
@@ -710,6 +764,146 @@ struct ControlHarnessTests {
         } catch {
             #expect(error.localizedDescription.contains("expired"))
         }
+    }
+
+    @Test func authPairingExchangeReturnsStableDesktopIdentity() async throws {
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let storageURL = tempDirectory.appendingPathComponent("auth.json", isDirectory: false)
+        let auth = ControlHarnessAuth(
+            storageURL: storageURL,
+            configuration: .init(pairingCodeTTLSeconds: 5, tokenTTLSeconds: 60)
+        )
+
+        let pairing = try await auth.beginPairing(
+            client: "android-identity",
+            requestedScopes: ["observe"]
+        )
+        let issued = try await auth.exchangePairingCode(pairing.pairingCode)
+        let status = try await auth.tokenStatus(for: issued.token)
+
+        #expect(issued.desktopID.isEmpty == false)
+        #expect(issued.desktopLabel.isEmpty == false)
+        #expect(issued.preferredDesktopID == issued.desktopID)
+        #expect(issued.transportMode == "lan")
+
+        #expect(status.desktopID == issued.desktopID)
+        #expect(status.desktopLabel == issued.desktopLabel)
+        #expect(status.preferredDesktopID == issued.preferredDesktopID)
+        #expect(status.transportMode == issued.transportMode)
+    }
+
+    @Test func authRestoresDesktopIdentityAcrossReload() async throws {
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let storageURL = tempDirectory.appendingPathComponent("auth.json", isDirectory: false)
+        let clock = MutableClock(Date(timeIntervalSince1970: 1_710_000_000))
+        let auth = ControlHarnessAuth(
+            storageURL: storageURL,
+            configuration: .init(pairingCodeTTLSeconds: 5, tokenTTLSeconds: 60),
+            now: { clock.now() }
+        )
+
+        let pairing = try await auth.beginPairing(
+            client: "android-reload",
+            requestedScopes: ["mutate"]
+        )
+        let issued = try await auth.exchangePairingCode(pairing.pairingCode)
+
+        let restored = ControlHarnessAuth(
+            storageURL: storageURL,
+            configuration: .init(pairingCodeTTLSeconds: 5, tokenTTLSeconds: 60),
+            now: { clock.now() }
+        )
+        let restoredStatus = try await restored.tokenStatus(for: issued.token)
+
+        #expect(restoredStatus.desktopID == issued.desktopID)
+        #expect(restoredStatus.desktopLabel == issued.desktopLabel)
+        #expect(restoredStatus.preferredDesktopID == issued.preferredDesktopID)
+        #expect(restoredStatus.transportMode == "lan")
+    }
+
+    @Test func gatewaySecureChannelRoundTripsEncryptedRequest() throws {
+        let request = ControlHarnessRequest(
+            requestID: "public-req-1",
+            protocolVersion: nil,
+            authToken: "token-1",
+            command: "snapshot",
+            date: nil,
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            todoID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            notes: nil,
+            environment: nil,
+            force: nil,
+            completed: nil,
+            workspaceID: nil,
+            includeCompleted: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            pairingCode: nil,
+            requestedScopes: nil
+        )
+        let sharedSecret = try ControlHarnessGatewaySecureChannel.makeTransportSharedSecret()
+
+        let encrypted = try ControlHarnessGatewaySecureChannel.encryptRequest(
+            request,
+            authToken: "token-1",
+            transportSharedSecret: sharedSecret
+        )
+
+        #expect(encrypted.command == "gateway.encrypted")
+        #expect(encrypted.transportMode == "relay")
+        #expect(encrypted.authToken == "token-1")
+        #expect(encrypted.encryptedPayload.contains("snapshot") == false)
+
+        let decoded = try ControlHarnessGatewaySecureChannel.decryptRequest(
+            encrypted,
+            transportSharedSecret: sharedSecret
+        )
+
+        #expect(decoded.requestID == request.requestID)
+        #expect(decoded.command == request.command)
+        #expect(decoded.authToken == request.authToken)
+    }
+
+    @Test func gatewaySecureChannelRoundTripsEncryptedEnvelope() throws {
+        let payload = ControlHarnessSecureEnvelopePayload(
+            requestID: "public-res-1",
+            status: "ok"
+        )
+        let sharedSecret = try ControlHarnessGatewaySecureChannel.makeTransportSharedSecret()
+
+        let encrypted = try ControlHarnessGatewaySecureChannel.encryptEnvelope(
+            payload,
+            transportSharedSecret: sharedSecret
+        )
+
+        #expect(encrypted.transportMode == "relay")
+        #expect(encrypted.encryptedPayload.contains("public-res-1") == false)
+
+        let decoded = try ControlHarnessGatewaySecureChannel.decryptEnvelope(
+            encrypted,
+            transportSharedSecret: sharedSecret,
+            as: ControlHarnessSecureEnvelopePayload.self
+        )
+
+        #expect(decoded == payload)
     }
 
     @Test func tabCloseConfirmationUsesTabCopyWhenMultipleTabsRemain() {
@@ -1289,6 +1483,218 @@ struct ControlHarnessTests {
                 maxChars: nil
             ).text == "12345678"
         )
+    }
+
+    @Test @MainActor func readTerminalDeltaPreservesCompleteChangedRowsWhenMaxLinesIsSmall() throws {
+        let terminalID = UUID()
+        let surface = RecordingReadableSurface(id: terminalID)
+        surface.visibleReads = [
+            (refresh: true, content: "A\nB\nC\nD", cacheAgeMs: 0),
+            (refresh: true, content: "A\nD", cacheAgeMs: 0),
+        ]
+
+        let (core, _, _) = makeCore(
+            bundleID: "ghdx.tests.read-delta-complete-rows",
+            surfaceResolver: { requestedID in
+                requestedID == terminalID ? surface : nil
+            }
+        )
+
+        let baselineResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-read-delta-baseline",
+                protocolVersion: nil,
+                command: "read-terminal",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: terminalID.uuidString,
+                scope: "visible",
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: "snapshot",
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: 1,
+                cursor: nil,
+                readAfterWriteID: nil
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        )
+
+        let baselineJSON = try responseJSON(baselineResponse)
+        let baselineResult = try #require(baselineJSON["result"] as? [String: Any])
+        let baselineFrameID = try #require(baselineResult["frame_id"] as? String)
+
+        let deltaResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-read-delta-follow-up",
+                protocolVersion: nil,
+                command: "read-terminal",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: terminalID.uuidString,
+                scope: "visible",
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: "delta",
+                sinceFrameID: baselineFrameID,
+                maxChars: nil,
+                maxLines: 1,
+                cursor: nil,
+                readAfterWriteID: nil
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        )
+
+        let deltaJSON = try responseJSON(deltaResponse)
+        let deltaResult = try #require(deltaJSON["result"] as? [String: Any])
+        let changedRows = try #require(deltaResult["changed_rows"] as? [[String: Any]])
+
+        #expect(deltaResult["delta_kind"] as? String == "rows")
+        #expect(changedRows.count == 3)
+        #expect(changedRows.compactMap { $0["kind"] as? String } == ["update", "delete", "delete"])
+    }
+
+    @Test @MainActor func readTerminalDeltaFallsBackToResetWhenSinceFrameWasEvicted() throws {
+        let terminalID = UUID()
+        let surface = RecordingReadableSurface(id: terminalID)
+        surface.visibleReads = [
+            (refresh: true, content: "A", cacheAgeMs: 0),
+            (refresh: true, content: "A\nB", cacheAgeMs: 0),
+            (refresh: true, content: "A\nB\nC", cacheAgeMs: 0),
+        ]
+        let readStore = ControlHarnessTerminalReadStore(
+            maxFramesPerKey: 1,
+            maxTotalFrames: 16,
+            maxTotalContentBytes: 1024 * 1024
+        )
+
+        let (core, _, _) = makeCore(
+            bundleID: "ghdx.tests.read-delta-reset",
+            readStore: readStore,
+            surfaceResolver: { requestedID in
+                requestedID == terminalID ? surface : nil
+            }
+        )
+
+        let firstResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-read-first",
+                protocolVersion: nil,
+                command: "read-terminal",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: terminalID.uuidString,
+                scope: "visible",
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: "snapshot",
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        )
+        let firstJSON = try responseJSON(firstResponse)
+        let firstResult = try #require(firstJSON["result"] as? [String: Any])
+        let firstFrameID = try #require(firstResult["frame_id"] as? String)
+
+        _ = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-read-second",
+                protocolVersion: nil,
+                command: "read-terminal",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: terminalID.uuidString,
+                scope: "visible",
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: "snapshot",
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        )
+
+        let deltaResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-read-third",
+                protocolVersion: nil,
+                command: "read-terminal",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: terminalID.uuidString,
+                scope: "visible",
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: "delta",
+                sinceFrameID: firstFrameID,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        )
+
+        let deltaJSON = try responseJSON(deltaResponse)
+        let deltaResult = try #require(deltaJSON["result"] as? [String: Any])
+
+        #expect(deltaResult["delta_kind"] as? String == "reset")
+        #expect(deltaResult["content"] as? String == "A\nB\nC")
+        #expect(deltaResult["has_changes"] as? Bool == true)
+        #expect((deltaResult["changed_rows"] as? [[String: Any]])?.isEmpty == true)
     }
 
     @Test func readAfterWriteStoreRemoveTerminalClearsPendingEntries() {
@@ -2469,6 +2875,330 @@ struct ControlHarnessTests {
         #expect(revokedSnapshot.status == "error")
         #expect(revokedSnapshot.errorCode == "unauthorized")
         #expect(callCount.value() == 2)
+    }
+
+    @Test func gatewayPairingLifecyclePublishesRelayMetadataWhenPublicEndpointIsConfigured() async throws {
+        let bundleID = "ghdx.tests.gateway-pairing-relay-metadata"
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
+        let gateway = await MainActor.run {
+            ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: 0,
+                    publicEndpoint: "wss://edge.example.test/gateway",
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096
+                ),
+                authManager: ControlHarnessAuth(
+                    storageURL: storageURL,
+                    configuration: .init(pairingCodeTTLSeconds: 60, tokenTTLSeconds: 300)
+                )
+            )
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+        let decoder = JSONDecoder()
+
+        func request(_ payload: String) throws -> Data {
+            let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+            defer { Darwin.close(clientFD) }
+            try ControlHarnessSocketSupport.writeAll(Data(payload.utf8), to: clientFD)
+            guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            return try ControlHarnessSocketSupport.readAll(from: clientFD)
+        }
+
+        let beginData = try request(
+            #"{"request_id":"req-pair-begin-relay","command":"gateway.pairing.begin","client":"android-relay","requested_scopes":["observe"]}"#
+        )
+        let begin = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessPairingBeginPayload>.self,
+            from: beginData
+        )
+        let pairingCode = try #require(begin.result?.pairingCode)
+
+        let exchangeData = try request(
+            #"{"request_id":"req-pair-exchange-relay","command":"gateway.pairing.exchange","pairing_code":"\#(pairingCode)"}"#
+        )
+        let exchange = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessTokenIssuePayload>.self,
+            from: exchangeData
+        )
+        #expect(exchange.status == "ok")
+        #expect(exchange.result?.transportMode == "relay")
+        #expect(exchange.result?.publicEndpoint == "wss://edge.example.test/gateway")
+        #expect(exchange.result?.transportSharedSecret?.isEmpty == false)
+
+        let firstToken = try #require(exchange.result?.token)
+        let rotateData = try request(
+            #"{"request_id":"req-token-rotate-relay","command":"gateway.token.rotate","auth_token":"\#(firstToken)"}"#
+        )
+        let rotate = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessTokenIssuePayload>.self,
+            from: rotateData
+        )
+        #expect(rotate.status == "ok")
+        #expect(rotate.result?.transportMode == "relay")
+        #expect(rotate.result?.publicEndpoint == "wss://edge.example.test/gateway")
+        #expect(rotate.result?.transportSharedSecret?.isEmpty == false)
+    }
+
+    @Test func gatewayDeviceRegistryListsKnownDevicesAndPersistsAcrossReload() async throws {
+        let bundleID = "ghdx.tests.gateway-device-registry-list"
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
+
+        func makeGateway() async -> ControlHarnessGateway {
+            await MainActor.run {
+                ControlHarnessGateway(
+                    bundleID: bundleID,
+                    configuration: .init(
+                        isEnabled: true,
+                        listenHost: "127.0.0.1",
+                        listenPort: 0,
+                        maxBufferedEvents: 16,
+                        maxBufferedBytes: 4096
+                    ),
+                    authManager: ControlHarnessAuth(
+                        storageURL: storageURL,
+                        configuration: .init(pairingCodeTTLSeconds: 60, tokenTTLSeconds: 300)
+                    )
+                )
+            }
+        }
+
+        let decoder = JSONDecoder()
+        let gateway = await makeGateway()
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+
+        func request(_ payload: String, port: UInt16) throws -> Data {
+            let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+            defer { Darwin.close(clientFD) }
+            try ControlHarnessSocketSupport.writeAll(Data(payload.utf8), to: clientFD)
+            guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            return try ControlHarnessSocketSupport.readAll(from: clientFD)
+        }
+
+        let beginData = try request(
+            #"{"request_id":"req-device-list-begin","command":"gateway.pairing.begin","client":"android-registry","device_id":"device-alpha","device_label":"Alpha phone","requested_scopes":["observe"]}"#,
+            port: port
+        )
+        let begin = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessPairingBeginPayload>.self,
+            from: beginData
+        )
+        let pairingCode = try #require(begin.result?.pairingCode)
+
+        let exchangeData = try request(
+            #"{"request_id":"req-device-list-exchange","command":"gateway.pairing.exchange","pairing_code":"\#(pairingCode)"}"#,
+            port: port
+        )
+        let exchange = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessTokenIssuePayload>.self,
+            from: exchangeData
+        )
+        #expect(exchange.status == "ok")
+
+        let listData = try request(
+            #"{"request_id":"req-device-list","command":"gateway.devices.list"}"#,
+            port: port
+        )
+        let listed = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessDeviceRegistryListPayload>.self,
+            from: listData
+        )
+        #expect(listed.status == "ok")
+        #expect(listed.result?.devices == [
+            ControlHarnessDeviceRegistryPayload(
+                deviceID: "device-alpha",
+                displayLabel: "Alpha phone",
+                trustState: "trusted",
+                lastSeenAt: listed.result?.devices.first?.lastSeenAt,
+                currentConnectionState: "idle",
+                transportMode: "lan",
+                capabilityFlags: []
+            )
+        ])
+        #expect(listed.result?.devices.first?.lastSeenAt?.isEmpty == false)
+
+        gateway.stop()
+
+        let reloadedGateway = await makeGateway()
+        defer { reloadedGateway.stop() }
+        reloadedGateway.startIfNeeded()
+        let reloadedPort = try #require(reloadedGateway.listenerPort)
+
+        let reloadedListData = try request(
+            #"{"request_id":"req-device-list-reload","command":"gateway.devices.list"}"#,
+            port: reloadedPort
+        )
+        let reloadedList = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessDeviceRegistryListPayload>.self,
+            from: reloadedListData
+        )
+        #expect(reloadedList.status == "ok")
+        #expect(reloadedList.result?.devices.map(\.deviceID) == ["device-alpha"])
+        #expect(reloadedList.result?.devices.map(\.displayLabel) == ["Alpha phone"])
+        #expect(reloadedList.result?.devices.map(\.trustState) == ["trusted"])
+    }
+
+    @Test func gatewayDeviceRegistryRevokesOnlyTargetDeviceAndClosesActiveStreams() async throws {
+        let bundleID = "ghdx.tests.gateway-device-registry-revoke"
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
+        let (eventHub, gateway) = await MainActor.run {
+            let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
+            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let core = ControlHarnessCore(
+                appDelegate: nil,
+                auditLogger: auditLogger,
+                eventHub: eventHub,
+                generations: ControlHarnessGenerationTracker(),
+                idempotencyStore: ControlHarnessIdempotencyStore(),
+                readStore: ControlHarnessTerminalReadStore(),
+                readAfterWriteStore: ControlHarnessReadAfterWriteStore(),
+                sampleStore: ControlHarnessSampleStore()
+            )
+            let gateway = ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: 0,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096
+                ),
+                authManager: ControlHarnessAuth(
+                    storageURL: storageURL,
+                    configuration: .init(pairingCodeTTLSeconds: 60, tokenTTLSeconds: 300)
+                ),
+                requestHandler: { request, socketPath in
+                    if request.command == "events.subscribe" {
+                        return .subscription(core.handleSubscription(request, socketPath: socketPath))
+                    }
+                    return .single(core.handle(request, socketPath: socketPath))
+                }
+            )
+            return (eventHub, gateway)
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+        let decoder = JSONDecoder()
+
+        func request(_ payload: String) throws -> Data {
+            let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+            defer { Darwin.close(clientFD) }
+            try ControlHarnessSocketSupport.writeAll(Data(payload.utf8), to: clientFD)
+            guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            return try ControlHarnessSocketSupport.readAll(from: clientFD)
+        }
+
+        func pair(deviceID: String, label: String, requestIDPrefix: String) throws -> String {
+            let beginData = try request(
+                #"{"request_id":"\#(requestIDPrefix)-begin","command":"gateway.pairing.begin","client":"android-registry","device_id":"\#(deviceID)","device_label":"\#(label)","requested_scopes":["observe"]}"#
+            )
+            let begin = try decoder.decode(
+                ControlHarnessResponseResultEnvelope<ControlHarnessPairingBeginPayload>.self,
+                from: beginData
+            )
+            let pairingCode = try #require(begin.result?.pairingCode)
+            let exchangeData = try request(
+                #"{"request_id":"\#(requestIDPrefix)-exchange","command":"gateway.pairing.exchange","pairing_code":"\#(pairingCode)"}"#
+            )
+            let exchange = try decoder.decode(
+                ControlHarnessResponseResultEnvelope<ControlHarnessTokenIssuePayload>.self,
+                from: exchangeData
+            )
+            return try #require(exchange.result?.token)
+        }
+
+        let revokedToken = try pair(deviceID: "device-revoked", label: "Revoked phone", requestIDPrefix: "device-revoked")
+        let survivingToken = try pair(deviceID: "device-survives", label: "Trusted phone", requestIDPrefix: "device-survives")
+
+        let subscribedFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+        let subscribePayload = Data(
+            #"{"request_id":"req-device-registry-subscribe","command":"events.subscribe","auth_token":"\#(revokedToken)","since_sequence":0,"event_limit":2}"#.utf8
+        )
+        try ControlHarnessSocketSupport.writeAll(subscribePayload, to: subscribedFD)
+        guard Darwin.shutdown(subscribedFD, SHUT_WR) == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+        let ackLine = try ControlHarnessSocketSupport.readLine(from: subscribedFD)
+        let ack = try decoder.decode(ControlHarnessSubscriptionAckEnvelope.self, from: ackLine)
+        #expect(ack.status == "ok")
+
+        let listWhileConnectedData = try request(
+            #"{"request_id":"req-device-list-connected","command":"gateway.devices.list"}"#
+        )
+        let listWhileConnected = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessDeviceRegistryListPayload>.self,
+            from: listWhileConnectedData
+        )
+        #expect(listWhileConnected.status == "ok")
+        #expect(listWhileConnected.result?.devices.first(where: { $0.deviceID == "device-revoked" })?.currentConnectionState == "connected")
+
+        let revokeData = try request(
+            #"{"request_id":"req-device-revoke","command":"gateway.devices.revoke","device_id":"device-revoked"}"#
+        )
+        let revoke = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessDeviceRegistryPayload>.self,
+            from: revokeData
+        )
+        #expect(revoke.status == "ok")
+        #expect(revoke.result?.deviceID == "device-revoked")
+        #expect(revoke.result?.trustState == "revoked")
+
+        let postRevokeSnapshot = try request(
+            #"{"request_id":"req-device-revoke-old-token","command":"snapshot","auth_token":"\#(revokedToken)"}"#
+        )
+        let rejected = try decoder.decode(ControlHarnessResponseEnvelope.self, from: postRevokeSnapshot)
+        #expect(rejected.status == "error")
+        #expect(rejected.errorCode == "unauthorized")
+
+        let survivingSnapshot = try request(
+            #"{"request_id":"req-device-revoke-survives","command":"snapshot","auth_token":"\#(survivingToken)"}"#
+        )
+        let surviving = try decoder.decode(ControlHarnessResponseEnvelope.self, from: survivingSnapshot)
+        #expect(surviving.status == "ok")
+
+        let postRevokeListData = try request(
+            #"{"request_id":"req-device-list-after-revoke","command":"gateway.devices.list"}"#
+        )
+        let postRevokeList = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessDeviceRegistryListPayload>.self,
+            from: postRevokeListData
+        )
+        #expect(postRevokeList.status == "ok")
+        #expect(postRevokeList.result?.devices.first(where: { $0.deviceID == "device-revoked" })?.trustState == "revoked")
+        #expect(postRevokeList.result?.devices.first(where: { $0.deviceID == "device-revoked" })?.currentConnectionState == "idle")
+        #expect(postRevokeList.result?.devices.first(where: { $0.deviceID == "device-survives" })?.trustState == "trusted")
+
+        let drainAfterRevoke = try ControlHarnessSocketSupport.readAll(from: subscribedFD)
+        #expect(drainAfterRevoke.isEmpty)
+        Darwin.close(subscribedFD)
+        _ = eventHub.emit(
+            event: "terminal.input.sent",
+            requestID: "req-device-registry-release",
+            resource: ControlHarnessEventResource(type: "terminal", id: "terminal-1", generation: 2),
+            payload: AnyEncodable(["text_length": 1])
+        )
     }
 
     @Test func gatewayRejectsConcurrentSessionsForSamePairedIdentity() async throws {

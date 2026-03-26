@@ -3,6 +3,44 @@ import CryptoKit
 import Foundation
 import OSLog
 
+private struct ControlHarnessGatewayRegisteredDevicePayload: Encodable {
+    let deviceID: String
+    let displayLabel: String
+    let trustState: String
+    let lastSeenAt: String?
+    let currentConnectionState: String
+    let transportMode: String
+    let capabilityFlags: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case deviceID = "device_id"
+        case displayLabel = "display_label"
+        case trustState = "trust_state"
+        case lastSeenAt = "last_seen_at"
+        case currentConnectionState = "current_connection_state"
+        case transportMode = "transport_mode"
+        case capabilityFlags = "capability_flags"
+    }
+}
+
+private struct ControlHarnessGatewayRegisteredDeviceListPayload: Encodable {
+    let devices: [ControlHarnessGatewayRegisteredDevicePayload]
+}
+
+private enum ControlHarnessGatewayDeviceRegistryError: LocalizedError {
+    case invalidDeviceID
+    case deviceNotFound
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidDeviceID:
+            return "A valid device_id is required"
+        case .deviceNotFound:
+            return "The requested device is not registered"
+        }
+    }
+}
+
 final class ControlHarnessGateway {
     private enum GatewayCommand {
         case pairingBegin
@@ -10,6 +48,8 @@ final class ControlHarnessGateway {
         case tokenInfo
         case tokenRotate
         case tokenRevoke
+        case devicesList
+        case devicesRevoke
         case metrics
         case metricsReset
     }
@@ -18,6 +58,7 @@ final class ControlHarnessGateway {
         var isEnabled = false
         var listenHost = "127.0.0.1"
         var listenPort: UInt16 = 0
+        var publicEndpoint: String?
         var maxBufferedEvents = 256
         var maxBufferedBytes = 1_048_576
         var authToken: String?
@@ -40,6 +81,9 @@ final class ControlHarnessGateway {
             }
             if let value = parseUInt16(environment["GHODEX_CONTROL_HARNESS_GATEWAY_PORT"]) {
                 configuration.listenPort = value
+            }
+            if let value = parseString(environment["GHODEX_CONTROL_HARNESS_GATEWAY_PUBLIC_ENDPOINT"]) {
+                configuration.publicEndpoint = value
             }
             if let value = parseInt(environment["GHODEX_CONTROL_HARNESS_GATEWAY_MAX_BUFFERED_EVENTS"]) {
                 configuration.maxBufferedEvents = max(1, value)
@@ -110,6 +154,7 @@ final class ControlHarnessGateway {
     }
 
     private struct ActiveStream {
+        let sessionIdentity: String?
         let close: @Sendable () -> Void
     }
 
@@ -152,6 +197,7 @@ final class ControlHarnessGateway {
     private var listenerFD: Int32 = -1
     private var acceptSource: DispatchSourceRead?
     private var activeStreams: [UUID: ActiveStream] = [:]
+    private var activeStreamIDsByIdentity: [String: Set<UUID>] = [:]
 
     init(
         bundleID: String,
@@ -328,7 +374,9 @@ final class ControlHarnessGateway {
             }
 
             let requestData = try Self.readAll(from: clientFD)
-            let request = try JSONDecoder().decode(ControlHarnessRequest.self, from: requestData)
+            let decoded = try decodeGatewayRequest(from: requestData)
+            let request = decoded.request
+            let transportSharedSecret = decoded.transportSharedSecret
             requestCommand = request.command
 
             func recordRequestIfNeeded() {
@@ -343,7 +391,7 @@ final class ControlHarnessGateway {
 
             switch authorize(request, peerDescription: peerDescription) {
             case .deny(let response):
-                try Self.writeAll(try encodeResponse(response), to: clientFD)
+                try Self.writeAll(try encodeResponse(response, transportSharedSecret: transportSharedSecret), to: clientFD)
                 recordRequestIfNeeded()
                 return
             case .allow(let sessionIdentity):
@@ -352,7 +400,10 @@ final class ControlHarnessGateway {
                     peerDescription: peerDescription,
                     sessionIdentity: sessionIdentity,
                     responseWriter: { response in
-                        try Self.writeAll(try encodeResponse(response), to: clientFD)
+                        try Self.writeAll(
+                            try encodeResponse(response, transportSharedSecret: transportSharedSecret),
+                            to: clientFD
+                        )
                         recordRequestIfNeeded()
                     }
                 ) {
@@ -360,14 +411,19 @@ final class ControlHarnessGateway {
                         ?? callRequestHandler(request)
                     switch reply {
                     case .single(let response):
-                        try Self.writeAll(try encodeResponse(response), to: clientFD)
+                        try Self.writeAll(
+                            try encodeResponse(response, transportSharedSecret: transportSharedSecret),
+                            to: clientFD
+                        )
                         recordRequestIfNeeded()
                     case .subscription(let envelope):
                         try streamSubscription(
                             envelope,
                             to: clientFD,
                             transport: "tcp",
-                            closeReason: "client_disconnect"
+                            closeReason: "client_disconnect",
+                            transportSharedSecret: transportSharedSecret,
+                            sessionIdentity: sessionIdentity
                         )
                     }
                 }
@@ -405,7 +461,9 @@ final class ControlHarnessGateway {
 
         var bufferedBytes = handshake.remainder
         let requestData = try Self.readWebSocketFrame(from: clientFD, bufferedBytes: &bufferedBytes)
-        let request = try JSONDecoder().decode(ControlHarnessRequest.self, from: requestData)
+        let decoded = try decodeGatewayRequest(from: requestData)
+        let request = decoded.request
+        let transportSharedSecret = decoded.transportSharedSecret
         var requestRecorded = false
 
         func recordRequestIfNeeded() {
@@ -420,34 +478,84 @@ final class ControlHarnessGateway {
 
         switch authorize(request, peerDescription: peerDescription) {
         case .deny(let response):
-            try Self.writeAll(try encodeWebSocketResponse(response), to: clientFD)
+            try Self.writeAll(
+                try encodeWebSocketResponse(response, transportSharedSecret: transportSharedSecret),
+                to: clientFD
+            )
             recordRequestIfNeeded()
         case .allow(let sessionIdentity):
             try withSessionReservation(
                 request: request,
                 peerDescription: peerDescription,
-                sessionIdentity: sessionIdentity,
-                responseWriter: { response in
-                    try Self.writeAll(try encodeWebSocketResponse(response), to: clientFD)
-                    recordRequestIfNeeded()
-                }
-            ) {
+                    sessionIdentity: sessionIdentity,
+                    responseWriter: { response in
+                        try Self.writeAll(
+                            try encodeWebSocketResponse(response, transportSharedSecret: transportSharedSecret),
+                            to: clientFD
+                        )
+                        recordRequestIfNeeded()
+                    }
+                ) {
                 let reply = handleGatewayCommand(request).map(ControlHarnessServiceReply.single)
                     ?? callRequestHandler(request)
-                switch reply {
-                case .single(let response):
-                    try Self.writeAll(try encodeWebSocketResponse(response), to: clientFD)
-                    recordRequestIfNeeded()
-                case .subscription(let envelope):
-                    try streamWebSocketSubscription(
-                        envelope,
-                        to: clientFD,
-                        transport: "websocket",
-                        closeReason: "client_disconnect"
-                    )
+                    switch reply {
+                    case .single(let response):
+                        try Self.writeAll(
+                            try encodeWebSocketResponse(response, transportSharedSecret: transportSharedSecret),
+                            to: clientFD
+                        )
+                        recordRequestIfNeeded()
+                    case .subscription(let envelope):
+                        try streamWebSocketSubscription(
+                            envelope,
+                            to: clientFD,
+                            transport: "websocket",
+                            closeReason: "client_disconnect",
+                            transportSharedSecret: transportSharedSecret,
+                            sessionIdentity: sessionIdentity
+                        )
+                    }
                 }
-            }
         }
+    }
+
+    private func decodeGatewayRequest(
+        from requestData: Data
+    ) throws -> (request: ControlHarnessRequest, transportSharedSecret: String?) {
+        let request = try JSONDecoder().decode(ControlHarnessRequest.self, from: requestData)
+        guard request.command == "gateway.encrypted" else {
+            return (request, nil)
+        }
+        guard let authManager else {
+            throw ControlHarnessAuthError.invalidToken
+        }
+        guard let authToken = request.authToken,
+              let encryptedPayload = request.encryptedPayload else {
+            throw ControlHarnessGatewaySecureChannelError.invalidEncryptedRequest
+        }
+
+        let sharedSecret: String
+        switch withAuthManager(authManager, operation: {
+            try await authManager.transportSharedSecret(for: authToken)
+        }) {
+        case .success(let secret):
+            sharedSecret = secret
+        case .failure:
+            throw ControlHarnessAuthError.invalidToken
+        }
+
+        let encryptedRequest = ControlHarnessEncryptedGatewayRequest(
+            requestID: request.requestID,
+            command: request.command,
+            authToken: authToken,
+            transportMode: request.transportMode ?? "relay",
+            encryptedPayload: encryptedPayload
+        )
+        let decryptedRequest = try ControlHarnessGatewaySecureChannel.decryptRequest(
+            encryptedRequest,
+            transportSharedSecret: sharedSecret
+        )
+        return (decryptedRequest, sharedSecret)
     }
 
     private func rateLimit(
@@ -507,7 +615,8 @@ final class ControlHarnessGateway {
             switch validateToken(
                 request.authToken,
                 requiredScope: requiredScope,
-                authManager: authManager
+                authManager: authManager,
+                transportMode: request.transportMode
             ) {
             case .allow(let grant):
                 return continueAuthorization(
@@ -578,14 +687,18 @@ final class ControlHarnessGateway {
         case .pairingExchange:
             return .allow(sessionIdentity: nil)
 
-        case .metrics, .metricsReset:
+        case .devicesList, .devicesRevoke, .metrics, .metricsReset:
             guard Self.isLoopbackPeer(peerDescription) else {
                 return .deny(ControlHarnessResponse(
                     requestID: request.requestID,
                     status: "error",
                     result: nil,
-                    errorCode: "metrics_requires_local_origin",
-                    errorMessage: "Gateway metrics can only be requested from a local desktop client"
+                    errorCode: gatewayCommand == .metrics || gatewayCommand == .metricsReset
+                        ? "metrics_requires_local_origin"
+                        : "device_registry_requires_local_origin",
+                    errorMessage: gatewayCommand == .metrics || gatewayCommand == .metricsReset
+                        ? "Gateway metrics can only be requested from a local desktop client"
+                        : "Device registry commands can only be requested from a local desktop client"
                 ))
             }
             return .allow(sessionIdentity: nil)
@@ -600,7 +713,12 @@ final class ControlHarnessGateway {
                     errorMessage: "A valid gateway auth token is required"
                 ))
             }
-            switch validateToken(request.authToken, requiredScope: nil, authManager: authManager) {
+            switch validateToken(
+                request.authToken,
+                requiredScope: nil,
+                authManager: authManager,
+                transportMode: request.transportMode
+            ) {
             case .allow(let grant):
                 return .allow(sessionIdentity: "paired:\(grant.subjectID)")
             case .deny(let errorCode, let errorMessage):
@@ -660,7 +778,9 @@ final class ControlHarnessGateway {
             case .pairingBegin:
                 let pairing = try await authManager.beginPairing(
                     client: request.client,
-                    requestedScopes: request.requestedScopes
+                    requestedScopes: request.requestedScopes,
+                    deviceID: request.deviceID,
+                    deviceLabel: request.deviceLabel
                 )
                 return AnyEncodable(pairing)
             case .pairingExchange:
@@ -669,7 +789,7 @@ final class ControlHarnessGateway {
                     throw ControlHarnessAuthError.invalidPairingCode
                 }
                 let issued = try await authManager.exchangePairingCode(pairingCode)
-                return AnyEncodable(issued)
+                return AnyEncodable(applyPublicTransportMetadata(to: issued))
             case .tokenInfo:
                 guard let token = request.authToken else {
                     throw ControlHarnessAuthError.invalidToken
@@ -679,12 +799,25 @@ final class ControlHarnessGateway {
                 guard let token = request.authToken else {
                     throw ControlHarnessAuthError.invalidToken
                 }
-                return AnyEncodable(try await authManager.rotate(token: token))
+                let rotated = try await authManager.rotate(token: token)
+                return AnyEncodable(applyPublicTransportMetadata(to: rotated))
             case .tokenRevoke:
                 guard let token = request.authToken else {
                     throw ControlHarnessAuthError.invalidToken
                 }
                 return AnyEncodable(try await authManager.revoke(token: token))
+            case .devicesList:
+                let devices = try await authManager.listDevices()
+                return AnyEncodable(makeRegisteredDeviceListPayload(devices))
+            case .devicesRevoke:
+                guard let deviceID = request.deviceID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      deviceID.isEmpty == false else {
+                    throw ControlHarnessGatewayDeviceRegistryError.invalidDeviceID
+                }
+                let revoked = try await authManager.revokeDevice(deviceID: deviceID)
+                closeActiveStreams(identity: "paired:\(revoked.deviceID)")
+                waitForSessionDrain(identity: "paired:\(revoked.deviceID)")
+                return AnyEncodable(makeRegisteredDevicePayload(revoked))
             case .metrics:
                 return AnyEncodable(
                     self.performanceMonitor?.snapshot()
@@ -708,14 +841,45 @@ final class ControlHarnessGateway {
                 errorMessage: nil
             )
         case .failure(let error):
+            let errorPayload = gatewayCommandErrorPayload(for: error)
             return ControlHarnessResponse(
                 requestID: request.requestID,
                 status: "error",
                 result: nil,
-                errorCode: "gateway_auth_failure",
-                errorMessage: error.localizedDescription
+                errorCode: errorPayload.code,
+                errorMessage: errorPayload.message
             )
         }
+    }
+
+    private func applyPublicTransportMetadata(
+        to result: ControlHarnessTokenIssueResult
+    ) -> ControlHarnessTokenIssueResult {
+        let publicEndpoint = resolvedPublicEndpoint()
+        return ControlHarnessTokenIssueResult(
+            token: result.token,
+            tokenID: result.tokenID,
+            client: result.client,
+            scopes: result.scopes,
+            desktopID: result.desktopID,
+            desktopLabel: result.desktopLabel,
+            preferredDesktopID: result.preferredDesktopID,
+            transportMode: publicEndpoint == nil ? result.transportMode : "relay",
+            publicEndpoint: publicEndpoint,
+            transportSharedSecret: result.transportSharedSecret,
+            issuedAt: result.issuedAt,
+            expiresAt: result.expiresAt
+        )
+    }
+
+    private func resolvedPublicEndpoint() -> String? {
+        guard let endpoint = configuration.publicEndpoint?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              endpoint.isEmpty == false,
+              endpoint.hasPrefix("wss://") else {
+            return nil
+        }
+        return endpoint
     }
 
     private func gatewayCommand(for request: ControlHarnessRequest) -> GatewayCommand? {
@@ -730,12 +894,54 @@ final class ControlHarnessGateway {
             return .tokenRotate
         case "gateway.token.revoke":
             return .tokenRevoke
+        case "gateway.devices.list":
+            return .devicesList
+        case "gateway.devices.revoke":
+            return .devicesRevoke
         case "gateway.metrics":
             return .metrics
         case "gateway.metrics.reset":
             return .metricsReset
         default:
             return nil
+        }
+    }
+
+    private func makeRegisteredDeviceListPayload(
+        _ devices: [ControlHarnessRegisteredDeviceResult]
+    ) -> ControlHarnessGatewayRegisteredDeviceListPayload {
+        ControlHarnessGatewayRegisteredDeviceListPayload(
+            devices: devices.map(makeRegisteredDevicePayload)
+        )
+    }
+
+    private func makeRegisteredDevicePayload(
+        _ device: ControlHarnessRegisteredDeviceResult
+    ) -> ControlHarnessGatewayRegisteredDevicePayload {
+        ControlHarnessGatewayRegisteredDevicePayload(
+            deviceID: device.deviceID,
+            displayLabel: device.displayLabel,
+            trustState: device.trustState,
+            lastSeenAt: device.lastSeenAt,
+            currentConnectionState: connectionState(forDeviceID: device.deviceID),
+            transportMode: device.transportMode,
+            capabilityFlags: device.capabilityFlags
+        )
+    }
+
+    private func connectionState(forDeviceID deviceID: String) -> String {
+        sessionRegistry.isActive(identity: "paired:\(deviceID)") ? "connected" : "idle"
+    }
+
+    private func gatewayCommandErrorPayload(for error: Error) -> (code: String, message: String) {
+        switch error {
+        case ControlHarnessGatewayDeviceRegistryError.invalidDeviceID:
+            return ("invalid_argument", error.localizedDescription)
+        case ControlHarnessGatewayDeviceRegistryError.deviceNotFound,
+             ControlHarnessAuthError.deviceNotFound:
+            return ("device_not_found", error.localizedDescription)
+        default:
+            return ("gateway_auth_failure", error.localizedDescription)
         }
     }
 
@@ -753,12 +959,18 @@ final class ControlHarnessGateway {
     private func validateToken(
         _ token: String?,
         requiredScope: ControlHarnessAuthScope?,
-        authManager: ControlHarnessAuth
+        authManager: ControlHarnessAuth,
+        transportMode: String?
     ) -> ControlHarnessAuth.Validation {
         switch withAuthManager(authManager, operation: {
             await authManager.validate(token: token, requiredScope: requiredScope)
         }) {
         case .success(let validation):
+            if case .allow = validation, let token, token.isEmpty == false {
+                _ = withAuthManager(authManager, operation: {
+                    try await authManager.recordDeviceActivity(token: token, transportMode: transportMode)
+                })
+            }
             return validation
         case .failure:
             return .deny(
@@ -824,23 +1036,56 @@ final class ControlHarnessGateway {
 
     private func registerActiveStream(
         clientSession: ControlHarnessGatewayClientSession,
-        clientFD: Int32
+        clientFD: Int32,
+        sessionIdentity: String?
     ) -> UUID {
         let streamID = UUID()
         lifecycleQueue.sync {
             activeStreams[streamID] = ActiveStream(
+                sessionIdentity: sessionIdentity,
                 close: {
                     clientSession.close()
                     _ = Darwin.shutdown(clientFD, SHUT_RDWR)
                 }
             )
+            if let sessionIdentity {
+                var streamIDs = activeStreamIDsByIdentity[sessionIdentity] ?? []
+                streamIDs.insert(streamID)
+                activeStreamIDsByIdentity[sessionIdentity] = streamIDs
+            }
         }
         return streamID
     }
 
     private func unregisterActiveStream(_ streamID: UUID) {
         lifecycleQueue.sync {
-            activeStreams.removeValue(forKey: streamID)
+            let sessionIdentity = activeStreams.removeValue(forKey: streamID)?.sessionIdentity
+            if let sessionIdentity {
+                var streamIDs = activeStreamIDsByIdentity[sessionIdentity] ?? []
+                streamIDs.remove(streamID)
+                if streamIDs.isEmpty {
+                    activeStreamIDsByIdentity.removeValue(forKey: sessionIdentity)
+                } else {
+                    activeStreamIDsByIdentity[sessionIdentity] = streamIDs
+                }
+            }
+        }
+    }
+
+    private func closeActiveStreams(identity: String) {
+        let closures = lifecycleQueue.sync {
+            (activeStreamIDsByIdentity[identity] ?? []).compactMap { activeStreams[$0]?.close }
+        }
+        closures.forEach { $0() }
+    }
+
+    private func waitForSessionDrain(identity: String, timeoutSeconds: TimeInterval = 1.0) {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while Date() < deadline {
+            if sessionRegistry.isActive(identity: identity) == false {
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.01)
         }
     }
 
@@ -858,12 +1103,18 @@ final class ControlHarnessGateway {
         _ envelope: ControlHarnessSubscriptionEnvelope,
         to clientFD: Int32,
         transport: String,
-        closeReason: String
+        closeReason: String,
+        transportSharedSecret: String? = nil,
+        sessionIdentity: String? = nil
     ) throws {
         let started = DispatchTime.now()
         let clientSession = makeClientSession()
         let attachment = attachSubscription(envelope, to: clientSession)
-        let activeStreamID = registerActiveStream(clientSession: clientSession, clientFD: clientFD)
+        let activeStreamID = registerActiveStream(
+            clientSession: clientSession,
+            clientFD: clientFD,
+            sessionIdentity: sessionIdentity
+        )
         performanceMonitor?.recordGatewayStreamOpened(transport: transport)
         defer {
             performanceMonitor?.recordGatewayStreamClosed(
@@ -876,7 +1127,7 @@ final class ControlHarnessGateway {
             clientSession.close()
         }
 
-        try flushClientSession(clientSession, to: clientFD)
+        try flushClientSession(clientSession, to: clientFD, transportSharedSecret: transportSharedSecret)
         guard envelope.session != nil else {
             return
         }
@@ -886,14 +1137,17 @@ final class ControlHarnessGateway {
             if !hasBufferedData, Self.isClientStreamDisconnected(clientFD) {
                 return
             }
-            try flushClientSession(clientSession, to: clientFD)
+            try flushClientSession(clientSession, to: clientFD, transportSharedSecret: transportSharedSecret)
             if clientSession.isClosed {
                 let drain = clientSession.drain()
                 if drain.payloads.isEmpty {
                     return
                 }
                 for payload in drain.payloads {
-                    try Self.writeAll(payload, to: clientFD)
+                    try Self.writeAll(
+                        try encodeOutboundPayload(payload, transportSharedSecret: transportSharedSecret),
+                        to: clientFD
+                    )
                 }
                 return
             }
@@ -904,12 +1158,18 @@ final class ControlHarnessGateway {
         _ envelope: ControlHarnessSubscriptionEnvelope,
         to clientFD: Int32,
         transport: String,
-        closeReason: String
+        closeReason: String,
+        transportSharedSecret: String? = nil,
+        sessionIdentity: String? = nil
     ) throws {
         let started = DispatchTime.now()
         let clientSession = makeClientSession()
         let attachment = attachSubscription(envelope, to: clientSession)
-        let activeStreamID = registerActiveStream(clientSession: clientSession, clientFD: clientFD)
+        let activeStreamID = registerActiveStream(
+            clientSession: clientSession,
+            clientFD: clientFD,
+            sessionIdentity: sessionIdentity
+        )
         performanceMonitor?.recordGatewayStreamOpened(transport: transport)
         defer {
             performanceMonitor?.recordGatewayStreamClosed(
@@ -922,7 +1182,7 @@ final class ControlHarnessGateway {
             clientSession.close()
         }
 
-        try flushWebSocketClientSession(clientSession, to: clientFD)
+        try flushWebSocketClientSession(clientSession, to: clientFD, transportSharedSecret: transportSharedSecret)
         guard envelope.session != nil else {
             return
         }
@@ -932,14 +1192,17 @@ final class ControlHarnessGateway {
             if !hasBufferedData, Self.isClientStreamDisconnected(clientFD) {
                 return
             }
-            try flushWebSocketClientSession(clientSession, to: clientFD)
+            try flushWebSocketClientSession(clientSession, to: clientFD, transportSharedSecret: transportSharedSecret)
             if clientSession.isClosed {
                 let drain = clientSession.drain()
                 if drain.payloads.isEmpty {
                     return
                 }
                 for payload in drain.payloads {
-                    try Self.writeAll(Self.encodeWebSocketTextFrame(Self.trimTrailingLineFeed(payload)), to: clientFD)
+                    try Self.writeAll(
+                        try encodeWebSocketPayload(payload, transportSharedSecret: transportSharedSecret),
+                        to: clientFD
+                    )
                 }
                 return
             }
@@ -948,21 +1211,29 @@ final class ControlHarnessGateway {
 
     private func flushClientSession(
         _ clientSession: ControlHarnessGatewayClientSession,
-        to clientFD: Int32
+        to clientFD: Int32,
+        transportSharedSecret: String? = nil
     ) throws {
         let drain = clientSession.drain()
         for payload in drain.payloads {
-            try Self.writeAll(payload, to: clientFD)
+            try Self.writeAll(
+                try encodeOutboundPayload(payload, transportSharedSecret: transportSharedSecret),
+                to: clientFD
+            )
         }
     }
 
     private func flushWebSocketClientSession(
         _ clientSession: ControlHarnessGatewayClientSession,
-        to clientFD: Int32
+        to clientFD: Int32,
+        transportSharedSecret: String? = nil
     ) throws {
         let drain = clientSession.drain()
         for payload in drain.payloads {
-            try Self.writeAll(Self.encodeWebSocketTextFrame(Self.trimTrailingLineFeed(payload)), to: clientFD)
+            try Self.writeAll(
+                try encodeWebSocketPayload(payload, transportSharedSecret: transportSharedSecret),
+                to: clientFD
+            )
         }
     }
 
@@ -1031,14 +1302,63 @@ final class ControlHarnessGateway {
         Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
     }
 
-    private func encodeResponse(_ response: ControlHarnessResponse) throws -> Data {
-        var data = try encoder.encode(response)
+    private func encodeResponse(
+        _ response: ControlHarnessResponse,
+        transportSharedSecret: String? = nil
+    ) throws -> Data {
+        let rawPayload = try encoder.encode(response)
+        guard let transportSharedSecret,
+              transportSharedSecret.isEmpty == false else {
+            var data = rawPayload
+            data.append(0x0A)
+            return data
+        }
+        let encrypted = try ControlHarnessGatewaySecureChannel.encryptEnvelopeData(
+            rawPayload,
+            transportSharedSecret: transportSharedSecret
+        )
+        var data = try encoder.encode(encrypted)
         data.append(0x0A)
         return data
     }
 
-    private func encodeWebSocketResponse(_ response: ControlHarnessResponse) throws -> Data {
-        Self.encodeWebSocketTextFrame(Self.trimTrailingLineFeed(try encodeResponse(response)))
+    private func encodeOutboundPayload(
+        _ payload: Data,
+        transportSharedSecret: String?
+    ) throws -> Data {
+        guard let transportSharedSecret,
+              transportSharedSecret.isEmpty == false else {
+            return payload
+        }
+        let encrypted = try ControlHarnessGatewaySecureChannel.encryptEnvelopeData(
+            Self.trimTrailingLineFeed(payload),
+            transportSharedSecret: transportSharedSecret
+        )
+        var data = try encoder.encode(encrypted)
+        data.append(0x0A)
+        return data
+    }
+
+    private func encodeWebSocketPayload(
+        _ payload: Data,
+        transportSharedSecret: String?
+    ) throws -> Data {
+        Self.encodeWebSocketTextFrame(
+            Self.trimTrailingLineFeed(
+                try encodeOutboundPayload(payload, transportSharedSecret: transportSharedSecret)
+            )
+        )
+    }
+
+    private func encodeWebSocketResponse(
+        _ response: ControlHarnessResponse,
+        transportSharedSecret: String? = nil
+    ) throws -> Data {
+        Self.encodeWebSocketTextFrame(
+            Self.trimTrailingLineFeed(
+                try encodeResponse(response, transportSharedSecret: transportSharedSecret)
+            )
+        )
     }
 
     private func makeListener(host: String, port: UInt16) throws -> (fd: Int32, port: UInt16) {
@@ -1539,6 +1859,12 @@ private final class ControlHarnessGatewaySessionRegistry {
             } else {
                 activeSessions[identity] = current - 1
             }
+        }
+    }
+
+    func isActive(identity: String) -> Bool {
+        queue.sync {
+            (activeSessions[identity] ?? 0) > 0
         }
     }
 }
