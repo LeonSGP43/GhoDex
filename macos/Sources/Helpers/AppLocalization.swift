@@ -360,12 +360,20 @@ enum AppLocalization {
         "about.tagline": "Fast, native, feature-rich terminal \nemulator pushing modern features.",
         "about.version": "Version",
         "about.build": "Build",
+        "about.configuration": "Configuration",
+        "about.built_at": "Built At",
+        "about.workspace": "Workspace",
+        "about.branch": "Branch",
         "about.commit": "Commit",
+        "about.fingerprint": "Fingerprint",
+        "about.workspace.clean": "Clean",
+        "about.workspace.dirty": "Dirty",
         "about.docs": "Docs",
         "about.github": "GitHub",
         "settings.title": "Settings",
         "settings.body": "Language can be configured here. For advanced terminal settings, edit $HOME/.config/ghodex/config.ghodex and restart GhoDex.",
         "settings.general.tab": "General",
+        "settings.appearance.tab": "Appearance",
         "settings.gateway.tab": "Gateway",
         "settings.language.title": "App Language",
         "AI Terminal Manager…": "AI Terminal Manager…",
@@ -377,6 +385,47 @@ enum AppLocalization {
         "settings.language.option.simplified_chinese": "简体中文",
         "settings.language.restart_required": "Restart GhoDex to apply the language change everywhere.",
         "settings.language.restart_now": "Restart Now",
+        "settings.icon.quick_title": "App Logo",
+        "settings.icon.quick_description": "Switch the Dock and app logo visually, save it into config, and apply it live after saving.",
+        "settings.icon.open_editor": "Open Logo Settings",
+        "settings.icon.title": "App Logo",
+        "settings.icon.description": "Choose a built-in logo, point GhoDex at your own icon file, or tune the experimental custom-style logo without editing config by hand.",
+        "settings.icon.preview": "Preview",
+        "settings.icon.mode": "Logo Source",
+        "settings.icon.mode.built_in": "Built-in",
+        "settings.icon.mode.custom_file": "Custom File",
+        "settings.icon.mode.custom_style": "Custom Style",
+        "settings.icon.built_in.title": "Built-in Logos",
+        "settings.icon.custom_path": "Custom Icon File",
+        "settings.icon.custom_placeholder": "/Users/you/Pictures/GhoDex.icns",
+        "settings.icon.custom_help": "Supports PNG, JPEG, ICNS, and any macOS-readable image format. ICNS is the safest choice for a crisp Dock icon.",
+        "settings.icon.custom_browse": "Browse…",
+        "settings.icon.custom_picker_message": "Choose the image file GhoDex should use as the app icon.",
+        "settings.icon.invalid_custom_path": "Choose a valid image file before applying the custom logo.",
+        "settings.icon.style.title": "Custom Style",
+        "settings.icon.frame": "Frame",
+        "settings.icon.frame.aluminum": "Aluminum",
+        "settings.icon.frame.beige": "Beige",
+        "settings.icon.frame.plastic": "Plastic",
+        "settings.icon.frame.chrome": "Chrome",
+        "settings.icon.ghost_color": "Ghost Color",
+        "settings.icon.screen_colors": "Screen Gradient",
+        "settings.icon.add_color": "Add Color Stop",
+        "settings.icon.remove_color": "Remove",
+        "settings.icon.apply": "Apply Logo",
+        "settings.icon.reset": "Reset Draft",
+        "settings.icon.pending_changes": "Unsaved logo changes are waiting to be applied.",
+        "settings.icon.saved": "Logo settings saved to config.",
+        "settings.icon.live_apply": "After saving, GhoDex reloads config and updates the app icon immediately.",
+        "settings.icon.option.official": "Official",
+        "settings.icon.option.blueprint": "Blueprint",
+        "settings.icon.option.chalkboard": "Chalkboard",
+        "settings.icon.option.glass": "Glass",
+        "settings.icon.option.holographic": "Holographic",
+        "settings.icon.option.microchip": "Microchip",
+        "settings.icon.option.paper": "Paper",
+        "settings.icon.option.retro": "Retro",
+        "settings.icon.option.xray": "X-Ray",
         "settings.browser.title": "Browser Profile",
         "settings.browser.description": "Choose which Chromium profile GhoDex should use for Browser tabs. Leave it on the managed default to keep browser data isolated from Chrome.",
         "settings.browser.profile_section": "Browser Profile",
@@ -785,12 +834,20 @@ enum AppLocalization {
         "about.tagline": "快速、原生、功能丰富的终端模拟器，持续推进现代终端体验。",
         "about.version": "版本",
         "about.build": "构建号",
+        "about.configuration": "构建配置",
+        "about.built_at": "构建时间",
+        "about.workspace": "工作区状态",
+        "about.branch": "分支",
         "about.commit": "提交",
+        "about.fingerprint": "构建指纹",
+        "about.workspace.clean": "干净",
+        "about.workspace.dirty": "未提交变更",
         "about.docs": "文档",
         "about.github": "GitHub",
         "settings.title": "设置",
         "settings.body": "这里目前可配置应用语言。若要修改高级终端配置，请编辑 $HOME/.config/ghodex/config.ghodex，然后重启 GhoDex。",
         "settings.general.tab": "通用",
+        "settings.appearance.tab": "外观",
         "settings.gateway.tab": "网关",
         "settings.language.title": "应用语言",
         "AI Terminal Manager…": "AI 终端管理器…",
@@ -802,6 +859,47 @@ enum AppLocalization {
         "settings.language.option.simplified_chinese": "简体中文",
         "settings.language.restart_required": "需要重启 GhoDex，语言变更才会完整应用到所有界面。",
         "settings.language.restart_now": "立即重启",
+        "settings.icon.quick_title": "应用 Logo",
+        "settings.icon.quick_description": "可视化切换 Dock 和应用 Logo，保存后会写回配置文件并立即生效。",
+        "settings.icon.open_editor": "打开 Logo 设置",
+        "settings.icon.title": "应用 Logo",
+        "settings.icon.description": "可以直接选择内置 Logo、指定自己的图标文件，或者在不手改配置的前提下调节实验性的自定义风格 Logo。",
+        "settings.icon.preview": "预览",
+        "settings.icon.mode": "Logo 来源",
+        "settings.icon.mode.built_in": "内置",
+        "settings.icon.mode.custom_file": "自定义文件",
+        "settings.icon.mode.custom_style": "自定义风格",
+        "settings.icon.built_in.title": "内置 Logo",
+        "settings.icon.custom_path": "自定义图标文件",
+        "settings.icon.custom_placeholder": "/Users/you/Pictures/GhoDex.icns",
+        "settings.icon.custom_help": "支持 PNG、JPEG、ICNS 以及 macOS 可读取的图片格式。想要 Dock 图标最稳定、最清晰，优先用 ICNS。",
+        "settings.icon.custom_browse": "选择…",
+        "settings.icon.custom_picker_message": "选择 GhoDex 要使用的应用图标文件。",
+        "settings.icon.invalid_custom_path": "应用自定义 Logo 前，请先选择一个有效的图片文件。",
+        "settings.icon.style.title": "自定义风格",
+        "settings.icon.frame": "边框",
+        "settings.icon.frame.aluminum": "铝合金",
+        "settings.icon.frame.beige": "米色",
+        "settings.icon.frame.plastic": "塑料",
+        "settings.icon.frame.chrome": "铬面",
+        "settings.icon.ghost_color": "幽灵颜色",
+        "settings.icon.screen_colors": "屏幕渐变",
+        "settings.icon.add_color": "添加颜色节点",
+        "settings.icon.remove_color": "移除",
+        "settings.icon.apply": "应用 Logo",
+        "settings.icon.reset": "重置草稿",
+        "settings.icon.pending_changes": "还有未应用的 Logo 变更。",
+        "settings.icon.saved": "Logo 设置已写入配置文件。",
+        "settings.icon.live_apply": "保存后 GhoDex 会重载配置，并立即更新应用图标。",
+        "settings.icon.option.official": "官方",
+        "settings.icon.option.blueprint": "蓝图",
+        "settings.icon.option.chalkboard": "黑板",
+        "settings.icon.option.glass": "玻璃",
+        "settings.icon.option.holographic": "全息",
+        "settings.icon.option.microchip": "芯片",
+        "settings.icon.option.paper": "纸质",
+        "settings.icon.option.retro": "复古",
+        "settings.icon.option.xray": "X 光",
         "settings.browser.title": "浏览器 Profile",
         "settings.browser.description": "选择 Browser tab 使用哪个 Chromium profile。保持为 GhoDex 管理的默认值时，浏览器数据会和 Chrome 隔离。",
         "settings.browser.profile_section": "浏览器 Profile",
@@ -1365,7 +1463,14 @@ enum L10n {
         nonisolated static var tagline: String { AppLocalization.localizedString("about.tagline") }
         nonisolated static var version: String { AppLocalization.localizedString("about.version") }
         nonisolated static var build: String { AppLocalization.localizedString("about.build") }
+        nonisolated static var configuration: String { AppLocalization.localizedString("about.configuration") }
+        nonisolated static var builtAt: String { AppLocalization.localizedString("about.built_at") }
+        nonisolated static var workspace: String { AppLocalization.localizedString("about.workspace") }
+        nonisolated static var branch: String { AppLocalization.localizedString("about.branch") }
         nonisolated static var commit: String { AppLocalization.localizedString("about.commit") }
+        nonisolated static var fingerprint: String { AppLocalization.localizedString("about.fingerprint") }
+        nonisolated static var workspaceClean: String { AppLocalization.localizedString("about.workspace.clean") }
+        nonisolated static var workspaceDirty: String { AppLocalization.localizedString("about.workspace.dirty") }
         nonisolated static var docs: String { AppLocalization.localizedString("about.docs") }
         nonisolated static var github: String { AppLocalization.localizedString("about.github") }
     }
@@ -1374,6 +1479,7 @@ enum L10n {
         nonisolated static var title: String { AppLocalization.localizedString("settings.title") }
         nonisolated static var body: String { AppLocalization.localizedString("settings.body") }
         nonisolated static var generalTab: String { AppLocalization.localizedString("settings.general.tab") }
+        nonisolated static var appearanceTab: String { AppLocalization.localizedString("settings.appearance.tab") }
         nonisolated static var gatewayTab: String { AppLocalization.localizedString("settings.gateway.tab") }
         nonisolated static var languageTitle: String { AppLocalization.localizedString("settings.language.title") }
         nonisolated static var languageDescription: String { AppLocalization.localizedString("settings.language.description") }
@@ -1382,6 +1488,47 @@ enum L10n {
         nonisolated static var languageOptionSimplifiedChinese: String { AppLocalization.localizedString("settings.language.option.simplified_chinese") }
         nonisolated static var languageRestartRequired: String { AppLocalization.localizedString("settings.language.restart_required") }
         nonisolated static var restartNow: String { AppLocalization.localizedString("settings.language.restart_now") }
+        nonisolated static var iconQuickTitle: String { AppLocalization.localizedString("settings.icon.quick_title") }
+        nonisolated static var iconQuickDescription: String { AppLocalization.localizedString("settings.icon.quick_description") }
+        nonisolated static var iconOpenEditor: String { AppLocalization.localizedString("settings.icon.open_editor") }
+        nonisolated static var iconTitle: String { AppLocalization.localizedString("settings.icon.title") }
+        nonisolated static var iconDescription: String { AppLocalization.localizedString("settings.icon.description") }
+        nonisolated static var iconPreview: String { AppLocalization.localizedString("settings.icon.preview") }
+        nonisolated static var iconModeTitle: String { AppLocalization.localizedString("settings.icon.mode") }
+        nonisolated static var iconModeBuiltIn: String { AppLocalization.localizedString("settings.icon.mode.built_in") }
+        nonisolated static var iconModeCustomFile: String { AppLocalization.localizedString("settings.icon.mode.custom_file") }
+        nonisolated static var iconModeCustomStyle: String { AppLocalization.localizedString("settings.icon.mode.custom_style") }
+        nonisolated static var iconBuiltInTitle: String { AppLocalization.localizedString("settings.icon.built_in.title") }
+        nonisolated static var iconCustomPath: String { AppLocalization.localizedString("settings.icon.custom_path") }
+        nonisolated static var iconCustomPlaceholder: String { AppLocalization.localizedString("settings.icon.custom_placeholder") }
+        nonisolated static var iconCustomHelp: String { AppLocalization.localizedString("settings.icon.custom_help") }
+        nonisolated static var iconCustomBrowse: String { AppLocalization.localizedString("settings.icon.custom_browse") }
+        nonisolated static var iconCustomPickerMessage: String { AppLocalization.localizedString("settings.icon.custom_picker_message") }
+        nonisolated static var iconInvalidCustomPath: String { AppLocalization.localizedString("settings.icon.invalid_custom_path") }
+        nonisolated static var iconStyleTitle: String { AppLocalization.localizedString("settings.icon.style.title") }
+        nonisolated static var iconFrame: String { AppLocalization.localizedString("settings.icon.frame") }
+        nonisolated static var iconFrameAluminum: String { AppLocalization.localizedString("settings.icon.frame.aluminum") }
+        nonisolated static var iconFrameBeige: String { AppLocalization.localizedString("settings.icon.frame.beige") }
+        nonisolated static var iconFramePlastic: String { AppLocalization.localizedString("settings.icon.frame.plastic") }
+        nonisolated static var iconFrameChrome: String { AppLocalization.localizedString("settings.icon.frame.chrome") }
+        nonisolated static var iconGhostColor: String { AppLocalization.localizedString("settings.icon.ghost_color") }
+        nonisolated static var iconScreenColors: String { AppLocalization.localizedString("settings.icon.screen_colors") }
+        nonisolated static var iconAddColor: String { AppLocalization.localizedString("settings.icon.add_color") }
+        nonisolated static var iconRemoveColor: String { AppLocalization.localizedString("settings.icon.remove_color") }
+        nonisolated static var iconApply: String { AppLocalization.localizedString("settings.icon.apply") }
+        nonisolated static var iconReset: String { AppLocalization.localizedString("settings.icon.reset") }
+        nonisolated static var iconPendingChanges: String { AppLocalization.localizedString("settings.icon.pending_changes") }
+        nonisolated static var iconSaved: String { AppLocalization.localizedString("settings.icon.saved") }
+        nonisolated static var iconLiveApply: String { AppLocalization.localizedString("settings.icon.live_apply") }
+        nonisolated static var iconOptionOfficial: String { AppLocalization.localizedString("settings.icon.option.official") }
+        nonisolated static var iconOptionBlueprint: String { AppLocalization.localizedString("settings.icon.option.blueprint") }
+        nonisolated static var iconOptionChalkboard: String { AppLocalization.localizedString("settings.icon.option.chalkboard") }
+        nonisolated static var iconOptionGlass: String { AppLocalization.localizedString("settings.icon.option.glass") }
+        nonisolated static var iconOptionHolographic: String { AppLocalization.localizedString("settings.icon.option.holographic") }
+        nonisolated static var iconOptionMicrochip: String { AppLocalization.localizedString("settings.icon.option.microchip") }
+        nonisolated static var iconOptionPaper: String { AppLocalization.localizedString("settings.icon.option.paper") }
+        nonisolated static var iconOptionRetro: String { AppLocalization.localizedString("settings.icon.option.retro") }
+        nonisolated static var iconOptionXray: String { AppLocalization.localizedString("settings.icon.option.xray") }
         nonisolated static var browserTitle: String { AppLocalization.localizedString("settings.browser.title") }
         nonisolated static var browserDescription: String { AppLocalization.localizedString("settings.browser.description") }
         nonisolated static var browserProfileSectionTitle: String { AppLocalization.localizedString("settings.browser.profile_section") }

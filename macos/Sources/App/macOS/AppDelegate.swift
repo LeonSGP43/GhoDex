@@ -6,6 +6,7 @@ import OSLog
 import Sparkle
 import GhoDexKit
 import Darwin
+import UniformTypeIdentifiers
 
 class AppDelegate: NSObject,
                     ObservableObject,
@@ -346,6 +347,7 @@ class AppDelegate: NSObject,
 
     /// The custom app icon image that is currently in use.
     @Published private(set) var appIcon: NSImage?
+    @Published private(set) var appIconSettings = AppIconSettings()
     @Published private(set) var browserProfilePathOverride: String?
     @Published private(set) var browserRuntimePathOverride: String?
 
@@ -1691,6 +1693,7 @@ class AppDelegate: NSObject,
     private func ghosttyConfigDidChange(config: Ghostty.Config) {
         // Update the config we need to store
         self.derivedConfig = DerivedConfig(config)
+        appIconSettings = AppIconSettings(config: config)
         syncBrowserProfileConfig(config)
         syncBrowserRuntimeConfig(config)
         syncBrowserRemoteDebugPortConfig(config)
@@ -1792,8 +1795,13 @@ class AppDelegate: NSObject,
         // Since this is called after `DockTilePlugin` has been running,
         // clean it up here to trigger a correct update of the current config.
         UserDefaults.standard.removeObject(forKey: "CustomGhosttyIcon")
+        let resolvedIcon = AppIcon(config: config)
+        let resolvedImage = AppIconSettings(config: config).previewImage(in: .main)
+        DispatchQueue.main.async {
+            self.appIcon = resolvedImage
+        }
         DispatchQueue.global().async {
-            UserDefaults.standard.appIcon = AppIcon(config: config)
+            UserDefaults.standard.appIcon = resolvedIcon
             DistributedNotificationCenter.default()
                 .postNotificationName(.ghosttyIconDidChange, object: nil, userInfo: nil, deliverImmediately: true)
         }
@@ -1822,6 +1830,24 @@ class AppDelegate: NSObject,
         } else {
             panel.directoryURL = BrowserPaths.defaultManagedProfileRoot().deletingLastPathComponent()
         }
+
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return url.path
+    }
+
+    @MainActor
+    func chooseCustomAppIconPath(currentPath: String?) -> String? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.canCreateDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.image]
+        panel.prompt = L10n.Settings.iconCustomBrowse
+        panel.message = L10n.Settings.iconCustomPickerMessage
+
+        let normalized = Self.normalizedCustomAppIconPath(currentPath) ?? AppIconSettings.defaultCustomIconPath
+        panel.directoryURL = URL(fileURLWithPath: normalized).deletingLastPathComponent()
 
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
         return url.path
@@ -1867,6 +1893,27 @@ class AppDelegate: NSObject,
 
         applyBrowserProfileDefaults(path: normalized)
         browserProfilePathOverride = normalized
+        ghostty.reloadConfig()
+    }
+
+    @MainActor
+    func saveVisualAppIconSettings(_ rawSettings: AppIconSettings) throws {
+        let settings = rawSettings.sanitized
+
+        if settings.icon == .custom {
+            let path = settings.customIconPath
+            guard FileManager.default.fileExists(atPath: path),
+                  settings.isCustomIconValid else {
+                throw NSError(
+                    domain: "GhoDexIconSettings",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: L10n.Settings.iconInvalidCustomPath]
+                )
+            }
+        }
+
+        let configURL = Self.browserSettingsConfigURL()
+        try Self.saveAppIconSettingsConfig(settings, to: configURL)
         ghostty.reloadConfig()
     }
 
@@ -2662,11 +2709,25 @@ extension AppDelegate: NSMenuItemValidation {
 extension AppDelegate {
     private static let browserSettingsStartMarker = "# >>> GhoDex browser settings >>>"
     private static let browserSettingsEndMarker = "# <<< GhoDex browser settings <<<"
+    private static let iconSettingsStartMarker = "# >>> GhoDex app icon settings >>>"
+    private static let iconSettingsEndMarker = "# <<< GhoDex app icon settings <<<"
     private static let browserProfileConfigKey = "ghodex-browser-profile-path"
     private static let browserRuntimeConfigKey = "ghodex-browser-runtime-path"
     private static let browserRemoteDebugPortConfigKey = "ghodex-browser-remote-debug-port"
+    private static let macosIconConfigKey = "macos-icon"
+    private static let macosCustomIconConfigKey = "macos-custom-icon"
+    private static let macosIconFrameConfigKey = "macos-icon-frame"
+    private static let macosIconGhostColorConfigKey = "macos-icon-ghost-color"
+    private static let macosIconScreenColorConfigKey = "macos-icon-screen-color"
 
     fileprivate static func normalizedBrowserProfilePath(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return (trimmed as NSString).standardizingPath
+    }
+
+    fileprivate static func normalizedCustomAppIconPath(_ value: String?) -> String? {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -2797,6 +2858,27 @@ extension AppDelegate {
         try text.write(to: url, atomically: true, encoding: .utf8)
     }
 
+    fileprivate static func saveAppIconSettingsConfig(_ settings: AppIconSettings, to url: URL) throws {
+        let fileManager = FileManager.default
+        try fileManager.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        let existingText: String
+        if fileManager.fileExists(atPath: url.path) {
+            existingText = try String(contentsOf: url, encoding: .utf8)
+        } else {
+            existingText = ""
+        }
+
+        let stripped = stripAppIconSettingsConfig(from: existingText)
+        let block = appIconSettingsConfigBlock(settings.sanitized)
+        let normalized = stripped.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = normalized.isEmpty ? "\(block)\n" : "\(normalized)\n\n\(block)\n"
+        try text.write(to: url, atomically: true, encoding: .utf8)
+    }
+
     fileprivate static func loadBrowserSettingsConfig() -> (profilePath: String?, runtimePath: String?) {
         let url = browserSettingsConfigURL()
         guard let text = try? String(contentsOf: url, encoding: .utf8) else {
@@ -2815,6 +2897,20 @@ extension AppDelegate {
             "\(browserProfileConfigKey) = \(configStringLiteral(profilePath ?? ""))",
             "\(browserRuntimeConfigKey) = \(configStringLiteral(runtimePath ?? ""))",
             browserSettingsEndMarker,
+        ].joined(separator: "\n")
+    }
+
+    private static func appIconSettingsConfigBlock(_ settings: AppIconSettings) -> String {
+        let normalized = settings.sanitized
+        let screenColors = normalized.screenColorHexes.joined(separator: ",")
+        return [
+            iconSettingsStartMarker,
+            "\(macosIconConfigKey) = \(configStringLiteral(normalized.icon.rawValue))",
+            "\(macosCustomIconConfigKey) = \(configStringLiteral(normalized.customIconPath))",
+            "\(macosIconFrameConfigKey) = \(configStringLiteral(normalized.frame.rawValue))",
+            "\(macosIconGhostColorConfigKey) = \(configStringLiteral(normalized.ghostColorHex))",
+            "\(macosIconScreenColorConfigKey) = \(configStringLiteral(screenColors))",
+            iconSettingsEndMarker,
         ].joined(separator: "\n")
     }
 
@@ -2844,6 +2940,45 @@ extension AppDelegate {
                 trimmed == browserProfileConfigKey ||
                 trimmed.hasPrefix("\(browserRuntimeConfigKey) =") ||
                 trimmed == browserRuntimeConfigKey {
+                continue
+            }
+
+            result.append(line)
+        }
+
+        return result.joined(separator: "\n")
+    }
+
+    private static func stripAppIconSettingsConfig(from text: String) -> String {
+        let lines = text.components(separatedBy: .newlines)
+        var result: [String] = []
+        var insideManagedBlock = false
+        let managedKeys = [
+            macosIconConfigKey,
+            macosCustomIconConfigKey,
+            macosIconFrameConfigKey,
+            macosIconGhostColorConfigKey,
+            macosIconScreenColorConfigKey,
+        ]
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            if trimmed == iconSettingsStartMarker {
+                insideManagedBlock = true
+                continue
+            }
+
+            if trimmed == iconSettingsEndMarker {
+                insideManagedBlock = false
+                continue
+            }
+
+            if insideManagedBlock {
+                continue
+            }
+
+            if managedKeys.contains(where: { trimmed.hasPrefix("\($0) =") || trimmed == $0 }) {
                 continue
             }
 

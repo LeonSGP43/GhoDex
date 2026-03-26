@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(settings): add visual logo switching in the macOS settings panel
+
+- What changed: Added a dedicated `Appearance` tab in the macOS settings panel for app-logo switching, plus a quick-entry card on `General` so the logo controls are easier to discover. The new UI supports built-in logo presets, custom icon file selection, and editable `custom-style` controls for frame, ghost color, and screen gradient stops. Added config-backed icon persistence in `AppDelegate` through a managed config block that writes `macos-icon`, `macos-custom-icon`, `macos-icon-frame`, `macos-icon-ghost-color`, and `macos-icon-screen-color`, then reloads config so the Dock/app icon updates live. Also localized the new settings surface in both English and Simplified Chinese.
+- Why: GhoDex already had runtime/config support for alternate app icons, but there was no practical settings entry for normal use. That forced users back to hand-editing config for a visual preference that should be directly operable from Settings.
+- Impact: Users can now switch logos visually from inside the app, verify the result immediately with a live preview, and rely on config round-tripping instead of hidden in-memory state. The entry is also easier to find because `General` now links directly into the dedicated logo editor.
+- Verification: `swiftlint lint macos/Sources/App/macOS/AppDelegate.swift macos/Sources/Features/Settings/SettingsView.swift macos/Sources/Features/Custom\ App\ Icon/AppIconSettings.swift macos/Sources/Helpers/AppLocalization.swift`; `nu macos/build.nu --configuration Release --action build`; open Settings and confirm built-in/custom/custom-style logo changes save into config and update the app icon after reload.
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Features/Settings/SettingsView.swift`, `macos/Sources/Features/Custom App Icon/AppIconSettings.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `CHANGELOG.md`
+- Decision trail: Keep logo settings in a dedicated `Appearance` tab instead of hiding them inside the existing language-only general page, but also add a general-page shortcut so the entry is not buried. Persist through a managed config block rather than `UserDefaults`-only state because the project requires Settings and config to stay two-way synced for user-facing controls.
+
 ### fix(control-harness): bound retained read frames and clean terminal teardown state
 
 - What changed: Reworked `ControlHarnessTerminalReadStore` so retained frames now store only canonical `content` text instead of both `content` and a persistent `[String]` line cache, added terminal-scoped cleanup on close, and enforced global retention guards with max frame count and max total retained text bytes on top of the existing per-key frame cap. Added matching `ControlHarnessReadAfterWriteStore` terminal cleanup and regression tests covering teardown and global eviction behavior.

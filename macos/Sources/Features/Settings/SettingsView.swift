@@ -1,13 +1,21 @@
+import AppKit
 import SwiftUI
 
 struct SettingsView: View {
-    private enum SettingsTab: Hashable {
+    enum SettingsTab: Hashable, CaseIterable {
         case general
+        case appearance
         case gateway
     }
 
-    // We need access to our app delegate to know if we're quitting or not.
+    private enum IconSource: Hashable {
+        case builtIn
+        case customFile
+        case customStyle
+    }
+
     @EnvironmentObject private var appDelegate: AppDelegate
+    private let visibleTabs: [SettingsTab]
     @AppStorage(AppLanguageSetting.storageKey)
     private var selectedLanguageRawValue: String = AppLanguageSetting.storedSelection().rawValue
     @State private var selectedTab: SettingsTab = .general
@@ -16,6 +24,14 @@ struct SettingsView: View {
     @State private var gatewayPortText = ""
     @State private var gatewayPairingHost = ""
     @State private var gatewayShowQrOnLaunch = false
+    @State private var iconSource: IconSource = .builtIn
+    @State private var builtInIconSelection: Ghostty.MacOSIcon = .official
+    @State private var customIconPath = AppIconSettings.defaultCustomIconPath
+    @State private var customStyleFrame: Ghostty.MacOSIconFrame = .aluminum
+    @State private var customStyleGhostColor = NSColor(hex: AppIconSettings.defaultGhostColorHex) ?? .white
+    @State private var customStyleScreenColors = AppIconSettings.defaultScreenColorHexes.compactMap(NSColor.init(hex:))
+    @State private var iconFeedbackMessage: String?
+    @State private var iconFeedbackIsError = false
 
     private var selectedLanguage: Binding<AppLanguageSetting> {
         Binding(
@@ -34,74 +50,381 @@ struct SettingsView: View {
     }
 
     private var gatewaySettingsDirty: Bool {
-        let current = gatewayDraftSettings()
-        return current != appDelegate.controlHarnessGatewaySettings
+        gatewayDraftSettings() != appDelegate.controlHarnessGatewaySettings
+    }
+
+    private var savedIconSettings: AppIconSettings {
+        appDelegate.appIconSettings.sanitized
+    }
+
+    private var iconSettingsDirty: Bool {
+        iconDraftSettings() != savedIconSettings
+    }
+
+    private var currentAppIconImage: NSImage {
+        appDelegate.appIcon ?? savedIconSettings.previewImage(in: .main) ?? NSImage()
+    }
+
+    private var draftAppIconImage: NSImage {
+        iconDraftSettings().previewImage(in: .main) ?? currentAppIconImage
+    }
+
+    init(
+        initialTab: SettingsTab = .general,
+        visibleTabs: [SettingsTab] = SettingsTab.allCases
+    ) {
+        let normalizedTabs = visibleTabs.isEmpty ? SettingsTab.allCases : visibleTabs
+        self.visibleTabs = normalizedTabs
+        _selectedTab = State(initialValue: normalizedTabs.contains(initialTab) ? initialTab : normalizedTabs[0])
     }
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            generalTab
-                .tabItem { Label(L10n.Settings.generalTab, systemImage: "gearshape") }
-                .tag(SettingsTab.general)
+        Group {
+            if visibleTabs.count == 1, let onlyTab = visibleTabs.first {
+                content(for: onlyTab)
+            } else {
+                TabView(selection: $selectedTab) {
+                    if visibleTabs.contains(.general) {
+                        generalTab
+                            .tabItem { Label(L10n.Settings.generalTab, systemImage: "gearshape") }
+                            .tag(SettingsTab.general)
+                    }
 
-            gatewayTab
-                .tabItem { Label(L10n.Settings.gatewayTab, systemImage: "network") }
-                .tag(SettingsTab.gateway)
+                    if visibleTabs.contains(.appearance) {
+                        appearanceTab
+                            .tabItem { Label(L10n.Settings.appearanceTab, systemImage: "app.badge") }
+                            .tag(SettingsTab.appearance)
+                    }
+
+                    if visibleTabs.contains(.gateway) {
+                        gatewayTab
+                            .tabItem { Label(L10n.Settings.gatewayTab, systemImage: "network") }
+                            .tag(SettingsTab.gateway)
+                    }
+                }
+            }
         }
-        .frame(minWidth: 720, minHeight: 460)
-        .onAppear(perform: syncGatewayForm)
+        .frame(minWidth: 780, minHeight: 560)
+        .onAppear {
+            syncGatewayForm()
+            syncIconForm(clearFeedback: true)
+        }
         .onReceive(appDelegate.$controlHarnessGatewaySettings) { _ in
             syncGatewayForm()
+        }
+        .onReceive(appDelegate.$appIconSettings) { _ in
+            syncIconForm(clearFeedback: false)
+        }
+    }
+
+    @ViewBuilder
+    private func content(for tab: SettingsTab) -> some View {
+        switch tab {
+        case .general:
+            generalTab
+        case .appearance:
+            appearanceTab
+        case .gateway:
+            gatewayTab
         }
     }
 
     private var generalTab: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack(alignment: .top, spacing: 16) {
-                Image("AppIconImage")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 96, height: 96)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack(alignment: .top, spacing: 16) {
+                    Image(nsImage: currentAppIconImage)
+                        .resizable()
+                        .interpolation(.high)
+                        .scaledToFit()
+                        .frame(width: 96, height: 96)
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(L10n.Settings.title)
-                        .font(.title)
-                    Text(L10n.Settings.body)
-                        .multilineTextAlignment(.leading)
-                        .lineLimit(nil)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 10) {
-                Text(L10n.Settings.languageTitle)
-                    .font(.headline)
-                Picker(L10n.Settings.languageTitle, selection: selectedLanguage) {
-                    ForEach(AppLanguageSetting.allCases, id: \.self) { option in
-                        Text(option.displayName).tag(option)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(L10n.Settings.title)
+                            .font(.title)
+                        Text(L10n.Settings.body)
+                            .multilineTextAlignment(.leading)
+                            .lineLimit(nil)
                     }
                 }
-                .pickerStyle(.radioGroup)
 
-                Text(L10n.Settings.languageDescription)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(L10n.Settings.languageTitle)
+                        .font(.headline)
+                    Picker(L10n.Settings.languageTitle, selection: selectedLanguage) {
+                        ForEach(AppLanguageSetting.allCases, id: \.self) { option in
+                            Text(option.displayName).tag(option)
+                        }
+                    }
+                    .pickerStyle(.radioGroup)
 
-            if needsRestart {
-                HStack {
-                    Text(L10n.Settings.languageRestartRequired)
+                    Text(L10n.Settings.languageDescription)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Spacer()
-                    Button(L10n.Settings.restartNow) {
-                        appDelegate.relaunchApplication()
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if needsRestart {
+                    HStack {
+                        Text(L10n.Settings.languageRestartRequired)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button(L10n.Settings.restartNow) {
+                            appDelegate.relaunchApplication()
+                        }
                     }
+                }
+
+                Divider()
+
+                HStack(alignment: .center, spacing: 16) {
+                    Image(nsImage: currentAppIconImage)
+                        .resizable()
+                        .interpolation(.high)
+                        .scaledToFit()
+                        .frame(width: 72, height: 72)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(L10n.Settings.iconQuickTitle)
+                            .font(.headline)
+                        Text(L10n.Settings.iconQuickDescription)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer()
+
+                    Button(L10n.Settings.iconOpenEditor) {
+                        selectedTab = .appearance
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding(16)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color(nsColor: .controlBackgroundColor))
+                )
+            }
+            .padding(22)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private var appearanceTab: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text(L10n.Settings.iconTitle)
+                    .font(.title2.weight(.semibold))
+
+                Text(L10n.Settings.iconDescription)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                GroupBox {
+                    HStack(alignment: .center, spacing: 18) {
+                        Image(nsImage: draftAppIconImage)
+                            .resizable()
+                            .interpolation(.high)
+                            .scaledToFit()
+                            .frame(width: 88, height: 88)
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(L10n.Settings.iconPreview)
+                                .font(.headline)
+                            Text(L10n.Settings.iconLiveApply)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        Spacer()
+                    }
+                    .padding(.vertical, 4)
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(L10n.Settings.iconModeTitle)
+                        .font(.headline)
+
+                    Picker(L10n.Settings.iconModeTitle, selection: $iconSource) {
+                        Text(L10n.Settings.iconModeBuiltIn).tag(IconSource.builtIn)
+                        Text(L10n.Settings.iconModeCustomFile).tag(IconSource.customFile)
+                        Text(L10n.Settings.iconModeCustomStyle).tag(IconSource.customStyle)
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                if iconSource == .builtIn {
+                    builtInIconSection
+                }
+
+                if iconSource == .customFile {
+                    customIconSection
+                }
+
+                if iconSource == .customStyle {
+                    customStyleSection
+                }
+
+                HStack(spacing: 12) {
+                    Button(L10n.Settings.iconApply) {
+                        saveIconSettings()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!iconSettingsDirty)
+
+                    Button(L10n.Settings.iconReset) {
+                        syncIconForm(clearFeedback: true)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!iconSettingsDirty)
+                }
+
+                if iconSettingsDirty {
+                    Text(L10n.Settings.iconPendingChanges)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let iconFeedbackMessage {
+                    Text(iconFeedbackMessage)
+                        .font(.caption)
+                        .foregroundStyle(iconFeedbackIsError ? Color.red : Color.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(22)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private var builtInIconSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(L10n.Settings.iconBuiltInTitle)
+                .font(.headline)
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 12)], spacing: 12) {
+                ForEach(Ghostty.MacOSIcon.builtInOptions, id: \.self) { icon in
+                    Button {
+                        builtInIconSelection = icon
+                    } label: {
+                        VStack(spacing: 10) {
+                            Image(nsImage: builtInPreviewImage(for: icon))
+                                .resizable()
+                                .interpolation(.high)
+                                .scaledToFit()
+                                .frame(width: 56, height: 56)
+
+                            Text(iconDisplayName(icon))
+                                .font(.caption)
+                                .foregroundStyle(.primary)
+                                .multilineTextAlignment(.center)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .padding(12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color(nsColor: .controlBackgroundColor))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(
+                                    builtInIconSelection == icon ? Color.accentColor : Color(nsColor: .separatorColor).opacity(0.3),
+                                    lineWidth: builtInIconSelection == icon ? 2 : 1
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
-        .padding(22)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var customIconSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(L10n.Settings.iconCustomPath)
+                .font(.headline)
+
+            HStack(spacing: 10) {
+                TextField(L10n.Settings.iconCustomPlaceholder, text: $customIconPath)
+                    .textFieldStyle(.roundedBorder)
+
+                Button(L10n.Settings.iconCustomBrowse) {
+                    guard let path = appDelegate.chooseCustomAppIconPath(currentPath: customIconPath) else { return }
+                    customIconPath = path
+                }
+                .buttonStyle(.bordered)
+            }
+
+            Text(L10n.Settings.iconCustomHelp)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var customStyleSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(L10n.Settings.iconStyleTitle)
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(L10n.Settings.iconFrame)
+                    .font(.subheadline.weight(.medium))
+                Picker(L10n.Settings.iconFrame, selection: $customStyleFrame) {
+                    Text(L10n.Settings.iconFrameAluminum).tag(Ghostty.MacOSIconFrame.aluminum)
+                    Text(L10n.Settings.iconFrameBeige).tag(Ghostty.MacOSIconFrame.beige)
+                    Text(L10n.Settings.iconFramePlastic).tag(Ghostty.MacOSIconFrame.plastic)
+                    Text(L10n.Settings.iconFrameChrome).tag(Ghostty.MacOSIconFrame.chrome)
+                }
+                .pickerStyle(.segmented)
+            }
+
+            ColorPicker(
+                L10n.Settings.iconGhostColor,
+                selection: Binding(
+                    get: { Color(nsColor: customStyleGhostColor) },
+                    set: { customStyleGhostColor = NSColor($0) }
+                ),
+                supportsOpacity: false
+            )
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(L10n.Settings.iconScreenColors)
+                    .font(.subheadline.weight(.medium))
+
+                ForEach(Array(customStyleScreenColors.indices), id: \.self) { index in
+                    HStack(spacing: 10) {
+                        ColorPicker(
+                            "\(L10n.Settings.iconScreenColors) \(index + 1)",
+                            selection: screenColorBinding(for: index),
+                            supportsOpacity: false
+                        )
+
+                        if let hex = customStyleScreenColors[index].hexString {
+                            Text(hex)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .frame(width: 76, alignment: .leading)
+                        }
+
+                        Button(L10n.Settings.iconRemoveColor) {
+                            removeScreenColor(at: index)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(customStyleScreenColors.count <= 1)
+                    }
+                }
+
+                Button(L10n.Settings.iconAddColor) {
+                    addScreenColor()
+                }
+                .buttonStyle(.bordered)
+                .disabled(customStyleScreenColors.count >= AppIconSettings.maxScreenColorCount)
+            }
+        }
     }
 
     private var gatewayTab: some View {
@@ -190,6 +513,117 @@ struct SettingsView: View {
         gatewayPortText = String(settings.listenPort)
         gatewayPairingHost = settings.pairingAdvertiseHost
         gatewayShowQrOnLaunch = settings.showPairingQrOnLaunch
+    }
+
+    private func syncIconForm(clearFeedback: Bool) {
+        let settings = savedIconSettings
+
+        switch settings.icon {
+        case .custom:
+            iconSource = .customFile
+            builtInIconSelection = .official
+        case .customStyle:
+            iconSource = .customStyle
+            builtInIconSelection = .official
+        default:
+            iconSource = .builtIn
+            builtInIconSelection = settings.icon
+        }
+
+        customIconPath = settings.customIconPath
+        customStyleFrame = settings.frame
+        customStyleGhostColor = settings.ghostColor
+        customStyleScreenColors = settings.screenColors
+
+        if clearFeedback {
+            iconFeedbackMessage = nil
+            iconFeedbackIsError = false
+        }
+    }
+
+    private func addScreenColor() {
+        let fallback = customStyleScreenColors.last ?? (NSColor(hex: AppIconSettings.defaultScreenColorHexes.last ?? "") ?? .systemBlue)
+        customStyleScreenColors.append(fallback)
+    }
+
+    private func removeScreenColor(at index: Int) {
+        guard customStyleScreenColors.indices.contains(index), customStyleScreenColors.count > 1 else { return }
+        customStyleScreenColors.remove(at: index)
+    }
+
+    private func screenColorBinding(for index: Int) -> Binding<Color> {
+        Binding(
+            get: {
+                let color = customStyleScreenColors.indices.contains(index)
+                    ? customStyleScreenColors[index]
+                    : (customStyleScreenColors.last ?? .systemBlue)
+                return Color(nsColor: color)
+            },
+            set: { newValue in
+                guard customStyleScreenColors.indices.contains(index) else { return }
+                customStyleScreenColors[index] = NSColor(newValue)
+            }
+        )
+    }
+
+    private func iconDraftSettings() -> AppIconSettings {
+        let selectedIcon: Ghostty.MacOSIcon
+        switch iconSource {
+        case .builtIn:
+            selectedIcon = builtInIconSelection
+        case .customFile:
+            selectedIcon = .custom
+        case .customStyle:
+            selectedIcon = .customStyle
+        }
+
+        return AppIconSettings(
+            icon: selectedIcon,
+            customIconPath: customIconPath,
+            frame: customStyleFrame,
+            ghostColorHex: customStyleGhostColor.hexString ?? AppIconSettings.defaultGhostColorHex,
+            screenColorHexes: customStyleScreenColors.compactMap(\.hexString)
+        ).sanitized
+    }
+
+    private func builtInPreviewImage(for icon: Ghostty.MacOSIcon) -> NSImage {
+        AppIconSettings(icon: icon).previewImage(in: .main) ?? currentAppIconImage
+    }
+
+    private func iconDisplayName(_ icon: Ghostty.MacOSIcon) -> String {
+        switch icon {
+        case .official:
+            return L10n.Settings.iconOptionOfficial
+        case .blueprint:
+            return L10n.Settings.iconOptionBlueprint
+        case .chalkboard:
+            return L10n.Settings.iconOptionChalkboard
+        case .glass:
+            return L10n.Settings.iconOptionGlass
+        case .holographic:
+            return L10n.Settings.iconOptionHolographic
+        case .microchip:
+            return L10n.Settings.iconOptionMicrochip
+        case .paper:
+            return L10n.Settings.iconOptionPaper
+        case .retro:
+            return L10n.Settings.iconOptionRetro
+        case .xray:
+            return L10n.Settings.iconOptionXray
+        case .custom, .customStyle:
+            return ""
+        }
+    }
+
+    private func saveIconSettings() {
+        do {
+            try appDelegate.saveVisualAppIconSettings(iconDraftSettings())
+            iconFeedbackMessage = L10n.Settings.iconSaved
+            iconFeedbackIsError = false
+        } catch {
+            iconFeedbackMessage = error.localizedDescription
+            iconFeedbackIsError = true
+        }
     }
 
     private func gatewayDraftSettings() -> ControlHarnessGatewayAppSettings {

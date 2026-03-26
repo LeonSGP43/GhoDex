@@ -715,7 +715,10 @@ struct SSHConnectionsView: View {
 
     private var preferencesTabContent: some View {
         ScrollView {
-            SettingsView()
+            SettingsView(
+                initialTab: .general,
+                visibleTabs: [.general, .appearance, .gateway]
+            )
                 .padding(.horizontal, 20)
                 .padding(.bottom, 20)
                 .padding(.top, 4)
