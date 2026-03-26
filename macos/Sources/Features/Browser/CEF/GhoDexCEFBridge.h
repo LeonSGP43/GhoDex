@@ -73,6 +73,9 @@ requestOpenURLInNewTab:(NSString *)urlString
 didHostPopupWindowForURL:(NSString *)urlString
     disposition:(NSInteger)disposition
      userGesture:(BOOL)userGesture;
+- (void)cefView:(GhoDexCEFView *)view
+didEmitRuntimeEventKind:(NSString *)kind
+        payload:(NSDictionary<NSString *, NSString *> *)payload;
 @end
 
 NS_ASSUME_NONNULL_END

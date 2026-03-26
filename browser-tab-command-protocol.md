@@ -477,7 +477,7 @@ Frame-specific notes:
 
 ```json
 {
-  "kindsJSON": "[\"consoleMessage\",\"navigationStateChanged\",\"networkRequestFinished\",\"popupRequest\",\"pageInspectionSnapshot\"]"
+  "kindsJSON": "[\"consoleMessage\",\"navigationStateChanged\",\"networkRequestFinished\",\"popupRequest\",\"pageInspectionSnapshot\",\"download\",\"javaScriptDialog\",\"permissionRequest\",\"authenticationRequest\",\"certificateWarning\"]"
 }
 ```
 
@@ -509,6 +509,11 @@ The external event stream currently supports these `kind` values:
 - `networkRequestFinished`
 - `popupRequest`
 - `pageInspectionSnapshot`
+- `download`
+- `javaScriptDialog`
+- `permissionRequest`
+- `authenticationRequest`
+- `certificateWarning`
 
 ### Event Envelope
 
@@ -553,6 +558,95 @@ Payload keys:
 
 `snapshotJSON` decodes into the same `BrowserDOMSnapshotResult` structure used
 by the internal Browser control plane.
+
+### `download` Payload
+
+`download` is emitted for the Browser download lifecycle.
+
+Payload keys:
+
+- `pageID`
+- `documentRevision`
+- `phase` as `started`, `completed`, `canceled`, or `interrupted`
+- `downloadID`
+- `url`
+- `suggestedName` when available
+- `targetPath` when available
+- `mimeType` when available
+- `receivedBytes`
+- `totalBytes`
+- `percentComplete`
+- `isComplete`
+- `isCanceled`
+- `isInterrupted`
+
+### `javaScriptDialog` Payload
+
+`javaScriptDialog` is emitted when a page opens a JavaScript alert, confirm,
+prompt, or before-unload dialog, and again after GhoDex resolves it through the
+native dialog UI.
+
+Payload keys:
+
+- `pageID`
+- `documentRevision`
+- `phase` as `requested` or `resolved`
+- `dialogType` as `alert`, `confirm`, `prompt`, or `beforeUnload`
+- `originURL` when available
+- `messageText`
+- `defaultPromptText` for prompt dialogs
+- `isReload` for before-unload dialogs
+- `accepted` on resolved events
+- `userInput` on resolved prompt events
+
+### `permissionRequest` Payload
+
+`permissionRequest` is emitted for both media-device permission prompts and
+generic browser permission prompts.
+
+Payload keys:
+
+- `pageID`
+- `documentRevision`
+- `phase` as `requested` or `resolved`
+- `permissionKind` as `media` or `generic`
+- `originURL`
+- `requestedPermissions`
+- `requestedPermissionsLabel`
+- `promptID` for generic permission prompts
+- `result` on resolved events
+
+### `authenticationRequest` Payload
+
+`authenticationRequest` is emitted when a page or proxy challenges for HTTP
+authentication, and again after GhoDex resolves the native auth dialog.
+
+Payload keys:
+
+- `pageID`
+- `documentRevision`
+- `phase` as `requested` or `resolved`
+- `originURL`
+- `host`
+- `port`
+- `realm`
+- `scheme`
+- `isProxy`
+- `accepted` on resolved events
+
+### `certificateWarning` Payload
+
+`certificateWarning` is emitted when TLS certificate validation fails and GhoDex
+surfaces the native continue/cancel warning.
+
+Payload keys:
+
+- `pageID`
+- `documentRevision`
+- `phase` as `requested` or `resolved`
+- `requestURL`
+- `errorCode`
+- `accepted` on resolved events
 
 ### `popupRequest` Payload
 
@@ -755,7 +849,7 @@ ghodex +browser-control --transport=ipc --request '{
   "command":"subscribeEvents",
   "browserTabID":"browser-tab-1",
   "payload":{
-    "kindsJSON":"[\"consoleMessage\",\"navigationStateChanged\",\"networkRequestFinished\",\"popupRequest\",\"pageInspectionSnapshot\"]"
+    "kindsJSON":"[\"consoleMessage\",\"navigationStateChanged\",\"networkRequestFinished\",\"popupRequest\",\"pageInspectionSnapshot\",\"download\",\"javaScriptDialog\",\"permissionRequest\",\"authenticationRequest\",\"certificateWarning\"]"
   }
 }'
 ```

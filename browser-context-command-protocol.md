@@ -101,6 +101,15 @@ State and events:
 - `drainEvents`
 - `unsubscribeEvents`
 
+Current externally observable runtime-service event kinds on that shared event
+stream:
+
+- `download`
+- `javaScriptDialog`
+- `permissionRequest`
+- `authenticationRequest`
+- `certificateWarning`
+
 ## Compatibility Rules
 
 - `browser.tab.v1` remains supported
@@ -134,3 +143,7 @@ What that proof currently covers:
   context
 - `browser.tab.v1` `newTab` creating a top-level Browser context that is then
   visible through `browser.context.v2` `listContexts`
+
+The runtime-service event kinds above are part of the same shared event stream
+and currently have unit coverage for kind mapping and payload shape. Full
+interactive resolve/cancel APIs remain a later slice.

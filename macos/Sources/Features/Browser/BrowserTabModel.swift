@@ -29,6 +29,11 @@ enum BrowserControlEventKind: String, Codable, Hashable {
     case consoleMessage
     case bridgeReady
     case networkRequestFinished
+    case download
+    case javaScriptDialog
+    case permissionRequest
+    case authenticationRequest
+    case certificateWarning
 }
 
 enum BrowserPopupDisposition: Int, Codable, Hashable {
@@ -505,6 +510,148 @@ struct BrowserControlEvent: Identifiable, Hashable, Codable {
                 "frameName": frameName,
             ]
         )
+    }
+
+    static func download(
+        target: BrowserControlTarget,
+        phase: String,
+        downloadID: String,
+        url: String,
+        suggestedName: String?,
+        targetPath: String?,
+        mimeType: String?,
+        receivedBytes: Int64,
+        totalBytes: Int64,
+        percentComplete: Int,
+        isComplete: Bool,
+        isCanceled: Bool,
+        isInterrupted: Bool
+    ) -> BrowserControlEvent {
+        var payload: [String: String] = [
+            "phase": phase,
+            "downloadID": downloadID,
+            "url": url,
+            "receivedBytes": String(receivedBytes),
+            "totalBytes": String(totalBytes),
+            "percentComplete": String(percentComplete),
+            "isComplete": String(isComplete),
+            "isCanceled": String(isCanceled),
+            "isInterrupted": String(isInterrupted),
+        ]
+        if let suggestedName, !suggestedName.isEmpty {
+            payload["suggestedName"] = suggestedName
+        }
+        if let targetPath, !targetPath.isEmpty {
+            payload["targetPath"] = targetPath
+        }
+        if let mimeType, !mimeType.isEmpty {
+            payload["mimeType"] = mimeType
+        }
+        return BrowserControlEvent(target: target, kind: .download, payload: payload)
+    }
+
+    static func javaScriptDialog(
+        target: BrowserControlTarget,
+        phase: String,
+        dialogType: String,
+        originURL: String?,
+        messageText: String,
+        defaultPromptText: String?,
+        isReload: Bool?,
+        accepted: Bool?,
+        userInput: String?
+    ) -> BrowserControlEvent {
+        var payload: [String: String] = [
+            "phase": phase,
+            "dialogType": dialogType,
+            "messageText": messageText,
+        ]
+        if let originURL, !originURL.isEmpty {
+            payload["originURL"] = originURL
+        }
+        if let defaultPromptText, !defaultPromptText.isEmpty {
+            payload["defaultPromptText"] = defaultPromptText
+        }
+        if let isReload {
+            payload["isReload"] = String(isReload)
+        }
+        if let accepted {
+            payload["accepted"] = String(accepted)
+        }
+        if let userInput {
+            payload["userInput"] = userInput
+        }
+        return BrowserControlEvent(target: target, kind: .javaScriptDialog, payload: payload)
+    }
+
+    static func permissionRequest(
+        target: BrowserControlTarget,
+        phase: String,
+        permissionKind: String,
+        originURL: String,
+        requestedPermissions: String,
+        requestedPermissionsLabel: String,
+        promptID: String?,
+        result: String?
+    ) -> BrowserControlEvent {
+        var payload: [String: String] = [
+            "phase": phase,
+            "permissionKind": permissionKind,
+            "originURL": originURL,
+            "requestedPermissions": requestedPermissions,
+            "requestedPermissionsLabel": requestedPermissionsLabel,
+        ]
+        if let promptID, !promptID.isEmpty {
+            payload["promptID"] = promptID
+        }
+        if let result, !result.isEmpty {
+            payload["result"] = result
+        }
+        return BrowserControlEvent(target: target, kind: .permissionRequest, payload: payload)
+    }
+
+    static func authenticationRequest(
+        target: BrowserControlTarget,
+        phase: String,
+        originURL: String,
+        host: String,
+        port: Int,
+        realm: String,
+        scheme: String,
+        isProxy: Bool,
+        accepted: Bool?
+    ) -> BrowserControlEvent {
+        var payload: [String: String] = [
+            "phase": phase,
+            "originURL": originURL,
+            "host": host,
+            "port": String(port),
+            "realm": realm,
+            "scheme": scheme,
+            "isProxy": String(isProxy),
+        ]
+        if let accepted {
+            payload["accepted"] = String(accepted)
+        }
+        return BrowserControlEvent(target: target, kind: .authenticationRequest, payload: payload)
+    }
+
+    static func certificateWarning(
+        target: BrowserControlTarget,
+        phase: String,
+        requestURL: String,
+        errorCode: String,
+        accepted: Bool?
+    ) -> BrowserControlEvent {
+        var payload: [String: String] = [
+            "phase": phase,
+            "requestURL": requestURL,
+            "errorCode": errorCode,
+        ]
+        if let accepted {
+            payload["accepted"] = String(accepted)
+        }
+        return BrowserControlEvent(target: target, kind: .certificateWarning, payload: payload)
     }
 }
 
@@ -1140,7 +1287,13 @@ final class BrowserTabModel: ObservableObject {
             }
         case .bridgeReady:
             pages.first(where: { $0.id == pageID })?.markControlBridgeReady()
-        case .consoleMessage, .networkRequestFinished:
+        case .consoleMessage,
+             .networkRequestFinished,
+             .download,
+             .javaScriptDialog,
+             .permissionRequest,
+             .authenticationRequest,
+             .certificateWarning:
             break
         }
 

@@ -790,6 +790,16 @@ private final class PageDelegate: NSObject, @preconcurrency GhoDexCEFViewDelegat
             from: pageID
         )
     }
+
+    func cefView(
+        _ view: GhoDexCEFView,
+        didEmitRuntimeEventKind kind: String,
+        payload: [String: String]
+    ) {
+        guard let target = model.controlTarget(for: pageID) else { return }
+        guard let eventKind = BrowserControlEventKind(rawValue: kind) else { return }
+        model.handle(BrowserControlEvent(target: target, kind: eventKind, payload: payload), from: pageID)
+    }
 }
 
 @MainActor

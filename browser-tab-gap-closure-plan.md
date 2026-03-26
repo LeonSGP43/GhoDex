@@ -215,6 +215,38 @@ Acceptance:
 - every handler surfaced in `GhoDexCEFBridge.mm` and related Swift routing has either passing evidence or an explicit red status
 - no handler remains in the ambiguous state of "implemented somewhere, probably works"
 
+### 3.5 Runtime Service Event Surface
+
+Problem:
+The CEF layer already handles downloads, JS dialogs, permission prompts, HTTP
+auth, and certificate warnings, but the external Browser control plane still
+cannot observe those flows as first-class events. That leaves automation blind
+exactly where real browser/runtime regressions are hardest to diagnose.
+
+Deliverables:
+
+- extend the external event stream so runtime-service flows are observable
+  without private logs
+- add stable event kinds for:
+  - download lifecycle
+  - JavaScript dialog lifecycle
+  - permission request lifecycle
+  - HTTP auth lifecycle
+  - certificate warning lifecycle
+- keep the first atomic slice to observability only; interactive resolve/cancel
+  commands remain a follow-up once the typed event model is stable
+- add unit coverage for broker kind mapping and payload contract stability
+
+Acceptance:
+
+- `subscribeEvents` can request the new runtime-service event kinds
+- the CEF-to-Swift path emits typed Browser control events for the five runtime
+  surfaces above
+- the external broker forwards those events with stable payload keys and page
+  targeting metadata
+- the acceptance matrix no longer treats these handler surfaces as "implemented
+  but externally invisible"
+
 ### 4. Popup And Open-Window Observability
 
 Problem:

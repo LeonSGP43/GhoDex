@@ -53,6 +53,11 @@ enum BrowserExternalEventKind: String, Codable, Hashable {
     case networkRequestFinished
     case popupRequest
     case pageInspectionSnapshot
+    case download
+    case javaScriptDialog
+    case permissionRequest
+    case authenticationRequest
+    case certificateWarning
 }
 
 struct BrowserExternalCommandError: Error, Hashable, Codable {

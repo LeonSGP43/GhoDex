@@ -228,6 +228,47 @@ NSURL *UniqueDownloadURL(NSString *suggested_name) {
   return [directory URLByAppendingPathComponent:sanitized isDirectory:NO];
 }
 
+NSString *BoolString(BOOL value) {
+  return value ? @"true" : @"false";
+}
+
+NSString *IntegerString(NSInteger value) {
+  return [NSString stringWithFormat:@"%ld", (long)value];
+}
+
+NSString *Int64String(int64_t value) {
+  return [NSString stringWithFormat:@"%lld", (long long)value];
+}
+
+NSString *UInt32String(uint32_t value) {
+  return [NSString stringWithFormat:@"%u", value];
+}
+
+NSString *UInt64String(uint64_t value) {
+  return [NSString stringWithFormat:@"%llu", (unsigned long long)value];
+}
+
+void SetPayloadValue(NSMutableDictionary<NSString *, NSString *> *payload,
+                     NSString *key,
+                     NSString * _Nullable value) {
+  if (payload == nil || key.length == 0 || value == nil || value.length == 0) {
+    return;
+  }
+  payload[key] = value;
+}
+
+NSString *JSDialogTypeName(JSDialogType dialog_type) {
+  switch (dialog_type) {
+  case JSDIALOGTYPE_ALERT:
+    return @"alert";
+  case JSDIALOGTYPE_CONFIRM:
+    return @"confirm";
+  case JSDIALOGTYPE_PROMPT:
+    return @"prompt";
+  }
+  return @"unknown";
+}
+
 NSArray<NSString *> *ExpandedFileDialogExtensions(
     const std::vector<CefString> &accept_filters,
     const std::vector<CefString> &accept_extensions) {
@@ -1149,6 +1190,14 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
               userGesture:userGesture];
 }
 
+- (void)notifyRuntimeEventKind:(NSString *)kind
+                       payload:(NSDictionary<NSString *, NSString *> *)payload {
+  NSDictionary<NSString *, NSString *> *captured_payload = payload ?: @{};
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [self.delegate cefView:self didEmitRuntimeEventKind:kind payload:captured_payload];
+  });
+}
+
 - (NSString *)registerEvaluationCompletion:(GhoDexCEFJavaScriptEvaluationCompletion)completion {
   NSString *request_id = [NSString stringWithFormat:@"%lld", ++_nextEvaluationRequestID];
   if (completion != nil) {
@@ -1415,6 +1464,14 @@ didHostPopupWindowForURL:(NSString *)urlString
   }
 }
 
+- (void)cefView:(GhoDexCEFView *)view
+didEmitRuntimeEventKind:(NSString *)kind
+        payload:(NSDictionary<NSString *, NSString *> *)payload {
+  (void)view;
+  (void)kind;
+  (void)payload;
+}
+
 @end
 
 namespace {
@@ -1612,7 +1669,6 @@ bool GhoDexCEFClient::OnBeforeDownload(CefRefPtr<CefBrowser> browser,
                                        const CefString &suggested_name,
                                        CefRefPtr<CefBeforeDownloadCallback> callback) {
   (void)browser;
-  (void)download_item;
   if (!callback.get()) {
     return false;
   }
@@ -1622,6 +1678,25 @@ bool GhoDexCEFClient::OnBeforeDownload(CefRefPtr<CefBrowser> browser,
   NSLog(@"[CEF] Download starting suggested=%@ target=%@",
         suggested.length > 0 ? suggested : @"<none>",
         target_url.path ?: @"<none>");
+  if (owner_) {
+    NSMutableDictionary<NSString *, NSString *> *payload = [@{
+      @"phase": @"started",
+      @"downloadID": download_item.get() ? UInt32String(download_item->GetId()) : @"0",
+      @"url": download_item.get() ? [NSString stringWithUTF8String:download_item->GetURL().ToString().c_str() ?: ""] : @"",
+      @"receivedBytes": @"0",
+      @"totalBytes": download_item.get() ? Int64String(download_item->GetTotalBytes()) : @"0",
+      @"percentComplete": download_item.get() ? IntegerString(download_item->GetPercentComplete()) : @"0",
+      @"isComplete": @"false",
+      @"isCanceled": @"false",
+      @"isInterrupted": @"false",
+    } mutableCopy];
+    SetPayloadValue(payload, @"suggestedName", suggested);
+    SetPayloadValue(payload, @"targetPath", target_url.path);
+    if (download_item.get()) {
+      SetPayloadValue(payload, @"mimeType", [NSString stringWithUTF8String:download_item->GetMimeType().ToString().c_str() ?: ""]);
+    }
+    [owner_ notifyRuntimeEventKind:@"download" payload:payload];
+  }
   callback->Continue(CefString(target_url.path.UTF8String), false);
   return true;
 }
@@ -1635,13 +1710,35 @@ void GhoDexCEFClient::OnDownloadUpdated(CefRefPtr<CefBrowser> browser,
     return;
   }
 
+  NSString *phase = nil;
   if (download_item->IsComplete()) {
+    phase = @"completed";
     NSString *path = [NSString stringWithUTF8String:download_item->GetFullPath().ToString().c_str() ?: ""];
     NSLog(@"[CEF] Download completed path=%@", path ?: @"<none>");
   } else if (download_item->IsCanceled()) {
+    phase = @"canceled";
     NSLog(@"[CEF] Download canceled id=%u", download_item->GetId());
   } else if (download_item->IsInterrupted()) {
+    phase = @"interrupted";
     NSLog(@"[CEF] Download interrupted id=%u", download_item->GetId());
+  }
+
+  if (phase != nil && owner_) {
+    NSMutableDictionary<NSString *, NSString *> *payload = [@{
+      @"phase": phase,
+      @"downloadID": UInt32String(download_item->GetId()),
+      @"url": [NSString stringWithUTF8String:download_item->GetURL().ToString().c_str() ?: ""],
+      @"receivedBytes": Int64String(download_item->GetReceivedBytes()),
+      @"totalBytes": Int64String(download_item->GetTotalBytes()),
+      @"percentComplete": IntegerString(download_item->GetPercentComplete()),
+      @"isComplete": BoolString(download_item->IsComplete()),
+      @"isCanceled": BoolString(download_item->IsCanceled()),
+      @"isInterrupted": BoolString(download_item->IsInterrupted()),
+    } mutableCopy];
+    SetPayloadValue(payload, @"suggestedName", [NSString stringWithUTF8String:download_item->GetSuggestedFileName().ToString().c_str() ?: ""]);
+    SetPayloadValue(payload, @"targetPath", [NSString stringWithUTF8String:download_item->GetFullPath().ToString().c_str() ?: ""]);
+    SetPayloadValue(payload, @"mimeType", [NSString stringWithUTF8String:download_item->GetMimeType().ToString().c_str() ?: ""]);
+    [owner_ notifyRuntimeEventKind:@"download" payload:payload];
   }
 }
 
@@ -1661,23 +1758,51 @@ bool GhoDexCEFClient::OnJSDialog(CefRefPtr<CefBrowser> browser,
   NSString *origin = [NSString stringWithUTF8String:origin_url.ToString().c_str() ?: ""];
   NSString *message = [NSString stringWithUTF8String:message_text.ToString().c_str() ?: ""];
   NSString *default_prompt = [NSString stringWithUTF8String:default_prompt_text.ToString().c_str() ?: ""];
+  NSString *dialog_type_name = JSDialogTypeName(dialog_type);
+
+  NSMutableDictionary<NSString *, NSString *> *requested_payload = [@{
+    @"phase": @"requested",
+    @"dialogType": dialog_type_name,
+    @"messageText": message,
+  } mutableCopy];
+  SetPayloadValue(requested_payload, @"originURL", origin);
+  SetPayloadValue(requested_payload, @"defaultPromptText", default_prompt);
+  [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:requested_payload];
 
   NSAlert *alert = [[NSAlert alloc] init];
   alert.alertStyle = NSAlertStyleInformational;
   alert.informativeText = message.length > 0 ? message : AlertDisplayOrigin(origin);
 
   switch (dialog_type) {
-  case JSDIALOGTYPE_ALERT:
+  case JSDIALOGTYPE_ALERT: {
     alert.messageText = [NSString stringWithFormat:@"%@ says", AlertDisplayOrigin(origin)];
     [alert addButtonWithTitle:@"OK"];
-    callback->Continue(RunAlert(alert, owner_) == NSAlertFirstButtonReturn, CefString());
+    BOOL accepted = RunAlert(alert, owner_) == NSAlertFirstButtonReturn;
+    callback->Continue(accepted, CefString());
+    [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:@{
+      @"phase": @"resolved",
+      @"dialogType": dialog_type_name,
+      @"messageText": message,
+      @"accepted": BoolString(accepted),
+      @"originURL": origin ?: @"",
+    }];
     return true;
-  case JSDIALOGTYPE_CONFIRM:
+  }
+  case JSDIALOGTYPE_CONFIRM: {
     alert.messageText = [NSString stringWithFormat:@"%@ confirmation", AlertDisplayOrigin(origin)];
     [alert addButtonWithTitle:@"OK"];
     [alert addButtonWithTitle:@"Cancel"];
-    callback->Continue(RunAlert(alert, owner_) == NSAlertFirstButtonReturn, CefString());
+    BOOL accepted = RunAlert(alert, owner_) == NSAlertFirstButtonReturn;
+    callback->Continue(accepted, CefString());
+    [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:@{
+      @"phase": @"resolved",
+      @"dialogType": dialog_type_name,
+      @"messageText": message,
+      @"accepted": BoolString(accepted),
+      @"originURL": origin ?: @"",
+    }];
     return true;
+  }
   case JSDIALOGTYPE_PROMPT: {
     alert.messageText = [NSString stringWithFormat:@"%@ prompt", AlertDisplayOrigin(origin)];
     NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 320, 24)];
@@ -1686,7 +1811,20 @@ bool GhoDexCEFClient::OnJSDialog(CefRefPtr<CefBrowser> browser,
     [alert addButtonWithTitle:@"OK"];
     [alert addButtonWithTitle:@"Cancel"];
     BOOL accepted = RunAlert(alert, owner_) == NSAlertFirstButtonReturn;
-    callback->Continue(accepted, CefString((accepted ? field.stringValue : default_prompt).UTF8String));
+    NSString *resolved_input = accepted ? field.stringValue : default_prompt;
+    callback->Continue(accepted, CefString(resolved_input.UTF8String));
+    NSMutableDictionary<NSString *, NSString *> *resolved_payload = [@{
+      @"phase": @"resolved",
+      @"dialogType": dialog_type_name,
+      @"messageText": message,
+      @"accepted": BoolString(accepted),
+      @"originURL": origin ?: @"",
+    } mutableCopy];
+    SetPayloadValue(resolved_payload, @"defaultPromptText", default_prompt);
+    if (accepted) {
+      SetPayloadValue(resolved_payload, @"userInput", resolved_input);
+    }
+    [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:resolved_payload];
     return true;
   }
   default:
@@ -1704,13 +1842,30 @@ bool GhoDexCEFClient::OnBeforeUnloadDialog(CefRefPtr<CefBrowser> browser,
   }
 
   NSString *message = [NSString stringWithUTF8String:message_text.ToString().c_str() ?: ""];
+  NSString *origin = browser.get() ? [NSString stringWithUTF8String:browser->GetMainFrame()->GetURL().ToString().c_str() ?: ""] : @"";
+  [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:@{
+    @"phase": @"requested",
+    @"dialogType": @"beforeUnload",
+    @"messageText": message,
+    @"originURL": origin ?: @"",
+    @"isReload": BoolString(is_reload),
+  }];
   NSAlert *alert = [[NSAlert alloc] init];
   alert.messageText = is_reload ? @"Reload this page?" : @"Leave this page?";
   alert.informativeText = message.length > 0 ? message : @"Changes you made may not be saved.";
   alert.alertStyle = NSAlertStyleWarning;
   [alert addButtonWithTitle:is_reload ? @"Reload" : @"Leave"];
   [alert addButtonWithTitle:@"Stay"];
-  callback->Continue(RunAlert(alert, owner_) == NSAlertFirstButtonReturn, CefString());
+  BOOL accepted = RunAlert(alert, owner_) == NSAlertFirstButtonReturn;
+  callback->Continue(accepted, CefString());
+  [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:@{
+    @"phase": @"resolved",
+    @"dialogType": @"beforeUnload",
+    @"messageText": message,
+    @"originURL": origin ?: @"",
+    @"isReload": BoolString(is_reload),
+    @"accepted": BoolString(accepted),
+  }];
   return true;
 }
 
@@ -1727,17 +1882,34 @@ bool GhoDexCEFClient::OnRequestMediaAccessPermission(
   }
 
   NSString *origin = [NSString stringWithUTF8String:requesting_origin.ToString().c_str() ?: ""];
+  NSString *permission_label = MediaPermissionDescription(requested_permissions);
+  [owner_ notifyRuntimeEventKind:@"permissionRequest" payload:@{
+    @"phase": @"requested",
+    @"permissionKind": @"media",
+    @"originURL": origin ?: @"",
+    @"requestedPermissions": UInt32String(requested_permissions),
+    @"requestedPermissionsLabel": permission_label,
+  }];
   NSAlert *alert = [[NSAlert alloc] init];
-  alert.messageText = [NSString stringWithFormat:@"%@ wants to use %@", AlertDisplayOrigin(origin), MediaPermissionDescription(requested_permissions)];
+  alert.messageText = [NSString stringWithFormat:@"%@ wants to use %@", AlertDisplayOrigin(origin), permission_label];
   alert.informativeText = @"Allow this browser page to access the requested device capabilities?";
   alert.alertStyle = NSAlertStyleInformational;
   [alert addButtonWithTitle:@"Allow"];
   [alert addButtonWithTitle:@"Block"];
-  if (RunAlert(alert, owner_) == NSAlertFirstButtonReturn) {
+  BOOL accepted = RunAlert(alert, owner_) == NSAlertFirstButtonReturn;
+  if (accepted) {
     callback->Continue(requested_permissions);
   } else {
     callback->Cancel();
   }
+  [owner_ notifyRuntimeEventKind:@"permissionRequest" payload:@{
+    @"phase": @"resolved",
+    @"permissionKind": @"media",
+    @"originURL": origin ?: @"",
+    @"requestedPermissions": UInt32String(requested_permissions),
+    @"requestedPermissionsLabel": permission_label,
+    @"result": accepted ? @"allow" : @"deny",
+  }];
   return true;
 }
 
@@ -1753,8 +1925,17 @@ bool GhoDexCEFClient::OnShowPermissionPrompt(CefRefPtr<CefBrowser> browser,
   }
 
   NSString *origin = [NSString stringWithUTF8String:requesting_origin.ToString().c_str() ?: ""];
+  NSString *permission_label = PermissionPromptDescription(requested_permissions);
+  [owner_ notifyRuntimeEventKind:@"permissionRequest" payload:@{
+    @"phase": @"requested",
+    @"permissionKind": @"generic",
+    @"originURL": origin ?: @"",
+    @"requestedPermissions": UInt32String(requested_permissions),
+    @"requestedPermissionsLabel": permission_label,
+    @"promptID": UInt64String(prompt_id),
+  }];
   NSAlert *alert = [[NSAlert alloc] init];
-  alert.messageText = [NSString stringWithFormat:@"%@ wants %@", AlertDisplayOrigin(origin), PermissionPromptDescription(requested_permissions)];
+  alert.messageText = [NSString stringWithFormat:@"%@ wants %@", AlertDisplayOrigin(origin), permission_label];
   alert.informativeText = @"Choose whether to allow this permission request.";
   alert.alertStyle = NSAlertStyleInformational;
   [alert addButtonWithTitle:@"Allow"];
@@ -1762,13 +1943,25 @@ bool GhoDexCEFClient::OnShowPermissionPrompt(CefRefPtr<CefBrowser> browser,
   [alert addButtonWithTitle:@"Not Now"];
 
   NSModalResponse response = RunAlert(alert, owner_);
+  NSString *result = @"dismiss";
   if (response == NSAlertFirstButtonReturn) {
+    result = @"allow";
     callback->Continue(CEF_PERMISSION_RESULT_ACCEPT);
   } else if (response == NSAlertSecondButtonReturn) {
+    result = @"deny";
     callback->Continue(CEF_PERMISSION_RESULT_DENY);
   } else {
     callback->Continue(CEF_PERMISSION_RESULT_DISMISS);
   }
+  [owner_ notifyRuntimeEventKind:@"permissionRequest" payload:@{
+    @"phase": @"resolved",
+    @"permissionKind": @"generic",
+    @"originURL": origin ?: @"",
+    @"requestedPermissions": UInt32String(requested_permissions),
+    @"requestedPermissionsLabel": permission_label,
+    @"promptID": UInt64String(prompt_id),
+    @"result": result,
+  }];
   return true;
 }
 
@@ -1781,8 +1974,6 @@ bool GhoDexCEFClient::GetAuthCredentials(CefRefPtr<CefBrowser> browser,
                                          const CefString &scheme,
                                          CefRefPtr<CefAuthCallback> callback) {
   (void)browser;
-  (void)isProxy;
-  (void)port;
   if (!owner_ || !callback.get()) {
     return false;
   }
@@ -1796,6 +1987,15 @@ bool GhoDexCEFClient::GetAuthCredentials(CefRefPtr<CefBrowser> browser,
   NSString *scheme_string = (scheme_cstr != nullptr && scheme_cstr[0] != '\0')
       ? [NSString stringWithUTF8String:scheme_cstr]
       : @"authentication";
+  [owner_ notifyRuntimeEventKind:@"authenticationRequest" payload:@{
+    @"phase": @"requested",
+    @"originURL": origin ?: @"",
+    @"host": host_string ?: @"",
+    @"port": IntegerString(port),
+    @"realm": realm_string ?: @"",
+    @"scheme": scheme_string ?: @"authentication",
+    @"isProxy": BoolString(isProxy),
+  }];
   dispatch_async(dispatch_get_main_queue(), ^{
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = [NSString stringWithFormat:@"%@ requires %@", host_string.length > 0 ? host_string : AlertDisplayOrigin(origin), scheme_string];
@@ -1813,12 +2013,23 @@ bool GhoDexCEFClient::GetAuthCredentials(CefRefPtr<CefBrowser> browser,
 
     [alert addButtonWithTitle:@"Sign In"];
     [alert addButtonWithTitle:@"Cancel"];
-    if (RunAlert(alert, owner) == NSAlertFirstButtonReturn) {
+    BOOL accepted = RunAlert(alert, owner) == NSAlertFirstButtonReturn;
+    if (accepted) {
       callback->Continue(CefString(username.stringValue.UTF8String),
                          CefString(password.stringValue.UTF8String));
     } else {
       callback->Cancel();
     }
+    [owner notifyRuntimeEventKind:@"authenticationRequest" payload:@{
+      @"phase": @"resolved",
+      @"originURL": origin ?: @"",
+      @"host": host_string ?: @"",
+      @"port": IntegerString(port),
+      @"realm": realm_string ?: @"",
+      @"scheme": scheme_string ?: @"authentication",
+      @"isProxy": BoolString(isProxy),
+      @"accepted": BoolString(accepted),
+    }];
   });
   return true;
 }
@@ -1835,6 +2046,12 @@ bool GhoDexCEFClient::OnCertificateError(CefRefPtr<CefBrowser> browser,
   }
 
   NSString *url = [NSString stringWithUTF8String:request_url.ToString().c_str() ?: ""];
+  NSString *error_code = IntegerString(static_cast<NSInteger>(cert_error));
+  [owner_ notifyRuntimeEventKind:@"certificateWarning" payload:@{
+    @"phase": @"requested",
+    @"requestURL": url ?: @"",
+    @"errorCode": error_code,
+  }];
   NSAlert *alert = [[NSAlert alloc] init];
   alert.messageText = @"Certificate validation failed";
   alert.informativeText = [NSString stringWithFormat:
@@ -1844,11 +2061,18 @@ bool GhoDexCEFClient::OnCertificateError(CefRefPtr<CefBrowser> browser,
   alert.alertStyle = NSAlertStyleWarning;
   [alert addButtonWithTitle:@"Continue"];
   [alert addButtonWithTitle:@"Cancel"];
-  if (RunAlert(alert, owner_) == NSAlertFirstButtonReturn) {
+  BOOL accepted = RunAlert(alert, owner_) == NSAlertFirstButtonReturn;
+  if (accepted) {
     callback->Continue();
   } else {
     callback->Cancel();
   }
+  [owner_ notifyRuntimeEventKind:@"certificateWarning" payload:@{
+    @"phase": @"resolved",
+    @"requestURL": url ?: @"",
+    @"errorCode": error_code,
+    @"accepted": BoolString(accepted),
+  }];
   return true;
 }
 
