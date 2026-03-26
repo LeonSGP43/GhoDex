@@ -283,6 +283,29 @@ Acceptance:
 - teardown clears pending prompt state without leaking callbacks into later page
   lifecycles
 
+Next atomic acceptance slice:
+
+- add a dedicated JavaScript dialog acceptance harness first, because alert /
+  confirm / prompt can be triggered deterministically from a local page without
+  introducing extra HTTPS, certificate, or OS-permission variables
+- keep permission, auth, and certificate acceptance as later slices instead of
+  mixing all runtime prompt types into one unverifiable harness
+
+Current blocker:
+
+- the dedicated JavaScript dialog harness now exists at
+  `scripts/browser_js_dialog_resolution_acceptance.py`, but isolated
+  end-to-end execution is currently blocked by the same `newContext` socket
+  timeout seen when re-running
+  `scripts/browser_context_protocol_acceptance.py` against the local
+  Browser-enabled app bundle
+- current blocker artifacts:
+  `/tmp/ghx-browser-js-dialog-resolution-acceptance.json`
+  `/tmp/ghx-browser-context-protocol-acceptance-recheck.json`
+- until that startup/control-path timeout is closed, runtime prompt acceptance
+  should be treated as "harness present, environment still blocking proof" and
+  not as a completed green slice
+
 ### 3.7 Download Control Surface
 
 Problem:
