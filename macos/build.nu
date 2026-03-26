@@ -26,6 +26,51 @@ def xcframework-build-args [configuration: string] {
     }
 }
 
+def trim-output [value: string] {
+    $value | str trim
+}
+
+def git-output [repo_root: string, ...args: string] {
+    let result = (^git -C $repo_root ...$args | complete)
+    if $result.exit_code != 0 {
+        error make {
+            msg: $"git command failed: git -C ($repo_root) ($args | str join ' ')"
+        }
+    }
+
+    trim-output $result.stdout
+}
+
+def git-has-dirty-tracked-state [repo_root: string] {
+    let unstaged = (^git -C $repo_root diff --quiet --ignore-submodules --exit-code | complete)
+    let staged = (^git -C $repo_root diff --cached --quiet --ignore-submodules --exit-code | complete)
+    ($unstaged.exit_code != 0) or ($staged.exit_code != 0)
+}
+
+def build-metadata [repo_root: string, version: string, configuration: string] {
+    let commit = (git-output $repo_root rev-parse HEAD)
+    let branch = ((git-output $repo_root rev-parse '--abbrev-ref' HEAD) | str replace -a "/" "-")
+    let dirty = (git-has-dirty-tracked-state $repo_root)
+    let workspace_state = if $dirty { "dirty" } else { "clean" }
+    let timestamp = (trim-output ((^date -u +"%Y-%m-%dT%H:%M:%SZ" | complete).stdout))
+    let short_commit = if (($commit | str length) > 12) {
+        $commit | str substring 0..12
+    } else {
+        $commit
+    }
+    let fingerprint = $"($version)+($configuration).($short_commit).($workspace_state).($timestamp)"
+
+    {
+        commit: $commit,
+        branch: $branch,
+        dirty: $dirty,
+        workspace_state: $workspace_state,
+        timestamp: $timestamp,
+        configuration: $configuration,
+        fingerprint: $fingerprint,
+    }
+}
+
 def ensure-xcframework [macos_dir: string, configuration: string, env_map: record] {
     let xcframework = ($macos_dir | path join "GhoDexKit.xcframework")
     let mode_marker = ($xcframework | path join ".ghodex-optimize-mode")
@@ -33,16 +78,16 @@ def ensure-xcframework [macos_dir: string, configuration: string, env_map: recor
 
     if ($xcframework | path exists) and ($mode_marker | path exists) {
         let current_mode = (open $mode_marker | str trim)
-        if $current_mode == $expected_mode {
-            return
+        if $current_mode != $expected_mode {
+            print $"Rebuilding ($xcframework) for optimize mode ($expected_mode)..."
+            rm -rf $xcframework
         }
-    }
-
-    if ($xcframework | path exists) {
-        print $"Rebuilding ($xcframework) for optimize mode ($expected_mode)..."
-        rm -rf $xcframework
     } else {
-        print $"Missing ($xcframework), bootstrapping GhoDexKit.xcframework via Zig..."
+        if ($xcframework | path exists) {
+            print $"Refreshing ($xcframework) for optimize mode ($expected_mode)..."
+        } else {
+            print $"Missing ($xcframework), bootstrapping GhoDexKit.xcframework via Zig..."
+        }
     }
 
     let build_args = (xcframework-build-args $configuration)
@@ -67,6 +112,44 @@ def ensure-xcframework [macos_dir: string, configuration: string, env_map: recor
     $expected_mode | save -f $mode_marker
 }
 
+def load-project-version [repo_root: string] {
+    let version = (open ($repo_root | path join "VERSION") | str trim)
+    let parsed = ($version | parse "{major}.{minor}.{patch}")
+    if ($parsed | is-empty) {
+        error make {
+            msg: $"VERSION must use MAJOR.MINOR.PATCH, got ($version)"
+        }
+    }
+
+    $version
+}
+
+def ensure-version-gate [repo_root: string, env_map: record] {
+    let gate = (^env -i
+        $"HOME=($env_map.HOME)"
+        $"PATH=($env_map.PATH)"
+        python3
+        ($repo_root | path join "scripts" "version_gate.py")
+        check
+        --quiet
+        | complete
+    )
+
+    if $gate.exit_code != 0 {
+        let stderr = ($gate.stderr | str trim)
+        let stdout = ($gate.stdout | str trim)
+        let details = if ($stderr | is-empty) { $stdout } else { $stderr }
+        error make {
+            msg: "Version gate failed before macOS build."
+            label: {
+                text: $details
+                span: (metadata $repo_root).span
+            }
+            help: "Run `python3 scripts/version_gate.py bump patch|minor|major` or `python3 scripts/version_gate.py sync X.Y.Z`, update CHANGELOG.md, then rebuild."
+        }
+    }
+}
+
 def main [
     --scheme: string = "GhoDex"        # Xcode scheme (GhoDex, GhoDex-iOS, DockTilePlugin)
     --configuration: string = "Debug"  # Build configuration (Debug, Release, ReleaseLocal)
@@ -78,6 +161,10 @@ def main [
     let derived_data_dir = ($build_dir | path join "DerivedData")
     let repo_root = ($macos_dir | path dirname)
     let env_map = (clean-env)
+    let project_version = (load-project-version $repo_root)
+    let metadata = (build-metadata $repo_root $project_version $configuration)
+
+    ensure-version-gate $repo_root $env_map
 
     ensure-xcframework $macos_dir $configuration $env_map
 
@@ -124,6 +211,14 @@ def main [
         -configuration $configuration
         -derivedDataPath $derived_data_dir
         $"SYMROOT=($build_dir)"
+        $"MARKETING_VERSION=($project_version)"
+        $"CURRENT_PROJECT_VERSION=($project_version)"
+        $"GHODEX_BUILD_COMMIT=($metadata.commit)"
+        $"GHODEX_BUILD_BRANCH=($metadata.branch)"
+        $"GHODEX_BUILD_CONFIGURATION=($metadata.configuration)"
+        $"GHODEX_BUILD_TIMESTAMP=($metadata.timestamp)"
+        $"GHODEX_BUILD_WORKTREE_STATE=($metadata.workspace_state)"
+        $"GHODEX_BUILD_FINGERPRINT=($metadata.fingerprint)"
         ...$skip_testing
         ...$cef_build_settings
         $action)

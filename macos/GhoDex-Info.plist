@@ -45,9 +45,17 @@
 		</dict>
 	</array>
 	<key>GhoDexBuild</key>
-	<string></string>
+	<string>$(GHODEX_BUILD_FINGERPRINT)</string>
+	<key>GhoDexBuildBranch</key>
+	<string>$(GHODEX_BUILD_BRANCH)</string>
+	<key>GhoDexBuildConfiguration</key>
+	<string>$(GHODEX_BUILD_CONFIGURATION)</string>
+	<key>GhoDexBuildTimestamp</key>
+	<string>$(GHODEX_BUILD_TIMESTAMP)</string>
+	<key>GhoDexBuildWorkspaceState</key>
+	<string>$(GHODEX_BUILD_WORKTREE_STATE)</string>
 	<key>GhoDexCommit</key>
-	<string></string>
+	<string>$(GHODEX_BUILD_COMMIT)</string>
 	<key>LSEnvironment</key>
 	<dict>
 		<key>GHOSTTY_MAC_LAUNCH_SOURCE</key>

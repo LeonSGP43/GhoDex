@@ -5,6 +5,9 @@ const std = @import("std");
 /// The short hash (7 characters) of the latest commit.
 short_hash: []const u8,
 
+/// The full hash of the latest commit.
+full_hash: []const u8,
+
 /// True if there was a diff at build time.
 changes: bool,
 
@@ -50,6 +53,19 @@ pub fn detect(b: *std.Build) !Version {
         break :short_hash std.mem.trimRight(u8, output, "\r\n ");
     };
 
+    const full_hash = full_hash: {
+        const output = b.runAllowFail(
+            &[_][]const u8{ "git", "-C", b.build_root.path orelse ".", "-c", "log.showSignature=false", "log", "--pretty=format:%H", "-n", "1" },
+            &code,
+            .Ignore,
+        ) catch |err| switch (err) {
+            error.FileNotFound => return error.GitNotFound,
+            else => return err,
+        };
+
+        break :full_hash std.mem.trimRight(u8, output, "\r\n ");
+    };
+
     const tag = b.runAllowFail(
         &[_][]const u8{ "git", "-C", b.build_root.path orelse ".", "describe", "--exact-match", "--tags" },
         &code,
@@ -76,6 +92,7 @@ pub fn detect(b: *std.Build) !Version {
 
     return .{
         .short_hash = short_hash,
+        .full_hash = full_hash,
         .changes = changes,
         .tag = if (tag.len > 0) std.mem.trimRight(u8, tag, "\r\n ") else null,
         .branch = std.mem.trimRight(u8, branch, "\r\n "),

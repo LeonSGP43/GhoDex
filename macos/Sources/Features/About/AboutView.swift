@@ -6,11 +6,31 @@ struct AboutView: View {
     private let githubURL = URL(string: "https://github.com/LeonSGP43/GhoDex")
     private let docsURL = URL(string: "https://github.com/LeonSGP43/GhoDex#readme")
 
-    /// Read the commit from the bundle.
-    private var build: String? { Bundle.main.infoDictionary?["CFBundleVersion"] as? String }
-    private var commit: String? { Bundle.main.infoDictionary?["GhoDexCommit"] as? String }
-    private var version: String? { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String }
-    private var copyright: String? { Bundle.main.infoDictionary?["NSHumanReadableCopyright"] as? String }
+    private func bundleString(_ key: String) -> String? {
+        guard let value = Bundle.main.infoDictionary?[key] as? String else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private var bundleBuild: String? { bundleString("CFBundleVersion") }
+    private var commit: String? { bundleString("GhoDexCommit") }
+    private var version: String? { bundleString("CFBundleShortVersionString") }
+    private var buildConfiguration: String? { bundleString("GhoDexBuildConfiguration") }
+    private var buildTimestamp: String? { bundleString("GhoDexBuildTimestamp") }
+    private var buildFingerprint: String? { bundleString("GhoDexBuild") }
+    private var buildBranch: String? { bundleString("GhoDexBuildBranch") }
+    private var copyright: String? { bundleString("NSHumanReadableCopyright") }
+    private var workspaceState: String? {
+        guard let raw = bundleString("GhoDexBuildWorkspaceState")?.lowercased() else { return nil }
+        switch raw {
+        case "clean":
+            return L10n.About.workspaceClean
+        case "dirty":
+            return L10n.About.workspaceDirty
+        default:
+            return raw
+        }
+    }
 
     #if os(macOS)
     // This creates a background style similar to the Apple "About My Mac" Window
@@ -63,12 +83,29 @@ struct AboutView: View {
                     if let version {
                         PropertyRow(label: L10n.About.version, text: version)
                     }
-                    if let build {
-                        PropertyRow(label: L10n.About.build, text: build)
+                    if let bundleBuild, bundleBuild != version {
+                        PropertyRow(label: L10n.About.build, text: bundleBuild)
+                    }
+                    if let buildConfiguration {
+                        PropertyRow(label: L10n.About.configuration, text: buildConfiguration)
+                    }
+                    if let buildTimestamp {
+                        PropertyRow(label: L10n.About.builtAt, text: buildTimestamp)
+                    }
+                    if let workspaceState {
+                        PropertyRow(label: L10n.About.workspace, text: workspaceState)
+                    }
+                    if let buildBranch {
+                        PropertyRow(label: L10n.About.branch, text: buildBranch)
                     }
                     if let commit, commit != "",
-                       let url = githubURL?.appendingPathComponent("/commits/\(commit)") {
+                       let url = githubURL?
+                        .appendingPathComponent("commit")
+                        .appendingPathComponent(commit) {
                         PropertyRow(label: L10n.About.commit, text: commit, url: url)
+                    }
+                    if let buildFingerprint {
+                        PropertyRow(label: L10n.About.fingerprint, text: buildFingerprint)
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -100,7 +137,7 @@ struct AboutView: View {
         }
         .padding(.top, 8)
         .padding(32)
-        .frame(minWidth: 256)
+        .frame(minWidth: 420)
         #if os(macOS)
         .background(VisualEffectBackground(material: .underWindowBackground).ignoresSafeArea())
         #endif
@@ -119,15 +156,16 @@ struct AboutView: View {
 
         @ViewBuilder private var textView: some View {
             Text(text)
-                .frame(width: 125, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.leading, 2)
                 .tint(.secondary)
                 .opacity(0.8)
                 .monospaced()
+                .fixedSize(horizontal: false, vertical: true)
         }
 
         var body: some View {
-            HStack(spacing: 4) {
+            HStack(alignment: .top, spacing: 4) {
                 Text(label)
                     .frame(width: 126, alignment: .trailing)
                     .padding(.trailing, 2)

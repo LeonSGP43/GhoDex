@@ -77,6 +77,47 @@ A file for [guiding coding agents](https://agents.md/).
   changelog notes, nearby design docs, implementation notes, or code comments
   for tightly scoped logic.
 
+## Version Gate (Required)
+
+- `VERSION` at the repo root is the single source of truth for the shipped
+  GhoDex app version. It must always be valid SemVer in `MAJOR.MINOR.PATCH`
+  format.
+- `build.zig.zon` `.version`, every `MARKETING_VERSION`, and every
+  `CURRENT_PROJECT_VERSION` in `macos/GhoDex.xcodeproj/project.pbxproj` must
+  stay fully synced to `VERSION`. Do not hand-edit one of these and leave the
+  others behind.
+- Use `python3 scripts/version_gate.py bump patch|minor|major` for ordinary
+  increments, or `python3 scripts/version_gate.py sync X.Y.Z` when an explicit
+  target version is required. Review and update `CHANGELOG.md` immediately after
+  any bump so the version and release notes move together.
+- Do not require a version bump for every local commit or every compile. Normal
+  iteration builds may reuse the current version as long as the synced version
+  metadata remains internally consistent.
+- A version bump is required before push only when the outgoing branch contains
+  a ship-worthy commit: any conventional commit with type `feat`, `fix`, or
+  `perf`, or any breaking change commit marked with `!`. `docs`, `test`,
+  `refactor`, and non-user-visible `chore` changes do not require a bump by
+  themselves.
+- The hard release boundary is the push/release boundary, not every build. Run
+  `python3 scripts/version_gate.py check-push` before `git push`. It must fail
+  when ship-worthy commits are present without a version bump and matching
+  changelog update.
+- `macos/build.nu` remains a lighter local gate: it must fail only when
+  `VERSION`, `build.zig.zon`, and the Xcode project version fields drift out of
+  sync or `VERSION` stops being valid SemVer. It must not force a fresh bump on
+  ordinary local compiles.
+- Preferred timing: keep developing freely, then once the outgoing change set is
+  stable and you know what will actually ship, make one atomic release-prep
+  commit such as `chore(release): bump version to X.Y.Z` immediately before the
+  final push/release cycle. That is the best balance between low-friction local
+  iteration and accurate shipped version history.
+- SemVer policy:
+  `major`: breaking config/data/API/runtime compatibility changes.
+  `minor`: backward-compatible user-visible features or significant new
+  capability.
+  `patch`: backward-compatible fixes, tuning, and user-visible behavior changes
+  that do not break compatibility.
+
 ## Worktree Development Policy
 
 - The current primary coordination worktree is

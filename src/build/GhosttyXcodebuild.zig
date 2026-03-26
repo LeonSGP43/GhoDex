@@ -8,6 +8,7 @@ const Docs = @import("GhosttyDocs.zig");
 const I18n = @import("GhosttyI18n.zig");
 const Resources = @import("GhosttyResources.zig");
 const XCFramework = @import("GhosttyXCFramework.zig");
+const GitVersion = @import("GitVersion.zig");
 
 build: *std.Build.Step.Run,
 open: *std.Build.Step.Run,
@@ -60,6 +61,7 @@ pub fn init(
         .x86_64 => "x86_64",
         else => @panic("unsupported macOS arch"),
     }});
+    const metadata = try BuildMetadata.detect(b, config, xc_config);
 
     // Our step to build the Ghostty macOS app.
     const build = build: {
@@ -82,6 +84,22 @@ pub fn init(
             "GhoDex",
             "-configuration",
             xc_config,
+            b.fmt("MARKETING_VERSION={d}.{d}.{d}", .{
+                config.version.major,
+                config.version.minor,
+                config.version.patch,
+            }),
+            b.fmt("CURRENT_PROJECT_VERSION={d}.{d}.{d}", .{
+                config.version.major,
+                config.version.minor,
+                config.version.patch,
+            }),
+            b.fmt("GHODEX_BUILD_COMMIT={s}", .{metadata.commit}),
+            b.fmt("GHODEX_BUILD_BRANCH={s}", .{metadata.branch}),
+            b.fmt("GHODEX_BUILD_CONFIGURATION={s}", .{xc_config}),
+            b.fmt("GHODEX_BUILD_TIMESTAMP={s}", .{metadata.timestamp}),
+            b.fmt("GHODEX_BUILD_WORKTREE_STATE={s}", .{metadata.workspace_state}),
+            b.fmt("GHODEX_BUILD_FINGERPRINT={s}", .{metadata.fingerprint}),
         });
 
         // If we have a specific architecture, we need to pass it
@@ -128,6 +146,22 @@ pub fn init(
             xctest_derived_data,
             "-skip-testing",
             "GhosttyUITests",
+            b.fmt("MARKETING_VERSION={d}.{d}.{d}", .{
+                config.version.major,
+                config.version.minor,
+                config.version.patch,
+            }),
+            b.fmt("CURRENT_PROJECT_VERSION={d}.{d}.{d}", .{
+                config.version.major,
+                config.version.minor,
+                config.version.patch,
+            }),
+            b.fmt("GHODEX_BUILD_COMMIT={s}", .{metadata.commit}),
+            b.fmt("GHODEX_BUILD_BRANCH={s}", .{metadata.branch}),
+            b.fmt("GHODEX_BUILD_CONFIGURATION={s}", .{xc_config}),
+            b.fmt("GHODEX_BUILD_TIMESTAMP={s}", .{metadata.timestamp}),
+            b.fmt("GHODEX_BUILD_WORKTREE_STATE={s}", .{metadata.workspace_state}),
+            b.fmt("GHODEX_BUILD_FINGERPRINT={s}", .{metadata.fingerprint}),
         });
 
         // The explicit destination already selects the host architecture.
@@ -208,6 +242,65 @@ pub fn init(
         .xctest = xctest,
     };
 }
+
+const BuildMetadata = struct {
+    commit: []const u8,
+    branch: []const u8,
+    timestamp: []const u8,
+    workspace_state: []const u8,
+    fingerprint: []const u8,
+
+    fn detect(
+        b: *std.Build,
+        config: *const Config,
+        configuration: []const u8,
+    ) !BuildMetadata {
+        const version = b.fmt("{d}.{d}.{d}", .{
+            config.version.major,
+            config.version.minor,
+            config.version.patch,
+        });
+
+        const git = GitVersion.detect(b) catch |err| switch (err) {
+            error.GitNotFound,
+            error.GitNotRepository,
+            => null,
+            else => return err,
+        };
+
+        const commit = if (git) |value| value.full_hash else "unknown";
+        const branch = if (git) |value| value.branch else "unknown";
+        const workspace_state = if (git != null and git.?.changes) "dirty" else "clean";
+        const timestamp = try detectBuildTimestamp(b);
+        const short_commit = if (commit.len > 12) commit[0..12] else commit;
+        const fingerprint = b.fmt(
+            "{s}+{s}.{s}.{s}.{s}",
+            .{ version, configuration, short_commit, workspace_state, timestamp },
+        );
+
+        return .{
+            .commit = commit,
+            .branch = branch,
+            .timestamp = timestamp,
+            .workspace_state = workspace_state,
+            .fingerprint = fingerprint,
+        };
+    }
+
+    fn detectBuildTimestamp(b: *std.Build) ![]const u8 {
+        var code: u8 = 0;
+        const output = b.runAllowFail(
+            &[_][]const u8{ "date", "-u", "+%Y-%m-%dT%H:%M:%SZ" },
+            &code,
+            .Ignore,
+        ) catch |err| switch (err) {
+            error.FileNotFound => return "unknown",
+            else => return err,
+        };
+        if (code != 0) return "unknown";
+        return std.mem.trimRight(u8, output, "\r\n ");
+    }
+};
 
 pub fn install(self: *const Ghostty) void {
     const b = self.copy.step.owner;
