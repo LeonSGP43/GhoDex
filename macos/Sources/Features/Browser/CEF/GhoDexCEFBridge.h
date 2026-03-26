@@ -20,6 +20,7 @@ typedef NS_ENUM(NSInteger, GhoDexCEFControlErrorCode) {
     GhoDexCEFControlErrorCodeEvaluationUnavailable = 2,
     GhoDexCEFControlErrorCodeEvaluationFailed = 3,
     GhoDexCEFControlErrorCodeRuntimePromptUnavailable = 4,
+    GhoDexCEFControlErrorCodeDownloadUnavailable = 5,
 };
 
 typedef void (^GhoDexCEFJavaScriptEvaluationCompletion)(NSString * _Nullable resultJSON, NSError * _Nullable error);
@@ -56,6 +57,8 @@ typedef void (^GhoDexCEFJavaScriptEvaluationCompletion)(NSString * _Nullable res
 - (BOOL)resolveCertificateRequestID:(NSString *)requestID
                            accepted:(BOOL)accepted
                               error:(NSError * _Nullable * _Nullable)error;
+- (BOOL)cancelDownloadID:(NSString *)downloadID
+                   error:(NSError * _Nullable * _Nullable)error;
 @end
 
 @protocol GhoDexCEFViewDelegate <NSObject>

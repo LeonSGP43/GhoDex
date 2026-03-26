@@ -60,6 +60,7 @@ NSString * const GhoDexCEFControlErrorDomain = @"com.leongong.ghodex.browser.cef
 #include <vector>
 
 #include <dispatch/dispatch.h>
+#include <map>
 
 #include "include/cef_app.h"
 #include "include/cef_browser.h"
@@ -815,6 +816,7 @@ public:
 
   void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
     if (browser_ && browser_->GetIdentifier() == browser->GetIdentifier()) {
+      pending_download_callbacks_.clear();
       if (owner_) {
         dispatch_async(dispatch_get_main_queue(), ^{
           [owner_ failPendingEvaluationRequestsWithCode:GhoDexCEFControlErrorCodeBridgeUnavailable
@@ -869,6 +871,7 @@ public:
                           std::string *error_description);
   bool ListFrames(std::string *result_json, std::string *error_description);
   bool SendTrustedClick(double x, double y, std::string *error_description);
+  bool CancelDownload(uint32_t download_id, std::string *error_description);
   void WasResized();
   void CloseBrowser();
 
@@ -879,6 +882,7 @@ private:
 
   __weak GhoDexCEFView *owner_;
   CefRefPtr<CefBrowser> browser_;
+  std::map<uint32_t, CefRefPtr<CefDownloadItemCallback>> pending_download_callbacks_;
 
   IMPLEMENT_REFCOUNTING(GhoDexCEFClient);
 };
@@ -1232,6 +1236,51 @@ CefRefPtr<GhoDexCEFApp> g_cef_app;
                                         kind:@"certificateWarning"
                                      payload:payload
                                        error:error];
+}
+
+- (BOOL)cancelDownloadID:(NSString *)downloadID
+                   error:(NSError * _Nullable * _Nullable)error {
+  if (!_client) {
+    if (error != nil) {
+      *error = MakeControlError(
+          GhoDexCEFControlErrorCodeBridgeUnavailable,
+          @"The CEF browser bridge is unavailable.");
+    }
+    return NO;
+  }
+
+  NSString *trimmed_download_id = [downloadID stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+  if (trimmed_download_id.length == 0) {
+    if (error != nil) {
+      *error = MakeControlError(
+          GhoDexCEFControlErrorCodeDownloadUnavailable,
+          @"The downloadID payload is required.");
+    }
+    return NO;
+  }
+
+  uint64_t parsed_download_id = 0;
+  NSScanner *scanner = [NSScanner scannerWithString:trimmed_download_id];
+  if (![scanner scanUnsignedLongLong:&parsed_download_id] || !scanner.isAtEnd || parsed_download_id > UINT32_MAX) {
+    if (error != nil) {
+      *error = MakeControlError(
+          GhoDexCEFControlErrorCodeDownloadUnavailable,
+          @"The downloadID payload must be a valid download identifier.");
+    }
+    return NO;
+  }
+
+  std::string error_description;
+  if (_client->CancelDownload(static_cast<uint32_t>(parsed_download_id), &error_description)) {
+    return YES;
+  }
+
+  if (error != nil) {
+    *error = MakeControlError(
+        GhoDexCEFControlErrorCodeDownloadUnavailable,
+        [NSString stringWithUTF8String:error_description.c_str() ?: "The browser could not cancel the requested download."]);
+  }
+  return NO;
 }
 
 - (void)notifyTitle:(NSString *)title {
@@ -1905,9 +1954,16 @@ void GhoDexCEFClient::OnDownloadUpdated(CefRefPtr<CefBrowser> browser,
                                         CefRefPtr<CefDownloadItem> download_item,
                                         CefRefPtr<CefDownloadItemCallback> callback) {
   (void)browser;
-  (void)callback;
   if (!download_item.get()) {
     return;
+  }
+
+  const uint32_t download_id = download_item->GetId();
+  if (callback.get() && !download_item->IsComplete() && !download_item->IsCanceled() &&
+      !download_item->IsInterrupted()) {
+    pending_download_callbacks_[download_id] = callback;
+  } else {
+    pending_download_callbacks_.erase(download_id);
   }
 
   NSString *phase = nil;
@@ -1917,16 +1973,16 @@ void GhoDexCEFClient::OnDownloadUpdated(CefRefPtr<CefBrowser> browser,
     NSLog(@"[CEF] Download completed path=%@", path ?: @"<none>");
   } else if (download_item->IsCanceled()) {
     phase = @"canceled";
-    NSLog(@"[CEF] Download canceled id=%u", download_item->GetId());
+    NSLog(@"[CEF] Download canceled id=%u", download_id);
   } else if (download_item->IsInterrupted()) {
     phase = @"interrupted";
-    NSLog(@"[CEF] Download interrupted id=%u", download_item->GetId());
+    NSLog(@"[CEF] Download interrupted id=%u", download_id);
   }
 
   if (phase != nil && owner_) {
     NSMutableDictionary<NSString *, NSString *> *payload = [@{
       @"phase": phase,
-      @"downloadID": UInt32String(download_item->GetId()),
+      @"downloadID": UInt32String(download_id),
       @"url": [NSString stringWithUTF8String:download_item->GetURL().ToString().c_str() ?: ""],
       @"receivedBytes": Int64String(download_item->GetReceivedBytes()),
       @"totalBytes": Int64String(download_item->GetTotalBytes()),
@@ -1940,6 +1996,29 @@ void GhoDexCEFClient::OnDownloadUpdated(CefRefPtr<CefBrowser> browser,
     SetPayloadValue(payload, @"mimeType", [NSString stringWithUTF8String:download_item->GetMimeType().ToString().c_str() ?: ""]);
     [owner_ notifyRuntimeEventKind:@"download" payload:payload];
   }
+}
+
+bool GhoDexCEFClient::CancelDownload(uint32_t download_id,
+                                     std::string *error_description) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!browser_) {
+    if (error_description != nullptr) {
+      *error_description = "The CEF browser instance is not ready.";
+    }
+    return false;
+  }
+
+  auto callback_it = pending_download_callbacks_.find(download_id);
+  if (callback_it == pending_download_callbacks_.end() || !callback_it->second.get()) {
+    if (error_description != nullptr) {
+      *error_description = "No active browser download matches the requested downloadID.";
+    }
+    return false;
+  }
+
+  callback_it->second->Cancel();
+  pending_download_callbacks_.erase(callback_it);
+  return true;
 }
 
 bool GhoDexCEFClient::OnJSDialog(CefRefPtr<CefBrowser> browser,
@@ -2892,6 +2971,7 @@ bool GhoDexCEFClient::SendTrustedClick(double x,
 void GhoDexCEFClient::CloseBrowser() {
   CEF_REQUIRE_UI_THREAD();
   if (browser_) {
+    pending_download_callbacks_.clear();
     browser_->GetHost()->CloseBrowser(false);
     browser_ = nullptr;
   }
@@ -4888,6 +4968,19 @@ NSString * _Nullable GhoDexCEFLastInitializationError(void) {
                               error:(NSError * _Nullable * _Nullable)error {
   (void)requestID;
   (void)accepted;
+  if (error != nil) {
+    *error = [NSError errorWithDomain:GhoDexCEFControlErrorDomain
+                                 code:GhoDexCEFControlErrorCodeBridgeUnavailable
+                             userInfo:@{
+                               NSLocalizedDescriptionKey : @"CEF support is disabled in this build."
+                             }];
+  }
+  return NO;
+}
+
+- (BOOL)cancelDownloadID:(NSString *)downloadID
+                   error:(NSError * _Nullable * _Nullable)error {
+  (void)downloadID;
   if (error != nil) {
     *error = [NSError errorWithDomain:GhoDexCEFControlErrorDomain
                                  code:GhoDexCEFControlErrorCodeBridgeUnavailable

@@ -47,6 +47,7 @@ enum BrowserExternalCommandKind: String, Codable, Hashable {
     case resolvePermission
     case resolveAuth
     case resolveCertificate
+    case cancelDownload
 }
 
 enum BrowserExternalEventKind: String, Codable, Hashable {
@@ -384,6 +385,37 @@ struct BrowserExternalRuntimeResolutionAck: Hashable, Codable {
     let requestID: String
     let kind: BrowserRuntimePromptResolutionKind
     let resolved: Bool
+}
+
+struct BrowserDownloadControlRequest: Hashable, Codable {
+    let downloadID: String
+    let operation: String
+
+    var controlPayload: [String: String] {
+        [
+            "downloadID": downloadID,
+        ]
+    }
+
+    static func cancel(from payload: [String: String]) throws -> BrowserDownloadControlRequest {
+        BrowserDownloadControlRequest(
+            downloadID: try requiredString(key: "downloadID", from: payload),
+            operation: "cancelDownload"
+        )
+    }
+
+    private static func requiredString(key: String, from payload: [String: String]) throws -> String {
+        guard let value = payload[key]?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            throw BrowserExternalCommandError.invalidRequest("The \(key) payload is required.")
+        }
+        return value
+    }
+}
+
+struct BrowserExternalDownloadControlAck: Hashable, Codable {
+    let downloadID: String
+    let accepted: Bool
+    let operation: String
 }
 
 struct BrowserExternalPageCloseResult: Hashable, Codable {

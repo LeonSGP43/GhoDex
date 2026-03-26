@@ -347,6 +347,13 @@ private struct BrowserCEFDeckView: NSViewRepresentable {
                 case .reload:
                     view.reloadPage()
                     completion(.success(for: request))
+                case .cancelDownload:
+                    self.routeDownloadControlCommand(
+                        request,
+                        pageID: pageID,
+                        view: view,
+                        completion: completion
+                    )
                 case .resolveDialog,
                      .resolvePermission,
                      .resolveAuth,
@@ -410,6 +417,71 @@ private struct BrowserCEFDeckView: NSViewRepresentable {
                     self.routeDOMCommand(request, pageID: pageID, view: view, completion: completion)
                 }
             })
+        }
+
+        private func routeDownloadControlCommand(
+            _ request: BrowserControlRequest,
+            pageID: UUID,
+            view: GhoDexCEFView,
+            completion: @escaping BrowserControlCompletion
+        ) {
+            let downloadID = request.payload["downloadID"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !downloadID.isEmpty else {
+                completion(.failure(
+                    for: request,
+                    error: .invalidRequest("The download control command requires a non-empty downloadID payload.")
+                ))
+                return
+            }
+
+            do {
+                switch request.command {
+                case .cancelDownload:
+                    try view.cancelDownloadID(downloadID)
+                default:
+                    completion(.failure(
+                        for: request,
+                        error: .commandUnsupported("The browser download control command \(request.command.rawValue) is not supported by the Browser bridge.")
+                    ))
+                    return
+                }
+
+                completion(.success(for: request))
+            } catch {
+                completion(.failure(
+                    for: request,
+                    error: downloadControlError(
+                        error as NSError,
+                        downloadID: downloadID,
+                        command: request.command,
+                        pageID: pageID
+                    )
+                ))
+            }
+        }
+
+        private func downloadControlError(
+            _ error: NSError?,
+            downloadID: String,
+            command: BrowserControlCommandKind,
+            pageID: UUID
+        ) -> BrowserControlError {
+            guard let error else {
+                return .internalFailure(
+                    "The browser download \(downloadID) on page \(pageID) could not be resolved for \(command.rawValue)."
+                )
+            }
+
+            if error.domain == GhoDexCEFControlErrorDomain {
+                if error.code == 5 {
+                    return .invalidRequest(error.localizedDescription)
+                }
+                if error.code == 1 {
+                    return .bridgeUnavailable(error.localizedDescription)
+                }
+            }
+
+            return .internalFailure(error.localizedDescription)
         }
 
         private func routeRuntimePromptResolutionCommand(

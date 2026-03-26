@@ -580,6 +580,26 @@ Payload keys:
 - `isCanceled`
 - `isInterrupted`
 
+### `cancelDownload`
+
+Cancel a live Browser download that was previously observed through a `download`
+event.
+
+Payload keys:
+
+- `downloadID`
+
+Result keys:
+
+- `downloadID`
+- `accepted`
+- `operation` as `cancelDownload`
+
+The command acknowledges only that GhoDex accepted the cancellation request for
+the live runtime handle. Callers should continue watching the `download` event
+stream for the authoritative lifecycle update, which should eventually emit
+`phase=canceled` for a successfully canceled transfer.
+
 ### `javaScriptDialog` Payload
 
 `javaScriptDialog` is emitted when a page opens a JavaScript alert, confirm,

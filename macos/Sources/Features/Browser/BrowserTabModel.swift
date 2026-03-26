@@ -11,6 +11,7 @@ enum BrowserControlCommandKind: String, Codable, Hashable {
     case resolvePermission
     case resolveAuth
     case resolveCertificate
+    case cancelDownload
     case executeJavaScript
     case evaluateJavaScript
     case listFrames

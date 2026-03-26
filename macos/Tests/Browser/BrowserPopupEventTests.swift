@@ -350,3 +350,44 @@ struct BrowserPromptResolutionTests {
         #expect(decoded.resolved == true)
     }
 }
+
+struct BrowserDownloadControlTests {
+    @Test func downloadControlRequestParsesDownloadID() throws {
+        let request = try BrowserDownloadControlRequest.cancel(
+            from: [
+                "downloadID": "41",
+            ]
+        )
+
+        #expect(request.downloadID == "41")
+        #expect(request.operation == "cancelDownload")
+        #expect(request.controlPayload["downloadID"] == "41")
+    }
+
+    @Test func downloadControlRequestRejectsMissingDownloadID() {
+        do {
+            _ = try BrowserDownloadControlRequest.cancel(from: [:])
+            Issue.record("Expected missing downloadID to throw")
+        } catch let error as BrowserExternalCommandError {
+            #expect(error.code == "invalid_request")
+            #expect(error.message == "The downloadID payload is required.")
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    @Test func downloadControlAckPreservesStableShape() throws {
+        let ack = BrowserExternalDownloadControlAck(
+            downloadID: "41",
+            accepted: true,
+            operation: "cancelDownload"
+        )
+
+        let data = try JSONEncoder().encode(ack)
+        let decoded = try JSONDecoder().decode(BrowserExternalDownloadControlAck.self, from: data)
+
+        #expect(decoded.downloadID == "41")
+        #expect(decoded.accepted == true)
+        #expect(decoded.operation == "cancelDownload")
+    }
+}

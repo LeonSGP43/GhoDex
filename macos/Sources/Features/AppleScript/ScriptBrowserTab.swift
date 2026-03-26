@@ -1034,6 +1034,65 @@ extension ScriptBrowserTab {
         }
     }
 
+    private static func routeExternalDownloadControlCommand(
+        _ request: BrowserExternalCommandRequest,
+        command: BrowserControlCommandKind
+    ) -> BrowserExternalCommandResponse {
+        let target: ResolvedExternalPageTarget
+        switch resolvePageTarget(for: request) {
+        case let .success(resolved):
+            target = resolved
+        case let .failure(error):
+            return .failure(for: request, error: error)
+        }
+
+        let controlRequest: BrowserDownloadControlRequest
+        do {
+            switch request.command {
+            case .cancelDownload:
+                controlRequest = try BrowserDownloadControlRequest.cancel(from: request.payload)
+            default:
+                return .failure(
+                    for: request,
+                    error: .invalidRequest("The \(request.command.rawValue) command is not a download control command.")
+                )
+            }
+        } catch let error as BrowserExternalCommandError {
+            return .failure(for: request, error: error)
+        } catch {
+            return .failure(for: request, error: .invalidRequest("The download control payload is invalid."))
+        }
+
+        switch target.browserTab.runExternalDOMCommand(
+            command,
+            payload: controlRequest.controlPayload,
+            pageID: target.page.id,
+            frameName: target.frameName,
+            timeoutMS: nil
+        ) {
+        case .success:
+            do {
+                return .success(
+                    for: request,
+                    resultJSON: try jsonString(
+                        from: BrowserExternalDownloadControlAck(
+                            downloadID: controlRequest.downloadID,
+                            accepted: true,
+                            operation: controlRequest.operation
+                        )
+                    )
+                )
+            } catch {
+                return .failure(
+                    for: request,
+                    error: .internalFailure("The download control acknowledgment could not be serialized as JSON.")
+                )
+            }
+        case let .failure(error):
+            return .failure(for: request, error: error.externalCommandError)
+        }
+    }
+
     private static func resolvePageTarget(
         for request: BrowserExternalCommandRequest
     ) -> Result<ResolvedExternalPageTarget, BrowserExternalCommandError> {
@@ -1632,6 +1691,8 @@ extension ScriptBrowserTab {
             return routeExternalRuntimePromptResolutionCommand(request, command: .resolveAuth)
         case .resolveCertificate:
             return routeExternalRuntimePromptResolutionCommand(request, command: .resolveCertificate)
+        case .cancelDownload:
+            return routeExternalDownloadControlCommand(request, command: .cancelDownload)
         case .getCookies:
             let target: ResolvedExternalPageTarget
             switch resolvePageTarget(for: request) {

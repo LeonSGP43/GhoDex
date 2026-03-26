@@ -97,6 +97,7 @@ State and events:
 - `setCookie`
 - `deleteCookie`
 - `clearCookies`
+- `cancelDownload`
 - `resolveDialog`
 - `resolvePermission`
 - `resolveAuth`
@@ -187,3 +188,23 @@ Each command returns an acknowledgement containing:
 Requested runtime prompt events now include `requestID` in their payload so the
 external client can bind the follow-up resolve command to the paused runtime
 handler.
+
+## Download Control
+
+`cancelDownload` targets a live page inside a context and cancels an in-flight
+download by `downloadID`.
+
+Payload:
+
+- `downloadID`
+
+Return payload:
+
+- `downloadID`
+- `accepted`
+- `operation` as `cancelDownload`
+
+Cancellation does not invent a new event kind. The existing `download` event
+stream remains the source of truth for lifecycle confirmation and should emit a
+follow-up `phase=canceled` event when the runtime finishes canceling the
+download.

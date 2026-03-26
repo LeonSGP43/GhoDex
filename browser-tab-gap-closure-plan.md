@@ -283,6 +283,36 @@ Acceptance:
 - teardown clears pending prompt state without leaking callbacks into later page
   lifecycles
 
+### 3.7 Download Control Surface
+
+Problem:
+Download lifecycle events are now externally visible, but the control plane
+still cannot act on an in-flight download. That leaves agents able to observe a
+bad or unexpected download without any typed way to stop it, and it keeps the
+download handler in the ambiguous state of "visible but not actually
+controllable."
+
+Deliverables:
+
+- add a typed external `cancelDownload` command keyed by `downloadID`
+- route cancellation to the live paused/in-flight CEF download callback instead
+  of shelling out to filesystem cleanup
+- maintain a per-page/per-view registry of cancellable download handles and
+  clear it on terminal download phases or Browser teardown
+- add unit coverage for request parsing and acknowledgement payload shape
+
+Acceptance:
+
+- a live `download` event exposes the stable `downloadID` used by
+  `cancelDownload`
+- `cancelDownload` returns a typed acknowledgement when the Browser runtime
+  accepts the cancellation request
+- unknown or already-finished `downloadID` values fail as typed control errors
+  instead of silently succeeding
+- canceled downloads emit the existing `download` lifecycle event with
+  `phase=canceled`
+- Browser teardown clears any retained download-control handles
+
 ### 4. Popup And Open-Window Observability
 
 Problem:
