@@ -8,6 +8,29 @@ import GhoDexKit
 import Darwin
 import UniformTypeIdentifiers
 
+enum RemotePairingQRCodeRequestSource: Equatable {
+    case manual
+    case launchPreference
+}
+
+enum RemotePairingQRCodeErrorPresentation: Equatable {
+    case blockingModal
+    case logOnly
+}
+
+struct RemotePairingQRCodePresentationPolicy {
+    static func errorPresentation(
+        for source: RemotePairingQRCodeRequestSource
+    ) -> RemotePairingQRCodeErrorPresentation {
+        switch source {
+        case .manual:
+            return .blockingModal
+        case .launchPreference:
+            return .logOnly
+        }
+    }
+}
+
 class AppDelegate: NSObject,
                     ObservableObject,
                     NSApplicationDelegate,
@@ -519,7 +542,7 @@ class AppDelegate: NSObject,
         installRemotePairingQRMenuItemIfNeeded()
         if shouldShowRemotePairingQROnLaunch() {
             DispatchQueue.main.async { [weak self] in
-                self?.showRemotePairingQRCode(nil)
+                self?.requestRemotePairingQRCode(source: .launchPreference)
             }
         }
 
@@ -868,13 +891,20 @@ class AppDelegate: NSObject,
 
     @objc
     func showRemotePairingQRCode(_ sender: Any?) {
+        requestRemotePairingQRCode(source: .manual)
+    }
+
+    private func requestRemotePairingQRCode(source: RemotePairingQRCodeRequestSource) {
         Task { @MainActor [weak self] in
             guard let self else { return }
 
             do {
                 try await self.presentRemotePairingQRCode()
             } catch {
-                self.presentRemotePairingQRCodeError(error.localizedDescription)
+                self.presentRemotePairingQRCodeError(
+                    error.localizedDescription,
+                    source: source
+                )
             }
         }
     }
@@ -1227,13 +1257,23 @@ class AppDelegate: NSObject,
     }
 
     @MainActor
-    private func presentRemotePairingQRCodeError(_ message: String) {
-        let alert = NSAlert()
-        alert.messageText = "Remote Pairing QR Unavailable"
-        alert.informativeText = message
-        alert.addButton(withTitle: "OK")
-        NSApp.activate(ignoringOtherApps: true)
-        alert.runModal()
+    private func presentRemotePairingQRCodeError(
+        _ message: String,
+        source: RemotePairingQRCodeRequestSource
+    ) {
+        switch RemotePairingQRCodePresentationPolicy.errorPresentation(for: source) {
+        case .blockingModal:
+            let alert = NSAlert()
+            alert.messageText = "Remote Pairing QR Unavailable"
+            alert.informativeText = message
+            alert.addButton(withTitle: "OK")
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+        case .logOnly:
+            AppDelegate.logger.error(
+                "Remote Pairing QR launch request failed without blocking startup: \(message, privacy: .public)"
+            )
+        }
     }
 
     private struct RemotePairingQRCodePayload: Encodable {

@@ -293,18 +293,29 @@ Next atomic acceptance slice:
 
 Current blocker:
 
-- the dedicated JavaScript dialog harness now exists at
-  `scripts/browser_js_dialog_resolution_acceptance.py`, but isolated
-  end-to-end execution is currently blocked by the same `newContext` socket
-  timeout seen when re-running
-  `scripts/browser_context_protocol_acceptance.py` against the local
-  Browser-enabled app bundle
-- current blocker artifacts:
-  `/tmp/ghx-browser-js-dialog-resolution-acceptance.json`
-  `/tmp/ghx-browser-context-protocol-acceptance-recheck.json`
-- until that startup/control-path timeout is closed, runtime prompt acceptance
-  should be treated as "harness present, environment still blocking proof" and
-  not as a completed green slice
+- the launch-time startup/control-path timeout is now closed for this worktree
+- root cause was confirmed by `/tmp/GhoDex_2026-03-27_014615_6qlP.sample.txt`,
+  which showed the main thread stuck in
+  `AppDelegate.showRemotePairingQRCode(_:)` ->
+  `presentRemotePairingQRCodeError(_:)` -> `NSAlert.runModal()` while Browser
+  IPC requests were waiting on `@MainActor`
+- the fix split Remote Pairing QR requests into `manual` versus
+  `launchPreference` sources so launch-triggered failures log without blocking
+  startup, while manual requests still retain visible modal feedback
+- startup regression evidence now exists in
+  `scripts/browser_ipc_startup_readiness_acceptance.py` and
+  `/tmp/ghx-browser-ipc-startup-readiness-acceptance.json`
+- the Browser Context protocol recheck now passes again under the rebuilt
+  Browser-enabled Debug app, backed by
+  `/tmp/ghx-browser-context-protocol-acceptance-recheck-3.json`
+- runtime prompt acceptance is still not green, but the blocker has moved
+  deeper: the dedicated JavaScript dialog harness now reaches dialog triggering
+  and then times out at `drainEvents`, which points to the JS dialog runtime
+  handler path still blocking event servicing after startup is already healthy
+- current runtime-prompt blocker artifact:
+  `/tmp/ghx-browser-js-dialog-resolution-acceptance-recheck-3.json`
+- next atomic slice should stay focused on that runtime prompt path rather than
+  reopening Browser Context startup
 
 ### 3.7 Download Control Surface
 
