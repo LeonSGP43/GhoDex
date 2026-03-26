@@ -7,9 +7,14 @@ import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useUnistyles } from 'react-native-unistyles';
-import { AuthProvider } from '@/auth/AuthContext';
-import { TokenStorage, type AuthCredentials } from '@/auth/tokenStorage';
-import { syncRestore } from '@/sync/sync';
+import { bootstrapGhoDexAppShell } from '@/ghodex/appShell';
+import {
+    recordBootstrapCompleted,
+    recordBootstrapFailed,
+    recordBootstrapStarted,
+    recordLaunchReady,
+    recordLaunchStarted,
+} from '@/ghodex/observability';
 import { useSetting } from '@/sync/storage';
 
 export { ErrorBoundary } from 'expo-router';
@@ -17,23 +22,13 @@ export { ErrorBoundary } from 'expo-router';
 void SplashScreen.preventAutoHideAsync().catch(() => {
     // Ignore repeated splash calls during fast refresh.
 });
-
-const AUTH_BOOTSTRAP_TIMEOUT_MS = 1500;
-
-async function loadInitialCredentialsWithTimeout(): Promise<AuthCredentials | null> {
-    return Promise.race([
-        TokenStorage.getCredentials(),
-        new Promise<AuthCredentials | null>((resolve) => {
-            setTimeout(() => resolve(null), AUTH_BOOTSTRAP_TIMEOUT_MS);
-        }),
-    ]);
-}
+recordLaunchStarted();
 
 export default function RootLayout() {
     const { theme } = useUnistyles();
     const preferredLanguage = useSetting('preferredLanguage');
     const splashHiddenRef = React.useRef(false);
-    const [initialCredentials, setInitialCredentials] = React.useState<AuthCredentials | null>(null);
+    const launchReadyRecordedRef = React.useRef(false);
     const languageTreeKey = preferredLanguage ?? '__auto__';
 
     const hideSplashScreen = React.useCallback(() => {
@@ -58,34 +53,24 @@ export default function RootLayout() {
     }, [hideSplashScreen]);
 
     const onLayoutRootView = React.useCallback(() => {
+        if (!launchReadyRecordedRef.current) {
+            launchReadyRecordedRef.current = true;
+            recordLaunchReady();
+        }
         hideSplashScreen();
     }, [hideSplashScreen]);
 
     React.useEffect(() => {
-        let active = true;
-
+        recordBootstrapStarted();
         void (async () => {
-            const credentials = await loadInitialCredentialsWithTimeout();
-            if (!active) {
-                return;
-            }
-
-            setInitialCredentials(credentials);
-
-            if (!credentials) {
-                return;
-            }
-
             try {
-                await syncRestore(credentials);
+                await bootstrapGhoDexAppShell();
+                recordBootstrapCompleted();
             } catch (error) {
-                console.error('Failed to restore auth sync state:', error);
+                recordBootstrapFailed();
+                console.warn('Failed to hydrate the GhoDex device session during bootstrap:', error);
             }
         })();
-
-        return () => {
-            active = false;
-        };
     }, []);
 
     return (
@@ -94,26 +79,24 @@ export default function RootLayout() {
                 style={{ flex: 1, backgroundColor: theme.colors.groupped.background }}
                 onLayout={onLayoutRootView}
             >
-                <AuthProvider initialCredentials={initialCredentials}>
-                    <KeyboardProvider
-                        navigationBarTranslucent={true}
-                        preserveEdgeToEdge={true}
-                        statusBarTranslucent={true}
+                <KeyboardProvider
+                    navigationBarTranslucent={true}
+                    preserveEdgeToEdge={true}
+                    statusBarTranslucent={true}
+                >
+                    <StatusBar style={theme.dark ? 'light' : 'dark'} />
+                    <Stack
+                        key={languageTreeKey}
+                        screenOptions={{
+                            headerShown: false,
+                            contentStyle: {
+                                backgroundColor: theme.colors.groupped.background,
+                            },
+                        }}
                     >
-                        <StatusBar style={theme.dark ? 'light' : 'dark'} />
-                        <Stack
-                            key={languageTreeKey}
-                            screenOptions={{
-                                headerShown: false,
-                                contentStyle: {
-                                    backgroundColor: theme.colors.groupped.background,
-                                },
-                            }}
-                        >
-                            <Stack.Screen name="(app)" options={{ headerShown: false }} />
-                        </Stack>
-                    </KeyboardProvider>
-                </AuthProvider>
+                        <Stack.Screen name="(app)" options={{ headerShown: false }} />
+                    </Stack>
+                </KeyboardProvider>
             </GestureHandlerRootView>
         </SafeAreaProvider>
     );

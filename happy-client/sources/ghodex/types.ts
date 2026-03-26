@@ -1,6 +1,9 @@
 export interface GatewayConnection {
     host: string;
     port: number;
+    transportMode?: 'lan' | 'relay';
+    publicEndpoint?: string | null;
+    transportSharedSecret?: string | null;
 }
 
 export interface GatewayEnvelope {
@@ -8,6 +11,8 @@ export interface GatewayEnvelope {
     status?: string;
     error_code?: string;
     error_message?: string;
+    transport_mode?: string;
+    encrypted_payload?: string;
     result?: Record<string, unknown>;
     event?: string;
     sequence?: number;
@@ -31,6 +36,12 @@ export interface PairingExchangeResult {
     authToken: string;
     tokenId: string | null;
     scopes: string[];
+    desktopId: string | null;
+    desktopLabel: string | null;
+    preferredDesktopId: string | null;
+    transportMode: string | null;
+    publicEndpoint: string | null;
+    transportSharedSecret: string | null;
 }
 
 export interface TerminalRow {

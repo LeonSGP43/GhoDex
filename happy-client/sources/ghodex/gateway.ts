@@ -11,6 +11,12 @@ import type {
     TerminalReadResult,
     TerminalRow,
 } from './types';
+import {
+    decodeEncryptedGatewayEnvelope,
+    encodeEncryptedGatewayRequest,
+    resolveGatewaySocketUrl,
+    usesEncryptedGatewayTransport,
+} from './transport';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -28,6 +34,8 @@ interface GatewayRequest {
     command: string;
     auth_token?: string;
     client?: string;
+    device_id?: string;
+    device_label?: string;
     requested_scopes?: string[];
     pairing_code?: string;
     tab_id?: string;
@@ -47,12 +55,6 @@ interface GatewayRequest {
     read_after_write_id?: string;
     since_sequence?: number;
     event_limit?: number;
-}
-
-function buildGatewayUrl(connection: GatewayConnection): string {
-    const trimmedHost = connection.host.trim() || '127.0.0.1';
-    const host = trimmedHost.includes(':') && !trimmedHost.startsWith('[') ? `[${trimmedHost}]` : trimmedHost;
-    return `ws://${host}:${connection.port}`;
 }
 
 function nextRequestId(prefix: string): string {
@@ -127,8 +129,45 @@ export function parseGatewayEnvelope(rawText: string): GatewayEnvelope {
     return parseEnvelope(rawText);
 }
 
-async function sendRequest(connection: GatewayConnection, request: GatewayRequest): Promise<GatewayEnvelope> {
-    const url = buildGatewayUrl(connection);
+async function parseReceivedEnvelope(
+    rawText: string,
+    connection: GatewayConnection,
+): Promise<GatewayEnvelope> {
+    const envelope = parseEnvelope(rawText);
+    if (!usesEncryptedGatewayTransport(connection) || typeof envelope.encrypted_payload !== 'string') {
+        return envelope;
+    }
+    const decrypted = await decodeEncryptedGatewayEnvelope({
+        encryptedEnvelope: {
+            transport_mode: typeof envelope.transport_mode === 'string' ? envelope.transport_mode : undefined,
+            encrypted_payload: envelope.encrypted_payload,
+        },
+        transportSharedSecret: connection.transportSharedSecret!.trim(),
+    });
+    return decrypted as GatewayEnvelope;
+}
+
+function relayFallbackConnection(connection: GatewayConnection): GatewayConnection | null {
+    if (connection.transportMode === 'relay') {
+        return null;
+    }
+    if (!connection.publicEndpoint?.trim() || !connection.transportSharedSecret?.trim()) {
+        return null;
+    }
+    return {
+        ...connection,
+        transportMode: 'relay',
+    };
+}
+
+async function sendRequestOnce(connection: GatewayConnection, request: GatewayRequest): Promise<GatewayEnvelope> {
+    const url = resolveGatewaySocketUrl({
+        transportMode: connection.transportMode === 'relay' ? 'relay' : 'lan',
+        host: connection.host,
+        port: connection.port,
+        publicEndpoint: connection.publicEndpoint,
+        transportSharedSecret: connection.transportSharedSecret,
+    });
 
     return new Promise<GatewayEnvelope>((resolve, reject) => {
         let settled = false;
@@ -151,10 +190,28 @@ async function sendRequest(connection: GatewayConnection, request: GatewayReques
         };
 
         socket.onopen = () => {
+            if (usesEncryptedGatewayTransport(connection)) {
+                void encodeEncryptedGatewayRequest({
+                    request: request as unknown as Record<string, unknown>,
+                    authToken: request.auth_token ?? '',
+                    transportSharedSecret: connection.transportSharedSecret!.trim(),
+                }).then((encryptedRequest) => {
+                    socket.send(JSON.stringify(encryptedRequest));
+                }).catch((error) => {
+                    if (settled) {
+                        return;
+                    }
+                    settled = true;
+                    cleanup();
+                    socket.close();
+                    reject(error instanceof Error ? error : new GatewayProtocolError('Failed to encrypt gateway request'));
+                });
+                return;
+            }
             socket.send(JSON.stringify(request));
         };
 
-        socket.onmessage = (event) => {
+        socket.onmessage = async (event) => {
             if (settled) {
                 return;
             }
@@ -164,7 +221,7 @@ async function sendRequest(connection: GatewayConnection, request: GatewayReques
 
             try {
                 const rawText = typeof event.data === 'string' ? event.data : String(event.data ?? '');
-                const envelope = parseEnvelope(rawText);
+                const envelope = await parseReceivedEnvelope(rawText, connection);
                 if (envelope.status === 'error') {
                     reject(new GatewayProtocolError(
                         envelope.error_message ?? envelope.error_code ?? 'Gateway rejected request',
@@ -200,6 +257,18 @@ async function sendRequest(connection: GatewayConnection, request: GatewayReques
     });
 }
 
+async function sendRequest(connection: GatewayConnection, request: GatewayRequest): Promise<GatewayEnvelope> {
+    try {
+        return await sendRequestOnce(connection, request);
+    } catch (error) {
+        const relayConnection = relayFallbackConnection(connection);
+        if (!relayConnection) {
+            throw error;
+        }
+        return sendRequestOnce(relayConnection, request);
+    }
+}
+
 function parsePairingBeginResult(envelope: GatewayEnvelope): PairingBeginResult {
     const result = ensureObject(envelope.result, 'pairing begin result');
     const pairingCode = readString(result, 'pairing_code');
@@ -225,6 +294,12 @@ function parsePairingExchangeResult(envelope: GatewayEnvelope): PairingExchangeR
         authToken,
         tokenId: readString(result, 'token_id'),
         scopes: readStringArray(result, 'scopes'),
+        desktopId: readString(result, 'desktop_id'),
+        desktopLabel: readString(result, 'desktop_label'),
+        preferredDesktopId: readString(result, 'preferred_desktop_id'),
+        transportMode: readString(result, 'transport_mode'),
+        publicEndpoint: readString(result, 'public_endpoint'),
+        transportSharedSecret: readString(result, 'transport_shared_secret'),
     };
 }
 
@@ -371,6 +446,8 @@ function parseTabMutationResult(envelope: GatewayEnvelope): TabMutationResult {
 
 export async function pairingBegin(input: GatewayConnection & {
     client: string;
+    deviceId: string;
+    deviceLabel: string;
     requestedScopes?: readonly string[];
 }): Promise<PairingBeginResult> {
     const envelope = await sendRequest(
@@ -379,6 +456,8 @@ export async function pairingBegin(input: GatewayConnection & {
             request_id: nextRequestId('pair-begin'),
             command: 'gateway.pairing.begin',
             client: input.client,
+            device_id: input.deviceId.trim(),
+            device_label: input.deviceLabel.trim(),
             requested_scopes: [...(input.requestedScopes ?? DEFAULT_REQUESTED_SCOPES)],
         },
     );
@@ -622,9 +701,21 @@ export function subscribeToGatewayEvents(input: GatewayConnection & {
         throw new GatewayProtocolError('Auth token is empty');
     }
 
-    const socket = new WebSocket(buildGatewayUrl(input));
+    const openVariant = (connection: GatewayConnection) => {
+        const socket = new WebSocket(resolveGatewaySocketUrl({
+            transportMode: connection.transportMode === 'relay' ? 'relay' : 'lan',
+            host: connection.host,
+            port: connection.port,
+            publicEndpoint: connection.publicEndpoint,
+            transportSharedSecret: connection.transportSharedSecret,
+        }));
+        return socket;
+    };
     let closedByClient = false;
     let settled = false;
+    let attemptedRelayFallback = false;
+    let socket = openVariant(input);
+    let activeConnection: GatewayConnection = input;
 
     const finalizeWithError = (error: GatewayProtocolError) => {
         if (closedByClient || settled) {
@@ -634,58 +725,105 @@ export function subscribeToGatewayEvents(input: GatewayConnection & {
         input.onError?.(error);
     };
 
-    socket.onopen = () => {
-        const request: GatewayRequest = {
-            request_id: nextRequestId('subscribe'),
-            command: 'events.subscribe',
-            auth_token: authToken,
-            since_sequence: Math.max(0, Math.trunc(input.sinceSequence)),
-            event_limit: input.eventLimit ?? 128,
-        };
-        socket.send(JSON.stringify(request));
-    };
+    const bindSocket = (connection: GatewayConnection) => {
+        const boundSocket = socket;
 
-    socket.onmessage = (event) => {
-        try {
-            const rawText = typeof event.data === 'string' ? event.data : String(event.data ?? '');
-            const envelope = parseEnvelope(rawText);
-            if (envelope.status === 'error') {
-                const error = new GatewayProtocolError(
-                    envelope.error_message ?? envelope.error_code ?? 'Gateway rejected subscription',
-                    envelope.error_code,
-                );
-                finalizeWithError(error);
-                socket.close();
+        socket.onopen = () => {
+            if (boundSocket !== socket) {
                 return;
             }
-            input.onEnvelope(envelope);
-        } catch (error) {
-            finalizeWithError(
-                error instanceof GatewayProtocolError
-                    ? error
-                    : new GatewayProtocolError(
-                        error instanceof Error ? error.message : 'Invalid subscription payload',
-                    ),
-            );
-            socket.close();
-        }
+            const request: GatewayRequest = {
+                request_id: nextRequestId('subscribe'),
+                command: 'events.subscribe',
+                auth_token: authToken,
+                since_sequence: Math.max(0, Math.trunc(input.sinceSequence)),
+                event_limit: input.eventLimit ?? 128,
+            };
+            if (usesEncryptedGatewayTransport(connection)) {
+                void encodeEncryptedGatewayRequest({
+                    request: request as unknown as Record<string, unknown>,
+                    authToken,
+                    transportSharedSecret: connection.transportSharedSecret!.trim(),
+                }).then((encryptedRequest) => {
+                    socket.send(JSON.stringify(encryptedRequest));
+                }).catch((error) => {
+                    finalizeWithError(error instanceof Error ? error : new GatewayProtocolError('Failed to encrypt gateway subscription request'));
+                    socket.close();
+                });
+                return;
+            }
+            socket.send(JSON.stringify(request));
+        };
+
+        socket.onmessage = async (event) => {
+            if (boundSocket !== socket) {
+                return;
+            }
+            try {
+                const rawText = typeof event.data === 'string' ? event.data : String(event.data ?? '');
+                const envelope = await parseReceivedEnvelope(rawText, connection);
+                if (envelope.status === 'error') {
+                    const error = new GatewayProtocolError(
+                        envelope.error_message ?? envelope.error_code ?? 'Gateway rejected subscription',
+                        envelope.error_code,
+                    );
+                    finalizeWithError(error);
+                    socket.close();
+                    return;
+                }
+                input.onEnvelope(envelope);
+            } catch (error) {
+                finalizeWithError(
+                    error instanceof GatewayProtocolError
+                        ? error
+                        : new GatewayProtocolError(
+                            error instanceof Error ? error.message : 'Invalid subscription payload',
+                        ),
+                );
+                socket.close();
+            }
+        };
+
+        socket.onerror = () => {
+            if (boundSocket !== socket) {
+                return;
+            }
+            const relayConnection = !attemptedRelayFallback ? relayFallbackConnection(activeConnection) : null;
+            if (relayConnection) {
+                attemptedRelayFallback = true;
+                activeConnection = relayConnection;
+                socket = openVariant(relayConnection);
+                bindSocket(relayConnection);
+                return;
+            }
+            finalizeWithError(new GatewayProtocolError('Gateway subscription socket failed'));
+        };
+
+        socket.onclose = (event) => {
+            if (boundSocket !== socket) {
+                return;
+            }
+            if (closedByClient || settled) {
+                return;
+            }
+            if (event.code === 1000) {
+                return;
+            }
+            const relayConnection = !attemptedRelayFallback ? relayFallbackConnection(activeConnection) : null;
+            if (relayConnection) {
+                attemptedRelayFallback = true;
+                activeConnection = relayConnection;
+                socket = openVariant(relayConnection);
+                bindSocket(relayConnection);
+                return;
+            }
+            finalizeWithError(new GatewayProtocolError(
+                event.reason || `Gateway subscription closed unexpectedly (code ${event.code})`,
+            ));
+        };
     };
 
-    socket.onerror = () => {
-        finalizeWithError(new GatewayProtocolError('Gateway subscription socket failed'));
-    };
-
-    socket.onclose = (event) => {
-        if (closedByClient || settled) {
-            return;
-        }
-        if (event.code === 1000) {
-            return;
-        }
-        finalizeWithError(new GatewayProtocolError(
-            event.reason || `Gateway subscription closed unexpectedly (code ${event.code})`,
-        ));
-    };
+    bindSocket(activeConnection);
 
     return () => {
         closedByClient = true;

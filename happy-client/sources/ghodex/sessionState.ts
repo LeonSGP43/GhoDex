@@ -2,6 +2,14 @@ import { DEFAULT_REQUESTED_SCOPES } from './gateway';
 import type { StoredSession } from './storage';
 
 export const INITIAL_GATEWAY_SESSION: StoredSession = {
+    deviceId: '',
+    deviceLabel: '',
+    desktopId: '',
+    desktopLabel: '',
+    preferredDesktopId: '',
+    transportMode: 'lan',
+    publicEndpoint: '',
+    transportSharedSecret: '',
     host: '127.0.0.1',
     port: 19527,
     pairingCode: '',

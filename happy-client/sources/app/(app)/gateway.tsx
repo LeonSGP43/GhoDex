@@ -14,6 +14,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { CameraView } from 'expo-camera';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { pairingBegin, pairingExchange } from '@/ghodex/gateway';
+import { recordScreenReady, recordScreenStarted } from '@/ghodex/observability';
 import { parseGatewayPairingQrPayload } from '@/ghodex/pairingQr';
 import { INITIAL_GATEWAY_SESSION, POLL_INTERVAL_OPTIONS, sanitizePollInterval, sanitizePort } from '@/ghodex/sessionState';
 import { clearStoredSession, getCachedStoredSession, loadStoredSession, saveStoredSession, type StoredSession } from '@/ghodex/storage';
@@ -154,6 +155,7 @@ export default function GhoDexGatewayScreen() {
 
     useFocusEffect(React.useCallback(() => {
         let active = true;
+        const openedAt = recordScreenStarted('device');
         const task = InteractionManager.runAfterInteractions(() => {
             void (async () => {
                 const stored = await loadStoredSession();
@@ -166,6 +168,7 @@ export default function GhoDexGatewayScreen() {
                 setPortText(String(stored.port));
                 setLiveUpdatesEnabled(stored.liveUpdatesEnabled);
                 setPollIntervalMs(stored.pollIntervalMs);
+                recordScreenReady('device', openedAt);
             })();
         });
 
@@ -233,7 +236,9 @@ export default function GhoDexGatewayScreen() {
             const result = await pairingBegin({
                 host: resolvedHost,
                 port: resolvedPort,
-                client: 'ghodex-happy-client',
+                client: 'ghodex-remote-client',
+                deviceId: session.deviceId,
+                deviceLabel: session.deviceLabel,
                 requestedScopes: session.requestedScopes,
             });
 
@@ -258,6 +263,12 @@ export default function GhoDexGatewayScreen() {
                 authToken: result.authToken,
                 tokenId: result.tokenId ?? '',
                 scopes: result.scopes,
+                desktopId: result.desktopId ?? session.desktopId,
+                desktopLabel: result.desktopLabel ?? session.desktopLabel,
+                preferredDesktopId: result.preferredDesktopId ?? result.desktopId ?? session.preferredDesktopId,
+                publicEndpoint: result.publicEndpoint ?? session.publicEndpoint,
+                transportSharedSecret: result.transportSharedSecret ?? session.transportSharedSecret,
+                transportMode: result.transportMode === 'relay' ? 'relay' : session.transportMode,
             });
             await saveStoredSession(nextSession);
             setSession(nextSession);
@@ -290,6 +301,12 @@ export default function GhoDexGatewayScreen() {
                 authToken: exchange.authToken,
                 tokenId: exchange.tokenId ?? '',
                 scopes: exchange.scopes,
+                desktopId: exchange.desktopId ?? session.desktopId,
+                desktopLabel: exchange.desktopLabel ?? session.desktopLabel,
+                preferredDesktopId: exchange.preferredDesktopId ?? exchange.desktopId ?? session.preferredDesktopId,
+                publicEndpoint: exchange.publicEndpoint ?? session.publicEndpoint,
+                transportSharedSecret: exchange.transportSharedSecret ?? session.transportSharedSecret,
+                transportMode: exchange.transportMode === 'relay' ? 'relay' : session.transportMode,
             });
             setHost(payload.host);
             setPortText(String(payload.port));

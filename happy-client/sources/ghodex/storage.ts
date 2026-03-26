@@ -1,11 +1,23 @@
 import * as SecureStore from 'expo-secure-store';
+import { randomUUID } from 'expo-crypto';
 import { Platform } from 'react-native';
 import { delay } from '@/utils/time';
 
 const STORAGE_KEY = 'ghodex.gateway.session.v1';
 const STORED_SESSION_TIMEOUT_MS = 1500;
+const DEFAULT_DEVICE_LABEL = 'This phone';
+
+export type StoredTransportMode = 'lan' | 'relay';
 
 export interface StoredSession {
+    deviceId: string;
+    deviceLabel: string;
+    desktopId: string;
+    desktopLabel: string;
+    preferredDesktopId: string;
+    transportMode: StoredTransportMode;
+    publicEndpoint: string;
+    transportSharedSecret: string;
     host: string;
     port: number;
     pairingCode: string;
@@ -17,7 +29,17 @@ export interface StoredSession {
     pollIntervalMs: number;
 }
 
+const DEFAULT_DEVICE_ID = randomUUID();
+
 const DEFAULT_SESSION: StoredSession = {
+    deviceId: DEFAULT_DEVICE_ID,
+    deviceLabel: DEFAULT_DEVICE_LABEL,
+    desktopId: '',
+    desktopLabel: '',
+    preferredDesktopId: '',
+    transportMode: 'lan',
+    publicEndpoint: '',
+    transportSharedSecret: '',
     host: '127.0.0.1',
     port: 19527,
     pairingCode: '',
@@ -47,18 +69,40 @@ function cloneStoredSession(session: StoredSession): StoredSession {
 
 let cachedSession: StoredSession | null = null;
 
+function sanitizeTransportMode(value: unknown): StoredTransportMode {
+    return value === 'relay' ? 'relay' : 'lan';
+}
+
 function sanitizeStoredSession(value: unknown): StoredSession {
     if (!value || typeof value !== 'object') {
         return cloneDefaultSession();
     }
 
     const object = value as Record<string, unknown>;
+    const deviceId = typeof object.deviceId === 'string' && object.deviceId.trim()
+        ? object.deviceId.trim()
+        : DEFAULT_SESSION.deviceId;
+    const desktopId = typeof object.desktopId === 'string' ? object.desktopId.trim() : '';
     const host = typeof object.host === 'string' && object.host.trim() ? object.host.trim() : DEFAULT_SESSION.host;
     const port = typeof object.port === 'number' && Number.isFinite(object.port) && object.port > 0
         ? Math.min(Math.trunc(object.port), 65535)
         : DEFAULT_SESSION.port;
 
     return {
+        deviceId,
+        deviceLabel: typeof object.deviceLabel === 'string' && object.deviceLabel.trim()
+            ? object.deviceLabel.trim()
+            : DEFAULT_SESSION.deviceLabel,
+        desktopId,
+        desktopLabel: typeof object.desktopLabel === 'string' ? object.desktopLabel.trim() : '',
+        preferredDesktopId: typeof object.preferredDesktopId === 'string'
+            ? object.preferredDesktopId.trim()
+            : desktopId,
+        transportMode: sanitizeTransportMode(object.transportMode),
+        publicEndpoint: typeof object.publicEndpoint === 'string' ? object.publicEndpoint.trim() : '',
+        transportSharedSecret: typeof object.transportSharedSecret === 'string'
+            ? object.transportSharedSecret.trim()
+            : '',
         host,
         port,
         pairingCode: typeof object.pairingCode === 'string' ? object.pairingCode : '',
@@ -96,6 +140,22 @@ async function setStoredValue(value: string): Promise<void> {
     await SecureStore.setItemAsync(STORAGE_KEY, value);
 }
 
+function clearStoredSessionBinding(session: StoredSession): StoredSession {
+    return {
+        ...session,
+        desktopId: '',
+        desktopLabel: '',
+        preferredDesktopId: '',
+        transportMode: 'lan',
+        publicEndpoint: '',
+        transportSharedSecret: '',
+        pairingCode: '',
+        authToken: '',
+        tokenId: '',
+        scopes: [],
+    };
+}
+
 export function getCachedStoredSession(): StoredSession {
     return cachedSession ? cloneStoredSession(cachedSession) : cloneDefaultSession();
 }
@@ -109,6 +169,9 @@ export async function loadStoredSession(): Promise<StoredSession> {
         const stored = await getStoredValue();
         const nextSession = stored ? sanitizeStoredSession(JSON.parse(stored)) : cloneDefaultSession();
         cachedSession = cloneStoredSession(nextSession);
+        if (!stored) {
+            await setStoredValue(JSON.stringify(nextSession));
+        }
         return cloneStoredSession(nextSession);
     } catch (error) {
         console.warn('Failed to load stored GhoDex session', error);
@@ -125,10 +188,8 @@ export async function saveStoredSession(session: StoredSession): Promise<void> {
 }
 
 export async function clearStoredSession(): Promise<void> {
-    cachedSession = cloneDefaultSession();
-    if (Platform.OS === 'web') {
-        localStorage.removeItem(STORAGE_KEY);
-        return;
-    }
-    await SecureStore.deleteItemAsync(STORAGE_KEY);
+    const currentSession = cachedSession ? cloneStoredSession(cachedSession) : await loadStoredSession();
+    const clearedSession = clearStoredSessionBinding(currentSession);
+    cachedSession = cloneStoredSession(clearedSession);
+    await setStoredValue(JSON.stringify(clearedSession));
 }
