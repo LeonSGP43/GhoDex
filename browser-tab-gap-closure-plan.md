@@ -25,8 +25,62 @@ Useful artifacts already produced during this branch:
 
 - popup follow-up visible acceptance: `/tmp/ghx-popup-followup-visible-acceptance.json`
 - control-surface proof: `/tmp/ghx-control-proof-b53caadb`
+- Browser teardown crash report: `/Users/leongong/Library/Logs/DiagnosticReports/GhoDex-2026-03-26-152602.ips`
 
 ## Workstreams
+
+### 0. BrowserTab Teardown Stability
+
+Problem:
+The current BrowserTab teardown path can abort the app on the main thread during
+SwiftUI view dismantle. The crash report from March 26, 2026 points to
+`BrowserCEFDeckView.Coordinator.reset(from:)` calling
+`BrowserTabModel.unbindBridge(for:)`, which then writes the `@Published`
+`BrowserPageState.isControlBridgeReady` flag while SwiftUI/Combine is already
+invalidating the same observable object graph.
+
+Key evidence:
+
+- crash thread: `CrBrowserMain` / `com.apple.main-thread`
+- termination: `SIGABRT`
+- runtime path: `swift_beginAccess` -> `Published.subscript.setter` ->
+  `BrowserPageState.isControlBridgeReady.setter`
+- source chain:
+  `BrowserTabView.swift:299` ->
+  `BrowserTabModel.swift:923` ->
+  `BrowserTabModel.swift:595`
+
+Deliverables:
+
+- remove synchronous `@Published` mutation from the Browser view dismantle path
+- choose one durable fix and record the decision near the implementation:
+  - defer `unbindBridge` work out of `dismantleNSView/reset`
+  - or stop mutating `isControlBridgeReady` during bridge teardown
+  - or move bridge-readiness bookkeeping to non-`@Published` internal state
+- add a narrow regression test or deterministic repro harness if practical
+- record the crash root cause and fix boundary in Browser durability docs so
+  later agents do not misattribute the failure to CEF worker threads
+
+Acceptance:
+
+- repeated Browser tab/context close and page teardown no longer crash the app
+- no `swift_beginAccess` / exclusivity abort appears in the teardown repro path
+- Browser bridge teardown still leaves page/control routing in a clean state
+- the fix does not regress page close, context close, or popup follow-up cleanup
+
+Close-out evidence in this worktree:
+
+- implementation:
+  `macos/Sources/Features/Browser/BrowserTabModel.swift`
+  `macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`
+- deterministic repro + regression harness:
+  `scripts/browser_teardown_stability_acceptance.py`
+- passing acceptance artifact:
+  `/tmp/ghx-browser-teardown-stability-acceptance.json`
+- status:
+  closed for this worktree; the March 26, 2026 `swift_beginAccess` teardown
+  abort no longer reproduces in the repeated context/page close harness
+  backed by the artifact above
 
 ### 1. Media And Fingerprint Parity
 

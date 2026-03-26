@@ -580,7 +580,7 @@ final class ScriptBrowserTab: NSObject {
                 continuation.resume(returning: result)
             }
 
-            readinessCancellable = page.$isControlBridgeReady
+            readinessCancellable = page.controlBridgeReadyPublisher()
                 .removeDuplicates()
                 .filter { $0 }
                 .sink { _ in

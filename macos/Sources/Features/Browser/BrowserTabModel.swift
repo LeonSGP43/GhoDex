@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 
 enum BrowserControlCommandKind: String, Codable, Hashable {
@@ -526,12 +527,16 @@ final class BrowserPageState: ObservableObject, Identifiable {
     @Published private(set) var canGoForward = false
     @Published private(set) var isLoading = false
     @Published private(set) var documentRevision = 0
-    @Published private(set) var isControlBridgeReady = false
+    // Keep bridge-readiness off the ObservableObject invalidation path.
+    // SwiftUI view teardown can synchronously unbind bridges, and publishing
+    // that transition through @Published has already caused exclusivity aborts.
+    private(set) var isControlBridgeReady = false
 
     fileprivate var onStateChange: (() -> Void)?
     fileprivate var isAddressBarEditing = false
 
     private var controlBridge: BrowserPageControlBridge?
+    private let controlBridgeReadySubject = CurrentValueSubject<Bool, Never>(false)
 
     init(initialURL: URL) {
         self.initialURL = initialURL
@@ -587,12 +592,12 @@ final class BrowserPageState: ObservableObject, Identifiable {
 
     func bindControlBridge(_ bridge: BrowserPageControlBridge) {
         controlBridge = bridge
-        isControlBridgeReady = false
+        setControlBridgeReady(false)
     }
 
     func unbindControlBridge() {
         controlBridge = nil
-        isControlBridgeReady = false
+        setControlBridgeReady(false)
     }
 
     var isControlBridgeBound: Bool {
@@ -600,7 +605,11 @@ final class BrowserPageState: ObservableObject, Identifiable {
     }
 
     func markControlBridgeReady() {
-        isControlBridgeReady = true
+        setControlBridgeReady(true)
+    }
+
+    func controlBridgeReadyPublisher() -> AnyPublisher<Bool, Never> {
+        controlBridgeReadySubject.eraseToAnyPublisher()
     }
 
     func route(_ request: BrowserControlRequest, completion: @escaping BrowserControlCompletion) {
@@ -785,6 +794,12 @@ final class BrowserPageState: ObservableObject, Identifiable {
             return .failure(.internalFailure("The browser control command returned an unexpected JSON payload: \(error.localizedDescription)"))
         }
     }
+
+    private func setControlBridgeReady(_ ready: Bool) {
+        guard isControlBridgeReady != ready else { return }
+        isControlBridgeReady = ready
+        controlBridgeReadySubject.send(ready)
+    }
 }
 
 @MainActor
@@ -819,6 +834,7 @@ final class BrowserTabModel: ObservableObject {
     private let defaultPageURL: URL
     private var installTask: Task<Void, Never>?
     private var eventObservers: [UUID: EventObserverRegistration] = [:]
+    private var activePageStateSyncPending = false
 
     init(initialURL: URL) {
         self.defaultPageURL = initialURL
@@ -892,7 +908,7 @@ final class BrowserTabModel: ObservableObject {
             pages.count
         )
         selectedPageID = pageID
-        syncActivePageState()
+        scheduleActivePageStateSync()
     }
 
     func newPageTab() {
@@ -909,7 +925,7 @@ final class BrowserTabModel: ObservableObject {
             selectedPageID = pages[replacementIndex].id
         }
 
-        syncActivePageState()
+        scheduleActivePageStateSync()
     }
 
     func bindBridge(
@@ -1269,7 +1285,7 @@ final class BrowserTabModel: ObservableObject {
                 page.id.uuidString,
                 selectedPageID.uuidString
             )
-            syncActivePageState()
+            scheduleActivePageStateSync()
         }
         return page
     }
@@ -1404,8 +1420,19 @@ final class BrowserTabModel: ObservableObject {
         page.onStateChange = { [weak self, weak page] in
             guard let self, let page else { return }
             if self.selectedPageID == page.id {
-                self.syncActivePageState()
+                self.scheduleActivePageStateSync()
             }
+        }
+    }
+
+    private func scheduleActivePageStateSync() {
+        guard !activePageStateSyncPending else { return }
+        activePageStateSyncPending = true
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.activePageStateSyncPending = false
+            self.syncActivePageState()
         }
     }
 
