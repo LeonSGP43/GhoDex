@@ -264,7 +264,7 @@ void SetPayloadValue(NSMutableDictionary<NSString *, NSString *> *payload,
   payload[key] = value;
 }
 
-NSString *JSDialogTypeName(JSDialogType dialog_type) {
+NSString *JSDialogTypeName(CefJSDialogHandler::JSDialogType dialog_type) {
   switch (dialog_type) {
   case JSDIALOGTYPE_ALERT:
     return @"alert";
@@ -768,7 +768,7 @@ public:
                          CefRefPtr<CefDownloadItemCallback> callback) override;
   bool OnJSDialog(CefRefPtr<CefBrowser> browser,
                   const CefString &origin_url,
-                  JSDialogType dialog_type,
+                  CefJSDialogHandler::JSDialogType dialog_type,
                   const CefString &message_text,
                   const CefString &default_prompt_text,
                   CefRefPtr<CefJSDialogCallback> callback,
@@ -2023,7 +2023,7 @@ bool GhoDexCEFClient::CancelDownload(uint32_t download_id,
 
 bool GhoDexCEFClient::OnJSDialog(CefRefPtr<CefBrowser> browser,
                                  const CefString &origin_url,
-                                 JSDialogType dialog_type,
+                                 CefJSDialogHandler::JSDialogType dialog_type,
                                  const CefString &message_text,
                                  const CefString &default_prompt_text,
                                  CefRefPtr<CefJSDialogCallback> callback,

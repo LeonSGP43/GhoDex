@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(browser): qualify CEF JS dialog type names for browser-enabled builds
+
+- What changed: Updated `GhoDexCEFBridge.mm` to use `CefJSDialogHandler::JSDialogType` explicitly in the shared JS dialog helper plus the `OnJSDialog` declaration and implementation.
+- Why: The Browser-enabled `nu macos/build.nu --configuration Debug --action build` path failed against the current CEF headers because the unqualified `JSDialogType` name no longer resolves in Objective-C++ compilation.
+- Impact: Browser-enabled Debug builds can compile the CEF bridge again, which unblocks acceptance runs that need a real Browser app bundle instead of a partially built test artifact.
+- Verification: `nu macos/build.nu --configuration Debug --action build`
+- Files: `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `CHANGELOG.md`
+- Decision trail: Keep the fix as a minimal compatibility qualification instead of broader dialog-handler refactoring. The goal of this slice is only to restore Browser-enabled buildability so later runtime-prompt acceptance work can execute against a real app bundle.
+
 ### test(browser): add js dialog resolution acceptance harness
 
 - What changed: Added `scripts/browser_js_dialog_resolution_acceptance.py`, a deterministic isolated acceptance harness for external `resolveDialog` coverage against local alert / confirm / prompt flows. The harness launches a Browser-enabled app in an isolated app-support root, serves a local dialog page, subscribes to `javaScriptDialog` events, attempts to resolve dialogs through the public IPC control plane, and writes an artifact that captures both the requested flow and any blocking failure. Updated the gap-closure plan and acceptance matrix to record this harness as the first dedicated runtime-prompt acceptance lane.
