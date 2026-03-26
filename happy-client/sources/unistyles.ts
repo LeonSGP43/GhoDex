@@ -13,6 +13,9 @@ const appThemes = {
     dark: darkTheme
 };
 
+export type ThemePreference = 'light' | 'dark' | 'adaptive';
+export type ResolvedThemePreference = Exclude<ThemePreference, 'adaptive'>;
+
 const breakpoints = {
     xs: 0, // <-- make sure to register one breakpoint with value 0
     sm: 300,
@@ -65,18 +68,28 @@ StyleSheet.configure({
 })
 
 // Set initial root view background color based on theme
-const setRootBackgroundColor = () => {
-    if (themePreference === 'adaptive') {
+export function applyThemePreference(preference: ThemePreference) {
+    if (preference === 'adaptive') {
+        UnistylesRuntime.setAdaptiveThemes(true);
         const systemTheme = Appearance.getColorScheme();
         const color = systemTheme === 'dark' ? appThemes.dark.colors.groupped.background : appThemes.light.colors.groupped.background;
         UnistylesRuntime.setRootViewBackgroundColor(color);
         SystemUI.setBackgroundColorAsync(color);
     } else {
-        const color = themePreference === 'dark' ? appThemes.dark.colors.groupped.background : appThemes.light.colors.groupped.background;
+        UnistylesRuntime.setAdaptiveThemes(false);
+        UnistylesRuntime.setTheme(preference);
+        const color = preference === 'dark' ? appThemes.dark.colors.groupped.background : appThemes.light.colors.groupped.background;
         UnistylesRuntime.setRootViewBackgroundColor(color);
         SystemUI.setBackgroundColorAsync(color);
     }
-};
+}
+
+export function resolveThemePreference(preference: ThemePreference, isDark: boolean): ResolvedThemePreference {
+    if (preference === 'adaptive') {
+        return isDark ? 'dark' : 'light';
+    }
+    return preference;
+}
 
 // Set initial background color
-setRootBackgroundColor();
+applyThemePreference(themePreference);

@@ -8,7 +8,6 @@ import {
     Platform,
     Pressable,
     ScrollView,
-    StyleSheet,
     Text,
     TextInput,
     useWindowDimensions,
@@ -19,6 +18,7 @@ import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { renderAnsiText } from '@/ghodex/ansi';
 import {
     closeTab as closeGatewayTab,
@@ -264,7 +264,7 @@ function shouldPasteRawInput(input: string): boolean {
 
 function renameTabErrorMessage(error: unknown): string {
     if (isGatewayAuthError(error)) {
-        return 'Desktop authorization expired. Re-open Pairing in Settings and bind the phone again.';
+        return 'Desktop authorization expired. Re-open Device and bind the phone again.';
     }
 
     if (
@@ -279,6 +279,7 @@ function renameTabErrorMessage(error: unknown): string {
 }
 
 export default function GhoDexWorkspaceScreen() {
+    const { theme } = useUnistyles();
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const { width } = useWindowDimensions();
@@ -395,7 +396,7 @@ export default function GhoDexWorkspaceScreen() {
             if (isGatewayAuthError(error)) {
                 setAuthorizationRequired(true);
                 setSubscriptionOpen(false);
-                setErrorMessage('Gateway authorization expired for this desktop build. Re-open Pairing in Settings and bind the phone again.');
+                setErrorMessage('Gateway authorization expired for this desktop build. Re-open Device and bind the phone again.');
                 return;
             }
             setErrorMessage(message);
@@ -627,7 +628,7 @@ export default function GhoDexWorkspaceScreen() {
                 if (isGatewayAuthError(error)) {
                     setAuthorizationRequired(true);
                     setSubscriptionOpen(false);
-                    setErrorMessage('Gateway authorization expired for this desktop build. Re-open Pairing in Settings and bind the phone again.');
+                    setErrorMessage('Gateway authorization expired for this desktop build. Re-open Device and bind the phone again.');
                     return;
                 }
                 console.warn('Failed to live-refresh terminal', error);
@@ -722,7 +723,7 @@ export default function GhoDexWorkspaceScreen() {
             if (isGatewayAuthError(error)) {
                 setAuthorizationRequired(true);
                 setSubscriptionOpen(false);
-                setErrorMessage('Gateway authorization expired for this desktop build. Re-open Pairing in Settings and bind the phone again.');
+                setErrorMessage('Gateway authorization expired for this desktop build. Re-open Device and bind the phone again.');
                 return;
             }
             const message = error instanceof Error ? error.message : 'Failed to load gateway snapshot';
@@ -743,7 +744,7 @@ export default function GhoDexWorkspaceScreen() {
     const handleRefreshSnapshot = React.useCallback(() => {
         const authToken = session.authToken.trim();
         if (!authToken) {
-            setErrorMessage('No auth token yet. Open pairing first.');
+            setErrorMessage('No auth token yet. Open Device and pair first.');
             return;
         }
 
@@ -755,7 +756,7 @@ export default function GhoDexWorkspaceScreen() {
     const handleSelectTerminal = React.useCallback((terminal: TerminalRow) => {
         const authToken = session.authToken.trim();
         if (!authToken) {
-            setErrorMessage('No auth token yet. Open pairing first.');
+            setErrorMessage('No auth token yet. Open Device and pair first.');
             return;
         }
 
@@ -778,7 +779,7 @@ export default function GhoDexWorkspaceScreen() {
     const handleCreateTab = React.useCallback(() => {
         const authToken = session.authToken.trim();
         if (!authToken) {
-            setErrorMessage('No auth token yet. Open pairing first.');
+            setErrorMessage('No auth token yet. Open Device and pair first.');
             return;
         }
 
@@ -810,7 +811,7 @@ export default function GhoDexWorkspaceScreen() {
     const handleSubmitRenameTab = React.useCallback(() => {
         const authToken = session.authToken.trim();
         if (!authToken || !renameTabTarget) {
-            setErrorMessage('No auth token yet. Open pairing first.');
+            setErrorMessage('No auth token yet. Open Device and pair first.');
             return;
         }
 
@@ -853,7 +854,7 @@ export default function GhoDexWorkspaceScreen() {
     const handleCloseTab = React.useCallback((tab: TabRow) => {
         const authToken = session.authToken.trim();
         if (!authToken) {
-            setErrorMessage('No auth token yet. Open pairing first.');
+            setErrorMessage('No auth token yet. Open Device and pair first.');
             return;
         }
 
@@ -988,7 +989,7 @@ export default function GhoDexWorkspaceScreen() {
                         if (isGatewayAuthError(error)) {
                             setAuthorizationRequired(true);
                             setSubscriptionOpen(false);
-                            setErrorMessage('Gateway authorization expired for this desktop build. Re-open Pairing in Settings and bind the phone again.');
+                            setErrorMessage('Gateway authorization expired for this desktop build. Re-open Device and bind the phone again.');
                             return;
                         }
                         console.warn('Gateway subscription dropped', error);
@@ -1061,7 +1062,7 @@ export default function GhoDexWorkspaceScreen() {
                 if (isGatewayAuthError(error)) {
                     setAuthorizationRequired(true);
                     setSubscriptionOpen(false);
-                    setErrorMessage('Gateway authorization expired for this desktop build. Re-open Pairing in Settings and bind the phone again.');
+                    setErrorMessage('Gateway authorization expired for this desktop build. Re-open Device and bind the phone again.');
                     return;
                 }
                 console.warn('Failed to refresh terminal view', error);
@@ -1081,20 +1082,20 @@ export default function GhoDexWorkspaceScreen() {
         };
     }, [authorizationRequired, busyAction, loadTerminalViewImpl, loaded, selectedTerminal, session.authToken, session.liveUpdatesEnabled, session.pollIntervalMs, subscriptionOpen, terminalView]);
 
-    const openPairing = React.useCallback(() => {
+    const openDevice = React.useCallback(() => {
         setSidebarVisible(false);
-        router.push('/pairing');
+        router.push('/gateway');
     }, [router]);
 
     const openSettings = React.useCallback(() => {
         setSidebarVisible(false);
-        router.push('/gateway');
+        router.push('/settings');
     }, [router]);
 
     if (!loaded) {
         return (
             <View style={styles.loadingScreen}>
-                <ActivityIndicator size="large" color="#8a4b2a" />
+                <ActivityIndicator size="large" color={theme.colors.button.primary.background} />
                 <Text style={styles.loadingText}>Loading GhoDex workspace…</Text>
             </View>
         );
@@ -1189,7 +1190,7 @@ export default function GhoDexWorkspaceScreen() {
                                                 pressed ? styles.sidebarTerminalItemPressed : null,
                                             ]}
                                         >
-                                            <Ionicons color="#d8b18e" name="create-outline" size={16} />
+                                            <Ionicons color={theme.colors.textSecondary} name="create-outline" size={16} />
                                         </Pressable>
                                         <Pressable
                                             hitSlop={8}
@@ -1199,7 +1200,7 @@ export default function GhoDexWorkspaceScreen() {
                                                 pressed ? styles.sidebarTerminalItemPressed : null,
                                             ]}
                                         >
-                                            <Ionicons color="#d8b18e" name="close-outline" size={18} />
+                                            <Ionicons color={theme.colors.textSecondary} name="close-outline" size={18} />
                                         </Pressable>
                                     </View>
                                 </View>
@@ -1249,7 +1250,7 @@ export default function GhoDexWorkspaceScreen() {
 
                 <View style={styles.sidebarFooter}>
                     <View style={styles.sidebarQuickRow}>
-                        <SidebarQuickAction icon="qr-code-outline" label="Device" onPress={openPairing} />
+                        <SidebarQuickAction icon="qr-code-outline" label="Device" onPress={openDevice} />
                         <SidebarQuickAction icon="settings-outline" label="Settings" onPress={openSettings} />
                     </View>
                     <View style={styles.sidebarStatus}>
@@ -1284,7 +1285,7 @@ export default function GhoDexWorkspaceScreen() {
 
                 {errorMessage ? (
                     <View style={styles.errorBar}>
-                        <Ionicons color="#a9412b" name="alert-circle-outline" size={16} />
+                        <Ionicons color={theme.colors.box.error.text} name="alert-circle-outline" size={16} />
                         <Text selectable style={styles.errorText}>{errorMessage}</Text>
                     </View>
                 ) : null}
@@ -1296,9 +1297,9 @@ export default function GhoDexWorkspaceScreen() {
                     <View style={styles.workspaceStage}>
                         {!paired ? (
                             <View style={styles.emptyStage}>
-                                <SurfaceCard title="Pair your desktop first" subtitle="The home screen now stays focused on the terminal panel. Pairing and sync settings moved into the left sidebar.">
+                                <SurfaceCard title="Pair your desktop first" subtitle="The home screen stays focused on the terminal panel. Device pairing and connection controls live under Device, while app preferences stay in Settings.">
                                     <View style={styles.emptyActions}>
-                                        <ActionButton label="Open Pairing" onPress={openPairing} />
+                                        <ActionButton label="Open Device" onPress={openDevice} />
                                         <ActionButton kind="secondary" label="Settings" onPress={openSettings} />
                                     </View>
                                 </SurfaceCard>
@@ -1339,7 +1340,7 @@ export default function GhoDexWorkspaceScreen() {
                                     multiline
                                     onChangeText={setTerminalCommand}
                                     placeholder="Run one line, paste real multi-line blocks."
-                                    placeholderTextColor="#8f867a"
+                                    placeholderTextColor={theme.colors.input.placeholder}
                                     style={styles.commandInput}
                                     value={terminalCommand}
                                 />
@@ -1388,7 +1389,7 @@ export default function GhoDexWorkspaceScreen() {
                                     }
                                 }}
                                 placeholder={renameTabPlaceholder}
-                                placeholderTextColor="#8f867a"
+                                placeholderTextColor={theme.colors.input.placeholder}
                                 style={styles.renameModalInput}
                                 value={renameTabDraft}
                             />
@@ -1417,6 +1418,8 @@ function WorkspaceIconButton(props: {
     icon: keyof typeof Ionicons.glyphMap;
     onPress: () => void;
 }) {
+    const { theme } = useUnistyles();
+
     return (
         <Pressable
             disabled={props.disabled}
@@ -1427,7 +1430,7 @@ function WorkspaceIconButton(props: {
                 props.disabled ? styles.iconButtonDisabled : null,
             ]}
         >
-            <Ionicons color="#f6eee3" name={props.icon} size={22} />
+            <Ionicons color={theme.colors.text} name={props.icon} size={22} />
         </Pressable>
     );
 }
@@ -1437,6 +1440,8 @@ function WorkspaceSubmitButton(props: {
     label: string;
     onPress: () => void;
 }) {
+    const { theme } = useUnistyles();
+
     return (
         <Pressable
             disabled={props.busy}
@@ -1447,7 +1452,7 @@ function WorkspaceSubmitButton(props: {
                 props.busy ? styles.iconButtonDisabled : null,
             ]}
         >
-            {props.busy ? <ActivityIndicator color="#fffaf3" size="small" /> : <Text style={styles.submitButtonText}>{props.label}</Text>}
+            {props.busy ? <ActivityIndicator color={theme.colors.button.primary.tint} size="small" /> : <Text style={styles.submitButtonText}>{props.label}</Text>}
         </Pressable>
     );
 }
@@ -1457,6 +1462,8 @@ function WorkspaceMiniAction(props: {
     icon: keyof typeof Ionicons.glyphMap;
     onPress: () => void;
 }) {
+    const { theme } = useUnistyles();
+
     return (
         <Pressable
             disabled={props.busy}
@@ -1467,7 +1474,7 @@ function WorkspaceMiniAction(props: {
                 props.busy ? styles.iconButtonDisabled : null,
             ]}
         >
-            {props.busy ? <ActivityIndicator color="#d9b68f" size="small" /> : <Ionicons color="#d9b68f" name={props.icon} size={15} />}
+            {props.busy ? <ActivityIndicator color={theme.colors.textSecondary} size="small" /> : <Ionicons color={theme.colors.textSecondary} name={props.icon} size={15} />}
         </Pressable>
     );
 }
@@ -1477,9 +1484,11 @@ function SidebarQuickAction(props: {
     label: string;
     onPress: () => void;
 }) {
+    const { theme } = useUnistyles();
+
     return (
         <Pressable onPress={props.onPress} style={({ pressed }) => [styles.sidebarQuickAction, pressed ? styles.sidebarTerminalItemPressed : null]}>
-            <Ionicons color="#fff4e7" name={props.icon} size={18} />
+            <Ionicons color={theme.colors.text} name={props.icon} size={18} />
             <Text style={styles.sidebarQuickActionText}>{props.label}</Text>
         </Pressable>
     );
@@ -1503,15 +1512,15 @@ function SyncBadge(props: {
     );
 }
 
-const styles = StyleSheet.create({
+const styles = StyleSheet.create((theme) => ({
     screen: {
         flex: 1,
-        backgroundColor: '#100d0b',
+        backgroundColor: theme.colors.groupped.background,
         overflow: 'hidden',
     },
     mainShell: {
         flex: 1,
-        backgroundColor: '#100d0b',
+        backgroundColor: theme.colors.groupped.background,
     },
     contentBackdropLayer: {
         ...StyleSheet.absoluteFillObject,
@@ -1521,10 +1530,10 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         gap: 12,
-        backgroundColor: '#100d0b',
+        backgroundColor: theme.colors.groupped.background,
     },
     loadingText: {
-        color: '#d7c8b8',
+        color: theme.colors.textSecondary,
         fontSize: 16,
     },
     header: {
@@ -1533,21 +1542,21 @@ const styles = StyleSheet.create({
         gap: 12,
         paddingHorizontal: 16,
         paddingBottom: 6,
-        backgroundColor: '#171210',
+        backgroundColor: theme.colors.header.background,
         borderBottomWidth: 1,
-        borderBottomColor: '#2a211b',
+        borderBottomColor: theme.colors.divider,
     },
     headerCopy: {
         flex: 1,
         gap: 2,
     },
     headerTitle: {
-        color: '#fff7ed',
+        color: theme.colors.text,
         fontSize: 17,
         fontWeight: '700',
     },
     headerSubtitle: {
-        color: '#ad9d8b',
+        color: theme.colors.textSecondary,
         fontSize: 12,
         lineHeight: 17,
     },
@@ -1557,7 +1566,7 @@ const styles = StyleSheet.create({
         borderRadius: 14,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: '#2a211b',
+        backgroundColor: theme.colors.surfaceHigh,
     },
     iconButtonPressed: {
         opacity: 0.82,
@@ -1572,15 +1581,15 @@ const styles = StyleSheet.create({
         paddingVertical: 8,
         borderRadius: 14,
         borderWidth: 1,
-        borderColor: '#6a2d21',
-        backgroundColor: '#321712',
+        borderColor: theme.colors.box.error.border,
+        backgroundColor: theme.colors.box.error.background,
         flexDirection: 'row',
         alignItems: 'flex-start',
         gap: 8,
     },
     errorText: {
         flex: 1,
-        color: '#f0c0b6',
+        color: theme.colors.box.error.text,
         fontSize: 13,
         lineHeight: 18,
     },
@@ -1608,8 +1617,8 @@ const styles = StyleSheet.create({
         minHeight: 0,
         borderRadius: 18,
         borderWidth: 1,
-        borderColor: '#2e241d',
-        backgroundColor: '#0c0907',
+        borderColor: theme.colors.divider,
+        backgroundColor: theme.colors.terminal.background,
         overflow: 'hidden',
     },
     terminalToolbar: {
@@ -1620,12 +1629,12 @@ const styles = StyleSheet.create({
         paddingHorizontal: 12,
         paddingVertical: 7,
         borderBottomWidth: 1,
-        borderBottomColor: '#221b16',
-        backgroundColor: '#16110f',
+        borderBottomColor: theme.colors.divider,
+        backgroundColor: theme.colors.surface,
     },
     terminalToolbarPath: {
         flex: 1,
-        color: '#b8a894',
+        color: theme.colors.textSecondary,
         fontSize: 11,
         lineHeight: 15,
         fontFamily: 'monospace',
@@ -1642,19 +1651,19 @@ const styles = StyleSheet.create({
         borderRadius: 10,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: '#251d18',
+        backgroundColor: theme.colors.surfaceHigh,
     },
     syncBadge: {
         borderRadius: 999,
         paddingHorizontal: 8,
         paddingVertical: 5,
-        backgroundColor: '#251d18',
+        backgroundColor: theme.colors.surfaceHigh,
     },
     syncBadgeLive: {
-        backgroundColor: '#173225',
+        backgroundColor: theme.colors.surfaceHighest,
     },
     syncBadgeText: {
-        color: '#d8c6b2',
+        color: theme.colors.textSecondary,
         fontSize: 10,
         fontWeight: '700',
         textTransform: 'uppercase',
@@ -1670,7 +1679,7 @@ const styles = StyleSheet.create({
     terminalContent: {
         paddingHorizontal: 12,
         paddingVertical: 10,
-        color: '#f8efe3',
+        color: theme.colors.text,
         fontSize: 13,
         lineHeight: 20,
         fontFamily: 'monospace',
@@ -1678,9 +1687,9 @@ const styles = StyleSheet.create({
     commandDock: {
         paddingHorizontal: 12,
         paddingTop: 8,
-        backgroundColor: '#171210',
+        backgroundColor: theme.colors.header.background,
         borderTopWidth: 1,
-        borderTopColor: '#2a211b',
+        borderTopColor: theme.colors.divider,
     },
     commandRow: {
         flexDirection: 'row',
@@ -1692,12 +1701,12 @@ const styles = StyleSheet.create({
         minHeight: 46,
         maxHeight: 92,
         borderRadius: 14,
-        backgroundColor: '#221b16',
+        backgroundColor: theme.colors.input.background,
         borderWidth: 1,
-        borderColor: '#342921',
+        borderColor: theme.colors.divider,
         paddingHorizontal: 12,
         paddingVertical: 9,
-        color: '#fff7ed',
+        color: theme.colors.input.text,
         fontSize: 14,
         textAlignVertical: 'top',
         fontFamily: 'monospace',
@@ -1712,11 +1721,11 @@ const styles = StyleSheet.create({
         borderRadius: 12,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: '#8a4b2a',
+        backgroundColor: theme.colors.button.primary.background,
         paddingHorizontal: 12,
     },
     submitButtonText: {
-        color: '#fffaf3',
+        color: theme.colors.button.primary.tint,
         fontSize: 13,
         fontWeight: '700',
     },
@@ -1726,14 +1735,14 @@ const styles = StyleSheet.create({
         bottom: 0,
         left: 0,
         zIndex: 20,
-        backgroundColor: '#191411',
+        backgroundColor: theme.colors.surface,
         borderRightWidth: 1,
-        borderRightColor: '#2d241d',
+        borderRightColor: theme.colors.divider,
         paddingHorizontal: 14,
         gap: 14,
-        shadowColor: '#000',
+        shadowColor: theme.colors.shadow.color,
         shadowOffset: { width: 8, height: 0 },
-        shadowOpacity: 0.22,
+        shadowOpacity: theme.colors.shadow.opacity,
         shadowRadius: 18,
         elevation: 24,
     },
@@ -1752,17 +1761,17 @@ const styles = StyleSheet.create({
         gap: 4,
     },
     sidebarTitle: {
-        color: '#fff6eb',
+        color: theme.colors.text,
         fontSize: 22,
         fontWeight: '800',
     },
     sidebarSubtitle: {
-        color: '#b19f8b',
+        color: theme.colors.textSecondary,
         fontSize: 13,
         lineHeight: 18,
     },
     sidebarSectionTitle: {
-        color: '#7d6d5d',
+        color: theme.colors.groupped.sectionTitle,
         fontSize: 11,
         fontWeight: '700',
         letterSpacing: 0.8,
@@ -1779,13 +1788,13 @@ const styles = StyleSheet.create({
         borderRadius: 20,
         paddingHorizontal: 12,
         paddingVertical: 12,
-        backgroundColor: '#241d18',
+        backgroundColor: theme.colors.surfaceHigh,
         gap: 10,
     },
     sidebarTabCardActive: {
-        backgroundColor: '#31241c',
+        backgroundColor: theme.colors.surfaceHighest,
         borderWidth: 1,
-        borderColor: '#8a4b2a',
+        borderColor: theme.colors.button.primary.background,
     },
     sidebarTabHeader: {
         flexDirection: 'row',
@@ -1802,20 +1811,20 @@ const styles = StyleSheet.create({
         gap: 3,
     },
     sidebarTabTitle: {
-        color: '#f8efe3',
+        color: theme.colors.text,
         fontSize: 15,
         fontWeight: '800',
     },
     sidebarTabTitleActive: {
-        color: '#fff6ec',
+        color: theme.colors.text,
     },
     sidebarTabMeta: {
-        color: '#b7a490',
+        color: theme.colors.textSecondary,
         fontSize: 12,
         lineHeight: 17,
     },
     sidebarTabMetaActive: {
-        color: '#f1cfb3',
+        color: theme.colors.text,
     },
     sidebarTabIconButton: {
         width: 30,
@@ -1823,7 +1832,7 @@ const styles = StyleSheet.create({
         borderRadius: 10,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: '#1a1410',
+        backgroundColor: theme.colors.surface,
     },
     sidebarTabTerminalList: {
         gap: 8,
@@ -1832,46 +1841,46 @@ const styles = StyleSheet.create({
         borderRadius: 18,
         paddingHorizontal: 14,
         paddingVertical: 12,
-        backgroundColor: '#1b1511',
+        backgroundColor: theme.colors.surface,
         gap: 6,
     },
     sidebarTerminalItemActive: {
-        backgroundColor: '#8a4b2a',
+        backgroundColor: theme.colors.button.primary.background,
     },
     sidebarTerminalItemPressed: {
         opacity: 0.82,
     },
     sidebarTerminalTitle: {
-        color: '#f8efe3',
+        color: theme.colors.text,
         fontSize: 15,
         fontWeight: '700',
     },
     sidebarTerminalTitleActive: {
-        color: '#fff9f0',
+        color: theme.colors.button.primary.tint,
     },
     sidebarTerminalMeta: {
-        color: '#b7a490',
+        color: theme.colors.textSecondary,
         fontSize: 12,
         lineHeight: 18,
         fontFamily: 'monospace',
     },
     sidebarTerminalMetaActive: {
-        color: '#f5decc',
+        color: theme.colors.button.primary.tint,
     },
     sidebarEmpty: {
         borderRadius: 18,
         paddingHorizontal: 14,
         paddingVertical: 16,
-        backgroundColor: '#241d18',
+        backgroundColor: theme.colors.surfaceHigh,
         gap: 8,
     },
     sidebarEmptyTitle: {
-        color: '#fff4e7',
+        color: theme.colors.text,
         fontSize: 15,
         fontWeight: '700',
     },
     sidebarEmptyText: {
-        color: '#b7a490',
+        color: theme.colors.textSecondary,
         fontSize: 13,
         lineHeight: 19,
     },
@@ -1889,25 +1898,25 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: 10,
         borderRadius: 16,
-        backgroundColor: '#241d18',
+        backgroundColor: theme.colors.surfaceHigh,
         paddingHorizontal: 14,
         paddingVertical: 13,
         justifyContent: 'center',
     },
     sidebarQuickActionText: {
-        color: '#fff4e7',
+        color: theme.colors.text,
         fontSize: 14,
         fontWeight: '700',
     },
     sidebarStatus: {
         borderRadius: 16,
-        backgroundColor: '#130f0c',
+        backgroundColor: theme.colors.surface,
         paddingHorizontal: 14,
         paddingVertical: 12,
         gap: 4,
     },
     sidebarStatusLine: {
-        color: '#9f8f7d',
+        color: theme.colors.textSecondary,
         fontSize: 12,
         lineHeight: 17,
         fontFamily: 'monospace',
@@ -1927,37 +1936,37 @@ const styles = StyleSheet.create({
     },
     renameModalCard: {
         borderRadius: 22,
-        backgroundColor: '#191411',
+        backgroundColor: theme.colors.surface,
         borderWidth: 1,
-        borderColor: '#2d241d',
+        borderColor: theme.colors.divider,
         paddingHorizontal: 16,
         paddingTop: 18,
         paddingBottom: 16,
         gap: 12,
     },
     renameModalTitle: {
-        color: '#fff4e7',
+        color: theme.colors.text,
         fontSize: 18,
         fontWeight: '800',
     },
     renameModalSubtitle: {
-        color: '#b7a490',
+        color: theme.colors.textSecondary,
         fontSize: 13,
         lineHeight: 19,
     },
     renameModalInput: {
         minHeight: 48,
         borderRadius: 14,
-        backgroundColor: '#221b16',
+        backgroundColor: theme.colors.input.background,
         borderWidth: 1,
-        borderColor: '#342921',
+        borderColor: theme.colors.divider,
         paddingHorizontal: 12,
         paddingVertical: 10,
-        color: '#fff7ed',
+        color: theme.colors.input.text,
         fontSize: 15,
     },
     renameModalErrorText: {
-        color: '#f0c0b6',
+        color: theme.colors.box.error.text,
         fontSize: 13,
         lineHeight: 18,
     },
@@ -1965,4 +1974,4 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         gap: 10,
     },
-});
+}));

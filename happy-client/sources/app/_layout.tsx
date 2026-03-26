@@ -6,6 +6,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
+import { useUnistyles } from 'react-native-unistyles';
 
 export { ErrorBoundary } from 'expo-router';
 
@@ -14,6 +15,7 @@ void SplashScreen.preventAutoHideAsync().catch(() => {
 });
 
 export default function RootLayout() {
+    const { theme } = useUnistyles();
     const splashHiddenRef = React.useRef(false);
 
     const hideSplashScreen = React.useCallback(() => {
@@ -43,18 +45,21 @@ export default function RootLayout() {
 
     return (
         <SafeAreaProvider initialMetrics={initialWindowMetrics}>
-            <GestureHandlerRootView style={{ flex: 1 }} onLayout={onLayoutRootView}>
+            <GestureHandlerRootView
+                style={{ flex: 1, backgroundColor: theme.colors.groupped.background }}
+                onLayout={onLayoutRootView}
+            >
                 <KeyboardProvider
                     navigationBarTranslucent={true}
                     preserveEdgeToEdge={true}
                     statusBarTranslucent={true}
                 >
-                    <StatusBar style="dark" />
+                    <StatusBar style={theme.dark ? 'light' : 'dark'} />
                     <Stack
                         screenOptions={{
                             headerShown: false,
                             contentStyle: {
-                                backgroundColor: '#f4efe6',
+                                backgroundColor: theme.colors.groupped.background,
                             },
                         }}
                     >

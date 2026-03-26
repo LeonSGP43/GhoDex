@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as React from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, Text, View } from 'react-native';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 export function ActionButton({
     busy,
@@ -15,6 +16,8 @@ export function ActionButton({
     label: string;
     onPress: () => void;
 }) {
+    const { theme } = useUnistyles();
+
     return (
         <Pressable
             disabled={busy}
@@ -28,7 +31,7 @@ export function ActionButton({
             ]}
         >
             {busy ? (
-                <ActivityIndicator color={kind === 'secondary' ? '#4e4337' : '#fffaf3'} />
+                <ActivityIndicator color={kind === 'secondary' ? theme.colors.text : theme.colors.button.primary.tint} />
             ) : (
                 <Text style={kind === 'secondary' ? styles.secondaryButtonText : styles.primaryButtonText}>{label}</Text>
             )}
@@ -61,9 +64,11 @@ export function InfoPill({
     icon: keyof typeof Ionicons.glyphMap;
     label: string;
 }) {
+    const { theme } = useUnistyles();
+
     return (
         <View style={styles.infoPill}>
-            <Ionicons color="#8a4b2a" name={icon} size={14} />
+            <Ionicons color={theme.colors.button.primary.background} name={icon} size={14} />
             <Text style={styles.infoPillText}>{label}</Text>
         </View>
     );
@@ -86,7 +91,7 @@ export function SectionValue({
     );
 }
 
-const styles = StyleSheet.create({
+const styles = StyleSheet.create((theme) => ({
     button: {
         flex: 1,
         minHeight: 48,
@@ -101,10 +106,12 @@ const styles = StyleSheet.create({
         paddingHorizontal: 14,
     },
     primaryButton: {
-        backgroundColor: '#8a4b2a',
+        backgroundColor: theme.colors.button.primary.background,
     },
     secondaryButton: {
-        backgroundColor: '#ede2d5',
+        backgroundColor: theme.colors.surfaceHigh,
+        borderWidth: 1,
+        borderColor: theme.colors.divider,
     },
     buttonPressed: {
         opacity: 0.88,
@@ -113,30 +120,30 @@ const styles = StyleSheet.create({
         opacity: 0.65,
     },
     primaryButtonText: {
-        color: '#fffaf3',
+        color: theme.colors.button.primary.tint,
         fontSize: 15,
         fontWeight: '700',
     },
     secondaryButtonText: {
-        color: '#4e4337',
+        color: theme.colors.text,
         fontSize: 15,
         fontWeight: '700',
     },
     card: {
-        backgroundColor: '#fbf7f0',
+        backgroundColor: theme.colors.surface,
         borderRadius: 20,
         padding: 16,
         gap: 12,
         borderWidth: 1,
-        borderColor: '#e8ddd0',
+        borderColor: theme.colors.divider,
     },
     cardTitle: {
-        color: '#241d17',
+        color: theme.colors.text,
         fontSize: 18,
         fontWeight: '700',
     },
     cardSubtitle: {
-        color: '#6b6259',
+        color: theme.colors.textSecondary,
         fontSize: 13,
         lineHeight: 19,
     },
@@ -147,10 +154,12 @@ const styles = StyleSheet.create({
         paddingHorizontal: 10,
         paddingVertical: 8,
         borderRadius: 999,
-        backgroundColor: '#efe4d8',
+        backgroundColor: theme.colors.surfaceHigh,
+        borderWidth: 1,
+        borderColor: theme.colors.divider,
     },
     infoPillText: {
-        color: '#5c4b3c',
+        color: theme.colors.text,
         fontSize: 12,
         fontWeight: '700',
     },
@@ -158,18 +167,18 @@ const styles = StyleSheet.create({
         gap: 4,
     },
     metaLabel: {
-        color: '#6a5f53',
+        color: theme.colors.groupped.sectionTitle,
         fontSize: 12,
         fontWeight: '700',
         textTransform: 'uppercase',
         letterSpacing: 0.6,
     },
     metaValue: {
-        color: '#261f18',
+        color: theme.colors.text,
         fontSize: 14,
         lineHeight: 20,
     },
     monoText: {
         fontFamily: 'monospace',
     },
-});
+}));
