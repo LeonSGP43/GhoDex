@@ -19,7 +19,6 @@ import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { renderAnsiText } from '@/ghodex/ansi';
 import { getCurrentLanguage } from '@/text';
 import {
     closeTab as closeGatewayTab,
@@ -33,12 +32,25 @@ import {
 } from '@/ghodex/gateway';
 import { INITIAL_GATEWAY_SESSION } from '@/ghodex/sessionState';
 import { loadStoredSession, type StoredSession } from '@/ghodex/storage';
+import { TerminalRenderer } from '@/ghodex/terminal/TerminalRenderer';
+import { applyTerminalRowDelta, buildTerminalRows, type TerminalRenderRow } from '@/ghodex/terminal/model';
+import {
+    applyTerminalDelta,
+    shouldFallbackToTerminalSnapshot,
+    shouldRequestTerminalDelta,
+} from '@/ghodex/terminalTransport';
+import {
+    recordReconnectRecovered,
+    recordReconnectScheduled,
+    recordScreenReady,
+    recordScreenStarted,
+    recordTerminalUpdate,
+} from '@/ghodex/observability';
 import { ActionButton, SurfaceCard } from '@/ghodex/ui';
 import type {
     GatewayEnvelope,
     SnapshotResult,
     TabRow,
-    TerminalChangedRow,
     TerminalMutationResult,
     TerminalReadResult,
     TerminalRow,
@@ -62,12 +74,14 @@ type LoadTerminalViewFn = (
         mode?: 'snapshot' | 'delta';
         sinceFrameId?: string;
         readAfterWriteId?: string;
+        metricsSource?: string;
     },
 ) => Promise<TerminalReadResult>;
 
 type RefreshSnapshotFn = (
     authToken: string,
     preferredTerminalId: string | null,
+    terminalMetricsSource?: string,
 ) => Promise<SnapshotResult>;
 
 const WRITE_SETTLE_ATTEMPTS = 6;
@@ -77,40 +91,6 @@ function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => {
         setTimeout(resolve, ms);
     });
-}
-
-function applyTerminalDelta(content: string, changedRows: TerminalChangedRow[]): string | null {
-    if (changedRows.length === 0) {
-        return content;
-    }
-
-    const nextLines = content.split('\n');
-    for (const row of [...changedRows].sort((left, right) => left.index - right.index)) {
-        while (nextLines.length < row.index) {
-            nextLines.push('');
-        }
-
-        switch (row.kind) {
-        case 'insert':
-            nextLines.splice(row.index, 0, row.text ?? '');
-            break;
-        case 'update':
-            while (nextLines.length <= row.index) {
-                nextLines.push('');
-            }
-            nextLines[row.index] = row.text ?? '';
-            break;
-        case 'delete':
-            if (row.index < nextLines.length) {
-                nextLines.splice(row.index, 1);
-            }
-            break;
-        default:
-            return null;
-        }
-    }
-
-    return nextLines.join('\n');
 }
 
 function pickPreferredTerminal(terminals: TerminalRow[], preferredTerminalId: string | null): TerminalRow | null {
@@ -377,6 +357,7 @@ export default function GhoDexWorkspaceScreen() {
     const [selectedTerminalId, setSelectedTerminalId] = React.useState<string | null>(null);
     const [terminalView, setTerminalView] = React.useState<TerminalReadResult | null>(null);
     const [terminalContent, setTerminalContent] = React.useState('');
+    const [terminalRows, setTerminalRows] = React.useState<TerminalRenderRow[]>([]);
     const [terminalCommand, setTerminalCommand] = React.useState('');
     const [renameTabTarget, setRenameTabTarget] = React.useState<TabRow | null>(null);
     const [renameTabDraft, setRenameTabDraft] = React.useState('');
@@ -400,7 +381,7 @@ export default function GhoDexWorkspaceScreen() {
     const syncLabel = session.liveUpdatesEnabled
         ? (subscriptionOpen ? copy.syncLive : copy.syncReconnecting(session.pollIntervalMs))
         : copy.syncPolling(session.pollIntervalMs);
-    const terminalDisplayText = selectedTerminal
+    const terminalEmptyText = selectedTerminal
         ? (terminalContent || copy.noTerminalText)
         : copy.openSidebarHint;
     const renameTabPlaceholder = renameTabTarget
@@ -430,11 +411,6 @@ export default function GhoDexWorkspaceScreen() {
             outputRange: [0, 1],
         })
     ), [sidebarProgress]);
-    const renderedTerminalContent = React.useMemo(
-        () => renderAnsiText(terminalDisplayText),
-        [terminalDisplayText],
-    );
-
     const sessionRef = React.useRef(session);
     const snapshotRef = React.useRef<SnapshotResult | null>(snapshot);
     const selectedTerminalRef = React.useRef<TerminalRow | null>(selectedTerminal);
@@ -447,6 +423,7 @@ export default function GhoDexWorkspaceScreen() {
     const snapshotRefreshTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
     const loadTerminalViewRef = React.useRef<LoadTerminalViewFn | null>(null);
     const refreshSnapshotRef = React.useRef<RefreshSnapshotFn | null>(null);
+    const reconnectStartedAtRef = React.useRef<number | null>(null);
 
     React.useEffect(() => {
         sessionRef.current = session;
@@ -530,6 +507,20 @@ export default function GhoDexWorkspaceScreen() {
 
             return result.content;
         });
+        setTerminalRows((current) => {
+            if (options?.mergeDelta && result.mode === 'delta' && result.contentKind === 'delta') {
+                if (!result.hasChanges) {
+                    return current;
+                }
+
+                const merged = applyTerminalRowDelta(current, result.changedRows);
+                if (merged !== null) {
+                    return merged;
+                }
+            }
+
+            return buildTerminalRows(result.content);
+        });
 
         setSnapshot((current) => {
             if (!current) {
@@ -563,9 +554,12 @@ export default function GhoDexWorkspaceScreen() {
             mode?: 'snapshot' | 'delta';
             sinceFrameId?: string;
             readAfterWriteId?: string;
+            metricsSource?: string;
         },
     ) => {
         const activeSession = sessionRef.current;
+        const updateStartedAt = Date.now();
+        const metricsSource = options?.metricsSource ?? (options?.mode === 'delta' ? 'live' : 'manual');
         const result = await readTerminal({
             host: activeSession.host,
             port: activeSession.port,
@@ -581,18 +575,12 @@ export default function GhoDexWorkspaceScreen() {
 
         const currentTerminalView = terminalViewRef.current;
         const expectsDelta = options?.mode === 'delta';
-        const sameTerminal = currentTerminalView?.terminalId === result.terminalId;
-        const canMergeDelta = expectsDelta
-            && !!options?.sinceFrameId
-            && sameTerminal
-            && (
-                result.parentFrameId === options.sinceFrameId
-                || (!result.hasChanges && result.frameId === options.sinceFrameId)
-            );
-        const deltaNeedsSnapshotFallback = expectsDelta && (
-            !canMergeDelta
-            || (result.hasChanges && result.changedRows.length === 0)
-        );
+        const deltaNeedsSnapshotFallback = shouldFallbackToTerminalSnapshot({
+            requestMode: expectsDelta ? 'delta' : 'snapshot',
+            requestedSinceFrameId: options?.sinceFrameId,
+            currentView: currentTerminalView,
+            result,
+        });
 
         if (deltaNeedsSnapshotFallback) {
             const snapshotResult = await readTerminal({
@@ -607,10 +595,12 @@ export default function GhoDexWorkspaceScreen() {
                 readAfterWriteId: options?.readAfterWriteId,
             });
             applyTerminalResult(snapshotResult);
+            recordTerminalUpdate(metricsSource, Date.now() - updateStartedAt);
             return snapshotResult;
         }
 
         applyTerminalResult(result, { mergeDelta: expectsDelta });
+        recordTerminalUpdate(metricsSource, Date.now() - updateStartedAt);
         return result;
     }, [applyTerminalResult]);
 
@@ -621,6 +611,7 @@ export default function GhoDexWorkspaceScreen() {
     const refreshSnapshotImpl = React.useCallback(async (
         authToken: string,
         preferredTerminalId: string | null,
+        terminalMetricsSource = 'manual',
     ) => {
         const activeSession = sessionRef.current;
         const result = await fetchSnapshot({
@@ -634,10 +625,11 @@ export default function GhoDexWorkspaceScreen() {
         const nextTerminal = pickPreferredTerminal(result.terminals, preferredTerminalId);
         setSelectedTerminalId(nextTerminal?.terminalId ?? null);
         if (nextTerminal) {
-            await loadTerminalViewImpl(nextTerminal, authToken);
+            await loadTerminalViewImpl(nextTerminal, authToken, { metricsSource: terminalMetricsSource });
         } else {
             setTerminalView(null);
             setTerminalContent('');
+            setTerminalRows([]);
         }
         return result;
     }, [loadTerminalViewImpl]);
@@ -651,8 +643,9 @@ export default function GhoDexWorkspaceScreen() {
         authToken: string,
         mutation: TerminalMutationResult,
     ) => {
-        let sinceFrameId = terminalViewRef.current?.terminalId === terminal.terminalId
-            ? terminalViewRef.current.frameId ?? undefined
+        const currentView = terminalViewRef.current;
+        let sinceFrameId = shouldRequestTerminalDelta(currentView, terminal.terminalId)
+            ? currentView?.frameId ?? undefined
             : undefined;
 
         for (let attempt = 0; attempt < WRITE_SETTLE_ATTEMPTS; attempt += 1) {
@@ -665,6 +658,7 @@ export default function GhoDexWorkspaceScreen() {
                 mode: sinceFrameId ? 'delta' : 'snapshot',
                 sinceFrameId,
                 readAfterWriteId: mutation.writeId ?? undefined,
+                metricsSource: 'write-settle',
             });
 
             sinceFrameId = result.frameId ?? sinceFrameId;
@@ -679,6 +673,7 @@ export default function GhoDexWorkspaceScreen() {
         return loadTerminalViewImpl(terminal, authToken, {
             expectedGeneration: mutation.generation,
             readAfterWriteId: mutation.writeId ?? undefined,
+            metricsSource: 'write-settle',
         });
     }, [loadTerminalViewImpl]);
 
@@ -716,16 +711,16 @@ export default function GhoDexWorkspaceScreen() {
                 do {
                     liveReadPendingRef.current = false;
                     const currentView = terminalViewRef.current;
+                    const deltaEnabled = shouldRequestTerminalDelta(currentView, currentTerminal.terminalId);
                     await loadTerminalViewRef.current?.(currentTerminal, authToken, {
                         expectedGeneration: currentView?.terminalId === currentTerminal.terminalId
                             ? currentView.generation
                             : currentTerminal.generation,
-                        mode: currentView?.terminalId === currentTerminal.terminalId && currentView.frameId
-                            ? 'delta'
-                            : 'snapshot',
-                        sinceFrameId: currentView?.terminalId === currentTerminal.terminalId
-                            ? currentView.frameId ?? undefined
+                        mode: deltaEnabled ? 'delta' : 'snapshot',
+                        sinceFrameId: deltaEnabled
+                            ? currentView?.frameId ?? undefined
                             : undefined,
+                        metricsSource: 'live',
                     });
                 } while (liveReadPendingRef.current);
             } catch (error) {
@@ -749,6 +744,10 @@ export default function GhoDexWorkspaceScreen() {
             const lastSequence = typeof result.last_sequence === 'number' ? result.last_sequence : null;
             if (lastSequence !== null) {
                 subscriptionSequenceRef.current = Math.max(subscriptionSequenceRef.current, lastSequence);
+            }
+            if (reconnectStartedAtRef.current !== null) {
+                recordReconnectRecovered(reconnectStartedAtRef.current);
+                reconnectStartedAtRef.current = null;
             }
             setSubscriptionOpen(true);
             return;
@@ -806,6 +805,7 @@ export default function GhoDexWorkspaceScreen() {
     }, [driveSelectedTerminalFromSubscription, scheduleSnapshotRefresh]);
 
     const hydrateSession = React.useCallback(async () => {
+        const workspaceOpenedAt = recordScreenStarted('workspace');
         const stored = await loadStoredSession();
         sessionRef.current = stored;
         setSession(stored);
@@ -817,24 +817,29 @@ export default function GhoDexWorkspaceScreen() {
             setSelectedTerminalId(null);
             setTerminalView(null);
             setTerminalContent('');
+            setTerminalRows([]);
             setSubscriptionOpen(false);
             setAuthorizationRequired(false);
             setErrorMessage(null);
+            recordScreenReady('workspace', workspaceOpenedAt);
             return;
         }
 
         try {
-            await refreshSnapshotImpl(authToken, selectedTerminalIdRef.current);
+            await refreshSnapshotImpl(authToken, selectedTerminalIdRef.current, 'workspace-open');
             setErrorMessage(null);
+            recordScreenReady('workspace', workspaceOpenedAt);
         } catch (error) {
             if (isGatewayAuthError(error)) {
                 setAuthorizationRequired(true);
                 setSubscriptionOpen(false);
                 setErrorMessage('Gateway authorization expired for this desktop build. Re-open Device and bind the phone again.');
+                recordScreenReady('workspace', workspaceOpenedAt);
                 return;
             }
             const message = error instanceof Error ? error.message : 'Failed to load gateway snapshot';
             setErrorMessage(message);
+            recordScreenReady('workspace', workspaceOpenedAt);
         }
     }, [refreshSnapshotImpl]);
 
@@ -856,7 +861,7 @@ export default function GhoDexWorkspaceScreen() {
         }
 
         void runAction('snapshot', async () => {
-            await refreshSnapshotImpl(authToken, selectedTerminalIdRef.current);
+            await refreshSnapshotImpl(authToken, selectedTerminalIdRef.current, 'manual');
         });
     }, [refreshSnapshotImpl, runAction, session.authToken]);
 
@@ -869,8 +874,9 @@ export default function GhoDexWorkspaceScreen() {
 
         setSelectedTerminalId(terminal.terminalId);
         setTerminalContent('');
+        setTerminalRows([]);
         void runAction('terminal-read', async () => {
-            await loadTerminalViewImpl(terminal, authToken);
+            await loadTerminalViewImpl(terminal, authToken, { metricsSource: 'manual' });
         });
     }, [loadTerminalViewImpl, runAction, session.authToken]);
 
@@ -1012,8 +1018,8 @@ export default function GhoDexWorkspaceScreen() {
                 selectedTerminal,
                 session.authToken,
                 terminalView?.terminalId === selectedTerminal.terminalId
-                    ? { expectedGeneration: terminalView.generation, mode: 'snapshot' }
-                    : undefined,
+                    ? { expectedGeneration: terminalView.generation, mode: 'snapshot', metricsSource: 'manual' }
+                    : { metricsSource: 'manual' },
             );
         });
     }, [loadTerminalViewImpl, runAction, selectedTerminal, session.authToken, terminalView]);
@@ -1064,6 +1070,7 @@ export default function GhoDexWorkspaceScreen() {
         const authToken = session.authToken.trim();
         if (!isFocused || !loaded || !authToken || !session.liveUpdatesEnabled || authorizationRequired || sidebarVisible) {
             setSubscriptionOpen(false);
+            reconnectStartedAtRef.current = null;
             return;
         }
 
@@ -1096,19 +1103,24 @@ export default function GhoDexWorkspaceScreen() {
                         if (isGatewayAuthError(error)) {
                             setAuthorizationRequired(true);
                             setSubscriptionOpen(false);
+                            reconnectStartedAtRef.current = null;
                             setErrorMessage('Gateway authorization expired for this desktop build. Re-open Device and bind the phone again.');
                             return;
                         }
                         console.warn('Gateway subscription dropped', error);
                         setSubscriptionOpen(false);
-                        reconnectTimer = setTimeout(openSubscription, Math.max(500, session.pollIntervalMs * 4));
+                        const delayMs = Math.max(500, session.pollIntervalMs * 4);
+                        reconnectStartedAtRef.current = recordReconnectScheduled('subscription_drop', delayMs);
+                        reconnectTimer = setTimeout(openSubscription, delayMs);
                     },
                 });
             } catch (error) {
                 const message = error instanceof Error ? error.message : 'Failed to open gateway subscription';
                 console.warn(message);
                 setSubscriptionOpen(false);
-                reconnectTimer = setTimeout(openSubscription, Math.max(500, session.pollIntervalMs * 4));
+                const delayMs = Math.max(500, session.pollIntervalMs * 4);
+                reconnectStartedAtRef.current = recordReconnectScheduled('subscription_open_failed', delayMs);
+                reconnectTimer = setTimeout(openSubscription, delayMs);
             }
         };
 
@@ -1117,6 +1129,7 @@ export default function GhoDexWorkspaceScreen() {
         return () => {
             cancelled = true;
             setSubscriptionOpen(false);
+            reconnectStartedAtRef.current = null;
             if (reconnectTimer) {
                 clearTimeout(reconnectTimer);
             }
@@ -1165,16 +1178,16 @@ export default function GhoDexWorkspaceScreen() {
 
             liveReadInFlightRef.current = true;
             try {
+                const deltaEnabled = shouldRequestTerminalDelta(terminalView, selectedTerminal.terminalId);
                 await loadTerminalViewImpl(selectedTerminal, authToken, {
                     expectedGeneration: terminalView?.terminalId === selectedTerminal.terminalId
                         ? terminalView.generation
                         : selectedTerminal.generation,
-                    mode: terminalView?.terminalId === selectedTerminal.terminalId && terminalView.frameId
-                        ? 'delta'
-                        : 'snapshot',
-                    sinceFrameId: terminalView?.terminalId === selectedTerminal.terminalId
-                        ? terminalView.frameId ?? undefined
+                    mode: deltaEnabled ? 'delta' : 'snapshot',
+                    sinceFrameId: deltaEnabled
+                        ? terminalView?.frameId ?? undefined
                         : undefined,
+                    metricsSource: 'poll',
                 });
             } catch (error) {
                 if (isGatewayAuthError(error)) {
@@ -1452,11 +1465,15 @@ export default function GhoDexWorkspaceScreen() {
                                 </View>
 
                                 <View style={styles.terminalViewport}>
-                                    <ScrollView nestedScrollEnabled style={styles.terminalScroll}>
-                                        <Text selectable style={styles.terminalContent}>
-                                            {renderedTerminalContent}
-                                        </Text>
-                                    </ScrollView>
+                                    {terminalRows.length > 0 ? (
+                                        <TerminalRenderer rows={terminalRows} />
+                                    ) : (
+                                        <ScrollView nestedScrollEnabled style={styles.terminalScroll}>
+                                            <Text selectable style={styles.terminalContent}>
+                                                {terminalEmptyText}
+                                            </Text>
+                                        </ScrollView>
+                                    )}
                                 </View>
                             </View>
                         )}
