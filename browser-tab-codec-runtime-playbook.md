@@ -6,6 +6,11 @@ This playbook records the repo-owned path for producing and validating a
 codec-enabled CEF runtime after the Browser codebase was already made
 descriptor-driven.
 
+Read `browser-tab-runtime-activation.md` first if the Browser tab currently
+shows `compiled without managed Chromium runtime support`. That state means the
+app binary itself was built without CEF host support, which must be fixed
+before codec/runtime supply questions matter.
+
 It exists so later agents do not have to rediscover the same supply-side
 boundary:
 

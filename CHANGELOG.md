@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### docs(browser): explain runtime activation gates and unsupported-build troubleshooting
+
+- What changed: Added `browser-tab-runtime-activation.md` to document the two separate Browser activation gates: the app binary must be built with CEF host support, and a compatible runtime must exist at the configured runtime root. The doc now explains why a Browser tab can still render its shell while showing `compiled without managed Chromium runtime support`, why a CEF-enabled worktree build can succeed while a merged `main` app still fails, and how that differs from later H.264/AAC runtime capability questions. Linked `browser-tab-codec-runtime-playbook.md` back to this activation doc so build-vs-runtime confusion is resolved before codec work starts.
+- Why: Browser development had already encoded the right runtime states in product code, but the durable docs still skipped the most operationally important distinction: source merge does not equal CEF-enabled app binary, and runtime installation does not repair an `unsupportedBuild` binary. That gap was causing repeated confusion during Browser rollout.
+- Impact: Later agents and operators now have one durable explanation for the exact failure shown by the Browser tab when the host-build gate is missing. This should reduce wasted codec/runtime debugging on binaries that never enabled CEF in the first place.
+- Verification: `git diff --check`
+- Files: `browser-tab-runtime-activation.md`, `browser-tab-codec-runtime-playbook.md`, `CHANGELOG.md`
+- Decision trail: Keep the explanation in a dedicated runtime-activation doc instead of burying it inside the codec playbook or changelog alone. The recurring confusion is architectural, not codec-specific, so it needs a stable document that cleanly separates host-build, runtime-supply, and codec-capability layers.
+
 ### feat(browser): add codec runtime build and managed acceptance tooling
 
 - What changed: Extended `scripts/install_cef_runtime.sh` so it can write runtime `manifest.json` and `managed-runtime.json` metadata for `ffmpegBranding`, `proprietaryCodecs`, and `mediaCapabilities` instead of only copying a bare CEF bundle. Added `scripts/build_codec_enabled_cef_runtime.sh`, a repo-owned official CEF `automate-git.py` wrapper that builds an arm64 codec-enabled distribution with `proprietary_codecs=true` and `ffmpeg_branding=Chrome`, then installs it into GhoDex's managed runtime root. `scripts/browser_media_debug_acceptance.py` can now validate a runtime staged through an isolated app-support `CEF/current` plus `managed-runtime.json`, so the managed-runtime lane can be exercised without forcing `GHODEX_CEF_ROOT`. Added `browser-tab-codec-runtime-playbook.md` to record the end-to-end supply workflow.
