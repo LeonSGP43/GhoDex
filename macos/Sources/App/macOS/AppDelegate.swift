@@ -356,6 +356,8 @@ class AppDelegate: NSObject,
     private var remotePairingQRCodeWindowCloseObserver: NSObjectProtocol?
     private var remotePairingQRCodePayloadJSON: String?
     private var remotePairingQRCodePairingCode: String?
+    private var topLevelWindowCloseObserver: NSObjectProtocol?
+    private var lastClosedTopLevelWindowKind: LastClosedTopLevelWindowKind?
 
     override init() {
 #if DEBUG
@@ -523,6 +525,7 @@ class AppDelegate: NSObject,
 
         // Setup signal handlers
         setupSignals()
+        observeTopLevelWindowCloseKind()
 
         switch Ghostty.launchSource {
         case .app:
@@ -576,7 +579,11 @@ class AppDelegate: NSObject,
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        return derivedConfig.shouldQuitAfterLastWindowClosed
+        defer { lastClosedTopLevelWindowKind = nil }
+        return LastWindowCloseTerminationPolicy.shouldTerminateAfterLastWindowClosed(
+            shouldQuitAfterLastWindowClosed: derivedConfig.shouldQuitAfterLastWindowClosed,
+            lastClosedWindowKind: lastClosedTopLevelWindowKind
+        )
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -1023,6 +1030,20 @@ class AppDelegate: NSObject,
         ])
 
         return container
+    }
+
+    private func observeTopLevelWindowCloseKind() {
+        guard topLevelWindowCloseObserver == nil else { return }
+
+        topLevelWindowCloseObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self else { return }
+            let window = notification.object as? NSWindow
+            self.lastClosedTopLevelWindowKind = LastClosedTopLevelWindowKind.resolve(window: window)
+        }
     }
 
     @MainActor

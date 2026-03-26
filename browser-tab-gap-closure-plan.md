@@ -104,6 +104,53 @@ Close-out evidence in this worktree:
   abort no longer reproduces in the repeated context/page close harness
   backed by the artifact above
 
+### 0.5 Browser Last-Window Close Semantics
+
+Problem:
+The current Browser UI container is still a top-level `NSWindowController`, so
+closing the last Browser window can accidentally terminate the whole app when
+`quit-after-last-window-closed = true` is enabled. That violates the intended
+product boundary: closing Browser should close that Browser surface, not quit
+GhoDex.
+
+Deliverables:
+
+- classify the last closed top-level window as Browser, Terminal, or Other
+- route `applicationShouldTerminateAfterLastWindowClosed(_:)` through a small
+  policy layer instead of directly returning the raw config flag
+- keep Terminal last-window behavior unchanged
+- treat dedicated Browser popup windows as Browser-owned closes too
+- add a deterministic regression test for the policy and controller
+  classification
+
+Acceptance:
+
+- closing the last Browser window/controller no longer terminates the app
+- closing the last Terminal window still honors `quit-after-last-window-closed`
+- Browser popup windows do not reintroduce the quit-on-close bug through a
+  separate controller class
+
+Close-out evidence in this worktree:
+
+- implementation:
+  `macos/Sources/App/macOS/AppDelegate.swift`
+  `macos/Sources/App/macOS/LastWindowCloseTerminationPolicy.swift`
+- regression tests:
+  `macos/Tests/LastWindowCloseTerminationPolicyTests.swift`
+- passing verification:
+  `nu macos/build.nu --configuration Debug --action build`
+  `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' test -only-testing:GhosttyTests/LastWindowCloseTerminationPolicyTests`
+- status:
+  closed for this worktree; Browser-owned top-level closes no longer route into
+  app termination, while Terminal last-window closes still follow the config
+  gate
+- note:
+  a higher-level window-close acceptance harness was drafted in
+  `scripts/browser_last_window_close_acceptance.py`, but end-to-end AppleScript
+  driving is currently blocked by the Debug app's broken scripting dictionary
+  (`osascript` returns `-2705`), so the durable evidence for this slice is the
+  product build plus the new policy regression tests
+
 ### 1. Media And Fingerprint Parity
 
 Problem:
