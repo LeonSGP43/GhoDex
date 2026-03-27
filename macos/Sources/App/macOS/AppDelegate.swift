@@ -1092,8 +1092,17 @@ class AppDelegate: NSObject,
             queue: .main
         ) { [weak self] notification in
             guard let self else { return }
-            let window = notification.object as? NSWindow
-            self.lastClosedTopLevelWindowKind = LastClosedTopLevelWindowKind.resolve(window: window)
+            guard let window = notification.object as? NSWindow else { return }
+
+            // Ignore sheets/child windows so top-level tab close classification
+            // isn't overwritten by auxiliary window close notifications.
+            if window.sheetParent != nil || window.parent != nil {
+                return
+            }
+
+            if let kind = LastClosedTopLevelWindowKind.resolve(window: window) {
+                self.lastClosedTopLevelWindowKind = kind
+            }
         }
     }
 

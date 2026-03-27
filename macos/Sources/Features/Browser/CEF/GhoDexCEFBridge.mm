@@ -43,6 +43,7 @@ NSString * const GhoDexCEFControlErrorDomain = @"com.leongong.ghodex.browser.cef
 - (void)cancelPendingRuntimePromptRequests;
 - (void)browserDidClose;
 - (void)loadPendingBootstrapURLIfNeeded;
+- (void)requestNewTabFromKeyboardShortcut;
 @end
 
 #if GHODEX_CEF_ENABLED
@@ -71,6 +72,7 @@ NSString * const GhoDexCEFControlErrorDomain = @"com.leongong.ghodex.browser.cef
 #include "include/cef_dialog_handler.h"
 #include "include/cef_download_handler.h"
 #include "include/cef_jsdialog_handler.h"
+#include "include/cef_keyboard_handler.h"
 #include "include/cef_parser.h"
 #include "include/cef_permission_handler.h"
 #include "include/cef_render_process_handler.h"
@@ -97,6 +99,23 @@ constexpr size_t kEvaluateRequestIDIndex = 0;
 constexpr size_t kEvaluateScriptIndex = 1;
 constexpr size_t kEvaluateSuccessIndex = 1;
 constexpr size_t kEvaluatePayloadIndex = 2;
+
+bool IsBrowserNewTabShortcut(const CefKeyEvent &event) {
+  if (event.type != KEYEVENT_RAWKEYDOWN && event.type != KEYEVENT_KEYDOWN) {
+    return false;
+  }
+  if ((event.modifiers & EVENTFLAG_COMMAND_DOWN) == 0) {
+    return false;
+  }
+
+  int windows_key_code = event.windows_key_code;
+  if (windows_key_code == 't' || windows_key_code == 'T') {
+    return true;
+  }
+
+  char16_t character = event.character;
+  return character == u't' || character == u'T';
+}
 
 dispatch_queue_t RuntimeDiagnosticsQueue() {
   static dispatch_queue_t queue = nil;
@@ -1046,6 +1065,7 @@ class GhoDexCEFClient final : public CefClient,
                               public CefDisplayHandler,
                               public CefDownloadHandler,
                               public CefJSDialogHandler,
+                              public CefKeyboardHandler,
                               public CefLifeSpanHandler,
                               public CefLoadHandler,
                               public CefPermissionHandler,
@@ -1058,6 +1078,7 @@ public:
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
   CefRefPtr<CefDownloadHandler> GetDownloadHandler() override { return this; }
   CefRefPtr<CefJSDialogHandler> GetJSDialogHandler() override { return this; }
+  CefRefPtr<CefKeyboardHandler> GetKeyboardHandler() override { return this; }
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
   CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
   CefRefPtr<CefPermissionHandler> GetPermissionHandler() override { return this; }
@@ -1122,6 +1143,10 @@ public:
                               CefRefPtr<CefPermissionPromptCallback> callback) override;
 
   void OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString &title) override;
+  bool OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
+                     const CefKeyEvent &event,
+                     CefEventHandle os_event,
+                     bool *is_keyboard_shortcut) override;
   bool OnConsoleMessage(CefRefPtr<CefBrowser> browser,
                         cef_log_severity_t level,
                         const CefString &message,
@@ -1452,6 +1477,23 @@ typedef void (^GhoDexCEFRuntimePromptContinuation)(
   if (_client) {
     _client->Reload();
   }
+}
+
+- (void)requestNewTabFromKeyboardShortcut {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if ([NSApp sendAction:@selector(newBrowserTab:) to:nil from:self]) {
+      return;
+    }
+
+    id app_delegate = NSApp.delegate;
+    if (app_delegate != nil && [app_delegate respondsToSelector:@selector(newBrowserTab:)]) {
+      void (*invoke_action)(id, SEL, id) =
+          (void (*)(id, SEL, id))[app_delegate methodForSelector:@selector(newBrowserTab:)];
+      if (invoke_action != nullptr) {
+        invoke_action(app_delegate, @selector(newBrowserTab:), self);
+      }
+    }
+  });
 }
 
 - (void)executeJavaScript:(NSString *)javaScript {
@@ -2205,6 +2247,25 @@ void GhoDexCEFClient::OnTitleChange(CefRefPtr<CefBrowser> browser, const CefStri
   dispatch_async(dispatch_get_main_queue(), ^{
     [owner_ notifyTitle:title_string ?: @""];
   });
+}
+
+bool GhoDexCEFClient::OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
+                                    const CefKeyEvent &event,
+                                    CefEventHandle os_event,
+                                    bool *is_keyboard_shortcut) {
+  (void)browser;
+  (void)os_event;
+
+  if (!owner_ || !IsBrowserNewTabShortcut(event)) {
+    return false;
+  }
+
+  if (is_keyboard_shortcut != nullptr) {
+    *is_keyboard_shortcut = true;
+  }
+
+  [owner_ requestNewTabFromKeyboardShortcut];
+  return true;
 }
 
 bool GhoDexCEFClient::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
