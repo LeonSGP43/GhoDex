@@ -320,12 +320,20 @@ Current status:
 - JavaScript dialog resolution is now green end-to-end:
   `scripts/browser_js_dialog_resolution_acceptance.py`
   `/tmp/ghx-browser-js-dialog-resolution-acceptance-recheck-5.json`
+- runtime prompt resolution is now green end-to-end for permission, HTTP auth,
+  and certificate-warning lanes:
+  `scripts/browser_runtime_prompt_resolution_acceptance.py`
+  `/tmp/ghx-browser-runtime-prompt-resolution-acceptance-recheck-3.json`
 - the fix changed `OnJSDialog` from a synchronous grace-period wait into an
   asynchronous continuation/fallback path, which lets `requested` events drain
   and `resolveDialog` complete before native UI fallback is considered
-- remaining runtime-prompt work is now the smaller, explicit set: permission,
-  auth, certificate, and other non-JS dialog prompt lanes still need their own
-  acceptance evidence
+- runtime prompt status in this worktree is now closed for:
+  JavaScript dialog + permission + auth + certificate resolution
+- one context protocol recheck attempt on March 27, 2026 was interrupted before
+  socket readiness by an unrelated app panic in terminal surface event handling
+  (`Surface.mouseButtonCallback`), recorded in:
+  `/tmp/ghx-browser-context-protocol-acceptance-recheck-5.json`
+  `/tmp/ghx-browser-context-6069be04/app.log`
 
 ### 3.7 Download Control Surface
 

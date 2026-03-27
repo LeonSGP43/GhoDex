@@ -1413,12 +1413,7 @@ extension ScriptBrowserTab {
 
             let controller = BrowserTabController.newWindow(appDelegate.ghostty, initialURL: initialURL)
             let browserTab = ScriptBrowserTab(controller: controller)
-            switch browserTab.waitForActivePageBridgeSynchronously() {
-            case .success:
-                break
-            case let .failure(error):
-                return .failure(for: request, error: error.externalCommandError)
-            }
+            controller.model.ensureRuntimeActivationForExternalControl()
 
             do {
                 return .success(for: request, resultJSON: try jsonString(from: browserTab.contextSummary))

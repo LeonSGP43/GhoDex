@@ -1007,26 +1007,10 @@ final class BrowserTabModel: ObservableObject {
         register(page: initialPage)
 
         // External callers can create Browser tabs before CEF is activated in
-        // the current app session. Kick off runtime activation asynchronously
-        // so tab creation can complete and the control-plane socket stays
-        // responsive while Chromium warms up.
-        if GhoDexCEFBuildHasRuntime(), !GhoDexCEFIsInitialized() {
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                if !GhoDexCEFIsInitialized() {
-                    if GhoDexCEFIsInitializing() {
-                        await waitForRuntimeInitialization()
-                    } else {
-                        _ = GhoDexCEFInitializeGlobal()
-                        if !GhoDexCEFIsInitialized(), GhoDexCEFIsInitializing() {
-                            await waitForRuntimeInitialization()
-                        }
-                    }
-                }
-                refreshRuntimeState()
-                syncActivePageState()
-            }
-        }
+        // the current app session. Always schedule runtime activation onto the
+        // next main-actor turn so the control-plane request can unwind back to
+        // the runloop before Chromium starts spinning up helper processes.
+        beginRuntimeActivationIfNeeded()
 
         refreshRuntimeState()
         syncActivePageState()
@@ -1385,12 +1369,7 @@ final class BrowserTabModel: ObservableObject {
             return
         }
 
-        if GhoDexCEFIsInitialized() || GhoDexCEFIsInitializing() {
-            refreshRuntimeState()
-            return
-        }
-
-        _ = GhoDexCEFInitializeGlobal()
+        beginRuntimeActivationIfNeeded()
         refreshRuntimeState()
     }
 
@@ -1637,6 +1616,30 @@ final class BrowserTabModel: ObservableObject {
                 return
             }
             try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
+    private func beginRuntimeActivationIfNeeded() {
+        guard GhoDexCEFBuildHasRuntime(), !GhoDexCEFIsInitialized(), !GhoDexCEFIsInitializing() else {
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard !GhoDexCEFIsInitialized() else {
+                refreshRuntimeState()
+                syncActivePageState()
+                return
+            }
+
+            if !GhoDexCEFIsInitializing() {
+                _ = GhoDexCEFInitializeGlobal()
+            }
+            if !GhoDexCEFIsInitialized(), GhoDexCEFIsInitializing() {
+                await waitForRuntimeInitialization()
+            }
+            refreshRuntimeState()
+            syncActivePageState()
         }
     }
 

@@ -53,9 +53,11 @@ NSString * const GhoDexCEFControlErrorDomain = @"com.leongong.ghodex.browser.cef
 #include <errno.h>
 #include <limits.h>
 #include <libproc.h>
+#include <mutex>
 #include <signal.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -237,6 +239,144 @@ NSURL *UniqueDownloadURL(NSString *suggested_name) {
 
 NSString *BoolString(BOOL value) {
   return value ? @"true" : @"false";
+}
+
+NSInteger DefaultPortForScheme(NSString *scheme) {
+  NSString *normalized_scheme = scheme.lowercaseString;
+  if ([normalized_scheme isEqualToString:@"https"]) {
+    return 443;
+  }
+  if ([normalized_scheme isEqualToString:@"http"]) {
+    return 80;
+  }
+  return 0;
+}
+
+NSInteger EffectiveURLPort(NSURLComponents *components) {
+  if (components == nil) {
+    return 0;
+  }
+  if (components.port != nil) {
+    return components.port.integerValue;
+  }
+  return DefaultPortForScheme(components.scheme ?: @"");
+}
+
+NSString *URLPathForAuthScope(NSURLComponents *components) {
+  if (components == nil) {
+    return @"/";
+  }
+
+  NSString *path = components.percentEncodedPath ?: components.path ?: @"/";
+  return path.length > 0 ? path : @"/";
+}
+
+NSString *HTTPAuthChallengeKey(NSString *scheme,
+                               NSString *host,
+                               NSInteger port,
+                               NSString *realm,
+                               BOOL is_proxy) {
+  return [NSString stringWithFormat:@"%@|%@|%ld|%@|%@",
+                                    (scheme ?: @"").lowercaseString,
+                                    (host ?: @"").lowercaseString,
+                                    (long)port,
+                                    realm ?: @"",
+                                    BoolString(is_proxy)];
+}
+
+NSString *BasicAuthorizationHeader(NSString *username, NSString *password) {
+  NSString *raw = [NSString stringWithFormat:@"%@:%@",
+                                             username ?: @"",
+                                             password ?: @""];
+  NSData *data = [raw dataUsingEncoding:NSUTF8StringEncoding];
+  NSString *encoded = [data base64EncodedStringWithOptions:0] ?: @"";
+  return [NSString stringWithFormat:@"Basic %@", encoded];
+}
+
+BOOL ExtractBasicAuthRealm(CefRefPtr<CefResponse> response, NSString **realm_out) {
+  if (!response.get()) {
+    return NO;
+  }
+
+  CefResponse::HeaderMap header_map;
+  response->GetHeaderMap(header_map);
+  for (const auto &entry : header_map) {
+    NSString *header_name = [NSString stringWithUTF8String:entry.first.ToString().c_str() ?: ""];
+    if ([header_name caseInsensitiveCompare:@"WWW-Authenticate"] != NSOrderedSame) {
+      continue;
+    }
+
+    NSString *value = [NSString stringWithUTF8String:entry.second.ToString().c_str() ?: ""];
+    NSRange basic_range = [value rangeOfString:@"Basic" options:NSCaseInsensitiveSearch];
+    if (basic_range.location == NSNotFound) {
+      continue;
+    }
+
+    NSString *realm = @"";
+    NSRange search_range = NSMakeRange(basic_range.location, value.length - basic_range.location);
+    NSRange quoted_realm_range =
+        [value rangeOfString:@"realm=\"" options:NSCaseInsensitiveSearch range:search_range];
+    if (quoted_realm_range.location != NSNotFound) {
+      NSUInteger start = NSMaxRange(quoted_realm_range);
+      NSRange remainder = NSMakeRange(start, value.length - start);
+      NSRange quote_end = [value rangeOfString:@"\"" options:0 range:remainder];
+      if (quote_end.location != NSNotFound) {
+        realm = [value substringWithRange:NSMakeRange(start, quote_end.location - start)];
+      }
+    } else {
+      NSRange plain_realm_range =
+          [value rangeOfString:@"realm=" options:NSCaseInsensitiveSearch range:search_range];
+      if (plain_realm_range.location != NSNotFound) {
+        NSUInteger start = NSMaxRange(plain_realm_range);
+        NSRange remainder = NSMakeRange(start, value.length - start);
+        NSCharacterSet *terminators =
+            [NSCharacterSet characterSetWithCharactersInString:@", \t\r\n"];
+        NSUInteger end = start;
+        while (end < value.length && ![terminators characterIsMember:[value characterAtIndex:end]]) {
+          end += 1;
+        }
+        realm = [value substringWithRange:NSMakeRange(start, end - start)];
+      }
+    }
+
+    if (realm_out != nullptr) {
+      *realm_out = realm ?: @"";
+    }
+    return YES;
+  }
+
+  return NO;
+}
+
+BOOL URLWithStringMatchesHTTPAuthScope(NSString *candidate_url, NSString *scope_url) {
+  if (candidate_url.length == 0 || scope_url.length == 0) {
+    return NO;
+  }
+
+  NSURLComponents *candidate = [NSURLComponents componentsWithString:candidate_url];
+  NSURLComponents *scope = [NSURLComponents componentsWithString:scope_url];
+  if (candidate == nil || scope == nil) {
+    return [candidate_url isEqualToString:scope_url];
+  }
+
+  NSString *candidate_scheme = (candidate.scheme ?: @"").lowercaseString;
+  NSString *scope_scheme = (scope.scheme ?: @"").lowercaseString;
+  NSString *candidate_host = (candidate.host ?: @"").lowercaseString;
+  NSString *scope_host = (scope.host ?: @"").lowercaseString;
+  if (![candidate_scheme isEqualToString:scope_scheme] ||
+      ![candidate_host isEqualToString:scope_host] ||
+      EffectiveURLPort(candidate) != EffectiveURLPort(scope)) {
+    return NO;
+  }
+
+  NSString *candidate_path = URLPathForAuthScope(candidate);
+  NSString *scope_path = URLPathForAuthScope(scope);
+  if ([candidate_path isEqualToString:scope_path]) {
+    return YES;
+  }
+
+  NSString *boundary_prefix = [scope_path hasSuffix:@"/"] ? scope_path : [scope_path stringByAppendingString:@"/"];
+  return [candidate_path hasPrefix:boundary_prefix];
 }
 
 NSString *IntegerString(NSInteger value) {
@@ -744,6 +884,10 @@ public:
       bool &disable_default_handling) override {
     return this;
   }
+  ReturnValue OnBeforeResourceLoad(CefRefPtr<CefBrowser> browser,
+                                   CefRefPtr<CefFrame> frame,
+                                   CefRefPtr<CefRequest> request,
+                                   CefRefPtr<CefCallback> callback) override;
   bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                 CefRefPtr<CefFrame> frame,
                                 CefProcessId source_process,
@@ -876,6 +1020,11 @@ public:
   void CloseBrowser();
 
 private:
+  struct SyntheticHTTPAuthCredential {
+    std::string challenge_url;
+    std::string header_value;
+  };
+
   CefRefPtr<CefFrame> ResolveFrame(const std::string *frame_name,
                                    std::string *error_description);
   void EmitState(bool isLoading, bool canGoBack, bool canGoForward);
@@ -883,6 +1032,9 @@ private:
   __weak GhoDexCEFView *owner_;
   CefRefPtr<CefBrowser> browser_;
   std::map<uint32_t, CefRefPtr<CefDownloadItemCallback>> pending_download_callbacks_;
+  std::mutex synthetic_http_auth_mutex_;
+  std::map<std::string, SyntheticHTTPAuthCredential> synthetic_http_auth_credentials_;
+  std::set<std::string> pending_synthetic_http_auth_challenge_keys_;
 
   IMPLEMENT_REFCOUNTING(GhoDexCEFClient);
 };
@@ -1771,13 +1923,73 @@ didHostPopupWindowForURL:(NSString *)urlString
 didEmitRuntimeEventKind:(NSString *)kind
         payload:(NSDictionary<NSString *, NSString *> *)payload {
   (void)view;
-  (void)kind;
-  (void)payload;
+  if (_sourceView != nil) {
+    [_sourceView notifyRuntimeEventKind:kind payload:payload];
+    return;
+  }
+
+  NSLog(@"[CEF] Dropping popup runtime event kind=%@ because the source view is unavailable",
+        kind);
 }
 
 @end
 
 namespace {
+cef_return_value_t GhoDexCEFClient::OnBeforeResourceLoad(CefRefPtr<CefBrowser> browser,
+                                                         CefRefPtr<CefFrame> frame,
+                                                         CefRefPtr<CefRequest> request,
+                                                         CefRefPtr<CefCallback> callback) {
+  (void)browser;
+  (void)frame;
+  (void)callback;
+
+  if (!request.get()) {
+    return RV_CONTINUE;
+  }
+
+  std::string matched_key;
+  SyntheticHTTPAuthCredential credential;
+  @autoreleasepool {
+    NSString *request_url =
+        [NSString stringWithUTF8String:request->GetURL().ToString().c_str() ?: ""];
+    if (request_url.length == 0) {
+      return RV_CONTINUE;
+    }
+
+    CefRequest::HeaderMap header_map;
+    request->GetHeaderMap(header_map);
+    for (const auto &entry : header_map) {
+      NSString *header_name =
+          [NSString stringWithUTF8String:entry.first.ToString().c_str() ?: ""];
+      if ([header_name caseInsensitiveCompare:@"Authorization"] == NSOrderedSame) {
+        return RV_CONTINUE;
+      }
+    }
+
+    std::lock_guard<std::mutex> lock(synthetic_http_auth_mutex_);
+    for (const auto &entry : synthetic_http_auth_credentials_) {
+      NSString *scope_url =
+          [NSString stringWithUTF8String:entry.second.challenge_url.c_str() ?: ""];
+      if (URLWithStringMatchesHTTPAuthScope(request_url, scope_url)) {
+        matched_key = entry.first;
+        credential = entry.second;
+        break;
+      }
+    }
+  }
+
+  if (matched_key.empty()) {
+    return RV_CONTINUE;
+  }
+
+  request->SetHeaderByName(CefString("Authorization"),
+                           CefString(credential.header_value),
+                           true);
+  NSLog(@"[CEF] Applied synthetic Authorization header for %@",
+        [NSString stringWithUTF8String:credential.challenge_url.c_str() ?: ""]);
+  return RV_CONTINUE;
+}
+
 void GhoDexCEFClient::OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString &title) {
   if (!owner_) {
     return;
@@ -1848,6 +2060,160 @@ void GhoDexCEFClient::OnResourceLoadComplete(CefRefPtr<CefBrowser> browser,
                  receivedContentLength:received_content_length
                            isMainFrame:is_main_frame
                              frameName:frame_name ?: @""];
+  });
+
+  if (!is_main_frame || status_code != 401) {
+    return;
+  }
+
+  NSString *realm_string = nil;
+  if (!ExtractBasicAuthRealm(response, &realm_string)) {
+    return;
+  }
+
+  NSURLComponents *components = [NSURLComponents componentsWithString:url_string];
+  NSString *host_string = components.host ?: @"";
+  NSString *scheme_string = components.scheme ?: @"http";
+  NSInteger port = EffectiveURLPort(components);
+  NSString *challenge_key =
+      HTTPAuthChallengeKey(scheme_string, host_string, port, realm_string ?: @"", NO);
+
+  {
+    std::lock_guard<std::mutex> lock(synthetic_http_auth_mutex_);
+    synthetic_http_auth_credentials_.erase(std::string(challenge_key.UTF8String ?: ""));
+    if (!pending_synthetic_http_auth_challenge_keys_
+             .insert(std::string(challenge_key.UTF8String ?: ""))
+             .second) {
+      NSLog(@"[CEF] Auth challenge already pending for %@", challenge_key);
+      return;
+    }
+  }
+
+  NSLog(@"[CEF] Synthesizing auth challenge from 401 response url=%@ host=%@ port=%ld realm=%@",
+        url_string,
+        host_string,
+        (long)port,
+        realm_string);
+
+  GhoDexCEFClient *client = this;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    GhoDexCEFView *owner = owner_;
+    if (owner == nil) {
+      std::lock_guard<std::mutex> lock(client->synthetic_http_auth_mutex_);
+      client->pending_synthetic_http_auth_challenge_keys_.erase(
+          std::string(challenge_key.UTF8String ?: ""));
+      return;
+    }
+
+    __block GhoDexCEFRuntimePromptRequest *runtime_prompt = nil;
+    runtime_prompt = [owner beginRuntimePromptKind:@"authenticationRequest" payload:@{
+      @"phase": @"requested",
+      @"originURL": url_string ?: @"",
+      @"host": host_string ?: @"",
+      @"port": IntegerString(port),
+      @"realm": realm_string ?: @"",
+      @"scheme": @"basic",
+      @"isProxy": @"false",
+    }];
+    if (runtime_prompt == nil) {
+      NSLog(@"[CEF] Failed to synthesize runtime auth prompt for %@", url_string);
+      std::lock_guard<std::mutex> lock(client->synthetic_http_auth_mutex_);
+      client->pending_synthetic_http_auth_challenge_keys_.erase(
+          std::string(challenge_key.UTF8String ?: ""));
+      return;
+    }
+
+    NSString *request_id = runtime_prompt.requestID;
+    runtime_prompt.continuation = ^(NSDictionary<NSString *, NSString *> *resolution_payload,
+                                    BOOL externally_resolved,
+                                    BOOL canceled) {
+      auto clear_pending = ^{
+        std::lock_guard<std::mutex> lock(client->synthetic_http_auth_mutex_);
+        client->pending_synthetic_http_auth_challenge_keys_.erase(
+            std::string(challenge_key.UTF8String ?: ""));
+      };
+
+      if (owner == nil) {
+        clear_pending();
+        return;
+      }
+
+      if (canceled) {
+        clear_pending();
+        return;
+      }
+
+      NSString *username = @"";
+      NSString *password = @"";
+      BOOL accepted = NO;
+
+      if (externally_resolved) {
+        accepted = [resolution_payload[@"accepted"] isEqualToString:@"true"];
+        username = resolution_payload[@"username"] ?: @"";
+        password = resolution_payload[@"password"] ?: @"";
+      } else {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = [NSString stringWithFormat:@"%@ requires Basic authentication",
+                                                       host_string.length > 0 ? host_string : AlertDisplayOrigin(url_string)];
+        alert.informativeText =
+            realm_string.length > 0 ? realm_string : @"Enter your username and password.";
+        alert.alertStyle = NSAlertStyleInformational;
+
+        NSView *accessory = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 320, 52)];
+        NSTextField *username_field =
+            [[NSTextField alloc] initWithFrame:NSMakeRect(0, 28, 320, 24)];
+        NSSecureTextField *password_field =
+            [[NSSecureTextField alloc] initWithFrame:NSMakeRect(0, 0, 320, 24)];
+        username_field.placeholderString = @"Username";
+        password_field.placeholderString = @"Password";
+        [accessory addSubview:username_field];
+        [accessory addSubview:password_field];
+        alert.accessoryView = accessory;
+
+        [alert addButtonWithTitle:@"Sign In"];
+        [alert addButtonWithTitle:@"Cancel"];
+        accepted = RunAlert(alert, owner) == NSAlertFirstButtonReturn;
+        username = username_field.stringValue ?: @"";
+        password = password_field.stringValue ?: @"";
+      }
+
+      if (accepted) {
+        SyntheticHTTPAuthCredential credential;
+        credential.challenge_url = std::string(url_string.UTF8String ?: "");
+        credential.header_value =
+            std::string(BasicAuthorizationHeader(username, password).UTF8String ?: "");
+
+        std::lock_guard<std::mutex> lock(client->synthetic_http_auth_mutex_);
+        client->synthetic_http_auth_credentials_[std::string(challenge_key.UTF8String ?: "")] =
+            credential;
+      }
+
+      clear_pending();
+      [owner notifyRuntimeEventKind:@"authenticationRequest" payload:@{
+        @"requestID": request_id,
+        @"phase": @"resolved",
+        @"originURL": url_string ?: @"",
+        @"host": host_string ?: @"",
+        @"port": IntegerString(port),
+        @"realm": realm_string ?: @"",
+        @"scheme": @"basic",
+        @"isProxy": @"false",
+        @"accepted": BoolString(accepted),
+      }];
+
+      if (accepted) {
+        [owner loadURLString:url_string];
+      }
+    };
+
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW,
+                      (int64_t)(kRuntimePromptExternalResolutionGraceSeconds * NSEC_PER_SEC)),
+        dispatch_get_main_queue(), ^{
+          if (owner != nil) {
+            [owner resumeRuntimePromptRequest:runtime_prompt];
+          }
+        });
   });
 }
 
@@ -2105,6 +2471,7 @@ bool GhoDexCEFClient::OnJSDialog(CefRefPtr<CefBrowser> browser,
   RunOnMainThreadSync(^{
     request = [owner_ beginRuntimePromptKind:@"javaScriptDialog" payload:requested_payload];
     if (request != nil) {
+      NSString *request_id = request.requestID;
       request.continuation = ^(NSDictionary<NSString *, NSString *> *resolution_payload,
                                BOOL externally_resolved,
                                BOOL canceled) {
@@ -2127,7 +2494,7 @@ bool GhoDexCEFClient::OnJSDialog(CefRefPtr<CefBrowser> browser,
             BOOL accepted = [resolution_payload[@"accepted"] isEqualToString:@"true"];
             retained_callback->Continue(accepted, CefString());
             [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:@{
-              @"requestID": request.requestID,
+              @"requestID": request_id,
               @"phase": @"resolved",
               @"dialogType": dialog_type_name,
               @"messageText": message,
@@ -2156,7 +2523,7 @@ bool GhoDexCEFClient::OnJSDialog(CefRefPtr<CefBrowser> browser,
             BOOL accepted = [resolution_payload[@"accepted"] isEqualToString:@"true"];
             retained_callback->Continue(accepted, CefString());
             [owner_ notifyRuntimeEventKind:@"javaScriptDialog" payload:@{
-              @"requestID": request.requestID,
+              @"requestID": request_id,
               @"phase": @"resolved",
               @"dialogType": dialog_type_name,
               @"messageText": message,
@@ -2187,7 +2554,7 @@ bool GhoDexCEFClient::OnJSDialog(CefRefPtr<CefBrowser> browser,
             NSString *resolved_input = accepted ? (resolution_payload[@"userInput"] ?: default_prompt) : default_prompt;
             retained_callback->Continue(accepted, CefString(resolved_input.UTF8String));
             NSMutableDictionary<NSString *, NSString *> *resolved_payload = [@{
-              @"requestID": request.requestID,
+              @"requestID": request_id,
               @"phase": @"resolved",
               @"dialogType": dialog_type_name,
               @"messageText": message,
@@ -2212,7 +2579,7 @@ bool GhoDexCEFClient::OnJSDialog(CefRefPtr<CefBrowser> browser,
           NSString *resolved_input = accepted ? field.stringValue : default_prompt;
           retained_callback->Continue(accepted, CefString(resolved_input.UTF8String));
           NSMutableDictionary<NSString *, NSString *> *resolved_payload = [@{
-            @"requestID": request.requestID,
+            @"requestID": request_id,
             @"phase": @"resolved",
             @"dialogType": dialog_type_name,
             @"messageText": message,
@@ -2332,84 +2699,108 @@ bool GhoDexCEFClient::OnRequestMediaAccessPermission(
     CefRefPtr<CefMediaAccessCallback> callback) {
   (void)browser;
   (void)frame;
-  if (!owner_ || !callback.get()) {
+  GhoDexCEFView *owner = owner_;
+  if (!owner || !callback.get()) {
+    NSLog(@"[CEF] Dropping media permission request because owner=%@ callback=%p",
+          owner,
+          callback.get());
     return false;
   }
 
   NSString *origin = [NSString stringWithUTF8String:requesting_origin.ToString().c_str() ?: ""];
   NSString *permission_label = MediaPermissionDescription(requested_permissions);
   __block GhoDexCEFRuntimePromptRequest *request = nil;
+  CefRefPtr<CefMediaAccessCallback> retained_callback = callback;
+  NSLog(@"[CEF] Media permission request origin=%@ requested=%u label=%@",
+        origin,
+        requested_permissions,
+        permission_label);
   RunOnMainThreadSync(^{
-    request = [owner_ beginRuntimePromptKind:@"permissionRequest" payload:@{
+    request = [owner beginRuntimePromptKind:@"permissionRequest" payload:@{
       @"phase": @"requested",
       @"permissionKind": @"media",
       @"originURL": origin ?: @"",
       @"requestedPermissions": UInt32String(requested_permissions),
       @"requestedPermissionsLabel": permission_label,
     }];
+    if (request != nil) {
+      NSString *request_id = request.requestID;
+      request.continuation = ^(NSDictionary<NSString *, NSString *> *resolution_payload,
+                               BOOL externally_resolved,
+                               BOOL canceled) {
+        if (!retained_callback.get()) {
+          return;
+        }
+
+        if (owner == nil) {
+          NSLog(@"[CEF] Canceling media permission requestID=%@ because the owning view was released",
+                request_id);
+          retained_callback->Cancel();
+          return;
+        }
+
+        if (canceled) {
+          retained_callback->Cancel();
+          return;
+        }
+
+        if (externally_resolved) {
+          NSString *result = resolution_payload[@"result"] ?: @"deny";
+          if ([result isEqualToString:@"allow"]) {
+            retained_callback->Continue(requested_permissions);
+          } else {
+            retained_callback->Cancel();
+            result = [result isEqualToString:@"dismiss"] ? @"dismiss" : @"deny";
+          }
+          [owner notifyRuntimeEventKind:@"permissionRequest" payload:@{
+            @"requestID": request_id,
+            @"phase": @"resolved",
+            @"permissionKind": @"media",
+            @"originURL": origin ?: @"",
+            @"requestedPermissions": UInt32String(requested_permissions),
+            @"requestedPermissionsLabel": permission_label,
+            @"result": result,
+          }];
+          return;
+        }
+
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = [NSString stringWithFormat:@"%@ wants to use %@", AlertDisplayOrigin(origin), permission_label];
+        alert.informativeText = @"Allow this browser page to access the requested device capabilities?";
+        alert.alertStyle = NSAlertStyleInformational;
+        [alert addButtonWithTitle:@"Allow"];
+        [alert addButtonWithTitle:@"Block"];
+        BOOL accepted = RunAlert(alert, owner) == NSAlertFirstButtonReturn;
+        if (accepted) {
+          retained_callback->Continue(requested_permissions);
+        } else {
+          retained_callback->Cancel();
+        }
+        [owner notifyRuntimeEventKind:@"permissionRequest" payload:@{
+          @"requestID": request_id,
+          @"phase": @"resolved",
+          @"permissionKind": @"media",
+          @"originURL": origin ?: @"",
+          @"requestedPermissions": UInt32String(requested_permissions),
+          @"requestedPermissionsLabel": permission_label,
+          @"result": accepted ? @"allow" : @"deny",
+        }];
+      };
+    }
   });
   if (request == nil) {
+    NSLog(@"[CEF] Failed to create runtime prompt request for media permission origin=%@",
+          origin);
     return false;
   }
 
-  dispatch_semaphore_wait(
-      request.semaphore,
-      dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kRuntimePromptExternalResolutionGraceSeconds * NSEC_PER_SEC)));
-
-  __block BOOL externally_resolved = NO;
-  __block BOOL canceled = NO;
-  __block NSDictionary<NSString *, NSString *> *resolution_payload = nil;
-  RunOnMainThreadSync(^{
-    resolution_payload = [owner_ finishRuntimePromptRequest:request
-                                         externallyResolved:&externally_resolved
-                                                   canceled:&canceled];
-  });
-  if (canceled) {
-    callback->Cancel();
-    return true;
-  }
-
-  if (externally_resolved) {
-    NSString *result = resolution_payload[@"result"] ?: @"deny";
-    if ([result isEqualToString:@"allow"]) {
-      callback->Continue(requested_permissions);
-    } else {
-      callback->Cancel();
-      result = [result isEqualToString:@"dismiss"] ? @"dismiss" : @"deny";
-    }
-    [owner_ notifyRuntimeEventKind:@"permissionRequest" payload:@{
-      @"requestID": request.requestID,
-      @"phase": @"resolved",
-      @"permissionKind": @"media",
-      @"originURL": origin ?: @"",
-      @"requestedPermissions": UInt32String(requested_permissions),
-      @"requestedPermissionsLabel": permission_label,
-      @"result": result,
-    }];
-    return true;
-  }
-
-  NSAlert *alert = [[NSAlert alloc] init];
-  alert.messageText = [NSString stringWithFormat:@"%@ wants to use %@", AlertDisplayOrigin(origin), permission_label];
-  alert.informativeText = @"Allow this browser page to access the requested device capabilities?";
-  alert.alertStyle = NSAlertStyleInformational;
-  [alert addButtonWithTitle:@"Allow"];
-  [alert addButtonWithTitle:@"Block"];
-  BOOL accepted = RunAlert(alert, owner_) == NSAlertFirstButtonReturn;
-  if (accepted) {
-    callback->Continue(requested_permissions);
-  } else {
-    callback->Cancel();
-  }
-  [owner_ notifyRuntimeEventKind:@"permissionRequest" payload:@{
-    @"requestID": request.requestID,
-    @"phase": @"resolved",
-    @"permissionKind": @"media",
-    @"originURL": origin ?: @"",
-    @"requestedPermissions": UInt32String(requested_permissions),
-    @"requestedPermissionsLabel": permission_label,
-    @"result": accepted ? @"allow" : @"deny",
-  }];
+  dispatch_after(
+      dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kRuntimePromptExternalResolutionGraceSeconds * NSEC_PER_SEC)),
+      dispatch_get_main_queue(), ^{
+        if (owner != nil) {
+          [owner resumeRuntimePromptRequest:request];
+        }
+      });
   return true;
 }
 
@@ -2420,15 +2811,26 @@ bool GhoDexCEFClient::OnShowPermissionPrompt(CefRefPtr<CefBrowser> browser,
                                              CefRefPtr<CefPermissionPromptCallback> callback) {
   (void)browser;
   (void)prompt_id;
-  if (!owner_ || !callback.get()) {
+  GhoDexCEFView *owner = owner_;
+  if (!owner || !callback.get()) {
+    NSLog(@"[CEF] Dropping generic permission prompt because owner=%@ callback=%p prompt=%llu",
+          owner,
+          callback.get(),
+          prompt_id);
     return false;
   }
 
   NSString *origin = [NSString stringWithUTF8String:requesting_origin.ToString().c_str() ?: ""];
   NSString *permission_label = PermissionPromptDescription(requested_permissions);
   __block GhoDexCEFRuntimePromptRequest *request = nil;
+  CefRefPtr<CefPermissionPromptCallback> retained_callback = callback;
+  NSLog(@"[CEF] Generic permission prompt origin=%@ requested=%u label=%@ prompt=%llu",
+        origin,
+        requested_permissions,
+        permission_label,
+        prompt_id);
   RunOnMainThreadSync(^{
-    request = [owner_ beginRuntimePromptKind:@"permissionRequest" payload:@{
+    request = [owner beginRuntimePromptKind:@"permissionRequest" payload:@{
       @"phase": @"requested",
       @"permissionKind": @"generic",
       @"originURL": origin ?: @"",
@@ -2436,80 +2838,96 @@ bool GhoDexCEFClient::OnShowPermissionPrompt(CefRefPtr<CefBrowser> browser,
       @"requestedPermissionsLabel": permission_label,
       @"promptID": UInt64String(prompt_id),
     }];
+    if (request != nil) {
+      NSString *request_id = request.requestID;
+      request.continuation = ^(NSDictionary<NSString *, NSString *> *resolution_payload,
+                               BOOL externally_resolved,
+                               BOOL canceled) {
+        if (!retained_callback.get()) {
+          return;
+        }
+
+        if (owner == nil) {
+          NSLog(@"[CEF] Canceling generic permission requestID=%@ because the owning view was released",
+                request_id);
+          retained_callback->Continue(CEF_PERMISSION_RESULT_DISMISS);
+          return;
+        }
+
+        if (canceled) {
+          retained_callback->Continue(CEF_PERMISSION_RESULT_DISMISS);
+          return;
+        }
+
+        if (externally_resolved) {
+          NSString *result = resolution_payload[@"result"] ?: @"dismiss";
+          if ([result isEqualToString:@"allow"]) {
+            retained_callback->Continue(CEF_PERMISSION_RESULT_ACCEPT);
+          } else if ([result isEqualToString:@"deny"]) {
+            retained_callback->Continue(CEF_PERMISSION_RESULT_DENY);
+          } else {
+            result = @"dismiss";
+            retained_callback->Continue(CEF_PERMISSION_RESULT_DISMISS);
+          }
+          [owner notifyRuntimeEventKind:@"permissionRequest" payload:@{
+            @"requestID": request_id,
+            @"phase": @"resolved",
+            @"permissionKind": @"generic",
+            @"originURL": origin ?: @"",
+            @"requestedPermissions": UInt32String(requested_permissions),
+            @"requestedPermissionsLabel": permission_label,
+            @"promptID": UInt64String(prompt_id),
+            @"result": result,
+          }];
+          return;
+        }
+
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = [NSString stringWithFormat:@"%@ wants %@", AlertDisplayOrigin(origin), permission_label];
+        alert.informativeText = @"Choose whether to allow this permission request.";
+        alert.alertStyle = NSAlertStyleInformational;
+        [alert addButtonWithTitle:@"Allow"];
+        [alert addButtonWithTitle:@"Block"];
+        [alert addButtonWithTitle:@"Not Now"];
+
+        NSModalResponse response = RunAlert(alert, owner);
+        NSString *result = @"dismiss";
+        if (response == NSAlertFirstButtonReturn) {
+          result = @"allow";
+          retained_callback->Continue(CEF_PERMISSION_RESULT_ACCEPT);
+        } else if (response == NSAlertSecondButtonReturn) {
+          result = @"deny";
+          retained_callback->Continue(CEF_PERMISSION_RESULT_DENY);
+        } else {
+          retained_callback->Continue(CEF_PERMISSION_RESULT_DISMISS);
+        }
+        [owner notifyRuntimeEventKind:@"permissionRequest" payload:@{
+          @"requestID": request_id,
+          @"phase": @"resolved",
+          @"permissionKind": @"generic",
+          @"originURL": origin ?: @"",
+          @"requestedPermissions": UInt32String(requested_permissions),
+          @"requestedPermissionsLabel": permission_label,
+          @"promptID": UInt64String(prompt_id),
+          @"result": result,
+        }];
+      };
+    }
   });
   if (request == nil) {
+    NSLog(@"[CEF] Failed to create runtime prompt request for generic permission origin=%@ prompt=%llu",
+          origin,
+          prompt_id);
     return false;
   }
 
-  dispatch_semaphore_wait(
-      request.semaphore,
-      dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kRuntimePromptExternalResolutionGraceSeconds * NSEC_PER_SEC)));
-
-  __block BOOL externally_resolved = NO;
-  __block BOOL canceled = NO;
-  __block NSDictionary<NSString *, NSString *> *resolution_payload = nil;
-  RunOnMainThreadSync(^{
-    resolution_payload = [owner_ finishRuntimePromptRequest:request
-                                         externallyResolved:&externally_resolved
-                                                   canceled:&canceled];
-  });
-  if (canceled) {
-    callback->Continue(CEF_PERMISSION_RESULT_DISMISS);
-    return true;
-  }
-
-  if (externally_resolved) {
-    NSString *result = resolution_payload[@"result"] ?: @"dismiss";
-    if ([result isEqualToString:@"allow"]) {
-      callback->Continue(CEF_PERMISSION_RESULT_ACCEPT);
-    } else if ([result isEqualToString:@"deny"]) {
-      callback->Continue(CEF_PERMISSION_RESULT_DENY);
-    } else {
-      result = @"dismiss";
-      callback->Continue(CEF_PERMISSION_RESULT_DISMISS);
-    }
-    [owner_ notifyRuntimeEventKind:@"permissionRequest" payload:@{
-      @"requestID": request.requestID,
-      @"phase": @"resolved",
-      @"permissionKind": @"generic",
-      @"originURL": origin ?: @"",
-      @"requestedPermissions": UInt32String(requested_permissions),
-      @"requestedPermissionsLabel": permission_label,
-      @"promptID": UInt64String(prompt_id),
-      @"result": result,
-    }];
-    return true;
-  }
-
-  NSAlert *alert = [[NSAlert alloc] init];
-  alert.messageText = [NSString stringWithFormat:@"%@ wants %@", AlertDisplayOrigin(origin), permission_label];
-  alert.informativeText = @"Choose whether to allow this permission request.";
-  alert.alertStyle = NSAlertStyleInformational;
-  [alert addButtonWithTitle:@"Allow"];
-  [alert addButtonWithTitle:@"Block"];
-  [alert addButtonWithTitle:@"Not Now"];
-
-  NSModalResponse response = RunAlert(alert, owner_);
-  NSString *result = @"dismiss";
-  if (response == NSAlertFirstButtonReturn) {
-    result = @"allow";
-    callback->Continue(CEF_PERMISSION_RESULT_ACCEPT);
-  } else if (response == NSAlertSecondButtonReturn) {
-    result = @"deny";
-    callback->Continue(CEF_PERMISSION_RESULT_DENY);
-  } else {
-    callback->Continue(CEF_PERMISSION_RESULT_DISMISS);
-  }
-  [owner_ notifyRuntimeEventKind:@"permissionRequest" payload:@{
-    @"requestID": request.requestID,
-    @"phase": @"resolved",
-    @"permissionKind": @"generic",
-    @"originURL": origin ?: @"",
-    @"requestedPermissions": UInt32String(requested_permissions),
-    @"requestedPermissionsLabel": permission_label,
-    @"promptID": UInt64String(prompt_id),
-    @"result": result,
-  }];
+  dispatch_after(
+      dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kRuntimePromptExternalResolutionGraceSeconds * NSEC_PER_SEC)),
+      dispatch_get_main_queue(), ^{
+        if (owner != nil) {
+          [owner resumeRuntimePromptRequest:request];
+        }
+      });
   return true;
 }
 
@@ -2522,11 +2940,14 @@ bool GhoDexCEFClient::GetAuthCredentials(CefRefPtr<CefBrowser> browser,
                                          const CefString &scheme,
                                          CefRefPtr<CefAuthCallback> callback) {
   (void)browser;
-  if (!owner_ || !callback.get()) {
+  GhoDexCEFView *owner = owner_;
+  if (!owner || !callback.get()) {
+    NSLog(@"[CEF] Dropping auth challenge because owner=%@ callback=%p",
+          owner,
+          callback.get());
     return false;
   }
 
-  GhoDexCEFView *owner = owner_;
   NSString *origin = [NSString stringWithUTF8String:origin_url.ToString().c_str() ?: ""];
   NSString *host_string = [NSString stringWithUTF8String:host.ToString().c_str() ?: ""];
   NSString *realm_string = [NSString stringWithUTF8String:realm.ToString().c_str() ?: ""];
@@ -2536,8 +2957,16 @@ bool GhoDexCEFClient::GetAuthCredentials(CefRefPtr<CefBrowser> browser,
       ? [NSString stringWithUTF8String:scheme_cstr]
       : @"authentication";
   __block GhoDexCEFRuntimePromptRequest *request = nil;
+  CefRefPtr<CefAuthCallback> retained_callback = callback;
+  NSLog(@"[CEF] Auth challenge origin=%@ host=%@ port=%d realm=%@ scheme=%@ proxy=%d",
+        origin,
+        host_string,
+        port,
+        realm_string,
+        scheme_string,
+        isProxy ? 1 : 0);
   RunOnMainThreadSync(^{
-    request = [owner_ beginRuntimePromptKind:@"authenticationRequest" payload:@{
+    request = [owner beginRuntimePromptKind:@"authenticationRequest" payload:@{
       @"phase": @"requested",
       @"originURL": origin ?: @"",
       @"host": host_string ?: @"",
@@ -2546,87 +2975,101 @@ bool GhoDexCEFClient::GetAuthCredentials(CefRefPtr<CefBrowser> browser,
       @"scheme": scheme_string ?: @"authentication",
       @"isProxy": BoolString(isProxy),
     }];
+    if (request != nil) {
+      NSString *request_id = request.requestID;
+      request.continuation = ^(NSDictionary<NSString *, NSString *> *resolution_payload,
+                               BOOL externally_resolved,
+                               BOOL canceled) {
+        if (!retained_callback.get()) {
+          return;
+        }
+
+        if (owner == nil) {
+          NSLog(@"[CEF] Canceling auth challenge requestID=%@ because the owning view was released",
+                request_id);
+          retained_callback->Cancel();
+          return;
+        }
+
+        if (canceled) {
+          retained_callback->Cancel();
+          return;
+        }
+
+        if (externally_resolved) {
+          BOOL accepted = [resolution_payload[@"accepted"] isEqualToString:@"true"];
+          if (accepted) {
+            retained_callback->Continue(
+                CefString((resolution_payload[@"username"] ?: @"").UTF8String),
+                CefString((resolution_payload[@"password"] ?: @"").UTF8String));
+          } else {
+            retained_callback->Cancel();
+          }
+          [owner notifyRuntimeEventKind:@"authenticationRequest" payload:@{
+            @"requestID": request_id,
+            @"phase": @"resolved",
+            @"originURL": origin ?: @"",
+            @"host": host_string ?: @"",
+            @"port": IntegerString(port),
+            @"realm": realm_string ?: @"",
+            @"scheme": scheme_string ?: @"authentication",
+            @"isProxy": BoolString(isProxy),
+            @"accepted": BoolString(accepted),
+          }];
+          return;
+        }
+
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = [NSString stringWithFormat:@"%@ requires %@", host_string.length > 0 ? host_string : AlertDisplayOrigin(origin), scheme_string];
+        alert.informativeText = realm_string.length > 0 ? realm_string : @"Enter your username and password.";
+        alert.alertStyle = NSAlertStyleInformational;
+
+        NSView *accessory = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 320, 52)];
+        NSTextField *username = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 28, 320, 24)];
+        NSSecureTextField *password = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(0, 0, 320, 24)];
+        username.placeholderString = @"Username";
+        password.placeholderString = @"Password";
+        [accessory addSubview:username];
+        [accessory addSubview:password];
+        alert.accessoryView = accessory;
+
+        [alert addButtonWithTitle:@"Sign In"];
+        [alert addButtonWithTitle:@"Cancel"];
+        BOOL accepted = RunAlert(alert, owner) == NSAlertFirstButtonReturn;
+        if (accepted) {
+          retained_callback->Continue(CefString(username.stringValue.UTF8String),
+                                      CefString(password.stringValue.UTF8String));
+        } else {
+          retained_callback->Cancel();
+        }
+        [owner notifyRuntimeEventKind:@"authenticationRequest" payload:@{
+          @"requestID": request_id,
+          @"phase": @"resolved",
+          @"originURL": origin ?: @"",
+          @"host": host_string ?: @"",
+          @"port": IntegerString(port),
+          @"realm": realm_string ?: @"",
+          @"scheme": scheme_string ?: @"authentication",
+          @"isProxy": BoolString(isProxy),
+          @"accepted": BoolString(accepted),
+        }];
+      };
+    }
   });
   if (request == nil) {
+    NSLog(@"[CEF] Failed to create runtime prompt request for auth challenge host=%@ origin=%@",
+          host_string,
+          origin);
     return false;
   }
 
-  dispatch_semaphore_wait(
-      request.semaphore,
-      dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kRuntimePromptExternalResolutionGraceSeconds * NSEC_PER_SEC)));
-
-  __block BOOL externally_resolved = NO;
-  __block BOOL canceled = NO;
-  __block NSDictionary<NSString *, NSString *> *resolution_payload = nil;
-  RunOnMainThreadSync(^{
-    resolution_payload = [owner_ finishRuntimePromptRequest:request
-                                         externallyResolved:&externally_resolved
-                                                   canceled:&canceled];
-  });
-  if (canceled) {
-    callback->Cancel();
-    return true;
-  }
-
-  if (externally_resolved) {
-    BOOL accepted = [resolution_payload[@"accepted"] isEqualToString:@"true"];
-    if (accepted) {
-      callback->Continue(
-          CefString((resolution_payload[@"username"] ?: @"").UTF8String),
-          CefString((resolution_payload[@"password"] ?: @"").UTF8String));
-    } else {
-      callback->Cancel();
-    }
-    [owner_ notifyRuntimeEventKind:@"authenticationRequest" payload:@{
-      @"requestID": request.requestID,
-      @"phase": @"resolved",
-      @"originURL": origin ?: @"",
-      @"host": host_string ?: @"",
-      @"port": IntegerString(port),
-      @"realm": realm_string ?: @"",
-      @"scheme": scheme_string ?: @"authentication",
-      @"isProxy": BoolString(isProxy),
-      @"accepted": BoolString(accepted),
-    }];
-    return true;
-  }
-
-  dispatch_async(dispatch_get_main_queue(), ^{
-    NSAlert *alert = [[NSAlert alloc] init];
-    alert.messageText = [NSString stringWithFormat:@"%@ requires %@", host_string.length > 0 ? host_string : AlertDisplayOrigin(origin), scheme_string];
-    alert.informativeText = realm_string.length > 0 ? realm_string : @"Enter your username and password.";
-    alert.alertStyle = NSAlertStyleInformational;
-
-    NSView *accessory = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 320, 52)];
-    NSTextField *username = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 28, 320, 24)];
-    NSSecureTextField *password = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(0, 0, 320, 24)];
-    username.placeholderString = @"Username";
-    password.placeholderString = @"Password";
-    [accessory addSubview:username];
-    [accessory addSubview:password];
-    alert.accessoryView = accessory;
-
-    [alert addButtonWithTitle:@"Sign In"];
-    [alert addButtonWithTitle:@"Cancel"];
-    BOOL accepted = RunAlert(alert, owner) == NSAlertFirstButtonReturn;
-    if (accepted) {
-      callback->Continue(CefString(username.stringValue.UTF8String),
-                         CefString(password.stringValue.UTF8String));
-    } else {
-      callback->Cancel();
-    }
-    [owner notifyRuntimeEventKind:@"authenticationRequest" payload:@{
-      @"requestID": request.requestID,
-      @"phase": @"resolved",
-      @"originURL": origin ?: @"",
-      @"host": host_string ?: @"",
-      @"port": IntegerString(port),
-      @"realm": realm_string ?: @"",
-      @"scheme": scheme_string ?: @"authentication",
-      @"isProxy": BoolString(isProxy),
-      @"accepted": BoolString(accepted),
-    }];
-  });
+  dispatch_after(
+      dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kRuntimePromptExternalResolutionGraceSeconds * NSEC_PER_SEC)),
+      dispatch_get_main_queue(), ^{
+        if (owner != nil) {
+          [owner resumeRuntimePromptRequest:request];
+        }
+      });
   return true;
 }
 
@@ -2637,80 +3080,105 @@ bool GhoDexCEFClient::OnCertificateError(CefRefPtr<CefBrowser> browser,
                                          CefRefPtr<CefCallback> callback) {
   (void)browser;
   (void)ssl_info;
-  if (!owner_ || !callback.get()) {
+  GhoDexCEFView *owner = owner_;
+  if (!owner || !callback.get()) {
+    NSLog(@"[CEF] Dropping certificate warning because owner=%@ callback=%p error=%d",
+          owner,
+          callback.get(),
+          static_cast<int>(cert_error));
     return false;
   }
 
   NSString *url = [NSString stringWithUTF8String:request_url.ToString().c_str() ?: ""];
   NSString *error_code = IntegerString(static_cast<NSInteger>(cert_error));
   __block GhoDexCEFRuntimePromptRequest *request = nil;
+  CefRefPtr<CefCallback> retained_callback = callback;
+  NSLog(@"[CEF] Certificate warning url=%@ error=%d",
+        url,
+        static_cast<int>(cert_error));
   RunOnMainThreadSync(^{
-    request = [owner_ beginRuntimePromptKind:@"certificateWarning" payload:@{
+    request = [owner beginRuntimePromptKind:@"certificateWarning" payload:@{
       @"phase": @"requested",
       @"requestURL": url ?: @"",
       @"errorCode": error_code,
     }];
+    if (request != nil) {
+      NSString *request_id = request.requestID;
+      request.continuation = ^(NSDictionary<NSString *, NSString *> *resolution_payload,
+                               BOOL externally_resolved,
+                               BOOL canceled) {
+        if (!retained_callback.get()) {
+          return;
+        }
+
+        if (owner == nil) {
+          NSLog(@"[CEF] Canceling certificate warning requestID=%@ because the owning view was released",
+                request_id);
+          retained_callback->Cancel();
+          return;
+        }
+
+        if (canceled) {
+          retained_callback->Cancel();
+          return;
+        }
+
+        if (externally_resolved) {
+          BOOL accepted = [resolution_payload[@"accepted"] isEqualToString:@"true"];
+          if (accepted) {
+            retained_callback->Continue();
+          } else {
+            retained_callback->Cancel();
+          }
+          [owner notifyRuntimeEventKind:@"certificateWarning" payload:@{
+            @"requestID": request_id,
+            @"phase": @"resolved",
+            @"requestURL": url ?: @"",
+            @"errorCode": error_code,
+            @"accepted": BoolString(accepted),
+          }];
+          return;
+        }
+
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = @"Certificate validation failed";
+        alert.informativeText = [NSString stringWithFormat:
+            @"The TLS certificate for %@ could not be verified (error %d). Continue anyway?",
+            url.length > 0 ? url : @"this site",
+            static_cast<int>(cert_error)];
+        alert.alertStyle = NSAlertStyleWarning;
+        [alert addButtonWithTitle:@"Continue"];
+        [alert addButtonWithTitle:@"Cancel"];
+        BOOL accepted = RunAlert(alert, owner) == NSAlertFirstButtonReturn;
+        if (accepted) {
+          retained_callback->Continue();
+        } else {
+          retained_callback->Cancel();
+        }
+        [owner notifyRuntimeEventKind:@"certificateWarning" payload:@{
+          @"requestID": request_id,
+          @"phase": @"resolved",
+          @"requestURL": url ?: @"",
+          @"errorCode": error_code,
+          @"accepted": BoolString(accepted),
+        }];
+      };
+    }
   });
   if (request == nil) {
+    NSLog(@"[CEF] Failed to create runtime prompt request for certificate warning url=%@ error=%d",
+          url,
+          static_cast<int>(cert_error));
     return false;
   }
 
-  dispatch_semaphore_wait(
-      request.semaphore,
-      dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kRuntimePromptExternalResolutionGraceSeconds * NSEC_PER_SEC)));
-
-  __block BOOL externally_resolved = NO;
-  __block BOOL canceled = NO;
-  __block NSDictionary<NSString *, NSString *> *resolution_payload = nil;
-  RunOnMainThreadSync(^{
-    resolution_payload = [owner_ finishRuntimePromptRequest:request
-                                         externallyResolved:&externally_resolved
-                                                   canceled:&canceled];
-  });
-  if (canceled) {
-    callback->Cancel();
-    return true;
-  }
-
-  if (externally_resolved) {
-    BOOL accepted = [resolution_payload[@"accepted"] isEqualToString:@"true"];
-    if (accepted) {
-      callback->Continue();
-    } else {
-      callback->Cancel();
-    }
-    [owner_ notifyRuntimeEventKind:@"certificateWarning" payload:@{
-      @"requestID": request.requestID,
-      @"phase": @"resolved",
-      @"requestURL": url ?: @"",
-      @"errorCode": error_code,
-      @"accepted": BoolString(accepted),
-    }];
-    return true;
-  }
-
-  NSAlert *alert = [[NSAlert alloc] init];
-  alert.messageText = @"Certificate validation failed";
-  alert.informativeText = [NSString stringWithFormat:
-      @"The TLS certificate for %@ could not be verified (error %d). Continue anyway?",
-      url.length > 0 ? url : @"this site",
-      static_cast<int>(cert_error)];
-  alert.alertStyle = NSAlertStyleWarning;
-  [alert addButtonWithTitle:@"Continue"];
-  [alert addButtonWithTitle:@"Cancel"];
-  BOOL accepted = RunAlert(alert, owner_) == NSAlertFirstButtonReturn;
-  if (accepted) {
-    callback->Continue();
-  } else {
-    callback->Cancel();
-  }
-  [owner_ notifyRuntimeEventKind:@"certificateWarning" payload:@{
-    @"requestID": request.requestID,
-    @"phase": @"resolved",
-    @"requestURL": url ?: @"",
-    @"errorCode": error_code,
-    @"accepted": BoolString(accepted),
-  }];
+  dispatch_after(
+      dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kRuntimePromptExternalResolutionGraceSeconds * NSEC_PER_SEC)),
+      dispatch_get_main_queue(), ^{
+        if (owner != nil) {
+          [owner resumeRuntimePromptRequest:request];
+        }
+      });
   return true;
 }
 
