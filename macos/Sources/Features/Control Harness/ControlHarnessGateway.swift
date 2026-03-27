@@ -273,7 +273,11 @@ final class ControlHarnessGateway {
         guard listenerFD == -1 else { return }
 
         do {
-            let listener = try makeListener(host: configuration.listenHost, port: configuration.listenPort)
+            let requestedPort = configuration.listenPort
+            let listener = try makeListenerRecoveringPortConflict(
+                host: configuration.listenHost,
+                requestedPort: requestedPort
+            )
             listenerFD = listener.fd
             listenerPort = listener.port
             lastStartupError = nil
@@ -288,6 +292,11 @@ final class ControlHarnessGateway {
             }
             source.resume()
             acceptSource = source
+            if requestedPort > 0, listener.port != requestedPort {
+                logger.notice(
+                    "control harness gateway port \(requestedPort) was unavailable; recovered on \(listener.port)"
+                )
+            }
             logger.notice(
                 "control harness gateway listening at \(self.configuration.listenHost, privacy: .public):\(listener.port)"
             )
@@ -333,6 +342,26 @@ final class ControlHarnessGateway {
         }
         listenerPort = nil
         outboundQueue.async {}
+    }
+
+    private func makeListenerRecoveringPortConflict(
+        host: String,
+        requestedPort: UInt16
+    ) throws -> (fd: Int32, port: UInt16) {
+        do {
+            return try makeListener(host: host, port: requestedPort)
+        } catch let error as POSIXError
+            where error.code == .EADDRINUSE && requestedPort > 0 {
+            for candidatePort in Self.portConflictRecoveryCandidates(startingAt: requestedPort) {
+                do {
+                    return try makeListener(host: host, port: candidatePort)
+                } catch let candidateError as POSIXError where candidateError.code == .EADDRINUSE {
+                    continue
+                }
+            }
+
+            return try makeListener(host: host, port: 0)
+        }
     }
 
     private func acceptAvailableConnections() {
@@ -1413,6 +1442,16 @@ final class ControlHarnessGateway {
             Darwin.close(fd)
             throw error
         }
+    }
+
+    private static func portConflictRecoveryCandidates(startingAt requestedPort: UInt16) -> [UInt16] {
+        guard requestedPort < UInt16.max else { return [] }
+
+        let maxSequentialAttempts = 16
+        let upperBound = min(Int(UInt16.max), Int(requestedPort) + maxSequentialAttempts)
+        guard upperBound > Int(requestedPort) else { return [] }
+
+        return ((Int(requestedPort) + 1)...upperBound).compactMap(UInt16.init)
     }
 
     private static func setNonBlocking(_ fd: Int32) throws {

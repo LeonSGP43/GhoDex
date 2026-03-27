@@ -462,6 +462,7 @@ enum AppLocalization {
         "settings.gateway.listen_host.help": "Use 127.0.0.1 for USB plus adb reverse, or 0.0.0.0 / a reachable LAN IP for direct phone access.",
         "settings.gateway.port": "Port",
         "settings.gateway.port.help": "The fixed port keeps one active gateway per machine. If another instance already owns it, this instance stays passive.",
+        "settings.gateway.port.invalid": "Enter a valid TCP port between 1 and 65535 before applying gateway settings.",
         "settings.gateway.pairing_host": "Pairing QR Host",
         "settings.gateway.pairing_host.placeholder": "Auto-detect from current LAN address",
         "settings.gateway.pairing_host.help": "Optional override for the host embedded in the pairing QR. Leave blank to auto-detect.",
@@ -936,6 +937,7 @@ enum AppLocalization {
         "settings.gateway.listen_host.help": "USB 调试配合 adb reverse 时用 127.0.0.1；手机直连时用 0.0.0.0 或可达的局域网 IP。",
         "settings.gateway.port": "端口",
         "settings.gateway.port.help": "固定端口可以保证一台机器只保留一个活动网关。如果端口已被别的实例占用，这个实例会保持被动状态。",
+        "settings.gateway.port.invalid": "应用网关设置前请输入 1 到 65535 之间的有效 TCP 端口。",
         "settings.gateway.pairing_host": "配对二维码主机地址",
         "settings.gateway.pairing_host.placeholder": "默认自动探测当前局域网地址",
         "settings.gateway.pairing_host.help": "可选。覆盖二维码里编码的主机地址；留空时自动探测。",
@@ -1567,6 +1569,7 @@ enum L10n {
         nonisolated static var gatewayListenHostHelp: String { AppLocalization.localizedString("settings.gateway.listen_host.help") }
         nonisolated static var gatewayPort: String { AppLocalization.localizedString("settings.gateway.port") }
         nonisolated static var gatewayPortHelp: String { AppLocalization.localizedString("settings.gateway.port.help") }
+        nonisolated static var gatewayPortInvalid: String { AppLocalization.localizedString("settings.gateway.port.invalid") }
         nonisolated static var gatewayPairingHost: String { AppLocalization.localizedString("settings.gateway.pairing_host") }
         nonisolated static var gatewayPairingHostPlaceholder: String { AppLocalization.localizedString("settings.gateway.pairing_host.placeholder") }
         nonisolated static var gatewayPairingHostHelp: String { AppLocalization.localizedString("settings.gateway.pairing_host.help") }
