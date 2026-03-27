@@ -8,11 +8,35 @@ import GhoDexKit
 import Darwin
 import UniformTypeIdentifiers
 
+enum RemotePairingQRCodeRequestSource: Equatable {
+    case manual
+    case launchPreference
+}
+
+enum RemotePairingQRCodeErrorPresentation: Equatable {
+    case blockingModal
+    case logOnly
+}
+
+struct RemotePairingQRCodePresentationPolicy {
+    static func errorPresentation(
+        for source: RemotePairingQRCodeRequestSource
+    ) -> RemotePairingQRCodeErrorPresentation {
+        switch source {
+        case .manual:
+            return .blockingModal
+        case .launchPreference:
+            return .logOnly
+        }
+    }
+}
+
 class AppDelegate: NSObject,
                     ObservableObject,
                     NSApplicationDelegate,
                     UNUserNotificationCenterDelegate,
                     GhosttyAppDelegate {
+    private static let skipInitialTerminalWindowEnvKey = "GHODEX_SKIP_INITIAL_TERMINAL_WINDOW"
     // The application logger. We should probably move this at some point to a dedicated
     // class/struct but for now it lives here! 🤷‍♂️
     static let logger = Logger(
@@ -100,6 +124,23 @@ class AppDelegate: NSObject,
 
     /// This is the current configuration from the Ghostty configuration that we need.
     private var derivedConfig: DerivedConfig = DerivedConfig()
+
+    static func shouldSkipInitialTerminalWindow(environment: [String: String]) -> Bool {
+        guard let rawValue = environment[skipInitialTerminalWindowEnvKey] else {
+            return false
+        }
+
+        switch rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "1", "true", "yes", "on":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private var shouldSkipInitialTerminalWindow: Bool {
+        Self.shouldSkipInitialTerminalWindow(environment: ProcessInfo.processInfo.environment)
+    }
 
     /// The ghostty global state. Only one per process.
     let ghostty: Ghostty.App
@@ -356,6 +397,8 @@ class AppDelegate: NSObject,
     private var remotePairingQRCodeWindowCloseObserver: NSObjectProtocol?
     private var remotePairingQRCodePayloadJSON: String?
     private var remotePairingQRCodePairingCode: String?
+    private var topLevelWindowCloseObserver: NSObjectProtocol?
+    private var lastClosedTopLevelWindowKind: LastClosedTopLevelWindowKind?
 
     override init() {
 #if DEBUG
@@ -516,12 +559,13 @@ class AppDelegate: NSObject,
         installRemotePairingQRMenuItemIfNeeded()
         if shouldShowRemotePairingQROnLaunch() {
             DispatchQueue.main.async { [weak self] in
-                self?.showRemotePairingQRCode(nil)
+                self?.requestRemotePairingQRCode(source: .launchPreference)
             }
         }
 
         // Setup signal handlers
         setupSignals()
+        observeTopLevelWindowCloseKind()
 
         switch Ghostty.launchSource {
         case .app:
@@ -566,7 +610,11 @@ class AppDelegate: NSObject,
             // is possible to have other windows in a few scenarios:
             //   - if we're opening a URL since `application(_:openFile:)` is called before this.
             //   - if we're restoring from persisted state
-            if TerminalController.all.isEmpty && derivedConfig.initialWindow {
+            if shouldSkipInitialTerminalWindow {
+                Self.logger.debug(
+                    "Skipping initial terminal window because \(Self.skipInitialTerminalWindowEnvKey, privacy: .public)=\(ProcessInfo.processInfo.environment[Self.skipInitialTerminalWindowEnvKey] ?? "", privacy: .public)"
+                )
+            } else if TerminalController.all.isEmpty && derivedConfig.initialWindow {
                 undoManager.disableUndoRegistration()
                 _ = TerminalController.newWindow(ghostty)
                 undoManager.enableUndoRegistration()
@@ -575,7 +623,11 @@ class AppDelegate: NSObject,
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        return derivedConfig.shouldQuitAfterLastWindowClosed
+        defer { lastClosedTopLevelWindowKind = nil }
+        return LastWindowCloseTerminationPolicy.shouldTerminateAfterLastWindowClosed(
+            shouldQuitAfterLastWindowClosed: derivedConfig.shouldQuitAfterLastWindowClosed,
+            lastClosedWindowKind: lastClosedTopLevelWindowKind
+        )
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -860,13 +912,20 @@ class AppDelegate: NSObject,
 
     @objc
     func showRemotePairingQRCode(_ sender: Any?) {
+        requestRemotePairingQRCode(source: .manual)
+    }
+
+    private func requestRemotePairingQRCode(source: RemotePairingQRCodeRequestSource) {
         Task { @MainActor [weak self] in
             guard let self else { return }
 
             do {
                 try await self.presentRemotePairingQRCode()
             } catch {
-                self.presentRemotePairingQRCodeError(error.localizedDescription)
+                self.presentRemotePairingQRCodeError(
+                    error.localizedDescription,
+                    source: source
+                )
             }
         }
     }
@@ -1022,6 +1081,20 @@ class AppDelegate: NSObject,
         ])
 
         return container
+    }
+
+    private func observeTopLevelWindowCloseKind() {
+        guard topLevelWindowCloseObserver == nil else { return }
+
+        topLevelWindowCloseObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self else { return }
+            let window = notification.object as? NSWindow
+            self.lastClosedTopLevelWindowKind = LastClosedTopLevelWindowKind.resolve(window: window)
+        }
     }
 
     @MainActor
@@ -1205,13 +1278,23 @@ class AppDelegate: NSObject,
     }
 
     @MainActor
-    private func presentRemotePairingQRCodeError(_ message: String) {
-        let alert = NSAlert()
-        alert.messageText = "Remote Pairing QR Unavailable"
-        alert.informativeText = message
-        alert.addButton(withTitle: "OK")
-        NSApp.activate(ignoringOtherApps: true)
-        alert.runModal()
+    private func presentRemotePairingQRCodeError(
+        _ message: String,
+        source: RemotePairingQRCodeRequestSource
+    ) {
+        switch RemotePairingQRCodePresentationPolicy.errorPresentation(for: source) {
+        case .blockingModal:
+            let alert = NSAlert()
+            alert.messageText = "Remote Pairing QR Unavailable"
+            alert.informativeText = message
+            alert.addButton(withTitle: "OK")
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+        case .logOnly:
+            AppDelegate.logger.error(
+                "Remote Pairing QR launch request failed without blocking startup: \(message, privacy: .public)"
+            )
+        }
     }
 
     private struct RemotePairingQRCodePayload: Encodable {

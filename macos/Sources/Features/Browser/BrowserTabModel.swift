@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 
 enum BrowserControlCommandKind: String, Codable, Hashable {
@@ -6,6 +7,11 @@ enum BrowserControlCommandKind: String, Codable, Hashable {
     case goBack
     case goForward
     case reload
+    case resolveDialog
+    case resolvePermission
+    case resolveAuth
+    case resolveCertificate
+    case cancelDownload
     case executeJavaScript
     case evaluateJavaScript
     case listFrames
@@ -28,6 +34,11 @@ enum BrowserControlEventKind: String, Codable, Hashable {
     case consoleMessage
     case bridgeReady
     case networkRequestFinished
+    case download
+    case javaScriptDialog
+    case permissionRequest
+    case authenticationRequest
+    case certificateWarning
 }
 
 enum BrowserPopupDisposition: Int, Codable, Hashable {
@@ -505,6 +516,156 @@ struct BrowserControlEvent: Identifiable, Hashable, Codable {
             ]
         )
     }
+
+    static func download(
+        target: BrowserControlTarget,
+        phase: String,
+        downloadID: String,
+        url: String,
+        suggestedName: String?,
+        targetPath: String?,
+        mimeType: String?,
+        receivedBytes: Int64,
+        totalBytes: Int64,
+        percentComplete: Int,
+        isComplete: Bool,
+        isCanceled: Bool,
+        isInterrupted: Bool
+    ) -> BrowserControlEvent {
+        var payload: [String: String] = [
+            "phase": phase,
+            "downloadID": downloadID,
+            "url": url,
+            "receivedBytes": String(receivedBytes),
+            "totalBytes": String(totalBytes),
+            "percentComplete": String(percentComplete),
+            "isComplete": String(isComplete),
+            "isCanceled": String(isCanceled),
+            "isInterrupted": String(isInterrupted),
+        ]
+        if let suggestedName, !suggestedName.isEmpty {
+            payload["suggestedName"] = suggestedName
+        }
+        if let targetPath, !targetPath.isEmpty {
+            payload["targetPath"] = targetPath
+        }
+        if let mimeType, !mimeType.isEmpty {
+            payload["mimeType"] = mimeType
+        }
+        return BrowserControlEvent(target: target, kind: .download, payload: payload)
+    }
+
+    static func javaScriptDialog(
+        target: BrowserControlTarget,
+        requestID: String,
+        phase: String,
+        dialogType: String,
+        originURL: String?,
+        messageText: String,
+        defaultPromptText: String?,
+        isReload: Bool?,
+        accepted: Bool?,
+        userInput: String?
+    ) -> BrowserControlEvent {
+        var payload: [String: String] = [
+            "requestID": requestID,
+            "phase": phase,
+            "dialogType": dialogType,
+            "messageText": messageText,
+        ]
+        if let originURL, !originURL.isEmpty {
+            payload["originURL"] = originURL
+        }
+        if let defaultPromptText, !defaultPromptText.isEmpty {
+            payload["defaultPromptText"] = defaultPromptText
+        }
+        if let isReload {
+            payload["isReload"] = String(isReload)
+        }
+        if let accepted {
+            payload["accepted"] = String(accepted)
+        }
+        if let userInput {
+            payload["userInput"] = userInput
+        }
+        return BrowserControlEvent(target: target, kind: .javaScriptDialog, payload: payload)
+    }
+
+    static func permissionRequest(
+        target: BrowserControlTarget,
+        requestID: String,
+        phase: String,
+        permissionKind: String,
+        originURL: String,
+        requestedPermissions: String,
+        requestedPermissionsLabel: String,
+        promptID: String?,
+        result: String?
+    ) -> BrowserControlEvent {
+        var payload: [String: String] = [
+            "requestID": requestID,
+            "phase": phase,
+            "permissionKind": permissionKind,
+            "originURL": originURL,
+            "requestedPermissions": requestedPermissions,
+            "requestedPermissionsLabel": requestedPermissionsLabel,
+        ]
+        if let promptID, !promptID.isEmpty {
+            payload["promptID"] = promptID
+        }
+        if let result, !result.isEmpty {
+            payload["result"] = result
+        }
+        return BrowserControlEvent(target: target, kind: .permissionRequest, payload: payload)
+    }
+
+    static func authenticationRequest(
+        target: BrowserControlTarget,
+        requestID: String,
+        phase: String,
+        originURL: String,
+        host: String,
+        port: Int,
+        realm: String,
+        scheme: String,
+        isProxy: Bool,
+        accepted: Bool?
+    ) -> BrowserControlEvent {
+        var payload: [String: String] = [
+            "requestID": requestID,
+            "phase": phase,
+            "originURL": originURL,
+            "host": host,
+            "port": String(port),
+            "realm": realm,
+            "scheme": scheme,
+            "isProxy": String(isProxy),
+        ]
+        if let accepted {
+            payload["accepted"] = String(accepted)
+        }
+        return BrowserControlEvent(target: target, kind: .authenticationRequest, payload: payload)
+    }
+
+    static func certificateWarning(
+        target: BrowserControlTarget,
+        requestID: String,
+        phase: String,
+        requestURL: String,
+        errorCode: String,
+        accepted: Bool?
+    ) -> BrowserControlEvent {
+        var payload: [String: String] = [
+            "requestID": requestID,
+            "phase": phase,
+            "requestURL": requestURL,
+            "errorCode": errorCode,
+        ]
+        if let accepted {
+            payload["accepted"] = String(accepted)
+        }
+        return BrowserControlEvent(target: target, kind: .certificateWarning, payload: payload)
+    }
 }
 
 typealias BrowserControlCompletion = (BrowserControlResponse) -> Void
@@ -526,12 +687,16 @@ final class BrowserPageState: ObservableObject, Identifiable {
     @Published private(set) var canGoForward = false
     @Published private(set) var isLoading = false
     @Published private(set) var documentRevision = 0
-    @Published private(set) var isControlBridgeReady = false
+    // Keep bridge-readiness off the ObservableObject invalidation path.
+    // SwiftUI view teardown can synchronously unbind bridges, and publishing
+    // that transition through @Published has already caused exclusivity aborts.
+    private(set) var isControlBridgeReady = false
 
     fileprivate var onStateChange: (() -> Void)?
     fileprivate var isAddressBarEditing = false
 
     private var controlBridge: BrowserPageControlBridge?
+    private let controlBridgeReadySubject = CurrentValueSubject<Bool, Never>(false)
 
     init(initialURL: URL) {
         self.initialURL = initialURL
@@ -587,12 +752,12 @@ final class BrowserPageState: ObservableObject, Identifiable {
 
     func bindControlBridge(_ bridge: BrowserPageControlBridge) {
         controlBridge = bridge
-        isControlBridgeReady = false
+        setControlBridgeReady(false)
     }
 
     func unbindControlBridge() {
         controlBridge = nil
-        isControlBridgeReady = false
+        setControlBridgeReady(false)
     }
 
     var isControlBridgeBound: Bool {
@@ -600,7 +765,11 @@ final class BrowserPageState: ObservableObject, Identifiable {
     }
 
     func markControlBridgeReady() {
-        isControlBridgeReady = true
+        setControlBridgeReady(true)
+    }
+
+    func controlBridgeReadyPublisher() -> AnyPublisher<Bool, Never> {
+        controlBridgeReadySubject.eraseToAnyPublisher()
     }
 
     func route(_ request: BrowserControlRequest, completion: @escaping BrowserControlCompletion) {
@@ -785,6 +954,12 @@ final class BrowserPageState: ObservableObject, Identifiable {
             return .failure(.internalFailure("The browser control command returned an unexpected JSON payload: \(error.localizedDescription)"))
         }
     }
+
+    private func setControlBridgeReady(_ ready: Bool) {
+        guard isControlBridgeReady != ready else { return }
+        isControlBridgeReady = ready
+        controlBridgeReadySubject.send(ready)
+    }
 }
 
 @MainActor
@@ -819,6 +994,7 @@ final class BrowserTabModel: ObservableObject {
     private let defaultPageURL: URL
     private var installTask: Task<Void, Never>?
     private var eventObservers: [UUID: EventObserverRegistration] = [:]
+    private var activePageStateSyncPending = false
 
     init(initialURL: URL) {
         self.defaultPageURL = initialURL
@@ -831,26 +1007,10 @@ final class BrowserTabModel: ObservableObject {
         register(page: initialPage)
 
         // External callers can create Browser tabs before CEF is activated in
-        // the current app session. Kick off runtime activation asynchronously
-        // so tab creation can complete and the control-plane socket stays
-        // responsive while Chromium warms up.
-        if GhoDexCEFBuildHasRuntime(), !GhoDexCEFIsInitialized() {
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                if !GhoDexCEFIsInitialized() {
-                    if GhoDexCEFIsInitializing() {
-                        await waitForRuntimeInitialization()
-                    } else {
-                        _ = GhoDexCEFInitializeGlobal()
-                        if !GhoDexCEFIsInitialized(), GhoDexCEFIsInitializing() {
-                            await waitForRuntimeInitialization()
-                        }
-                    }
-                }
-                refreshRuntimeState()
-                syncActivePageState()
-            }
-        }
+        // the current app session. Always schedule runtime activation onto the
+        // next main-actor turn so the control-plane request can unwind back to
+        // the runloop before Chromium starts spinning up helper processes.
+        beginRuntimeActivationIfNeeded()
 
         refreshRuntimeState()
         syncActivePageState()
@@ -892,7 +1052,7 @@ final class BrowserTabModel: ObservableObject {
             pages.count
         )
         selectedPageID = pageID
-        syncActivePageState()
+        scheduleActivePageStateSync()
     }
 
     func newPageTab() {
@@ -909,7 +1069,7 @@ final class BrowserTabModel: ObservableObject {
             selectedPageID = pages[replacementIndex].id
         }
 
-        syncActivePageState()
+        scheduleActivePageStateSync()
     }
 
     func bindBridge(
@@ -1124,7 +1284,13 @@ final class BrowserTabModel: ObservableObject {
             }
         case .bridgeReady:
             pages.first(where: { $0.id == pageID })?.markControlBridgeReady()
-        case .consoleMessage, .networkRequestFinished:
+        case .consoleMessage,
+             .networkRequestFinished,
+             .download,
+             .javaScriptDialog,
+             .permissionRequest,
+             .authenticationRequest,
+             .certificateWarning:
             break
         }
 
@@ -1203,12 +1369,7 @@ final class BrowserTabModel: ObservableObject {
             return
         }
 
-        if GhoDexCEFIsInitialized() || GhoDexCEFIsInitializing() {
-            refreshRuntimeState()
-            return
-        }
-
-        _ = GhoDexCEFInitializeGlobal()
+        beginRuntimeActivationIfNeeded()
         refreshRuntimeState()
     }
 
@@ -1269,7 +1430,7 @@ final class BrowserTabModel: ObservableObject {
                 page.id.uuidString,
                 selectedPageID.uuidString
             )
-            syncActivePageState()
+            scheduleActivePageStateSync()
         }
         return page
     }
@@ -1404,8 +1565,19 @@ final class BrowserTabModel: ObservableObject {
         page.onStateChange = { [weak self, weak page] in
             guard let self, let page else { return }
             if self.selectedPageID == page.id {
-                self.syncActivePageState()
+                self.scheduleActivePageStateSync()
             }
+        }
+    }
+
+    private func scheduleActivePageStateSync() {
+        guard !activePageStateSyncPending else { return }
+        activePageStateSyncPending = true
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.activePageStateSyncPending = false
+            self.syncActivePageState()
         }
     }
 
@@ -1444,6 +1616,30 @@ final class BrowserTabModel: ObservableObject {
                 return
             }
             try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
+    private func beginRuntimeActivationIfNeeded() {
+        guard GhoDexCEFBuildHasRuntime(), !GhoDexCEFIsInitialized(), !GhoDexCEFIsInitializing() else {
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard !GhoDexCEFIsInitialized() else {
+                refreshRuntimeState()
+                syncActivePageState()
+                return
+            }
+
+            if !GhoDexCEFIsInitializing() {
+                _ = GhoDexCEFInitializeGlobal()
+            }
+            if !GhoDexCEFIsInitialized(), GhoDexCEFIsInitializing() {
+                await waitForRuntimeInitialization()
+            }
+            refreshRuntimeState()
+            syncActivePageState()
         }
     }
 

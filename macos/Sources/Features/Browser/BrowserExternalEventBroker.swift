@@ -11,17 +11,19 @@ final class BrowserExternalEventBroker {
 
     func subscribe(
         to controller: BrowserTabController,
-        kinds: Set<BrowserExternalEventKind>
+        kinds: Set<BrowserExternalEventKind>,
+        version: String
     ) -> BrowserExternalEventSubscriptionResult {
         let subscriptionID = UUID()
         let browserTabID = ScriptBrowserTab.stableID(controller: controller)
-        let observedKinds = internalKinds(for: kinds)
+        let observedKinds = Self.observedControlKinds(for: kinds)
         let observerToken = controller.model.subscribeToControlEvents(kinds: observedKinds.isEmpty ? nil : observedKinds) { [weak self, weak controller] event in
             guard let self else { return }
             self.record(event, for: subscriptionID, browserTabID: browserTabID, controller: controller)
         }
 
         subscriptions[subscriptionID] = Subscription(
+            version: version,
             browserTabID: browserTabID,
             observerToken: observerToken,
             controller: controller,
@@ -31,12 +33,13 @@ final class BrowserExternalEventBroker {
             bufferedEvents: []
         )
 
-        return BrowserExternalEventSubscriptionResult(subscriptionID: subscriptionID)
+        return BrowserExternalEventSubscriptionResult(version: version, subscriptionID: subscriptionID)
     }
 
     func drain(
         subscriptionID: UUID,
-        limit: Int?
+        limit: Int?,
+        version: String
     ) -> BrowserExternalEventDrainResult? {
         guard var subscription = subscriptions[subscriptionID] else {
             return nil
@@ -48,6 +51,7 @@ final class BrowserExternalEventBroker {
         subscription.deliveredCount += drainedEvents.count
 
         let result = BrowserExternalEventDrainResult(
+            version: version,
             subscriptionID: subscriptionID,
             nextCursor: subscription.deliveredCount,
             droppedCount: subscription.droppedCount,
@@ -69,7 +73,7 @@ final class BrowserExternalEventBroker {
         return true
     }
 
-    private func internalKinds(for externalKinds: Set<BrowserExternalEventKind>) -> Set<BrowserControlEventKind> {
+    static func observedControlKinds(for externalKinds: Set<BrowserExternalEventKind>) -> Set<BrowserControlEventKind> {
         var kinds = Set<BrowserControlEventKind>(externalKinds.compactMap { eventKind in
             switch eventKind {
             case .consoleMessage:
@@ -82,6 +86,16 @@ final class BrowserExternalEventBroker {
                 return BrowserControlEventKind.pageTitleChanged
             case .networkRequestFinished:
                 return BrowserControlEventKind.networkRequestFinished
+            case .download:
+                return BrowserControlEventKind.download
+            case .javaScriptDialog:
+                return BrowserControlEventKind.javaScriptDialog
+            case .permissionRequest:
+                return BrowserControlEventKind.permissionRequest
+            case .authenticationRequest:
+                return BrowserControlEventKind.authenticationRequest
+            case .certificateWarning:
+                return BrowserControlEventKind.certificateWarning
             case .popupRequest:
                 return nil
             case .pageInspectionSnapshot:
@@ -102,8 +116,8 @@ final class BrowserExternalEventBroker {
         return kinds
     }
 
-    private func externalKind(for event: BrowserControlEvent) -> BrowserExternalEventKind? {
-        switch event.kind {
+    static func externalEventKind(for kind: BrowserControlEventKind) -> BrowserExternalEventKind? {
+        switch kind {
         case .consoleMessage:
             return .consoleMessage
         case .bridgeReady:
@@ -114,6 +128,16 @@ final class BrowserExternalEventBroker {
             return .pageTitleChanged
         case .networkRequestFinished:
             return .networkRequestFinished
+        case .download:
+            return .download
+        case .javaScriptDialog:
+            return .javaScriptDialog
+        case .permissionRequest:
+            return .permissionRequest
+        case .authenticationRequest:
+            return .authenticationRequest
+        case .certificateWarning:
+            return .certificateWarning
         case .openURLInNewTabRequested:
             return .popupRequest
         case .popupWindowHosted:
@@ -137,7 +161,7 @@ final class BrowserExternalEventBroker {
             captureInspectionSnapshot(for: subscriptionID, event: event, controller: controller)
         }
 
-        guard let externalKind = externalKind(for: event) else {
+        guard let externalKind = Self.externalEventKind(for: event.kind) else {
             subscriptions[subscriptionID] = subscription
             return
         }
@@ -156,8 +180,10 @@ final class BrowserExternalEventBroker {
 
         appendEvent(
             BrowserExternalEventEnvelope(
+                version: subscription.version,
                 subscriptionID: subscriptionID,
                 browserTabID: browserTabID,
+                browserContextID: browserTabID,
                 kind: externalKind,
                 payload: payload
             ),
@@ -218,8 +244,10 @@ final class BrowserExternalEventBroker {
 
             self.appendEvent(
                 BrowserExternalEventEnvelope(
+                    version: subscription.version,
                     subscriptionID: subscriptionID,
                     browserTabID: browserTabID,
+                    browserContextID: browserTabID,
                     kind: .pageInspectionSnapshot,
                     payload: payload
                 ),
@@ -252,6 +280,7 @@ final class BrowserExternalEventBroker {
     }
 
     private struct Subscription {
+        let version: String
         let browserTabID: String
         let observerToken: UUID
         weak var controller: BrowserTabController?

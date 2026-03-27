@@ -7,6 +7,14 @@
  browser control sessions, and treat the internal Swift/CEF implementation as an
  implementation detail.
 
+Compatibility note:
+
+- `browser.tab.v1` remains supported for existing clients
+- the underlying top-level object is now documented as a Browser Context
+- `browser.tab.v1` identifiers still resolve to that same top-level context
+- the forward-looking object model is documented in
+  `browser-context-command-protocol.md`
+
 The protocol is designed for:
 
 - low-latency local control over a running Browser tab
@@ -64,7 +72,7 @@ Every request is a JSON object with this shape:
 Field notes:
 
 - `id`: caller-generated UUID used to correlate the response
-- `version`: must currently be `browser.tab.v1`
+- `version`: `browser.tab.v1` for compatibility clients
 - `command`: one of the supported command names
 - `browserTabID`: optional tab identifier; required for tab-specific commands
 - `pageID`: optional internal page identifier for page-targeted commands
@@ -121,6 +129,8 @@ Field notes:
 Important semantic note:
 
 - `newTab` creates a new Browser window/controller
+- in the newer object model, that top-level object is a Browser Context
+- `newTab` should now be treated as a compatibility alias for `newContext`
 - it does not append an internal page to an existing Browser tab
 - use `listPages` / `activatePage` to work with the internal pages that already
   exist inside one Browser tab
@@ -178,6 +188,9 @@ targetable through the external command envelope.
 
 - `getDebugStatus`
 - `loadURL`
+- `goBack`
+- `goForward`
+- `reload`
 - `getCookies`
 - `setCookie`
 - `deleteCookie`
@@ -216,6 +229,8 @@ The optional CEF remote debugging lane is a diagnostics surface, not the
 product contract for Browser automation.
 
 - `browser.tab.v1` remains the primary control API for Browser tabs
+- `browser.context.v2` is the new context/page terminology layer for future
+  Browser Control clients
 - Chromium remote debugging stays disabled by default
 - enable it only by setting `ghodex-browser-remote-debug-port` to a positive
   local port in config
@@ -462,7 +477,7 @@ Frame-specific notes:
 
 ```json
 {
-  "kindsJSON": "[\"consoleMessage\",\"navigationStateChanged\",\"networkRequestFinished\",\"popupRequest\",\"pageInspectionSnapshot\"]"
+  "kindsJSON": "[\"consoleMessage\",\"navigationStateChanged\",\"networkRequestFinished\",\"popupRequest\",\"pageInspectionSnapshot\",\"download\",\"javaScriptDialog\",\"permissionRequest\",\"authenticationRequest\",\"certificateWarning\"]"
 }
 ```
 
@@ -494,6 +509,11 @@ The external event stream currently supports these `kind` values:
 - `networkRequestFinished`
 - `popupRequest`
 - `pageInspectionSnapshot`
+- `download`
+- `javaScriptDialog`
+- `permissionRequest`
+- `authenticationRequest`
+- `certificateWarning`
 
 ### Event Envelope
 
@@ -538,6 +558,169 @@ Payload keys:
 
 `snapshotJSON` decodes into the same `BrowserDOMSnapshotResult` structure used
 by the internal Browser control plane.
+
+### `download` Payload
+
+`download` is emitted for the Browser download lifecycle.
+
+Payload keys:
+
+- `pageID`
+- `documentRevision`
+- `phase` as `started`, `completed`, `canceled`, or `interrupted`
+- `downloadID`
+- `url`
+- `suggestedName` when available
+- `targetPath` when available
+- `mimeType` when available
+- `receivedBytes`
+- `totalBytes`
+- `percentComplete`
+- `isComplete`
+- `isCanceled`
+- `isInterrupted`
+
+### `cancelDownload`
+
+Cancel a live Browser download that was previously observed through a `download`
+event.
+
+Payload keys:
+
+- `downloadID`
+
+Result keys:
+
+- `downloadID`
+- `accepted`
+- `operation` as `cancelDownload`
+
+The command acknowledges only that GhoDex accepted the cancellation request for
+the live runtime handle. Callers should continue watching the `download` event
+stream for the authoritative lifecycle update, which should eventually emit
+`phase=canceled` for a successfully canceled transfer.
+
+### `javaScriptDialog` Payload
+
+`javaScriptDialog` is emitted when a page opens a JavaScript alert, confirm,
+prompt, or before-unload dialog, and again after GhoDex resolves it through the
+native dialog UI.
+
+Payload keys:
+
+- `pageID`
+- `documentRevision`
+- `requestID`
+- `phase` as `requested` or `resolved`
+- `dialogType` as `alert`, `confirm`, `prompt`, or `beforeUnload`
+- `originURL` when available
+- `messageText`
+- `defaultPromptText` for prompt dialogs
+- `isReload` for before-unload dialogs
+- `accepted` on resolved events
+- `userInput` on resolved prompt events
+
+### `permissionRequest` Payload
+
+`permissionRequest` is emitted for both media-device permission prompts and
+generic browser permission prompts.
+
+Payload keys:
+
+- `pageID`
+- `documentRevision`
+- `requestID`
+- `phase` as `requested` or `resolved`
+- `permissionKind` as `media` or `generic`
+- `originURL`
+- `requestedPermissions`
+- `requestedPermissionsLabel`
+- `promptID` for generic permission prompts
+- `result` on resolved events
+
+### `authenticationRequest` Payload
+
+`authenticationRequest` is emitted when a page or proxy challenges for HTTP
+authentication, and again after GhoDex resolves the native auth dialog.
+
+Payload keys:
+
+- `pageID`
+- `documentRevision`
+- `requestID`
+- `phase` as `requested` or `resolved`
+- `originURL`
+- `host`
+- `port`
+- `realm`
+- `scheme`
+- `isProxy`
+- `accepted` on resolved events
+
+### `certificateWarning` Payload
+
+`certificateWarning` is emitted when TLS certificate validation fails and GhoDex
+surfaces the native continue/cancel warning.
+
+Payload keys:
+
+- `pageID`
+- `documentRevision`
+- `requestID`
+- `phase` as `requested` or `resolved`
+- `requestURL`
+- `errorCode`
+- `accepted` on resolved events
+
+## Runtime Prompt Resolve Commands
+
+The external Browser control plane can resolve paused runtime prompts through
+typed commands keyed by the event `requestID`.
+
+### `resolveDialog`
+
+Resolve a previously emitted `javaScriptDialog` event.
+
+Payload keys:
+
+- `requestID`
+- `accepted` as `true` or `false`
+- `userInput` for accepted prompt dialogs
+
+### `resolvePermission`
+
+Resolve a previously emitted `permissionRequest` event.
+
+Payload keys:
+
+- `requestID`
+- `result` as `allow`, `deny`, or `dismiss`
+
+### `resolveAuth`
+
+Resolve a previously emitted `authenticationRequest` event.
+
+Payload keys:
+
+- `requestID`
+- `accepted` as `true` or `false`
+- `username` when `accepted=true`
+- `password` when `accepted=true`
+
+### `resolveCertificate`
+
+Resolve a previously emitted `certificateWarning` event.
+
+Payload keys:
+
+- `requestID`
+- `accepted` as `true` or `false`
+
+All four commands return a result with:
+
+- `requestID`
+- `kind`
+- `resolved`
 
 ### `popupRequest` Payload
 
@@ -740,7 +923,7 @@ ghodex +browser-control --transport=ipc --request '{
   "command":"subscribeEvents",
   "browserTabID":"browser-tab-1",
   "payload":{
-    "kindsJSON":"[\"consoleMessage\",\"navigationStateChanged\",\"networkRequestFinished\",\"popupRequest\",\"pageInspectionSnapshot\"]"
+    "kindsJSON":"[\"consoleMessage\",\"navigationStateChanged\",\"networkRequestFinished\",\"popupRequest\",\"pageInspectionSnapshot\",\"download\",\"javaScriptDialog\",\"permissionRequest\",\"authenticationRequest\",\"certificateWarning\"]"
   }
 }'
 ```
