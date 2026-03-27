@@ -88,6 +88,7 @@ private struct ControlHarnessIdempotencyEntry {
     let fingerprint: Data
     let response: ControlHarnessResponse
     let sequence: Int64?
+    var lastAccessedAt: Date
 }
 
 enum ControlHarnessIdempotencyLookup {
@@ -97,15 +98,28 @@ enum ControlHarnessIdempotencyLookup {
 }
 
 final class ControlHarnessIdempotencyStore {
+    private static let entryTTL: TimeInterval = 15 * 60
+    private static let maxEntries = 4_096
+
     private let queue = DispatchQueue(label: "com.leongong.ghodex.control-harness.idempotency")
     private var entries: [String: ControlHarnessIdempotencyEntry] = [:]
+    private var entryOrder: [String] = []
 
     func lookup(token: String, fingerprint: Data) -> ControlHarnessIdempotencyLookup {
         queue.sync {
-            guard let entry = entries[token] else {
+            let now = Date()
+            pruneLocked(now: now)
+            guard var entry = entries[token] else {
                 return .miss
             }
-            return entry.fingerprint == fingerprint ? .hit(entry.response, entry.sequence) : .conflict
+            guard entry.fingerprint == fingerprint else {
+                return .conflict
+            }
+
+            entry.lastAccessedAt = now
+            entries[token] = entry
+            touchEntryLocked(token)
+            return .hit(entry.response, entry.sequence)
         }
     }
 
@@ -116,10 +130,49 @@ final class ControlHarnessIdempotencyStore {
         fingerprint: Data
     ) {
         queue.sync {
+            let now = Date()
+            pruneLocked(now: now)
             entries[token] = .init(
                 fingerprint: fingerprint,
                 response: response,
-                sequence: sequence
+                sequence: sequence,
+                lastAccessedAt: now
+            )
+            touchEntryLocked(token)
+            pruneLocked(now: now)
+        }
+    }
+
+    private func touchEntryLocked(_ token: String) {
+        entryOrder.removeAll { $0 == token }
+        entryOrder.append(token)
+    }
+
+    private func pruneLocked(now: Date) {
+        let cutoff = now.addingTimeInterval(-Self.entryTTL)
+        var removedByTTL = 0
+        for (token, entry) in entries where entry.lastAccessedAt < cutoff {
+            entries.removeValue(forKey: token)
+            removedByTTL += 1
+        }
+
+        entryOrder.removeAll { entries[$0] == nil }
+        var removedByCapacity = 0
+        while entries.count > Self.maxEntries, let oldest = entryOrder.first {
+            entryOrder.removeFirst()
+            entries.removeValue(forKey: oldest)
+            removedByCapacity += 1
+        }
+
+        if removedByTTL > 0 || removedByCapacity > 0 {
+            RuntimeDiagnosticsLogger.log(
+                component: "control_harness.idempotency",
+                event: "prune",
+                details: [
+                    "removed_ttl": "\(removedByTTL)",
+                    "removed_capacity": "\(removedByCapacity)",
+                    "remaining_entries": "\(entries.count)",
+                ]
             )
         }
     }
@@ -168,6 +221,7 @@ private struct ControlHarnessPendingWriteEntry {
     let terminalID: String
     let sequence: Int64
     let kind: ControlHarnessPendingWriteKind
+    let createdAt: Date
     var scopeStates: [String: ControlHarnessPendingWriteScopeState]
 }
 
@@ -477,12 +531,29 @@ final class ControlHarnessTerminalReadStore {
 }
 
 final class ControlHarnessReadAfterWriteStore {
+    private static let pendingEntryTTL: TimeInterval = 5 * 60
+    private static let completedEntryTTL: TimeInterval = 60
+    private static let maxPendingEntries = 2_048
+    private static let maxCompletedEntries = 1_024
+
     private let queue = DispatchQueue(label: "com.leongong.ghodex.control-harness.read-after-write")
     private var entries: [String: ControlHarnessPendingWriteEntry] = [:]
+    private var entryOrder: [String] = []
+    private var completedEntries: [String: Date] = [:]
+    private var completedOrder: [String] = []
 
     func removeTerminal(_ terminalID: String) {
         queue.sync {
-            entries = entries.filter { $0.value.terminalID != terminalID }
+            let removedWriteIDs = entries
+                .filter { $0.value.terminalID == terminalID }
+                .map(\.key)
+            guard !removedWriteIDs.isEmpty else { return }
+
+            let removed = Set(removedWriteIDs)
+            for writeID in removedWriteIDs {
+                entries.removeValue(forKey: writeID)
+            }
+            entryOrder.removeAll { removed.contains($0) }
         }
     }
 
@@ -534,6 +605,13 @@ final class ControlHarnessReadAfterWriteStore {
         delta: ControlHarnessReadDelta
     ) -> Bool {
         queue.sync {
+            let now = Date()
+            pruneLocked(now: now)
+            if let completedAt = completedEntries[writeID], now.timeIntervalSince(completedAt) <= Self.completedEntryTTL {
+                touchCompletedEntryLocked(writeID)
+                return true
+            }
+
             guard var entry = entries[writeID], entry.terminalID == terminalID else {
                 return false
             }
@@ -555,6 +633,7 @@ final class ControlHarnessReadAfterWriteStore {
             if frame.frameID == scopeState.baselineFrameID {
                 entry.scopeStates[scope] = scopeState
                 entries[writeID] = entry
+                touchPendingEntryLocked(writeID)
                 return false
             }
 
@@ -564,6 +643,7 @@ final class ControlHarnessReadAfterWriteStore {
                 scopeState.awaitingDistinctNonEchoFrame = echoOnly
                 entry.scopeStates[scope] = scopeState
                 entries[writeID] = entry
+                touchPendingEntryLocked(writeID)
                 return false
             }
 
@@ -574,6 +654,7 @@ final class ControlHarnessReadAfterWriteStore {
                     }
                     entry.scopeStates[scope] = scopeState
                     entries[writeID] = entry
+                    touchPendingEntryLocked(writeID)
                     return false
                 }
             }
@@ -581,7 +662,16 @@ final class ControlHarnessReadAfterWriteStore {
             scopeState.awaitingDistinctNonEchoFrame = false
             scopeState.isReady = true
             entry.scopeStates[scope] = scopeState
-            entries[writeID] = entry
+            if entry.scopeStates.values.allSatisfy({ $0.isReady }) {
+                entries.removeValue(forKey: writeID)
+                entryOrder.removeAll { $0 == writeID }
+                completedEntries[writeID] = now
+                touchCompletedEntryLocked(writeID)
+                pruneLocked(now: now)
+            } else {
+                entries[writeID] = entry
+                touchPendingEntryLocked(writeID)
+            }
             return true
         }
     }
@@ -595,10 +685,13 @@ final class ControlHarnessReadAfterWriteStore {
         screenFrameID: String?
     ) {
         queue.sync {
+            let now = Date()
+            pruneLocked(now: now)
             entries[writeID] = .init(
                 terminalID: terminalID,
                 sequence: sequence,
                 kind: kind,
+                createdAt: now,
                 scopeStates: [
                     "visible": .init(
                         baselineFrameID: visibleFrameID,
@@ -612,6 +705,66 @@ final class ControlHarnessReadAfterWriteStore {
                         awaitingDistinctNonEchoFrame: false,
                         isReady: false
                     ),
+                ]
+            )
+            touchPendingEntryLocked(writeID)
+            pruneLocked(now: now)
+        }
+    }
+
+    private func touchPendingEntryLocked(_ writeID: String) {
+        entryOrder.removeAll { $0 == writeID }
+        entryOrder.append(writeID)
+    }
+
+    private func touchCompletedEntryLocked(_ writeID: String) {
+        completedOrder.removeAll { $0 == writeID }
+        completedOrder.append(writeID)
+    }
+
+    private func pruneLocked(now: Date) {
+        let pendingCutoff = now.addingTimeInterval(-Self.pendingEntryTTL)
+        var removedPendingByTTL = 0
+        for (writeID, entry) in entries where entry.createdAt < pendingCutoff {
+            entries.removeValue(forKey: writeID)
+            removedPendingByTTL += 1
+        }
+        entryOrder.removeAll { entries[$0] == nil }
+        var removedPendingByCapacity = 0
+        while entries.count > Self.maxPendingEntries, let oldest = entryOrder.first {
+            entryOrder.removeFirst()
+            entries.removeValue(forKey: oldest)
+            removedPendingByCapacity += 1
+        }
+
+        let completedCutoff = now.addingTimeInterval(-Self.completedEntryTTL)
+        var removedCompletedByTTL = 0
+        for (writeID, completedAt) in completedEntries where completedAt < completedCutoff {
+            completedEntries.removeValue(forKey: writeID)
+            removedCompletedByTTL += 1
+        }
+        completedOrder.removeAll { completedEntries[$0] == nil }
+        var removedCompletedByCapacity = 0
+        while completedEntries.count > Self.maxCompletedEntries, let oldest = completedOrder.first {
+            completedOrder.removeFirst()
+            completedEntries.removeValue(forKey: oldest)
+            removedCompletedByCapacity += 1
+        }
+
+        if removedPendingByTTL > 0 ||
+            removedPendingByCapacity > 0 ||
+            removedCompletedByTTL > 0 ||
+            removedCompletedByCapacity > 0 {
+            RuntimeDiagnosticsLogger.log(
+                component: "control_harness.read_after_write",
+                event: "prune",
+                details: [
+                    "removed_pending_ttl": "\(removedPendingByTTL)",
+                    "removed_pending_capacity": "\(removedPendingByCapacity)",
+                    "removed_completed_ttl": "\(removedCompletedByTTL)",
+                    "removed_completed_capacity": "\(removedCompletedByCapacity)",
+                    "remaining_pending": "\(entries.count)",
+                    "remaining_completed": "\(completedEntries.count)",
                 ]
             )
         }
@@ -704,6 +857,9 @@ final class ControlHarnessEventHub {
         let sink: @Sendable (Data) -> Bool
     }
 
+    private static let maxReplayEvents = 4_096
+    private static let maxReplayBytes = 8 * 1024 * 1024
+
     private let queue = DispatchQueue(label: "com.leongong.ghodex.control-harness.events")
     private let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -764,33 +920,51 @@ final class ControlHarnessEventHub {
 
     func replay(afterSequence: Int64?, limit: Int?) -> [Data] {
         queue.sync {
-            guard let handle = try? FileHandle(forReadingFrom: fileURL) else {
-                return []
-            }
-            defer { try? handle.close() }
-
-            guard let rawData = try? handle.readToEnd(), !rawData.isEmpty else {
-                return []
-            }
-
             let threshold = afterSequence ?? 0
-            var remaining = limit
+            let effectiveLimit = limit.map { min($0, Self.maxReplayEvents) }
+            var remaining = effectiveLimit
             var replayed: [Data] = []
+            var replayedBytes = 0
+            var truncatedByBudget = false
 
-            rawData.split(separator: 0x0A).forEach { line in
-                guard remaining != 0 else { return }
-
-                let lineData = Data(line)
+            Self.forEachJSONLLine(in: fileURL) { lineData in
+                guard remaining != 0 else {
+                    return false
+                }
                 guard let sequence = Self.sequence(from: lineData), sequence > threshold else {
-                    return
+                    return true
                 }
 
-                replayed.append(lineData + Data([0x0A]))
+                let eventData = lineData + Data([0x0A])
+                let nextByteCount = replayedBytes + eventData.count
+                if replayed.count >= Self.maxReplayEvents || nextByteCount > Self.maxReplayBytes {
+                    truncatedByBudget = true
+                    return false
+                }
+
+                replayed.append(eventData)
+                replayedBytes = nextByteCount
                 if let currentRemaining = remaining {
                     remaining = currentRemaining - 1
                 }
+                return remaining != 0
             }
 
+            if truncatedByBudget {
+                logger.notice(
+                    "control harness replay truncated by budget replayed=\(replayed.count, privacy: .public) bytes=\(replayedBytes, privacy: .public)"
+                )
+                RuntimeDiagnosticsLogger.log(
+                    component: "control_harness.events",
+                    event: "replay_truncated",
+                    details: [
+                        "replayed_events": "\(replayed.count)",
+                        "replayed_bytes": "\(replayedBytes)",
+                        "threshold_sequence": "\(threshold)",
+                        "effective_limit": "\(effectiveLimit?.description ?? "none")",
+                    ]
+                )
+            }
             return replayed
         }
     }
@@ -826,23 +1000,48 @@ final class ControlHarnessEventHub {
     }
 
     private static func loadLastSequence(from fileURL: URL) -> Int64 {
-        guard let handle = try? FileHandle(forReadingFrom: fileURL) else {
-            return 0
-        }
-        defer { try? handle.close() }
-
-        guard let rawData = try? handle.readToEnd(), !rawData.isEmpty else {
-            return 0
-        }
-
         var lastSequence: Int64 = 0
-        rawData.split(separator: 0x0A).forEach { line in
-            let lineData = Data(line)
+        Self.forEachJSONLLine(in: fileURL) { lineData in
             if let sequence = sequence(from: lineData) {
                 lastSequence = max(lastSequence, sequence)
             }
+            return true
         }
         return lastSequence
+    }
+
+    private static func forEachJSONLLine(
+        in fileURL: URL,
+        _ body: (Data) -> Bool
+    ) {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else {
+            return
+        }
+        defer { try? handle.close() }
+
+        var buffer = Data()
+        while true {
+            guard let chunk = try? handle.read(upToCount: 64 * 1024),
+                  !chunk.isEmpty else {
+                break
+            }
+
+            buffer.append(chunk)
+            while let newlineIndex = buffer.firstIndex(of: 0x0A) {
+                let lineData = Data(buffer[..<newlineIndex])
+                buffer.removeSubrange(buffer.startIndex...newlineIndex)
+                if lineData.isEmpty {
+                    continue
+                }
+                guard body(lineData) else {
+                    return
+                }
+            }
+        }
+
+        if !buffer.isEmpty {
+            _ = body(buffer)
+        }
     }
 
     private static func sequence(from lineData: Data) -> Int64? {
@@ -869,20 +1068,31 @@ enum ControlHarnessServiceReply {
 final class ControlHarnessEventSubscriptionSession {
     private let queue = DispatchQueue(label: "com.leongong.ghodex.control-harness.subscription")
     private let eventHub: ControlHarnessEventHub
+    private let maxBufferedLiveEvents: Int
+    private let maxBufferedLiveBytes: Int
 
     let replayEvents: [Data]
     private var remainingLiveEvents: Int?
     private var finished = false
     private var bufferingLiveEvents = false
     private var bufferedLiveEvents: [Data] = []
+    private var bufferedLiveEventBytes = 0
     private var deliverySink: (@Sendable (Data) -> Bool)?
     private var finishHandler: (@Sendable () -> Void)?
     private var finishSignaled = false
     private var completionPending = false
 
-    init(eventHub: ControlHarnessEventHub, replayEvents: [Data], eventLimit: Int?) {
+    init(
+        eventHub: ControlHarnessEventHub,
+        replayEvents: [Data],
+        eventLimit: Int?,
+        maxBufferedLiveEvents: Int = 512,
+        maxBufferedLiveBytes: Int = 8 * 1024 * 1024
+    ) {
         self.eventHub = eventHub
         self.replayEvents = replayEvents
+        self.maxBufferedLiveEvents = max(1, maxBufferedLiveEvents)
+        self.maxBufferedLiveBytes = max(1_024, maxBufferedLiveBytes)
         if let eventLimit {
             self.remainingLiveEvents = max(eventLimit - replayEvents.count, 0)
         } else {
@@ -906,6 +1116,7 @@ final class ControlHarnessEventSubscriptionSession {
             }
             bufferingLiveEvents = true
             bufferedLiveEvents.removeAll(keepingCapacity: true)
+            bufferedLiveEventBytes = 0
             deliverySink = sink
             finishHandler = onFinish
             completionPending = false
@@ -925,10 +1136,12 @@ final class ControlHarnessEventSubscriptionSession {
 
             while !bufferedLiveEvents.isEmpty {
                 let data = bufferedLiveEvents.removeFirst()
+                bufferedLiveEventBytes = max(0, bufferedLiveEventBytes - data.count)
                 guard let deliverySink, deliverySink(data) else {
                     finished = true
                     completionPending = true
                     bufferedLiveEvents.removeAll(keepingCapacity: false)
+                    bufferedLiveEventBytes = 0
                     break
                 }
             }
@@ -942,19 +1155,24 @@ final class ControlHarnessEventSubscriptionSession {
     func removeSubscriber(_ id: UUID?) {
         guard let id else { return }
 
+        var shouldRemoveFromHub = false
         let finishHandler = queue.sync { () -> (@Sendable () -> Void)? in
             guard !finished else { return nil }
             finished = true
             bufferingLiveEvents = false
             bufferedLiveEvents.removeAll(keepingCapacity: false)
+            bufferedLiveEventBytes = 0
             completionPending = false
-            eventHub.removeSubscriber(id)
+            shouldRemoveFromHub = true
             let handler = self.finishHandler
             deliverySink = nil
             self.finishHandler = nil
             return handler
         }
 
+        if shouldRemoveFromHub {
+            eventHub.removeSubscriber(id)
+        }
         finishHandler?()
     }
 
@@ -971,7 +1189,7 @@ final class ControlHarnessEventSubscriptionSession {
             }
 
             if bufferingLiveEvents {
-                bufferedLiveEvents.append(data)
+                appendBufferedLiveEventLocked(data)
             } else {
                 guard let deliverySink, deliverySink(data) else {
                     finished = true
@@ -1002,5 +1220,16 @@ final class ControlHarnessEventSubscriptionSession {
         guard !finishSignaled else { return }
         finishSignaled = true
         (finishHandlerOverride ?? finishHandler)?()
+    }
+
+    private func appendBufferedLiveEventLocked(_ data: Data) {
+        bufferedLiveEvents.append(data)
+        bufferedLiveEventBytes += data.count
+
+        while bufferedLiveEvents.count > maxBufferedLiveEvents || bufferedLiveEventBytes > maxBufferedLiveBytes {
+            guard !bufferedLiveEvents.isEmpty else { break }
+            let dropped = bufferedLiveEvents.removeFirst()
+            bufferedLiveEventBytes = max(0, bufferedLiveEventBytes - dropped.count)
+        }
     }
 }

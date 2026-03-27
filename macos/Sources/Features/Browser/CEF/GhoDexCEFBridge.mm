@@ -50,6 +50,7 @@ NSString * const GhoDexCEFControlErrorDomain = @"com.leongong.ghodex.browser.cef
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <errno.h>
 #include <limits.h>
 #include <libproc.h>
@@ -82,8 +83,12 @@ std::atomic<int64_t> g_message_pump_generation{0};
 std::atomic<bool> g_cef_initialized{false};
 std::atomic<bool> g_cef_initializing{false};
 std::atomic<bool> g_cef_library_loaded{false};
+std::atomic<int32_t> g_active_browser_count{0};
+std::atomic<int64_t> g_idle_shutdown_generation{0};
 NSString *g_cef_last_initialization_error = nil;
 dispatch_source_t g_message_pump_timer = nullptr;
+constexpr int64_t kIdleShutdownDelayMs = 5000;
+constexpr int64_t kRuntimeDiagnosticsMaxFileBytes = 4LL * 1024LL * 1024LL;
 constexpr char kEvaluateRequestMessageName[] = "ghodex.browser.evaluate";
 constexpr char kEvaluateResultMessageName[] = "ghodex.browser.evaluate.result";
 constexpr double kRuntimePromptExternalResolutionGraceSeconds = 0.75;
@@ -92,6 +97,149 @@ constexpr size_t kEvaluateRequestIDIndex = 0;
 constexpr size_t kEvaluateScriptIndex = 1;
 constexpr size_t kEvaluateSuccessIndex = 1;
 constexpr size_t kEvaluatePayloadIndex = 2;
+
+dispatch_queue_t RuntimeDiagnosticsQueue() {
+  static dispatch_queue_t queue = nil;
+  static dispatch_once_t once_token;
+  dispatch_once(&once_token, ^{
+    queue = dispatch_queue_create("com.leongong.ghodex.runtime-diagnostics.cef", DISPATCH_QUEUE_SERIAL);
+  });
+  return queue;
+}
+
+BOOL RuntimeDiagnosticsEnabled() {
+  static BOOL enabled = YES;
+  static dispatch_once_t once_token;
+  dispatch_once(&once_token, ^{
+    const char *raw = getenv("GHODEX_RUNTIME_DIAG_LOG");
+    if (raw == nullptr) {
+      enabled = YES;
+      return;
+    }
+
+    NSString *value = [[NSString stringWithUTF8String:raw] lowercaseString];
+    value = [value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if ([value isEqualToString:@"0"] ||
+        [value isEqualToString:@"false"] ||
+        [value isEqualToString:@"no"] ||
+        [value isEqualToString:@"off"]) {
+      enabled = NO;
+      return;
+    }
+    if ([value isEqualToString:@"1"] ||
+        [value isEqualToString:@"true"] ||
+        [value isEqualToString:@"yes"] ||
+        [value isEqualToString:@"on"]) {
+      enabled = YES;
+      return;
+    }
+    enabled = YES;
+  });
+  return enabled;
+}
+
+NSString *RuntimeDiagnosticsDirectoryPath() {
+  NSString *bundle_id = NSBundle.mainBundle.bundleIdentifier ?: @"com.leongong.ghodex";
+  NSURL *app_support = [[NSFileManager defaultManager] URLsForDirectory:NSApplicationSupportDirectory
+                                                               inDomains:NSUserDomainMask].firstObject;
+  if (app_support == nil) {
+    app_support = [NSURL fileURLWithPath:NSHomeDirectory() isDirectory:YES];
+  }
+  NSURL *directory = [[app_support URLByAppendingPathComponent:bundle_id isDirectory:YES]
+      URLByAppendingPathComponent:@"Diagnostics"
+      isDirectory:YES];
+  return directory.path;
+}
+
+NSString *RuntimeDiagnosticsLogPath() {
+  return [RuntimeDiagnosticsDirectoryPath() stringByAppendingPathComponent:@"runtime-memory-diagnostics.jsonl"];
+}
+
+NSString *RuntimeDiagnosticsRotatedLogPath() {
+  return [RuntimeDiagnosticsDirectoryPath() stringByAppendingPathComponent:@"runtime-memory-diagnostics.1.jsonl"];
+}
+
+void RotateRuntimeDiagnosticsLogIfNeeded(NSString *log_path, NSString *rotated_path) {
+  if (log_path.length == 0 || rotated_path.length == 0) {
+    return;
+  }
+  NSDictionary<NSFileAttributeKey, id> *attributes =
+      [[NSFileManager defaultManager] attributesOfItemAtPath:log_path error:nil];
+  NSNumber *size = attributes[NSFileSize];
+  if (size == nil || size.longLongValue < kRuntimeDiagnosticsMaxFileBytes) {
+    return;
+  }
+
+  NSFileManager *file_manager = [NSFileManager defaultManager];
+  if ([file_manager fileExistsAtPath:rotated_path]) {
+    [file_manager removeItemAtPath:rotated_path error:nil];
+  }
+  if ([file_manager fileExistsAtPath:log_path]) {
+    [file_manager moveItemAtPath:log_path toPath:rotated_path error:nil];
+  }
+}
+
+void AppendRuntimeDiagnosticsEvent(NSString *event, NSDictionary<NSString *, NSString *> *details = nil) {
+  if (!RuntimeDiagnosticsEnabled()) {
+    return;
+  }
+
+  NSString *event_name = event.length > 0 ? event : @"unknown";
+  NSDictionary<NSString *, NSString *> *event_details = details ?: @{};
+  dispatch_async(RuntimeDiagnosticsQueue(), ^{
+    @autoreleasepool {
+      NSString *directory = RuntimeDiagnosticsDirectoryPath();
+      NSString *log_path = RuntimeDiagnosticsLogPath();
+      NSString *rotated_path = RuntimeDiagnosticsRotatedLogPath();
+      NSFileManager *file_manager = [NSFileManager defaultManager];
+
+      NSError *directory_error = nil;
+      [file_manager createDirectoryAtPath:directory
+              withIntermediateDirectories:YES
+                               attributes:nil
+                                    error:&directory_error];
+      if (directory_error != nil) {
+        return;
+      }
+
+      RotateRuntimeDiagnosticsLogIfNeeded(log_path, rotated_path);
+
+      NSMutableDictionary<NSString *, id> *record = [NSMutableDictionary dictionaryWithDictionary:@{
+        @"timestamp_ms": @((long long)(NSDate.date.timeIntervalSince1970 * 1000.0)),
+        @"component": @"cef",
+        @"event": event_name
+      }];
+      if (event_details.count > 0) {
+        record[@"details"] = event_details;
+      }
+
+      NSError *serialize_error = nil;
+      NSData *serialized = [NSJSONSerialization dataWithJSONObject:record options:0 error:&serialize_error];
+      if (serialize_error != nil || serialized == nil) {
+        return;
+      }
+
+      if (![file_manager fileExistsAtPath:log_path]) {
+        [file_manager createFileAtPath:log_path contents:nil attributes:nil];
+      }
+
+      NSError *open_error = nil;
+      NSFileHandle *handle = [NSFileHandle fileHandleForWritingToURL:[NSURL fileURLWithPath:log_path]
+                                                               error:&open_error];
+      if (open_error != nil || handle == nil) {
+        return;
+      }
+
+      @try {
+        [handle seekToEndOfFile];
+        [handle writeData:serialized];
+        [handle writeData:[NSData dataWithBytes:"\n" length:1]];
+      } @catch (__unused NSException *exception) {
+      }
+      [handle closeFile];
+    }
+  });
+}
 
 NSError *MakeControlError(GhoDexCEFControlErrorCode code, NSString *description) {
   return [NSError errorWithDomain:GhoDexCEFControlErrorDomain
@@ -816,6 +964,7 @@ void StartMessagePumpTimer() {
   });
   dispatch_resume(timer);
   g_message_pump_timer = timer;
+  AppendRuntimeDiagnosticsEvent(@"message_pump_timer_start", @{@"interval_ms" : @"10"});
 }
 
 void StopMessagePumpTimer() {
@@ -823,8 +972,47 @@ void StopMessagePumpTimer() {
     return;
   }
 
+  AppendRuntimeDiagnosticsEvent(@"message_pump_timer_stop");
   dispatch_source_cancel(g_message_pump_timer);
   g_message_pump_timer = nullptr;
+}
+
+void ScheduleIdleShutdownIfNeeded(int64_t delay_ms = kIdleShutdownDelayMs) {
+  if (!g_cef_initialized.load()) {
+    return;
+  }
+  if (g_active_browser_count.load() > 0) {
+    return;
+  }
+
+  int64_t generation = ++g_idle_shutdown_generation;
+  int64_t clamped_delay = std::max<int64_t>(0, delay_ms);
+  AppendRuntimeDiagnosticsEvent(@"idle_shutdown_scheduled", @{
+    @"delay_ms" : [NSString stringWithFormat:@"%lld", static_cast<long long>(clamped_delay)],
+    @"active_browsers" : [NSString stringWithFormat:@"%d", static_cast<int>(g_active_browser_count.load())]
+  });
+  uint64_t nanoseconds = static_cast<uint64_t>(clamped_delay) * NSEC_PER_MSEC;
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(nanoseconds)),
+                 dispatch_get_main_queue(), ^{
+                   if (!g_cef_initialized.load()) {
+                     return;
+                   }
+                   if (generation != g_idle_shutdown_generation.load()) {
+                     return;
+                   }
+                   if (g_active_browser_count.load() > 0) {
+                     return;
+                   }
+
+                   NSLog(@"[CEF] Idle shutdown triggered after %lldms with active_browsers=%d",
+                         static_cast<long long>(clamped_delay),
+                         static_cast<int>(g_active_browser_count.load()));
+                   AppendRuntimeDiagnosticsEvent(@"idle_shutdown_triggered", @{
+                     @"delay_ms" : [NSString stringWithFormat:@"%lld", static_cast<long long>(clamped_delay)],
+                     @"active_browsers" : [NSString stringWithFormat:@"%d", static_cast<int>(g_active_browser_count.load())]
+                   });
+                   GhoDexCEFShutdownGlobal();
+                 });
 }
 
 class GhoDexCEFApp final : public CefApp,
@@ -948,7 +1136,13 @@ public:
 
   void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
     browser_ = browser;
-    NSLog(@"[CEF] Browser created for %@", owner_);
+    close_requested_ = false;
+    int32_t active_count = ++g_active_browser_count;
+    ++g_idle_shutdown_generation;
+    NSLog(@"[CEF] Browser created for %@ active_browsers=%d", owner_, static_cast<int>(active_count));
+    AppendRuntimeDiagnosticsEvent(@"browser_created", @{
+      @"active_browsers" : [NSString stringWithFormat:@"%d", static_cast<int>(active_count)]
+    });
     if (owner_) {
       dispatch_async(dispatch_get_main_queue(), ^{
         [owner_ notifyBridgeReady];
@@ -960,7 +1154,17 @@ public:
 
   void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
     if (browser_ && browser_->GetIdentifier() == browser->GetIdentifier()) {
+      close_requested_ = false;
       pending_download_callbacks_.clear();
+      int32_t active_count = g_active_browser_count.fetch_sub(1) - 1;
+      if (active_count < 0) {
+        g_active_browser_count.store(0);
+        active_count = 0;
+      }
+      NSLog(@"[CEF] Browser closed for %@ active_browsers=%d", owner_, static_cast<int>(active_count));
+      AppendRuntimeDiagnosticsEvent(@"browser_closed", @{
+        @"active_browsers" : [NSString stringWithFormat:@"%d", static_cast<int>(active_count)]
+      });
       if (owner_) {
         dispatch_async(dispatch_get_main_queue(), ^{
           [owner_ failPendingEvaluationRequestsWithCode:GhoDexCEFControlErrorCodeBridgeUnavailable
@@ -970,6 +1174,7 @@ public:
         });
       }
       browser_ = nullptr;
+      ScheduleIdleShutdownIfNeeded();
     }
   }
 
@@ -1032,6 +1237,7 @@ private:
   __weak GhoDexCEFView *owner_;
   CefRefPtr<CefBrowser> browser_;
   std::map<uint32_t, CefRefPtr<CefDownloadItemCallback>> pending_download_callbacks_;
+  bool close_requested_ = false;
   std::mutex synthetic_http_auth_mutex_;
   std::map<std::string, SyntheticHTTPAuthCredential> synthetic_http_auth_credentials_;
   std::set<std::string> pending_synthetic_http_auth_challenge_keys_;
@@ -3501,9 +3707,12 @@ bool GhoDexCEFClient::SendTrustedClick(double x,
 void GhoDexCEFClient::CloseBrowser() {
   CEF_REQUIRE_UI_THREAD();
   if (browser_) {
+    if (close_requested_) {
+      return;
+    }
+    close_requested_ = true;
     pending_download_callbacks_.clear();
     browser_->GetHost()->CloseBrowser(false);
-    browser_ = nullptr;
   }
 }
 
@@ -5092,8 +5301,16 @@ BOOL GhoDexCEFInitializeGlobal(void) {
         g_cef_initialized.load() ? 1 : 0,
         g_cef_initializing.load() ? 1 : 0,
         ConfiguredExternalProfilePath() ?: @"<none>");
+  AppendRuntimeDiagnosticsEvent(@"initialize_requested", @{
+    @"initialized" : g_cef_initialized.load() ? @"1" : @"0",
+    @"initializing" : g_cef_initializing.load() ? @"1" : @"0",
+    @"external_profile" : ConfiguredExternalProfilePath() ?: @"<none>"
+  });
   if (g_cef_initialized.load()) {
+    ++g_idle_shutdown_generation;
     SetLastInitializationError(nil);
+    ScheduleIdleShutdownIfNeeded();
+    AppendRuntimeDiagnosticsEvent(@"initialize_noop_already_initialized");
     return YES;
   }
   bool expected_initializing = false;
@@ -5109,6 +5326,9 @@ BOOL GhoDexCEFInitializeGlobal(void) {
   if (!EnsureLibraryLoaded()) {
     SetLastInitializationError(@"GhoDex could not load the Chromium Embedded Framework from the configured runtime.");
     clear_initializing();
+    AppendRuntimeDiagnosticsEvent(@"initialize_failed", @{
+      @"reason" : @"library_load_failed"
+    });
     return NO;
   }
 
@@ -5117,6 +5337,9 @@ BOOL GhoDexCEFInitializeGlobal(void) {
     NSLog(@"[CEF] Refusing external profile activation: %@", external_profile_conflict);
     SetLastInitializationError(external_profile_conflict);
     clear_initializing();
+    AppendRuntimeDiagnosticsEvent(@"initialize_failed", @{
+      @"reason" : @"external_profile_conflict"
+    });
     return NO;
   }
 
@@ -5127,6 +5350,10 @@ BOOL GhoDexCEFInitializeGlobal(void) {
     SetLastInitializationError(failure);
     clear_initializing();
     NSLog(@"[CEF] External profile runtime preparation failed: %@", failure);
+    AppendRuntimeDiagnosticsEvent(@"initialize_failed", @{
+      @"reason" : @"runtime_prepare_failed",
+      @"error" : failure ?: @"unknown"
+    });
     return NO;
   }
 
@@ -5187,19 +5414,29 @@ BOOL GhoDexCEFInitializeGlobal(void) {
                                                  : @"Chromium could not be activated in this app session.");
     SetLastInitializationError(failure);
     NSLog(@"[CEF] CefInitialize returned NO: %@", failure);
+    AppendRuntimeDiagnosticsEvent(@"initialize_failed", @{
+      @"reason" : @"cef_initialize_returned_no",
+      @"error" : failure ?: @"unknown"
+    });
   } else {
     SetLastInitializationError(nil);
     NSLog(@"[CEF] CefInitialize returned YES.");
+    AppendRuntimeDiagnosticsEvent(@"initialize_succeeded");
   }
   if (initialized) {
+    ++g_idle_shutdown_generation;
     StartMessagePumpTimer();
     ScheduleMessagePumpWork(0);
+    ScheduleIdleShutdownIfNeeded();
   }
   return initialized;
 }
 
 void GhoDexCEFShutdownGlobal(void) {
+  ++g_idle_shutdown_generation;
+  g_active_browser_count.store(0);
   if (!g_cef_initialized.exchange(false)) {
+    AppendRuntimeDiagnosticsEvent(@"shutdown_noop_not_initialized");
     g_cef_app = nullptr;
     if (g_cef_library_loaded.exchange(false)) {
       cef_unload_library();
@@ -5207,6 +5444,7 @@ void GhoDexCEFShutdownGlobal(void) {
     return;
   }
 
+  AppendRuntimeDiagnosticsEvent(@"shutdown_started");
   ++g_message_pump_generation;
   StopMessagePumpTimer();
   CefShutdown();
@@ -5214,6 +5452,7 @@ void GhoDexCEFShutdownGlobal(void) {
   if (g_cef_library_loaded.exchange(false)) {
     cef_unload_library();
   }
+  AppendRuntimeDiagnosticsEvent(@"shutdown_completed");
 }
 
 BOOL GhoDexCEFBuildSupportsManagedRuntime(void) {

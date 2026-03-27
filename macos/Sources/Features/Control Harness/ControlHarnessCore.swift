@@ -15,6 +15,140 @@ struct AnyEncodable: Encodable {
     }
 }
 
+private struct RuntimeDiagnosticsRecord: Encodable {
+    let timestamp: String
+    let component: String
+    let event: String
+    let details: [String: String]
+}
+
+final class RuntimeDiagnosticsLogger {
+    private static let fileName = "runtime-memory-diagnostics.jsonl"
+    private static let rotatedFileName = "runtime-memory-diagnostics.1.jsonl"
+    private static let maxFileBytes: Int64 = 4 * 1024 * 1024
+
+    static let shared = RuntimeDiagnosticsLogger()
+
+    private let queue = DispatchQueue(label: "com.leongong.ghodex.runtime-diagnostics")
+    private let encoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return encoder
+    }()
+    private let fileManager = FileManager.default
+    private let fileURL: URL?
+    private let rotatedFileURL: URL?
+    private let enabled: Bool
+    private let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
+        category: "RuntimeDiagnostics"
+    )
+
+    private init() {
+        let configured = Self.parseEnabledFlag(ProcessInfo.processInfo.environment["GHODEX_RUNTIME_DIAG_LOG"])
+        self.enabled = configured ?? true
+        guard enabled else {
+            self.fileURL = nil
+            self.rotatedFileURL = nil
+            return
+        }
+
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.leongong.ghodex"
+        let directory = Self.diagnosticsDirectory(bundleID: bundleID)
+        self.fileURL = directory.appendingPathComponent(Self.fileName, isDirectory: false)
+        self.rotatedFileURL = directory.appendingPathComponent(Self.rotatedFileName, isDirectory: false)
+    }
+
+    static func log(component: String, event: String, details: [String: String] = [:]) {
+        shared.append(component: component, event: event, details: details)
+    }
+
+    private static func parseEnabledFlag(_ rawValue: String?) -> Bool? {
+        guard let rawValue else { return nil }
+        let normalized = rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch normalized {
+        case "1", "true", "yes", "on":
+            return true
+        case "0", "false", "no", "off":
+            return false
+        default:
+            return nil
+        }
+    }
+
+    private static func diagnosticsDirectory(bundleID: String) -> URL {
+        let fileManager = FileManager.default
+        let appSupport = (try? fileManager.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )) ?? fileManager.homeDirectoryForCurrentUser
+        return appSupport
+            .appendingPathComponent(bundleID, isDirectory: true)
+            .appendingPathComponent("Diagnostics", isDirectory: true)
+    }
+
+    private func append(component: String, event: String, details: [String: String]) {
+        guard enabled, let fileURL, let rotatedFileURL else { return }
+
+        queue.async { [fileManager, encoder, logger] in
+            do {
+                try fileManager.createDirectory(
+                    at: fileURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true,
+                    attributes: nil
+                )
+
+                try Self.rotateIfNeeded(
+                    fileURL: fileURL,
+                    rotatedFileURL: rotatedFileURL,
+                    fileManager: fileManager
+                )
+
+                let record = RuntimeDiagnosticsRecord(
+                    timestamp: ISO8601DateFormatter().string(from: Date()),
+                    component: component,
+                    event: event,
+                    details: details
+                )
+                let data = try encoder.encode(record)
+                if !fileManager.fileExists(atPath: fileURL.path) {
+                    fileManager.createFile(atPath: fileURL.path, contents: nil)
+                }
+                let handle = try FileHandle(forWritingTo: fileURL)
+                defer { try? handle.close() }
+                try handle.seekToEnd()
+                try handle.write(contentsOf: data)
+                try handle.write(contentsOf: Data([0x0A]))
+            } catch {
+                logger.error("failed to write runtime diagnostics record: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    private static func rotateIfNeeded(
+        fileURL: URL,
+        rotatedFileURL: URL,
+        fileManager: FileManager
+    ) throws {
+        guard
+            let attributes = try? fileManager.attributesOfItem(atPath: fileURL.path),
+            let bytes = (attributes[.size] as? NSNumber)?.int64Value,
+            bytes >= maxFileBytes
+        else {
+            return
+        }
+
+        if fileManager.fileExists(atPath: rotatedFileURL.path) {
+            try fileManager.removeItem(at: rotatedFileURL)
+        }
+        if fileManager.fileExists(atPath: fileURL.path) {
+            try fileManager.moveItem(at: fileURL, to: rotatedFileURL)
+        }
+    }
+}
+
 struct ControlHarnessRequest: Codable {
     let requestID: String
     let protocolVersion: String?
@@ -1425,12 +1559,15 @@ final class ControlHarnessCore {
         let scope = request.scope ?? "visible"
         let mode = request.mode ?? "snapshot"
         let observedWriteID = request.readAfterWriteID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let forceFreshRead = observedWriteID?.isEmpty == false
+            || mode == "delta"
+            || request.sinceFrameID != nil
         let read = try resolveTerminalRead(
             terminalUUID: terminalID,
             terminalID: terminalIDString,
             scope: scope,
             surface: surface,
-            forceFresh: observedWriteID?.isEmpty == false
+            forceFresh: forceFreshRead
         )
         let content = read.content
         let consistency = read.consistency
