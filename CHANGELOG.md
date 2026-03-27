@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### docs(browser): refresh h264 parity blocker evidence
+
+- What changed: Refreshed Browser media/debug evidence with a new isolated artifact at `/tmp/ghx-browser-media-debug-acceptance-recheck-1.json` and updated the acceptance matrix, gap-closure plan, and completeness audit to reflect the current H.264/AAC failure shape. Added explicit host-capacity context showing this workstation's current disk preflight (`~31Gi` free on `/System/Volumes/Data`) versus the codec-enabled CEF source-build budget (`~150Gi`).
+- Why: The plan still has one red gate (`H.264 / AAC local playback parity`). We needed up-to-date, reproducible evidence and an explicit execution blocker record so this remaining item is tracked as a real runtime supply dependency instead of an ambiguous code-path regression.
+- Impact: Remaining Browser completeness risk is now sharply scoped: runtime prompt/context/control-plane slices are green, while codec parity remains blocked pending codec-enabled runtime supply on a build-capable host or a trusted prebuilt runtime artifact.
+- Verification: `python3 scripts/browser_media_debug_acceptance.py --app /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-browser-context-platform/macos/build/Debug/GhoDex.app --runtime-root '/Users/leongong/Library/Application Support/GhoDex/CEF/current' --output /tmp/ghx-browser-media-debug-acceptance-recheck-1.json`; `df -h / /Users/leongong/Desktop/LeonProjects/gho_workspace/wt-browser-context-platform`
+- Files: `browser-tab-acceptance-matrix.md`, `browser-tab-gap-closure-plan.md`, `browser-tab-completeness-audit.md`, `CHANGELOG.md`
+- Decision trail: Keep this slice documentation-only and evidence-first. No runtime behavior changed; the goal is to preserve a precise blocker record so the next implementation slice can focus only on codec-runtime supply rather than re-triaging already-closed control-plane work.
+
 ### feat(browser): add context policy metadata to browser.context.v2
 
 - What changed: Added a typed `BrowserContextPolicy` model (`profilePolicy`, `egressPolicy` + `egressTarget`, `fingerprintPolicy`, `popupInheritancePolicy`) and wired `newContext` to parse/validate these payload fields. `BrowserTabController` now carries a per-context policy instance, and `listContexts` / `getContext` / `newContext` responses now include `contextPolicy` with defaults applied. Added `BrowserContextPolicyTests` for defaults, explicit parsing, and validation failures.

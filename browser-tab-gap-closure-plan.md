@@ -170,6 +170,22 @@ Acceptance:
 - remote debug is proven closed by default and only open when explicitly configured
 - the resulting audit distinguishes "platform/build limitation" from "our own bad defaults"
 
+Current status:
+
+- remote-debug default-closed behavior is acceptance-backed
+- H.264/AAC is still blocked in both managed and external isolated lanes:
+  `/tmp/ghx-browser-media-debug-acceptance-postfix.json`
+  `/tmp/ghx-browser-media-debug-acceptance-recheck-1.json`
+- latest recheck still fails with:
+  empty `canPlayType` for H.264/AAC,
+  `MediaSource.isTypeSupported(...) = false`,
+  playback error `DEMUXER_ERROR_NO_SUPPORTED_STREAMS`
+- local host preflight is currently below CEF codec-build disk budget
+  (about `31Gi` free on `/System/Volumes/Data` vs roughly `150Gi` required by
+  the documented branch-7632 build flow), so closing this item now requires
+  either a prebuilt codec-enabled runtime artifact or a larger-capacity build
+  host
+
 ### 2. External And Mirror Service Surface
 
 Problem:
