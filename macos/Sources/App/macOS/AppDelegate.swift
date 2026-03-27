@@ -36,6 +36,7 @@ class AppDelegate: NSObject,
                     NSApplicationDelegate,
                     UNUserNotificationCenterDelegate,
                     GhosttyAppDelegate {
+    private static let skipInitialTerminalWindowEnvKey = "GHODEX_SKIP_INITIAL_TERMINAL_WINDOW"
     // The application logger. We should probably move this at some point to a dedicated
     // class/struct but for now it lives here! 🤷‍♂️
     static let logger = Logger(
@@ -123,6 +124,23 @@ class AppDelegate: NSObject,
 
     /// This is the current configuration from the Ghostty configuration that we need.
     private var derivedConfig: DerivedConfig = DerivedConfig()
+
+    static func shouldSkipInitialTerminalWindow(environment: [String: String]) -> Bool {
+        guard let rawValue = environment[skipInitialTerminalWindowEnvKey] else {
+            return false
+        }
+
+        switch rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "1", "true", "yes", "on":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private var shouldSkipInitialTerminalWindow: Bool {
+        Self.shouldSkipInitialTerminalWindow(environment: ProcessInfo.processInfo.environment)
+    }
 
     /// The ghostty global state. Only one per process.
     let ghostty: Ghostty.App
@@ -593,7 +611,11 @@ class AppDelegate: NSObject,
             // is possible to have other windows in a few scenarios:
             //   - if we're opening a URL since `application(_:openFile:)` is called before this.
             //   - if we're restoring from persisted state
-            if TerminalController.all.isEmpty && derivedConfig.initialWindow {
+            if shouldSkipInitialTerminalWindow {
+                Self.logger.debug(
+                    "Skipping initial terminal window because \(Self.skipInitialTerminalWindowEnvKey, privacy: .public)=\(ProcessInfo.processInfo.environment[Self.skipInitialTerminalWindowEnvKey] ?? "", privacy: .public)"
+                )
+            } else if TerminalController.all.isEmpty && derivedConfig.initialWindow {
                 undoManager.disableUndoRegistration()
                 _ = TerminalController.newWindow(ghostty)
                 undoManager.enableUndoRegistration()

@@ -250,6 +250,7 @@ def launch_app(
     env = os.environ.copy()
     env["GHODEX_CEF_ROOT"] = runtime_root
     env["GHODEX_BROWSER_APP_SUPPORT_ROOT"] = str(app_support_root)
+    env["GHODEX_SKIP_INITIAL_TERMINAL_WINDOW"] = "1"
     env["HOME"] = str(home_dir)
     env["TMPDIR"] = str(home_dir / "tmp")
     env.pop("GHODEX_CEF_PROFILE_PATH", None)

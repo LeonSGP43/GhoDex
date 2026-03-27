@@ -334,6 +334,10 @@ Current status:
   (`Surface.mouseButtonCallback`), recorded in:
   `/tmp/ghx-browser-context-protocol-acceptance-recheck-5.json`
   `/tmp/ghx-browser-context-6069be04/app.log`
+- Browser harnesses now launch with
+  `GHODEX_SKIP_INITIAL_TERMINAL_WINDOW=1`, and context protocol recheck is
+  green again in:
+  `/tmp/ghx-browser-context-protocol-acceptance-recheck-6.json`
 
 ### 3.7 Download Control Surface
 
