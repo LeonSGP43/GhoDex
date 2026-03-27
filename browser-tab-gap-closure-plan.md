@@ -394,6 +394,9 @@ Acceptance:
 - avoid reopening already-closed routing issues while working on new gaps
 - close the BrowserTab teardown exclusivity crash before deeper Browser Context
   refactors so the control-plane lifecycle remains stable during later work
+- keep Browser Context policy vocabulary explicit at the control-plane layer
+  (`profilePolicy`, `egressPolicy`, `fingerprintPolicy`,
+  `popupInheritancePolicy`) even before runtime enforcement is fully isolated
 - treat the crash fix itself as one atomic unit:
   root-cause doc -> implementation -> regression test or acceptance repro ->
   verification -> only then move on
@@ -403,6 +406,8 @@ Exit:
 - existing popup and control proofs still pass on the merged branch
 - Browser teardown no longer aborts in the known `isControlBridgeReady`
   dismantle path
+- Browser Context summaries expose stable policy metadata for profile/egress/
+  fingerprint/popup inheritance with deterministic defaults
 - teardown fix has durable documentation plus a reproducible verification path
 
 ### Phase 1. Media And Debug Surface

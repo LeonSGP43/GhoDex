@@ -746,7 +746,8 @@ extension ScriptBrowserTab {
             url: controller?.model.displayedURL ?? "",
             activePageID: controller?.model.selectedPageID.uuidString,
             pageCount: controller?.model.pages.count ?? 0,
-            isFrontmost: BrowserTabController.frontmostControllerID == stableID
+            isFrontmost: BrowserTabController.frontmostControllerID == stableID,
+            contextPolicy: controller?.contextPolicy ?? .default
         )
     }
 
@@ -1397,6 +1398,14 @@ extension ScriptBrowserTab {
                 return .failure(for: request, error: .internalFailure("The GhoDex app delegate is unavailable."))
             }
 
+            let contextPolicy: BrowserContextPolicy
+            switch BrowserContextPolicy.parse(payload: request.payload) {
+            case let .success(parsed):
+                contextPolicy = parsed
+            case let .failure(error):
+                return .failure(for: request, error: error)
+            }
+
             let initialURL: URL?
             if let rawURL = request.payload["url"], !rawURL.isEmpty {
                 let normalizedURL = BrowserPaths.normalizedURLString(
@@ -1411,7 +1420,11 @@ extension ScriptBrowserTab {
                 initialURL = nil
             }
 
-            let controller = BrowserTabController.newWindow(appDelegate.ghostty, initialURL: initialURL)
+            let controller = BrowserTabController.newWindow(
+                appDelegate.ghostty,
+                initialURL: initialURL,
+                contextPolicy: contextPolicy
+            )
             let browserTab = ScriptBrowserTab(controller: controller)
             controller.model.ensureRuntimeActivationForExternalControl()
 

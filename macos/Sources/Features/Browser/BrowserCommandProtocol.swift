@@ -147,6 +147,133 @@ struct BrowserExternalCommandRequest: Identifiable, Hashable, Codable {
     }
 }
 
+enum BrowserContextProfilePolicy: String, Hashable, Codable {
+    case managed
+    case isolated
+}
+
+enum BrowserContextEgressPolicyMode: String, Hashable, Codable {
+    case system
+    case direct
+    case namedProxy = "named-proxy"
+    case localGateway = "local-gateway"
+}
+
+struct BrowserContextEgressPolicy: Hashable, Codable {
+    let mode: BrowserContextEgressPolicyMode
+    let target: String?
+}
+
+enum BrowserContextFingerprintPolicy: String, Hashable, Codable {
+    case native
+    case hardenedNormal = "hardened-normal"
+    case customStable = "custom-stable"
+}
+
+enum BrowserContextPopupInheritancePolicy: String, Hashable, Codable {
+    case inheritSourceContext = "inherit-source-context"
+    case isolatePopup = "isolate-popup"
+}
+
+struct BrowserContextPolicy: Hashable, Codable {
+    let profilePolicy: BrowserContextProfilePolicy
+    let egressPolicy: BrowserContextEgressPolicy
+    let fingerprintPolicy: BrowserContextFingerprintPolicy
+    let popupInheritancePolicy: BrowserContextPopupInheritancePolicy
+
+    static let `default` = BrowserContextPolicy(
+        profilePolicy: .managed,
+        egressPolicy: BrowserContextEgressPolicy(mode: .system, target: nil),
+        fingerprintPolicy: .native,
+        popupInheritancePolicy: .inheritSourceContext
+    )
+
+    static func parse(payload: [String: String]) -> Result<BrowserContextPolicy, BrowserExternalCommandError> {
+        let profilePolicy = payload["profilePolicy"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let parsedProfilePolicy: BrowserContextProfilePolicy
+        switch profilePolicy {
+        case "", BrowserContextProfilePolicy.managed.rawValue:
+            parsedProfilePolicy = .managed
+        case BrowserContextProfilePolicy.isolated.rawValue:
+            parsedProfilePolicy = .isolated
+        default:
+            return .failure(
+                .invalidRequest("The profilePolicy payload must be one of managed or isolated.")
+            )
+        }
+
+        let egressPolicy = payload["egressPolicy"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let parsedEgressMode: BrowserContextEgressPolicyMode
+        switch egressPolicy {
+        case "", BrowserContextEgressPolicyMode.system.rawValue:
+            parsedEgressMode = .system
+        case BrowserContextEgressPolicyMode.direct.rawValue:
+            parsedEgressMode = .direct
+        case BrowserContextEgressPolicyMode.namedProxy.rawValue:
+            parsedEgressMode = .namedProxy
+        case BrowserContextEgressPolicyMode.localGateway.rawValue:
+            parsedEgressMode = .localGateway
+        default:
+            return .failure(
+                .invalidRequest("The egressPolicy payload must be one of system, direct, named-proxy, or local-gateway.")
+            )
+        }
+
+        let rawEgressTarget = payload["egressTarget"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parsedEgressTarget = rawEgressTarget?.isEmpty == false ? rawEgressTarget : nil
+        switch parsedEgressMode {
+        case .namedProxy, .localGateway:
+            guard parsedEgressTarget != nil else {
+                return .failure(
+                    .invalidRequest("The egressTarget payload is required when egressPolicy is named-proxy or local-gateway.")
+                )
+            }
+        case .system, .direct:
+            break
+        }
+
+        let fingerprintPolicy = payload["fingerprintPolicy"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let parsedFingerprintPolicy: BrowserContextFingerprintPolicy
+        switch fingerprintPolicy {
+        case "", BrowserContextFingerprintPolicy.native.rawValue:
+            parsedFingerprintPolicy = .native
+        case BrowserContextFingerprintPolicy.hardenedNormal.rawValue:
+            parsedFingerprintPolicy = .hardenedNormal
+        case BrowserContextFingerprintPolicy.customStable.rawValue:
+            parsedFingerprintPolicy = .customStable
+        default:
+            return .failure(
+                .invalidRequest("The fingerprintPolicy payload must be one of native, hardened-normal, or custom-stable.")
+            )
+        }
+
+        let popupPolicy = payload["popupInheritancePolicy"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let parsedPopupPolicy: BrowserContextPopupInheritancePolicy
+        switch popupPolicy {
+        case "", BrowserContextPopupInheritancePolicy.inheritSourceContext.rawValue:
+            parsedPopupPolicy = .inheritSourceContext
+        case BrowserContextPopupInheritancePolicy.isolatePopup.rawValue:
+            parsedPopupPolicy = .isolatePopup
+        default:
+            return .failure(
+                .invalidRequest("The popupInheritancePolicy payload must be one of inherit-source-context or isolate-popup.")
+            )
+        }
+
+        return .success(
+            BrowserContextPolicy(
+                profilePolicy: parsedProfilePolicy,
+                egressPolicy: BrowserContextEgressPolicy(
+                    mode: parsedEgressMode,
+                    target: parsedEgressTarget
+                ),
+                fingerprintPolicy: parsedFingerprintPolicy,
+                popupInheritancePolicy: parsedPopupPolicy
+            )
+        )
+    }
+}
+
 struct BrowserExternalCommandResponse: Hashable, Codable {
     let id: UUID
     let version: String
@@ -194,6 +321,7 @@ struct BrowserExternalContextSummary: Hashable, Codable {
     let activePageID: String?
     let pageCount: Int
     let isFrontmost: Bool
+    let contextPolicy: BrowserContextPolicy
 }
 
 struct BrowserExternalPageSummary: Hashable, Codable {

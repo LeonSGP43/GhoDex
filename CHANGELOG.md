@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(browser): add context policy metadata to browser.context.v2
+
+- What changed: Added a typed `BrowserContextPolicy` model (`profilePolicy`, `egressPolicy` + `egressTarget`, `fingerprintPolicy`, `popupInheritancePolicy`) and wired `newContext` to parse/validate these payload fields. `BrowserTabController` now carries a per-context policy instance, and `listContexts` / `getContext` / `newContext` responses now include `contextPolicy` with defaults applied. Added `BrowserContextPolicyTests` for defaults, explicit parsing, and validation failures.
+- Why: The control-plane object model already moved from `browser.tab.v1` to `browser.context.v2`, but context identity policy was still implicit and untyped. We needed a stable per-context metadata boundary before deeper runtime isolation slices (proxy/egress, fingerprint behavior, popup inheritance) can be enforced safely.
+- Impact: External agents can now declare and read context-level identity policy metadata deterministically at context creation time without relying on out-of-band config assumptions. This upgrades the protocol contract toward an OS-level context model while keeping runtime behavior backward-compatible.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' test -only-testing:GhosttyTests/BrowserContextPolicyTests CODE_SIGNING_ALLOWED=NO`; `python3 -m py_compile scripts/browser_context_protocol_acceptance.py`
+- Files: `macos/Sources/Features/Browser/BrowserCommandProtocol.swift`, `macos/Sources/Features/Browser/BrowserTabController.swift`, `macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `macos/Tests/Browser/BrowserContextPolicyTests.swift`, `browser-context-command-protocol.md`, `browser-tab-gap-closure-plan.md`, `browser-tab-acceptance-matrix.md`, `CHANGELOG.md`
+- Decision trail: Keep this slice metadata-first. Policy fields are now explicit, validated, and serialized per context, but runtime enforcement remains separate so this commit stays atomic and low-risk while unblocking later isolation work.
+
 ### fix(app): isolate browser acceptance runs from startup terminal surfaces
 
 - What changed: Added `GHODEX_SKIP_INITIAL_TERMINAL_WINDOW` handling in `AppDelegate` so app startup can skip opening the default terminal window for Browser-only acceptance lanes. Updated Browser acceptance harness launch environments (`browser_context_protocol_acceptance.py`, `browser_runtime_prompt_resolution_acceptance.py`, `browser_js_dialog_resolution_acceptance.py`) to set this variable by default in isolated sessions.

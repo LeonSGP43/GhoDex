@@ -55,6 +55,21 @@ Field notes:
 - `pageID` still targets one page inside the resolved context
 - `documentRevision` remains the stable stale-document guard for page commands
 
+`newContext` policy payload (optional, defaults shown):
+
+- `profilePolicy`: `managed` (default) or `isolated`
+- `egressPolicy`: `system` (default), `direct`, `named-proxy`, `local-gateway`
+- `egressTarget`: required when `egressPolicy` is `named-proxy` or
+  `local-gateway`
+- `fingerprintPolicy`: `native` (default), `hardened-normal`, `custom-stable`
+- `popupInheritancePolicy`: `inherit-source-context` (default) or
+  `isolate-popup`
+
+Context summary payload (`listContexts` / `getContext` / `newContext`) now
+includes:
+
+- `contextPolicy`: the resolved policy object with defaults applied
+
 ## Core Commands
 
 Context lifecycle:
@@ -130,6 +145,10 @@ This v2 slice only fixes the control-plane object model. It does not yet add
 true per-context proxy, fingerprint, storage, or profile policy separation in
 CEF runtime configuration. Those remain the next layers after the object model
 and lifecycle API are stable.
+
+`contextPolicy` is currently a first-class control-plane metadata boundary:
+callers can set and read it per context, but runtime enforcement is still a
+follow-up slice.
 
 ## Acceptance Evidence
 

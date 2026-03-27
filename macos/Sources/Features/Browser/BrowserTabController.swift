@@ -18,6 +18,7 @@ final class BrowserTabController: NSWindowController, NSWindowDelegate, TopLevel
 
     let externalID = "browser-tab-\(UUID().uuidString.lowercased())"
     let ghostty: Ghostty.App
+    let contextPolicy: BrowserContextPolicy
     let model: BrowserTabModel
 
     var titleOverride: String? {
@@ -61,8 +62,13 @@ final class BrowserTabController: NSWindowController, NSWindowDelegate, TopLevel
         return nib
     }
 
-    init(_ ghostty: Ghostty.App, initialURL: URL? = nil) {
+    init(
+        _ ghostty: Ghostty.App,
+        initialURL: URL? = nil,
+        contextPolicy: BrowserContextPolicy = .default
+    ) {
         self.ghostty = ghostty
+        self.contextPolicy = contextPolicy
         self.model = BrowserTabModel(initialURL: initialURL ?? Self.defaultHomePageURL(for: ghostty))
         super.init(window: nil)
         model.openURLInNewWindowHandler = { [weak self] url in
@@ -177,9 +183,14 @@ final class BrowserTabController: NSWindowController, NSWindowDelegate, TopLevel
     static func newWindow(
         _ ghostty: Ghostty.App,
         initialURL: URL? = nil,
+        contextPolicy: BrowserContextPolicy = .default,
         withParent explicitParent: NSWindow? = nil
     ) -> BrowserTabController {
-        let controller = BrowserTabController(ghostty, initialURL: initialURL)
+        let controller = BrowserTabController(
+            ghostty,
+            initialURL: initialURL,
+            contextPolicy: contextPolicy
+        )
         let parent = explicitParent ?? BrowserTabController.preferredParentWindow()
 
         DispatchQueue.main.async {
@@ -200,9 +211,14 @@ final class BrowserTabController: NSWindowController, NSWindowDelegate, TopLevel
     static func newTab(
         _ ghostty: Ghostty.App,
         from parent: NSWindow? = nil,
-        initialURL: URL? = nil
+        initialURL: URL? = nil,
+        contextPolicy: BrowserContextPolicy = .default
     ) -> BrowserTabController {
-        let controller = BrowserTabController(ghostty, initialURL: initialURL)
+        let controller = BrowserTabController(
+            ghostty,
+            initialURL: initialURL,
+            contextPolicy: contextPolicy
+        )
         guard let window = controller.window else { return controller }
 
         if let parent {
