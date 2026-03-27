@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(browser): skip stale browser window restore for isolated and external profile runs
+
+- What changed: Added `BrowserPaths.shouldRestoreBrowserWindows(...)` as the single restore-policy gate for Browser window restoration, wired `BrowserWindowRestoration` through that helper, and added `BrowserRestorePolicyTests` to lock the managed, `window-save-state=never`, external-profile, and isolated-app-support-root cases.
+- Why: Launching GhoDex against a real external Chrome profile or an isolated `GHODEX_BROWSER_APP_SUPPORT_ROOT` is supposed to start from an explicit Browser session boundary. macOS window restoration was reopening stale embedded Browser windows before the first intentional Browser open, which could contaminate acceptance runs and profile-backed sessions with leftover pages from an older runtime state.
+- Impact: Normal managed runs keep Browser window restoration, but external-profile and isolated acceptance lanes now start cleanly without surprise Browser windows being restored into the new session. This narrows the fix to the identity-boundary cases instead of disabling Browser restoration globally.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' test -only-testing:GhosttyTests/BrowserRestorePolicyTests CODE_SIGNING_ALLOWED=NO`
+- Files: `macos/Sources/Features/Browser/BrowserPaths.swift`, `macos/Sources/Features/Browser/BrowserRestorable.swift`, `macos/Tests/Browser/BrowserRestorePolicyTests.swift`, `browser-tab-gap-closure-plan.md`, `browser-tab-acceptance-matrix.md`, `CHANGELOG.md`
+- Decision trail: Keep restoration enabled for ordinary managed Browser use and only disable it where stale restored windows would cross an explicit session boundary. The right abstraction is one small policy helper rather than another ad hoc restore guard in the window-restoration callback.
+
 ### fix(browser): resolve js dialogs without blocking external event drain
 
 - What changed: Reworked `GhoDexCEFBridge.mm` so `OnJSDialog` now registers an asynchronous runtime-prompt continuation instead of synchronously waiting on the external-resolution grace semaphore on the dialog callback thread. External `resolveDialog` requests now resume the pending dialog asynchronously, native dialog fallback still happens after the grace window when no external response arrives, and the JS dialog acceptance harness now tolerates the existing `invalidRequest` stale-request error spelling used by the Browser control protocol.

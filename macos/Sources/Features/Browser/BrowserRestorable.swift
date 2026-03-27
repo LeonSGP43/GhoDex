@@ -92,11 +92,17 @@ final class BrowserWindowRestoration: NSObject, NSWindowRestoration {
         let configuredExternalProfile =
             ProcessInfo.processInfo.environment[BrowserPaths.envProfilePath]
             ?? UserDefaults.standard.string(forKey: BrowserPaths.profileDefaultsKey)
-        if let configuredExternalProfile, !configuredExternalProfile.isEmpty {
-            // Real external Chrome profiles should not auto-restore previously
-            // embedded browser windows. Restoring stale browser pages before the
-            // first explicit open can destabilize the profile-backed Chromium
-            // services and interfere with command-driven control.
+        let isolatedAppSupportRoot = BrowserPaths.isolatedAppSupportRootOverride()
+        if !BrowserPaths.shouldRestoreBrowserWindows(
+            windowSaveState: appDelegate.ghostty.config.windowSaveState,
+            configuredExternalProfile: configuredExternalProfile,
+            isolatedAppSupportRootOverride: isolatedAppSupportRoot
+        ) {
+            // Real external Chrome profiles and isolated Browser roots should
+            // not auto-restore previously embedded browser windows. Restoring
+            // stale browser pages before the first explicit open can destabilize
+            // profile-backed Chromium services and interfere with
+            // command-driven control.
             completionHandler(nil, nil)
             return
         }

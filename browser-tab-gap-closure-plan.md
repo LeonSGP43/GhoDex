@@ -188,6 +188,20 @@ Acceptance:
 - mirror mode does not require the source Chrome app to be closed when using an already-created mirror snapshot
 - any required degradation is documented as product boundary, not discovered accidentally during runtime
 
+Current status:
+
+- one profile-boundary regression is now closed for this worktree:
+  Browser window restoration no longer reopens stale embedded Browser windows
+  when GhoDex is launched against a real external profile or an isolated
+  `GHODEX_BROWSER_APP_SUPPORT_ROOT`
+- the restore gate is intentionally narrow:
+  normal managed runs still keep macOS window restoration, while automation and
+  external-profile lanes now start from an explicit blank-slate Browser context
+- durable evidence for this sub-slice:
+  `macos/Sources/Features/Browser/BrowserPaths.swift`
+  `macos/Sources/Features/Browser/BrowserRestorable.swift`
+  `macos/Tests/Browser/BrowserRestorePolicyTests.swift`
+
 ### 3. Missing End-To-End Acceptance
 
 Problem:
