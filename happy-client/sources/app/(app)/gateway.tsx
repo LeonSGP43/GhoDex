@@ -16,7 +16,13 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { pairingBegin, pairingExchange } from '@/ghodex/gateway';
 import { recordScreenReady, recordScreenStarted } from '@/ghodex/observability';
 import { parseGatewayPairingQrPayload } from '@/ghodex/pairingQr';
-import { INITIAL_GATEWAY_SESSION, POLL_INTERVAL_OPTIONS, sanitizePollInterval, sanitizePort } from '@/ghodex/sessionState';
+import {
+    applyPairingExchangeToSession,
+    INITIAL_GATEWAY_SESSION,
+    POLL_INTERVAL_OPTIONS,
+    sanitizePollInterval,
+    sanitizePort,
+} from '@/ghodex/sessionState';
 import { clearStoredSession, getCachedStoredSession, loadStoredSession, saveStoredSession, type StoredSession } from '@/ghodex/storage';
 import { ActionButton, InfoPill, SectionValue, SurfaceCard } from '@/ghodex/ui';
 import { useCheckScannerPermissions } from '@/hooks/useCheckCameraPermissions';
@@ -259,17 +265,17 @@ export default function GhoDexGatewayScreen() {
                 pairingCode: session.pairingCode,
             });
 
-            const nextSession = buildSession(session, {
-                authToken: result.authToken,
-                tokenId: result.tokenId ?? '',
-                scopes: result.scopes,
-                desktopId: result.desktopId ?? session.desktopId,
-                desktopLabel: result.desktopLabel ?? session.desktopLabel,
-                preferredDesktopId: result.preferredDesktopId ?? result.desktopId ?? session.preferredDesktopId,
-                publicEndpoint: result.publicEndpoint ?? session.publicEndpoint,
-                transportSharedSecret: result.transportSharedSecret ?? session.transportSharedSecret,
-                transportMode: result.transportMode === 'relay' ? 'relay' : session.transportMode,
-            });
+            const nextSession = buildSession(
+                applyPairingExchangeToSession(
+                    session,
+                    {
+                        host: resolvedHost,
+                        port: resolvedPort,
+                        pairingCode: session.pairingCode,
+                    },
+                    result,
+                ),
+            );
             await saveStoredSession(nextSession);
             setSession(nextSession);
             router.replace('/');
@@ -294,20 +300,17 @@ export default function GhoDexGatewayScreen() {
                 pairingCode: payload.pairingCode,
             });
 
-            const nextSession = buildSession(session, {
-                host: payload.host,
-                port: payload.port,
-                pairingCode: payload.pairingCode,
-                authToken: exchange.authToken,
-                tokenId: exchange.tokenId ?? '',
-                scopes: exchange.scopes,
-                desktopId: exchange.desktopId ?? session.desktopId,
-                desktopLabel: exchange.desktopLabel ?? session.desktopLabel,
-                preferredDesktopId: exchange.preferredDesktopId ?? exchange.desktopId ?? session.preferredDesktopId,
-                publicEndpoint: exchange.publicEndpoint ?? session.publicEndpoint,
-                transportSharedSecret: exchange.transportSharedSecret ?? session.transportSharedSecret,
-                transportMode: exchange.transportMode === 'relay' ? 'relay' : session.transportMode,
-            });
+            const nextSession = buildSession(
+                applyPairingExchangeToSession(
+                    session,
+                    {
+                        host: payload.host,
+                        port: payload.port,
+                        pairingCode: payload.pairingCode,
+                    },
+                    exchange,
+                ),
+            );
             setHost(payload.host);
             setPortText(String(payload.port));
             await saveStoredSession(nextSession);

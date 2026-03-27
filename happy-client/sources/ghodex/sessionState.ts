@@ -1,5 +1,7 @@
-import { DEFAULT_REQUESTED_SCOPES } from './gateway';
-import type { StoredSession } from './storage';
+import type { StoredSession } from './sessionTypes';
+import type { PairingExchangeResult } from './types';
+
+const DEFAULT_GATEWAY_REQUESTED_SCOPES = ['observe', 'mutate'] as const;
 
 export const INITIAL_GATEWAY_SESSION: StoredSession = {
     deviceId: '',
@@ -16,7 +18,7 @@ export const INITIAL_GATEWAY_SESSION: StoredSession = {
     authToken: '',
     tokenId: '',
     scopes: [],
-    requestedScopes: [...DEFAULT_REQUESTED_SCOPES],
+    requestedScopes: [...DEFAULT_GATEWAY_REQUESTED_SCOPES],
     liveUpdatesEnabled: true,
     pollIntervalMs: 500,
 };
@@ -42,4 +44,36 @@ export function sanitizePollInterval(raw: string | number): number {
         return INITIAL_GATEWAY_SESSION.pollIntervalMs;
     }
     return Math.max(250, Math.min(Math.trunc(normalized), 2000));
+}
+
+export function applyPairingExchangeToSession(
+    base: StoredSession,
+    input: {
+        host: string;
+        port: number;
+        pairingCode: string;
+    },
+    exchange: PairingExchangeResult,
+): StoredSession {
+    const normalizedPublicEndpoint = exchange.publicEndpoint?.trim() ?? '';
+    const normalizedTransportSharedSecret = exchange.transportSharedSecret?.trim() ?? '';
+    const shouldUseRelay = exchange.transportMode === 'relay'
+        && normalizedPublicEndpoint.length > 0
+        && normalizedTransportSharedSecret.length > 0;
+
+    return {
+        ...base,
+        host: input.host,
+        port: input.port,
+        pairingCode: input.pairingCode,
+        authToken: exchange.authToken,
+        tokenId: exchange.tokenId ?? '',
+        scopes: [...exchange.scopes],
+        desktopId: exchange.desktopId ?? base.desktopId,
+        desktopLabel: exchange.desktopLabel ?? base.desktopLabel,
+        preferredDesktopId: exchange.preferredDesktopId ?? exchange.desktopId ?? base.preferredDesktopId,
+        transportMode: shouldUseRelay ? 'relay' : 'lan',
+        publicEndpoint: shouldUseRelay ? normalizedPublicEndpoint : '',
+        transportSharedSecret: shouldUseRelay ? normalizedTransportSharedSecret : '',
+    };
 }
