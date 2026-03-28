@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(happy-client): keep realtime keyboard stable on control keys and restore visible caret
+
+- What changed: Updated mobile workspace terminal input in `happy-client/sources/app/(app)/index.tsx` so realtime mode no longer hides the input caret, control-key strip taps use `keyboardShouldPersistTaps="always"` / `keyboardDismissMode="none"`, and control-key sends now refocus the realtime input after dispatch.
+- Why: In realtime mode, tapping quick keys like Backspace could blur the input and collapse the keyboard, and hidden-caret behavior made typing state hard to track.
+- Impact: Realtime terminal interaction is smoother: keyboard stays up during quick-key operations and input cursor is visible while typing.
+- Verification: `cd happy-client && yarn typecheck`; `cd happy-client && yarn test sources/ghodex/terminalInput.spec.ts`; `cd happy-client/android && ANDROID_HOME=/Users/leongong/Library/Android/sdk ANDROID_SDK_ROOT=/Users/leongong/Library/Android/sdk ./gradlew --no-daemon installDebug -PreactNativeArchitectures=arm64-v8a`; `adb shell am force-stop com.leongong.ghodex.remote.dev && adb shell monkey -p com.leongong.ghodex.remote.dev -c android.intent.category.LAUNCHER 1`
+- Files: `happy-client/sources/app/(app)/index.tsx`, `CHANGELOG.md`
+- Decision trail: Keep the existing realtime transport protocol unchanged and fix UX at the input layer first. Focus-retention plus visible-caret restoration is the smallest safe change that addresses both keyboard flicker and editing clarity.
+
 ### fix(macos): prevent dock icon plugin from mutating transient build app bundles
 
 - What changed: Added `AppBundleIconMutationPolicy.shouldWriteBundleIcon(at:)` in `macos/Sources/Features/Custom App Icon/AppIcon.swift` and switched `DockTilePlugin` icon writes to honor this policy. The plugin now skips `NSWorkspace.setIcon(... forFile:)` and filesystem change notifications when the enclosing app bundle path is under Xcode transient outputs (`/DerivedData/` or `/Build/Products/`). Added `macos/Tests/DockTilePluginTests.swift` with explicit coverage for DerivedData rejection, Build/Products rejection, and installed `/Applications/*.app` allow.

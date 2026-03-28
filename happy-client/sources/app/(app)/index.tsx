@@ -10,6 +10,8 @@ import {
     ScrollView,
     Text,
     TextInput,
+    type NativeSyntheticEvent,
+    type TextInputKeyPressEventData,
     useWindowDimensions,
     View,
 } from 'react-native';
@@ -27,11 +29,13 @@ import {
     readTerminal,
     renameTab as renameGatewayTab,
     runTerminalCommand,
+    sendTerminalKey,
     sendTerminalText,
     subscribeToGatewayEvents,
 } from '@/ghodex/gateway';
 import { INITIAL_GATEWAY_SESSION } from '@/ghodex/sessionState';
 import { loadStoredSession, type StoredSession } from '@/ghodex/storage';
+import { useLocalSetting } from '@/sync/storage';
 import { TerminalRenderer } from '@/ghodex/terminal/TerminalRenderer';
 import { applyTerminalRowDelta, buildTerminalRows, type TerminalRenderRow } from '@/ghodex/terminal/model';
 import {
@@ -39,6 +43,16 @@ import {
     shouldFallbackToTerminalSnapshot,
     shouldRequestTerminalDelta,
 } from '@/ghodex/terminalTransport';
+import {
+    appendLatencySample,
+    deriveRealtimeInputDelta,
+    normalizeCommandInput,
+    resolveRealtimeKeyPayload,
+    resolveTerminalSubmitMutation,
+    summarizeLatency,
+    TERMINAL_CONTROL_KEYS,
+    type TerminalControlKeySpec,
+} from '@/ghodex/terminalInput';
 import {
     recordReconnectRecovered,
     recordReconnectScheduled,
@@ -86,6 +100,8 @@ type RefreshSnapshotFn = (
 
 const WRITE_SETTLE_ATTEMPTS = 6;
 const WRITE_SETTLE_INTERVAL_MS = 250;
+const REALTIME_INPUT_FLUSH_MS = 24;
+const REALTIME_INPUT_MAX_BATCH_SIZE = 48;
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => {
@@ -209,7 +225,7 @@ function isStructuralTerminalEvent(event: string | null | undefined): boolean {
     if (!event) {
         return false;
     }
-    return event !== 'terminal.input.sent' && event !== 'terminal.command.sent';
+    return event !== 'terminal.input.sent' && event !== 'terminal.command.sent' && event !== 'terminal.key.sent';
 }
 
 function nextSequenceFromEnvelope(envelope: GatewayEnvelope): number | null {
@@ -237,15 +253,13 @@ function isRecoverableTabMutationError(error: unknown): boolean {
     );
 }
 
-function normalizeCommandInput(input: string): string {
-    return input
-        .replace(/\r\n?/g, '\n')
-        .replace(/[\u2028\u2029]/g, '\n');
-}
-
-function shouldPasteRawInput(input: string): boolean {
-    const trimmed = normalizeCommandInput(input).trim();
-    return trimmed.includes('\n');
+function isUnsupportedGatewayCommand(error: unknown): boolean {
+    return !!(
+        error
+        && typeof error === 'object'
+        && 'code' in error
+        && (error as { code?: unknown }).code === 'unsupported_command'
+    );
 }
 
 function renameTabErrorMessage(error: unknown): string {
@@ -253,11 +267,7 @@ function renameTabErrorMessage(error: unknown): string {
         return 'Desktop authorization expired. Re-open Device and bind the phone again.';
     }
 
-    if (
-        error
-        && typeof error === 'object'
-        && (error as { code?: unknown }).code === 'unsupported_command'
-    ) {
+    if (isUnsupportedGatewayCommand(error)) {
         return 'The paired desktop app does not support tab rename yet. Restart or update that desktop GhoDex build first.';
     }
 
@@ -289,16 +299,20 @@ function getWorkspaceCopy(language = getCurrentLanguage()) {
             openDevice: '打开设备',
             openSettings: '设置',
             selectTerminalFromSidebar: '从侧边栏选择一个终端',
-            commandPlaceholder: '运行单行命令，或直接粘贴多行内容。',
+            commandPlaceholder: '直接输入终端文本；单行会自动回车执行。',
+            commandPlaceholderRealtime: '实时按键流：在这里直接输入，按键会立即发送到终端。',
             tabLabel: '标签',
-            paste: '粘贴',
-            run: '运行',
+            send: '发送',
+            realtimeInputModeHint: '实时按键流模式已开启（可用下方 ⌫ / Enter 按钮）',
+            realtimeInputTapHint: '点击终端画面即可直接输入',
             renameTab: '重命名标签',
             renameHint: '留空会恢复为桌面端自动管理的默认标题。',
             cancel: '取消',
             save: '保存',
             liveBadge: '实时',
             reconnectingBadge: '重连中',
+            latencyUnknown: '延迟 --',
+            latencyLabel: (ms: number) => `延迟 ${ms}ms`,
         };
     }
 
@@ -325,16 +339,20 @@ function getWorkspaceCopy(language = getCurrentLanguage()) {
         openDevice: 'Open Device',
         openSettings: 'Settings',
         selectTerminalFromSidebar: 'Select a terminal from the sidebar',
-        commandPlaceholder: 'Run one line, paste real multi-line blocks.',
+        commandPlaceholder: 'Send terminal text directly; single line auto-sends Enter.',
+        commandPlaceholderRealtime: 'Realtime key stream: type here to send keys immediately.',
         tabLabel: 'Tab',
-        paste: 'Paste',
-        run: 'Run',
+        send: 'Send',
+        realtimeInputModeHint: 'Realtime key stream mode is enabled (use ⌫ / Enter buttons below)',
+        realtimeInputTapHint: 'Tap terminal viewport to type directly',
         renameTab: 'Rename Tab',
         renameHint: 'Leave the field empty to restore the desktop-managed automatic title.',
         cancel: 'Cancel',
         save: 'Save',
         liveBadge: 'Live',
         reconnectingBadge: 'Reconnecting',
+        latencyUnknown: 'RTT --',
+        latencyLabel: (ms: number) => `RTT ${ms}ms`,
     };
 }
 
@@ -342,6 +360,7 @@ export default function GhoDexWorkspaceScreen() {
     const { theme } = useUnistyles();
     const router = useRouter();
     const isFocused = useIsFocused();
+    const terminalInputMode = useLocalSetting('mobileTerminalInputMode');
     const currentLanguage = getCurrentLanguage();
     const copy = React.useMemo(() => getWorkspaceCopy(currentLanguage), [currentLanguage]);
     const insets = useSafeAreaInsets();
@@ -359,9 +378,12 @@ export default function GhoDexWorkspaceScreen() {
     const [terminalContent, setTerminalContent] = React.useState('');
     const [terminalRows, setTerminalRows] = React.useState<TerminalRenderRow[]>([]);
     const [terminalCommand, setTerminalCommand] = React.useState('');
+    const [realtimeInputDraft, setRealtimeInputDraft] = React.useState('');
+    const [latencySamples, setLatencySamples] = React.useState<number[]>([]);
     const [renameTabTarget, setRenameTabTarget] = React.useState<TabRow | null>(null);
     const [renameTabDraft, setRenameTabDraft] = React.useState('');
     const [renameTabError, setRenameTabError] = React.useState<string | null>(null);
+    const isRealtimeInputMode = terminalInputMode === 'realtime';
     const sidebarWidth = Math.min(width * 0.84, 360);
     const sidebarProgress = React.useRef(new Animated.Value(0)).current;
 
@@ -381,6 +403,10 @@ export default function GhoDexWorkspaceScreen() {
     const syncLabel = session.liveUpdatesEnabled
         ? (subscriptionOpen ? copy.syncLive : copy.syncReconnecting(session.pollIntervalMs))
         : copy.syncPolling(session.pollIntervalMs);
+    const latencySummary = React.useMemo(() => summarizeLatency(latencySamples), [latencySamples]);
+    const latencyLabel = latencySummary.lastMs === null
+        ? copy.latencyUnknown
+        : copy.latencyLabel(latencySummary.lastMs);
     const terminalEmptyText = selectedTerminal
         ? (terminalContent || copy.noTerminalText)
         : copy.openSidebarHint;
@@ -418,9 +444,15 @@ export default function GhoDexWorkspaceScreen() {
     const sidebarVisibleRef = React.useRef(sidebarVisible);
     const terminalViewRef = React.useRef<TerminalReadResult | null>(terminalView);
     const subscriptionSequenceRef = React.useRef(0);
+    const commandInputRef = React.useRef<TextInput | null>(null);
+    const realtimeInputDraftRef = React.useRef('');
+    const realtimeBackspaceFromKeyPressRef = React.useRef(0);
     const liveReadInFlightRef = React.useRef(false);
     const liveReadPendingRef = React.useRef(false);
     const snapshotRefreshTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const realtimeInputFlushTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const realtimeInputBufferRef = React.useRef('');
+    const realtimeInputInFlightRef = React.useRef(false);
     const loadTerminalViewRef = React.useRef<LoadTerminalViewFn | null>(null);
     const refreshSnapshotRef = React.useRef<RefreshSnapshotFn | null>(null);
     const reconnectStartedAtRef = React.useRef<number | null>(null);
@@ -450,6 +482,17 @@ export default function GhoDexWorkspaceScreen() {
         terminalViewRef.current = terminalView;
         subscriptionSequenceRef.current = Math.max(subscriptionSequenceRef.current, terminalView?.lastSequence ?? 0);
     }, [terminalView]);
+
+    React.useEffect(() => {
+        realtimeInputDraftRef.current = realtimeInputDraft;
+    }, [realtimeInputDraft]);
+
+    React.useEffect(() => () => {
+        if (realtimeInputFlushTimerRef.current) {
+            clearTimeout(realtimeInputFlushTimerRef.current);
+            realtimeInputFlushTimerRef.current = null;
+        }
+    }, []);
 
     React.useEffect(() => {
         Animated.timing(sidebarProgress, {
@@ -485,6 +528,20 @@ export default function GhoDexWorkspaceScreen() {
             setBusyAction(null);
         }
     }, []);
+
+    const recordGatewayLatency = React.useCallback((startedAt: number) => {
+        const elapsed = Date.now() - startedAt;
+        setLatencySamples((current) => appendLatencySample(current, elapsed, 24));
+    }, []);
+
+    const runMeasuredGatewayRequest = React.useCallback(async <T,>(request: () => Promise<T>): Promise<T> => {
+        const startedAt = Date.now();
+        try {
+            return await request();
+        } finally {
+            recordGatewayLatency(startedAt);
+        }
+    }, [recordGatewayLatency]);
 
     const applyTerminalResult = React.useCallback((
         result: TerminalReadResult,
@@ -546,6 +603,42 @@ export default function GhoDexWorkspaceScreen() {
         });
     }, []);
 
+    const applyTerminalMutation = React.useCallback((mutation: TerminalMutationResult) => {
+        subscriptionSequenceRef.current = Math.max(subscriptionSequenceRef.current, mutation.sequence);
+        setTerminalView((current) => {
+            if (!current || current.terminalId !== mutation.terminalId) {
+                return current;
+            }
+            return {
+                ...current,
+                generation: Math.max(current.generation, mutation.generation),
+                lastSequence: Math.max(current.lastSequence, mutation.sequence),
+            };
+        });
+        setSnapshot((current) => {
+            if (!current) {
+                return current;
+            }
+            return {
+                ...current,
+                lastSequence: Math.max(current.lastSequence, mutation.sequence),
+                tabs: current.tabs.map((tab) => ({
+                    ...tab,
+                    terminals: tab.terminals.map((item) => (
+                        item.terminalId === mutation.terminalId
+                            ? { ...item, generation: Math.max(item.generation, mutation.generation) }
+                            : item
+                    )),
+                })),
+                terminals: current.terminals.map((item) => (
+                    item.terminalId === mutation.terminalId
+                        ? { ...item, generation: Math.max(item.generation, mutation.generation) }
+                        : item
+                )),
+            };
+        });
+    }, []);
+
     const loadTerminalViewImpl = React.useCallback(async (
         terminal: TerminalRow,
         authToken: string,
@@ -560,7 +653,7 @@ export default function GhoDexWorkspaceScreen() {
         const activeSession = sessionRef.current;
         const updateStartedAt = Date.now();
         const metricsSource = options?.metricsSource ?? (options?.mode === 'delta' ? 'live' : 'manual');
-        const result = await readTerminal({
+        const result = await runMeasuredGatewayRequest(() => readTerminal({
             host: activeSession.host,
             port: activeSession.port,
             authToken,
@@ -571,7 +664,7 @@ export default function GhoDexWorkspaceScreen() {
             maxChars: 24_000,
             maxLines: 300,
             readAfterWriteId: options?.readAfterWriteId,
-        });
+        }));
 
         const currentTerminalView = terminalViewRef.current;
         const expectsDelta = options?.mode === 'delta';
@@ -583,7 +676,7 @@ export default function GhoDexWorkspaceScreen() {
         });
 
         if (deltaNeedsSnapshotFallback) {
-            const snapshotResult = await readTerminal({
+            const snapshotResult = await runMeasuredGatewayRequest(() => readTerminal({
                 host: activeSession.host,
                 port: activeSession.port,
                 authToken,
@@ -593,7 +686,7 @@ export default function GhoDexWorkspaceScreen() {
                 maxChars: 24_000,
                 maxLines: 300,
                 readAfterWriteId: options?.readAfterWriteId,
-            });
+            }));
             applyTerminalResult(snapshotResult);
             recordTerminalUpdate(metricsSource, Date.now() - updateStartedAt);
             return snapshotResult;
@@ -602,7 +695,7 @@ export default function GhoDexWorkspaceScreen() {
         applyTerminalResult(result, { mergeDelta: expectsDelta });
         recordTerminalUpdate(metricsSource, Date.now() - updateStartedAt);
         return result;
-    }, [applyTerminalResult]);
+    }, [applyTerminalResult, runMeasuredGatewayRequest]);
 
     React.useEffect(() => {
         loadTerminalViewRef.current = loadTerminalViewImpl;
@@ -614,11 +707,11 @@ export default function GhoDexWorkspaceScreen() {
         terminalMetricsSource = 'manual',
     ) => {
         const activeSession = sessionRef.current;
-        const result = await fetchSnapshot({
+        const result = await runMeasuredGatewayRequest(() => fetchSnapshot({
             host: activeSession.host,
             port: activeSession.port,
             authToken,
-        });
+        }));
         setAuthorizationRequired(false);
         setSnapshot(result);
 
@@ -632,7 +725,7 @@ export default function GhoDexWorkspaceScreen() {
             setTerminalRows([]);
         }
         return result;
-    }, [loadTerminalViewImpl]);
+    }, [loadTerminalViewImpl, runMeasuredGatewayRequest]);
 
     React.useEffect(() => {
         refreshSnapshotRef.current = refreshSnapshotImpl;
@@ -691,6 +784,100 @@ export default function GhoDexWorkspaceScreen() {
             void refreshSnapshotRef.current?.(authToken, selectedTerminalIdRef.current);
         }, reason === 'resync' ? 0 : 120);
     }, []);
+
+    const flushRealtimeInputBuffer = React.useCallback(async () => {
+        if (realtimeInputInFlightRef.current) {
+            return;
+        }
+        const payload = realtimeInputBufferRef.current;
+        if (!payload) {
+            return;
+        }
+
+        const activeSession = sessionRef.current;
+        const authToken = activeSession.authToken.trim();
+        const currentTerminal = selectedTerminalRef.current;
+        if (!authToken || !currentTerminal) {
+            realtimeInputBufferRef.current = '';
+            return;
+        }
+
+        realtimeInputBufferRef.current = '';
+        realtimeInputInFlightRef.current = true;
+        try {
+            const mutation = await runMeasuredGatewayRequest(() => sendTerminalText({
+                host: activeSession.host,
+                port: activeSession.port,
+                authToken,
+                terminalId: currentTerminal.terminalId,
+                text: payload,
+            }));
+            setAuthorizationRequired(false);
+            applyTerminalMutation(mutation);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Unexpected gateway error';
+            if (isGatewayAuthError(error)) {
+                setAuthorizationRequired(true);
+                setSubscriptionOpen(false);
+                setErrorMessage('Gateway authorization expired for this desktop build. Re-open Device and bind the phone again.');
+            } else {
+                setErrorMessage(message);
+            }
+        } finally {
+            realtimeInputInFlightRef.current = false;
+            if (realtimeInputBufferRef.current.length > 0) {
+                void flushRealtimeInputBuffer();
+            }
+        }
+    }, [applyTerminalMutation, runMeasuredGatewayRequest]);
+
+    const enqueueRealtimeInputPayload = React.useCallback((payload: string) => {
+        if (!payload) {
+            return;
+        }
+        realtimeInputBufferRef.current += payload;
+
+        if (realtimeInputBufferRef.current.length >= REALTIME_INPUT_MAX_BATCH_SIZE) {
+            if (realtimeInputFlushTimerRef.current) {
+                clearTimeout(realtimeInputFlushTimerRef.current);
+                realtimeInputFlushTimerRef.current = null;
+            }
+            void flushRealtimeInputBuffer();
+            return;
+        }
+
+        if (realtimeInputFlushTimerRef.current) {
+            return;
+        }
+
+        realtimeInputFlushTimerRef.current = setTimeout(() => {
+            realtimeInputFlushTimerRef.current = null;
+            void flushRealtimeInputBuffer();
+        }, REALTIME_INPUT_FLUSH_MS);
+    }, [flushRealtimeInputBuffer]);
+
+    React.useEffect(() => {
+        if (isRealtimeInputMode) {
+            return;
+        }
+        if (realtimeInputFlushTimerRef.current) {
+            clearTimeout(realtimeInputFlushTimerRef.current);
+            realtimeInputFlushTimerRef.current = null;
+        }
+        realtimeInputBufferRef.current = '';
+        realtimeBackspaceFromKeyPressRef.current = 0;
+        realtimeInputDraftRef.current = '';
+        setRealtimeInputDraft('');
+    }, [isRealtimeInputMode]);
+
+    React.useEffect(() => {
+        if (!isRealtimeInputMode) {
+            return;
+        }
+        realtimeBackspaceFromKeyPressRef.current = 0;
+        realtimeInputDraftRef.current = '';
+        setRealtimeInputDraft('');
+    }, [isRealtimeInputMode, selectedTerminalId]);
 
     const driveSelectedTerminalFromSubscription = React.useCallback(() => {
         if (liveReadInFlightRef.current) {
@@ -1031,40 +1218,206 @@ export default function GhoDexWorkspaceScreen() {
         }
 
         const rawInput = terminalCommand;
-        const normalizedInput = normalizeCommandInput(rawInput);
-        if (!normalizedInput.trim()) {
+        const mutationIntent = resolveTerminalSubmitMutation(
+            rawInput,
+            isRealtimeInputMode ? 'realtime' : 'simple',
+        );
+        if (!mutationIntent) {
             setErrorMessage('Input is empty.');
             return;
         }
 
-        const expectsRawSend = shouldPasteRawInput(normalizedInput);
-        const action: BusyAction = expectsRawSend ? 'terminal-send-text' : 'terminal-command';
-
-        void runAction(action, async () => {
+        void runAction('terminal-send-text', async () => {
             const expectedGeneration = terminalView?.terminalId === selectedTerminal.terminalId
                 ? terminalView.generation
                 : selectedTerminal.generation;
-            const mutation = expectsRawSend
-                ? await sendTerminalText({
+            let mutation: TerminalMutationResult;
+            if (mutationIntent.kind === 'run-command') {
+                mutation = await runMeasuredGatewayRequest(() => runTerminalCommand({
                     host: session.host,
                     port: session.port,
                     authToken: session.authToken,
                     terminalId: selectedTerminal.terminalId,
-                    text: rawInput,
+                    commandText: mutationIntent.commandText,
                     expectedGeneration,
-                })
-                : await runTerminalCommand({
-                    host: session.host,
-                    port: session.port,
-                    authToken: session.authToken,
-                    terminalId: selectedTerminal.terminalId,
-                    commandText: normalizedInput.trim(),
-                    expectedGeneration,
-                });
-            setTerminalCommand('');
+                }));
+            } else {
+                try {
+                    mutation = await runMeasuredGatewayRequest(() => sendTerminalText({
+                        host: session.host,
+                        port: session.port,
+                        authToken: session.authToken,
+                        terminalId: selectedTerminal.terminalId,
+                        text: mutationIntent.text,
+                        expectedGeneration,
+                    }));
+                } catch (error) {
+                    if (!isUnsupportedGatewayCommand(error)) {
+                        throw error;
+                    }
+
+                    const fallbackCommandText = normalizeCommandInput(rawInput).trim();
+                    if (!fallbackCommandText || mutationIntent.text.includes('\n')) {
+                        throw error;
+                    }
+
+                    mutation = await runMeasuredGatewayRequest(() => runTerminalCommand({
+                        host: session.host,
+                        port: session.port,
+                        authToken: session.authToken,
+                        terminalId: selectedTerminal.terminalId,
+                        commandText: fallbackCommandText,
+                        expectedGeneration,
+                    }));
+                }
+            }
+            if (!isRealtimeInputMode) {
+                setTerminalCommand('');
+            }
             await settleTerminalAfterWrite(selectedTerminal, session.authToken, mutation);
         });
-    }, [runAction, selectedTerminal, session.authToken, session.host, session.port, settleTerminalAfterWrite, terminalCommand, terminalView]);
+    }, [
+        isRealtimeInputMode,
+        runAction,
+        runMeasuredGatewayRequest,
+        selectedTerminal,
+        session.authToken,
+        session.host,
+        session.port,
+        settleTerminalAfterWrite,
+        terminalCommand,
+        terminalView,
+    ]);
+
+    const sendControlKeyMutation = React.useCallback(async (
+        keySpec: TerminalControlKeySpec,
+        terminal: TerminalRow,
+        expectedGeneration: number,
+    ): Promise<TerminalMutationResult> => {
+        const terminalKey = keySpec.terminalKey;
+        if (terminalKey) {
+            try {
+                return await runMeasuredGatewayRequest(() => sendTerminalKey({
+                    host: session.host,
+                    port: session.port,
+                    authToken: session.authToken,
+                    terminalId: terminal.terminalId,
+                    terminalKey,
+                    expectedGeneration,
+                }));
+            } catch (error) {
+                if (!isUnsupportedGatewayCommand(error)) {
+                    throw error;
+                }
+            }
+        }
+
+        return runMeasuredGatewayRequest(() => sendTerminalText({
+            host: session.host,
+            port: session.port,
+            authToken: session.authToken,
+            terminalId: terminal.terminalId,
+            text: keySpec.payload,
+            expectedGeneration,
+        }));
+    }, [
+        runMeasuredGatewayRequest,
+        session.authToken,
+        session.host,
+        session.port,
+    ]);
+
+    const handleSendControlKey = React.useCallback((keySpec: TerminalControlKeySpec) => {
+        if (!selectedTerminal) {
+            setErrorMessage('Select a terminal first.');
+            return;
+        }
+
+        if (isRealtimeInputMode && !keySpec.terminalKey) {
+            enqueueRealtimeInputPayload(keySpec.payload);
+            commandInputRef.current?.focus();
+            return;
+        }
+
+        void runAction('terminal-send-text', async () => {
+            try {
+                const expectedGeneration = terminalView?.terminalId === selectedTerminal.terminalId
+                    ? terminalView.generation
+                    : selectedTerminal.generation;
+                const mutation = await sendControlKeyMutation(
+                    keySpec,
+                    selectedTerminal,
+                    expectedGeneration,
+                );
+                if (isRealtimeInputMode) {
+                    applyTerminalMutation(mutation);
+                    return;
+                }
+                await settleTerminalAfterWrite(selectedTerminal, session.authToken, mutation);
+            } finally {
+                if (isRealtimeInputMode) {
+                    commandInputRef.current?.focus();
+                }
+            }
+        });
+    }, [
+        applyTerminalMutation,
+        runAction,
+        enqueueRealtimeInputPayload,
+        isRealtimeInputMode,
+        sendControlKeyMutation,
+        selectedTerminal,
+        session.authToken,
+        settleTerminalAfterWrite,
+        terminalView,
+    ]);
+
+    const handleCommandInputChange = React.useCallback((nextValue: string) => {
+        if (!isRealtimeInputMode) {
+            setTerminalCommand(nextValue);
+            return;
+        }
+
+        const delta = deriveRealtimeInputDelta({
+            previousDraft: realtimeInputDraftRef.current,
+            nextDraft: nextValue,
+            keypressBackspacesPending: realtimeBackspaceFromKeyPressRef.current,
+        });
+        realtimeBackspaceFromKeyPressRef.current = delta.remainingKeypressBackspaces;
+        realtimeInputDraftRef.current = delta.nextDraft;
+        setRealtimeInputDraft(delta.nextDraft);
+        if (delta.emittedText) {
+            enqueueRealtimeInputPayload(delta.emittedText);
+        }
+    }, [enqueueRealtimeInputPayload, isRealtimeInputMode]);
+
+    const handleRealtimeKeyPress = React.useCallback((event: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
+        if (!isRealtimeInputMode) {
+            return;
+        }
+
+        const key = event.nativeEvent.key;
+        if (key === 'Backspace' || key === 'Delete' || key === 'Del') {
+            if (realtimeInputDraftRef.current.length > 0) {
+                realtimeBackspaceFromKeyPressRef.current += 1;
+            }
+            enqueueRealtimeInputPayload('\u007F');
+            return;
+        }
+        if (key === 'Enter' || key === 'Tab') {
+            const payload = resolveRealtimeKeyPayload(key);
+            if (payload) {
+                enqueueRealtimeInputPayload(payload);
+            }
+        }
+    }, [enqueueRealtimeInputPayload, isRealtimeInputMode]);
+
+    const focusRealtimeTerminalInput = React.useCallback(() => {
+        if (!isRealtimeInputMode || !selectedTerminal) {
+            return;
+        }
+        commandInputRef.current?.focus();
+    }, [isRealtimeInputMode, selectedTerminal]);
 
     React.useEffect(() => {
         const authToken = session.authToken.trim();
@@ -1449,6 +1802,7 @@ export default function GhoDexWorkspaceScreen() {
                                         {selectedTerminal?.workingDirectory || copy.selectTerminalFromSidebar}
                                     </Text>
                                     <View style={styles.terminalToolbarActions}>
+                                        <LatencyBadge active={latencySummary.lastMs !== null} label={latencyLabel} />
                                         <SyncBadge
                                             live={session.liveUpdatesEnabled}
                                             liveLabel={copy.liveBadge}
@@ -1464,7 +1818,10 @@ export default function GhoDexWorkspaceScreen() {
                                     </View>
                                 </View>
 
-                                <View style={styles.terminalViewport}>
+                                <View
+                                    onTouchEnd={isRealtimeInputMode ? focusRealtimeTerminalInput : undefined}
+                                    style={styles.terminalViewport}
+                                >
                                     {terminalRows.length > 0 ? (
                                         <TerminalRenderer rows={terminalRows} />
                                     ) : (
@@ -1481,23 +1838,61 @@ export default function GhoDexWorkspaceScreen() {
 
                     {paired ? (
                         <View style={[styles.commandDock, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+                            <ScrollView
+                                horizontal
+                                keyboardDismissMode="none"
+                                keyboardShouldPersistTaps="always"
+                                showsHorizontalScrollIndicator={false}
+                                contentContainerStyle={styles.commandControlList}
+                                style={styles.commandControlScroll}
+                            >
+                                {TERMINAL_CONTROL_KEYS.map((key) => (
+                                    <Pressable
+                                        key={key.id}
+                                        onPressIn={focusRealtimeTerminalInput}
+                                        onPress={() => handleSendControlKey(key)}
+                                        style={({ pressed }) => [
+                                            styles.commandControlButton,
+                                            pressed ? styles.iconButtonPressed : null,
+                                        ]}
+                                    >
+                                        <Text style={styles.commandControlButtonText}>{key.label}</Text>
+                                    </Pressable>
+                                ))}
+                            </ScrollView>
+                            {isRealtimeInputMode ? (
+                                <Text style={styles.commandModeHint}>
+                                    {copy.realtimeInputModeHint} · {copy.realtimeInputTapHint}
+                                </Text>
+                            ) : null}
                             <View style={styles.commandRow}>
                                 <TextInput
                                     autoCapitalize="none"
+                                    autoComplete="off"
                                     autoCorrect={false}
-                                    multiline
-                                    onChangeText={setTerminalCommand}
-                                    placeholder={copy.commandPlaceholder}
+                                    blurOnSubmit={false}
+                                    contextMenuHidden={isRealtimeInputMode}
+                                    multiline={!isRealtimeInputMode}
+                                    spellCheck={false}
+                                    ref={commandInputRef}
+                                    onChangeText={handleCommandInputChange}
+                                    onKeyPress={isRealtimeInputMode ? handleRealtimeKeyPress : undefined}
+                                    placeholder={isRealtimeInputMode ? copy.commandPlaceholderRealtime : copy.commandPlaceholder}
                                     placeholderTextColor={theme.colors.input.placeholder}
                                     style={styles.commandInput}
-                                    value={terminalCommand}
+                                    value={isRealtimeInputMode ? realtimeInputDraft : terminalCommand}
                                 />
-                                <View style={styles.commandActions}>
-                                    <WorkspaceSubmitButton
-                                        busy={busyAction === 'terminal-command' || busyAction === 'terminal-send-text'}
-                                        label={shouldPasteRawInput(terminalCommand) ? copy.paste : copy.run}
-                                        onPress={handleSubmitInput}
-                                    />
+                                <View style={[
+                                    styles.commandActions,
+                                    isRealtimeInputMode ? styles.commandActionsRealtime : null,
+                                ]}>
+                                    {!isRealtimeInputMode ? (
+                                        <WorkspaceSubmitButton
+                                            busy={busyAction === 'terminal-command' || busyAction === 'terminal-send-text'}
+                                            label={copy.send}
+                                            onPress={handleSubmitInput}
+                                        />
+                                    ) : null}
                                 </View>
                             </View>
                         </View>
@@ -1637,6 +2032,20 @@ function SidebarQuickAction(props: {
             <Ionicons color={theme.colors.text} name={props.icon} size={18} />
             <Text style={styles.sidebarQuickActionText}>{props.label}</Text>
         </Pressable>
+    );
+}
+
+function LatencyBadge(props: {
+    active: boolean;
+    label: string;
+}) {
+    return (
+        <View style={[
+            styles.latencyBadge,
+            props.active ? styles.latencyBadgeLive : null,
+        ]}>
+            <Text style={styles.latencyBadgeText}>{props.label}</Text>
+        </View>
     );
 }
 
@@ -1817,6 +2226,24 @@ const styles = StyleSheet.create((theme) => ({
         textTransform: 'uppercase',
         letterSpacing: 0.5,
     },
+    latencyBadge: {
+        borderRadius: 999,
+        paddingHorizontal: 8,
+        paddingVertical: 5,
+        backgroundColor: theme.colors.surfaceHigh,
+        borderWidth: 1,
+        borderColor: theme.colors.divider,
+    },
+    latencyBadgeLive: {
+        borderColor: theme.colors.button.primary.background,
+    },
+    latencyBadgeText: {
+        color: theme.colors.textSecondary,
+        fontSize: 10,
+        fontWeight: '700',
+        letterSpacing: 0.2,
+        fontFamily: 'monospace',
+    },
     terminalViewport: {
         flex: 1,
         minHeight: 0,
@@ -1838,6 +2265,36 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.header.background,
         borderTopWidth: 1,
         borderTopColor: theme.colors.divider,
+    },
+    commandControlScroll: {
+        marginBottom: 8,
+    },
+    commandControlList: {
+        gap: 8,
+        paddingRight: 6,
+    },
+    commandModeHint: {
+        color: theme.colors.textSecondary,
+        fontSize: 11,
+        lineHeight: 16,
+        marginBottom: 8,
+        paddingHorizontal: 2,
+    },
+    commandControlButton: {
+        minHeight: 34,
+        paddingHorizontal: 11,
+        borderRadius: 11,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: theme.colors.surfaceHigh,
+        borderWidth: 1,
+        borderColor: theme.colors.divider,
+    },
+    commandControlButtonText: {
+        color: theme.colors.textSecondary,
+        fontSize: 12,
+        fontWeight: '700',
+        fontFamily: 'monospace',
     },
     commandRow: {
         flexDirection: 'row',
@@ -1862,6 +2319,9 @@ const styles = StyleSheet.create((theme) => ({
     commandActions: {
         width: 78,
         alignSelf: 'stretch',
+    },
+    commandActionsRealtime: {
+        width: 0,
     },
     submitButton: {
         flex: 1,
