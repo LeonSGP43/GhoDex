@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(renderer): guard shaper index catch-up after preedit skip
+
+- What changed: Added an explicit `shaper_cells_i < shaper_cells_unwrapped.len` bound guard in `src/renderer/generic.zig` while catching up shaped-cell cursor position after preedit-range skipping in `rebuildRow`.
+- Why: Crash forensics showed a renderer-thread panic `index out of bounds: index 4, len 4` at `generic.zig:2740` when `shaper_cells_i` advanced beyond the shaped-cell slice length during catch-up.
+- Impact: Prevents this out-of-bounds panic path from aborting the app during row rebuild in affected preedit/shaping sequences.
+- Verification: `zig build -Demit-macos-app=false`; `nu macos/build.nu --scheme GhoDex --configuration Debug --action build`; overwrite-install `/Applications/GhoDex.app`; relaunch and confirm process starts.
+- Files: `src/renderer/generic.zig`, `CHANGELOG.md`
+- Decision trail: Apply the smallest safe fix directly at the crash site (index guard) so runtime behavior stays unchanged except for eliminating the panic path; broader shaping-flow refactors are deferred.
+
+### fix(macos): enrich runtime diagnostics with process memory snapshots and harden JSONL writes
+
+- What changed: Updated `RuntimeDiagnosticsLogger` to enrich every record with process memory fields (`pid`, `rss_bytes`, `virtual_size_bytes`, `physical_footprint_bytes`), added a 60-second `runtime.memory periodic_sample` event that also captures `vmmap` region residency (`iosurface_resident_bytes`, `ioaccelerator_graphics_resident_bytes`, `malloc_resident_bytes`), and switched both Swift and CEF diagnostics writers to a shared lock-file + append path to avoid concurrent JSONL corruption. Updated CEF diagnostics records to include the same process memory fields on every CEF lifecycle event.
+- Why: Memory-growth triage still lacked direct per-event memory telemetry, and existing mixed Swift/CEF concurrent writes occasionally produced malformed JSONL lines that broke forensic parsing.
+- Impact: `runtime-memory-diagnostics.jsonl` now provides parse-safe, per-event memory context and periodic region snapshots, so rising memory can be correlated against concrete subsystem events instead of inferred from external tools only.
+- Verification: `nu macos/build.nu`; overwrite-install `/Applications/GhoDex.app`; `jq -R 'fromjson? | if .==null then 1 else empty end' ~/Library/Application\\ Support/com.leongong.ghodex.debug/Diagnostics/runtime-memory-diagnostics.jsonl | wc -l` => `0`; log tail confirms new fields and `runtime.memory` `periodic_sample` events.
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `macos/Sources/Features/Browser/CEF/GhoDexCEFBridge.mm`, `CHANGELOG.md`
+- Decision trail: Keep the fix within the existing diagnostics pipeline (same JSONL file, same event model) and add low-risk observability first, rather than introducing a new telemetry subsystem or broad Browser architecture changes while memory attribution is still under investigation.
+
 ### fix(macos): temporarily disable browser in-tab split behavior
 
 - What changed: Disabled Browser in-tab split activation so Browser split shortcuts no longer create or maintain a split deck. Browser split actions now collapse any existing split state back to a single visible page, while Terminal split picker behavior remains unchanged.
