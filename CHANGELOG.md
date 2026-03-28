@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(happy-client): switch realtime terminal to viewport-first input and serialize gateway writes
+
+- What changed: Updated realtime terminal interaction in `happy-client/sources/app/(app)/index.tsx` to remove the visible bottom composer in realtime mode and capture typing via a hidden terminal-focus input (`tap viewport -> keyboard -> direct stream`). Realtime control keys and text now share one serialized mutation queue with bounded retry on `session_limit_exceeded`, and subscription-driven live reads are deferred while writes are in flight. Realtime quick-key strip no longer renders the standalone `⌫` button; Backspace is now expected from the system keyboard key path.
+- Why: The previous split path could blur/focus the keyboard repeatedly around quick-key taps, and mixed concurrent read/write requests could exceed gateway per-identity session concurrency (`Gateway concurrent session limit exceeded`), especially during fast typing.
+- Impact: Realtime mode now behaves closer to SSH interaction on mobile: no bottom text box, terminal-first typing flow, reduced keyboard flicker, and much lower chance of gateway concurrent-session errors during high-frequency input.
+- Verification: `cd happy-client && yarn typecheck`; `cd happy-client && yarn test sources/ghodex/terminalInput.spec.ts`; `cd happy-client/android && ANDROID_HOME=/Users/leongong/Library/Android/sdk ANDROID_SDK_ROOT=/Users/leongong/Library/Android/sdk ./gradlew --no-daemon installDebug -PreactNativeArchitectures=arm64-v8a`; on-device manual check: realtime mode tap terminal to type, hold rapid input/backspace, verify keyboard stability and no repeated `session_limit_exceeded` error.
+- Files: `happy-client/sources/app/(app)/index.tsx`, `CHANGELOG.md`
+- Decision trail: Keep protocol changes minimal and solve UX + stability in the mobile coordinator layer: one writer lane for realtime mutations, defer competing reads during write bursts, and remove the dedicated realtime backspace button once keyboard key path is available.
+
 ### fix(happy-client): keep realtime keyboard stable on control keys and restore visible caret
 
 - What changed: Updated mobile workspace terminal input in `happy-client/sources/app/(app)/index.tsx` so realtime mode no longer hides the input caret, control-key strip taps use `keyboardShouldPersistTaps="always"` / `keyboardDismissMode="none"`, and control-key sends now refocus the realtime input after dispatch.
