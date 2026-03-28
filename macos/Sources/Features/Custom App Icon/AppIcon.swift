@@ -84,3 +84,20 @@ enum AppIcon: Equatable, Codable {
         }
     }
 }
+
+enum AppBundleIconMutationPolicy {
+    /// Avoid mutating transient build products. Writing custom icons to
+    /// xcodebuild outputs creates `Icon\r` + Finder metadata and can break
+    /// subsequent code-sign passes.
+    static func shouldWriteBundleIcon(at appBundleURL: URL?) -> Bool {
+        guard let appBundleURL else { return false }
+        let path = appBundleURL.path
+        if path.contains("/DerivedData/") {
+            return false
+        }
+        if path.contains("/Build/Products/") {
+            return false
+        }
+        return true
+    }
+}

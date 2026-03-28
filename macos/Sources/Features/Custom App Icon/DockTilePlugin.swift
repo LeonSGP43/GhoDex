@@ -94,7 +94,7 @@ class DockTilePlugin: NSObject, NSDockTilePlugIn {
             return
         }
 
-        if let appBundleURL = self.ghosttyAppURL {
+        if AppBundleIconMutationPolicy.shouldWriteBundleIcon(at: ghosttyAppURL), let appBundleURL = ghosttyAppURL {
             let appBundlePath = appBundleURL.path
             NSWorkspace.shared.setIcon(appIcon, forFile: appBundlePath)
             NSWorkspace.shared.noteFileSystemChanged(appBundlePath)
@@ -106,10 +106,11 @@ class DockTilePlugin: NSObject, NSDockTilePlugIn {
     /// Reset the application icon and dock tile icon to the default.
     private func resetIcon(dockTile: NSDockTile) {
         let appBundlePath = self.ghosttyAppURL?.path
+        let shouldWriteBundleIcon = AppBundleIconMutationPolicy.shouldWriteBundleIcon(at: ghosttyAppURL)
         let appIcon: NSImage
         if #available(macOS 26.0, *) {
             // Reset to the default (glassy) icon.
-            if let appBundlePath {
+            if shouldWriteBundleIcon, let appBundlePath {
                 NSWorkspace.shared.setIcon(nil, forFile: appBundlePath)
             }
 
@@ -136,13 +137,13 @@ class DockTilePlugin: NSObject, NSDockTilePlugIn {
         } else {
             // Use the bundled icon to keep the corner radius consistent with pre-Tahoe apps.
             appIcon = pluginBundle.image(forResource: "AppIconImage")!
-            if let appBundlePath {
+            if shouldWriteBundleIcon, let appBundlePath {
                 NSWorkspace.shared.setIcon(appIcon, forFile: appBundlePath)
             }
         }
 
         // Notify Finder/Dock so icon caches refresh immediately.
-        if let appBundlePath {
+        if shouldWriteBundleIcon, let appBundlePath {
             NSWorkspace.shared.noteFileSystemChanged(appBundlePath)
         }
         dockTile.setIcon(appIcon)
