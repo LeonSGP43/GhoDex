@@ -963,6 +963,12 @@ final class BrowserPageState: ObservableObject, Identifiable {
 }
 
 @MainActor
+enum BrowserDeckSplitAxis: String, Equatable {
+    case vertical
+    case horizontal
+}
+
+@MainActor
 final class BrowserTabModel: ObservableObject {
     struct PageNavigationSnapshot {
         let url: String
@@ -988,6 +994,8 @@ final class BrowserTabModel: ObservableObject {
     @Published var isLoading = false
     @Published private(set) var runtimeState: RuntimeState
     @Published private(set) var installPhase: BrowserRuntimeInstallPhase = .idle
+    @Published private(set) var splitCompanionPageID: UUID?
+    @Published private(set) var splitAxis: BrowserDeckSplitAxis = .vertical
 
     var openURLInNewWindowHandler: ((URL) -> BrowserPopupOpenWindowResult?)?
 
@@ -1045,6 +1053,9 @@ final class BrowserTabModel: ObservableObject {
 
     func selectPage(_ pageID: UUID) {
         guard pages.contains(where: { $0.id == pageID }) else { return }
+        if splitCompanionPageID == pageID {
+            splitCompanionPageID = selectedPageID
+        }
         NSLog(
             "[Browser][PopupTrace] select_page previousSelected=%@ nextSelected=%@ pageCount=%ld",
             selectedPageID.uuidString,
@@ -1059,6 +1070,19 @@ final class BrowserTabModel: ObservableObject {
         appendPage(initialURL: defaultPageURL, activate: true)
     }
 
+    func beginSplit(axis: BrowserDeckSplitAxis) {
+        splitAxis = axis
+        splitCompanionPageID = nil
+    }
+
+    var visiblePageIDsInDeck: [UUID] {
+        [selectedPageID]
+    }
+
+    func collapseSplitDeck() {
+        splitCompanionPageID = nil
+    }
+
     func closePage(_ pageID: UUID) {
         guard pages.count > 1, let index = pages.firstIndex(where: { $0.id == pageID }) else { return }
         let closingSelectedPage = selectedPageID == pageID
@@ -1069,6 +1093,7 @@ final class BrowserTabModel: ObservableObject {
             selectedPageID = pages[replacementIndex].id
         }
 
+        normalizeSplitCompanion()
         scheduleActivePageStateSync()
     }
 
@@ -1593,6 +1618,10 @@ final class BrowserTabModel: ObservableObject {
 
     private func normalizedURLString(_ rawValue: String, fallback: String?) -> String {
         BrowserPaths.normalizedURLString(rawValue, fallback: fallback ?? defaultPageURL.absoluteString)
+    }
+
+    private func normalizeSplitCompanion() {
+        splitCompanionPageID = nil
     }
 
     private func refreshRuntimeState() {

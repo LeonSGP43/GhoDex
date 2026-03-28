@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(macos): temporarily disable browser in-tab split behavior
+
+- What changed: Disabled Browser in-tab split activation so Browser split shortcuts no longer create or maintain a split deck. Browser split actions now collapse any existing split state back to a single visible page, while Terminal split picker behavior remains unchanged.
+- Why: Current Browser split UX is still inconsistent in real usage and can reduce usability; the immediate priority is restoring predictable single-page Browser tab behavior.
+- Impact: Browser tabs return to single-page rendering even if a split state was created earlier, and `Cmd+D`/`Cmd+Shift+D` from Browser no longer trigger in-tab split composition.
+- Verification: `nu macos/build.nu --scheme GhoDex --configuration Debug --action build`; `pkill -f '/Applications/GhoDex.app/Contents/MacOS/GhoDex' || true`; `rm -rf /Applications/GhoDex.app`; `ditto macos/build/Debug/GhoDex.app /Applications/GhoDex.app`; `open -a /Applications/GhoDex.app`
+- Files: `macos/Sources/Features/Browser/BrowserTabModel.swift`, `CHANGELOG.md`
+- Decision trail: Keep Browser split disablement as a narrow, reversible guardrail while retaining the Terminal split picker improvements. This avoids further Browser split regressions during ongoing UX iteration.
+
 ### feat(macos): add runtime memory diagnostics logging for CEF and harness lifecycle
 
 - What changed: Added a unified runtime diagnostics JSONL stream at `~/Library/Application Support/<bundle-id>/Diagnostics/runtime-memory-diagnostics.jsonl` with size-based rotation (`.1` backup at 4 MiB). Wired Control Harness lifecycle pressure points (`idempotency` prune, `read-after-write` prune, `events.replay` truncation, sampler timer schedule) plus AI manager retention/automation paths (`heartbeat` prune, todo cache prune, SSH password automation timer cadence changes) into this log. Added CEF-side diagnostics in `GhoDexCEFBridge.mm` for initialize/shutdown, browser create/close counts, global message pump timer start/stop, and idle shutdown scheduling/trigger events.
