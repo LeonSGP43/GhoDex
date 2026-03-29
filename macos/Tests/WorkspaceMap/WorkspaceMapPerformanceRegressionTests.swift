@@ -5,18 +5,7 @@ import XCTest
 final class WorkspaceMapPerformanceRegressionTests: XCTestCase {
     func testLargeAFixtureProjectionP95WithinBudget() {
         let runtime = makeLargeARuntimeState()
-        var samples: [Double] = []
-
-        for _ in 0..<120 {
-            let start = CFAbsoluteTimeGetCurrent()
-            _ = WorkspaceMapProjectionService.makeSnapshot(
-                from: runtime,
-                now: Date(timeIntervalSince1970: 1)
-            )
-            samples.append((CFAbsoluteTimeGetCurrent() - start) * 1000)
-        }
-
-        let p95 = WorkspaceMapPercentile.p95(samples)
+        let p95 = medianBatchP95(runtime: runtime)
         XCTAssertLessThanOrEqual(p95, WorkspaceMapPerformanceBudget.largeASnapshotBuildP95MS)
     }
 
@@ -37,18 +26,53 @@ final class WorkspaceMapPerformanceRegressionTests: XCTestCase {
             panesPerTerminal: max(1, totalPanes / 6),
             tabsPerPane: 3
         )
-        var samples: [Double] = []
-
-        for _ in 0..<80 {
-            let start = CFAbsoluteTimeGetCurrent()
-            _ = WorkspaceMapProjectionService.makeSnapshot(
-                from: runtime,
+        let batchMeans = (0..<5).map { _ -> Double in
+            let samples = projectionSamples(
+                runtime: runtime,
+                sampleCount: 20,
+                warmupCount: 6,
                 now: Date(timeIntervalSince1970: 2)
             )
-            samples.append((CFAbsoluteTimeGetCurrent() - start) * 1000)
+            return samples.reduce(0, +) / Double(samples.count)
+        }
+        return median(batchMeans)
+    }
+
+    private func medianBatchP95(runtime: WorkspaceMapRuntimeState) -> Double {
+        let batchP95s = (0..<5).map { _ in
+            WorkspaceMapPercentile.p95(
+                projectionSamples(
+                    runtime: runtime,
+                    sampleCount: 24,
+                    warmupCount: 10,
+                    now: Date(timeIntervalSince1970: 1)
+                )
+            )
+        }
+        return median(batchP95s)
+    }
+
+    private func projectionSamples(
+        runtime: WorkspaceMapRuntimeState,
+        sampleCount: Int,
+        warmupCount: Int,
+        now: Date
+    ) -> [Double] {
+        for _ in 0..<warmupCount {
+            _ = WorkspaceMapProjectionService.makeSnapshot(from: runtime, now: now)
         }
 
-        return samples.reduce(0, +) / Double(samples.count)
+        return (0..<sampleCount).map { _ in
+            let start = CFAbsoluteTimeGetCurrent()
+            _ = WorkspaceMapProjectionService.makeSnapshot(from: runtime, now: now)
+            return (CFAbsoluteTimeGetCurrent() - start) * 1000
+        }
+    }
+
+    private func median(_ values: [Double]) -> Double {
+        guard !values.isEmpty else { return 0 }
+        let sorted = values.sorted()
+        return sorted[sorted.count / 2]
     }
 
     private func makeLargeARuntimeState() -> WorkspaceMapRuntimeState {

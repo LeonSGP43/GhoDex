@@ -66,10 +66,12 @@ struct WorkspaceMapPercentile {
 struct WorkspaceMapPerformanceRecorder {
     private let maxSamples: Int
     private(set) var snapshotBuildMS: [Double] = []
+    private(set) var snapshotMainThreadMS: [Double] = []
     private(set) var commandLatencyMS: [Double] = []
     private(set) var commandStatuses: [WorkspaceMapCommandStatus] = []
     private(set) var publishTimestamps: [Date] = []
     private(set) var workloadSnapshotBuildMS: [WorkspaceMapPerformanceWorkload: [Double]] = [:]
+    private(set) var workloadSnapshotMainThreadMS: [WorkspaceMapPerformanceWorkload: [Double]] = [:]
     private(set) var workloadCommandLatencyMS: [WorkspaceMapPerformanceWorkload: [Double]] = [:]
     private(set) var workloadCommandStatuses: [WorkspaceMapPerformanceWorkload: [WorkspaceMapCommandStatus]] = [:]
     private(set) var workloadPublishTimestamps: [WorkspaceMapPerformanceWorkload: [Date]] = [:]
@@ -78,14 +80,26 @@ struct WorkspaceMapPerformanceRecorder {
         self.maxSamples = max(20, maxSamples)
     }
 
-    mutating func recordSnapshotBuild(ms: Double, workload: WorkspaceMapPerformanceWorkload? = nil) {
+    mutating func recordSnapshotBuild(
+        ms: Double,
+        mainThreadMS: Double? = nil,
+        workload: WorkspaceMapPerformanceWorkload? = nil
+    ) {
+        let mainThreadDuration = mainThreadMS ?? ms
         snapshotBuildMS.append(ms)
         trim(&snapshotBuildMS)
+        snapshotMainThreadMS.append(mainThreadDuration)
+        trim(&snapshotMainThreadMS)
         if let workload {
             var values = workloadSnapshotBuildMS[workload, default: []]
             values.append(ms)
             trim(&values)
             workloadSnapshotBuildMS[workload] = values
+
+            var mainThreadValues = workloadSnapshotMainThreadMS[workload, default: []]
+            mainThreadValues.append(mainThreadDuration)
+            trim(&mainThreadValues)
+            workloadSnapshotMainThreadMS[workload] = mainThreadValues
         }
     }
 
@@ -128,6 +142,7 @@ struct WorkspaceMapPerformanceRecorder {
     func snapshot() -> WorkspaceMapPerformanceSnapshot {
         let metrics = buildMetrics(
             snapshotSamples: snapshotBuildMS,
+            snapshotMainThreadSamples: snapshotMainThreadMS,
             commandSamples: commandLatencyMS,
             commandStatusSamples: commandStatuses,
             publishSamples: publishTimestamps
@@ -142,11 +157,13 @@ struct WorkspaceMapPerformanceRecorder {
 
     private func evaluateWorkload(_ workload: WorkspaceMapPerformanceWorkload) -> WorkspaceMapPerformanceWorkloadResult {
         guard let snapshotSamples = workloadSnapshotBuildMS[workload],
+              let snapshotMainThreadSamples = workloadSnapshotMainThreadMS[workload],
               let commandSamples = workloadCommandLatencyMS[workload],
               let commandStatusSamples = workloadCommandStatuses[workload],
               let publishSamples = workloadPublishTimestamps[workload],
               hasRequiredSamples(
                 snapshotSamples: snapshotSamples,
+                snapshotMainThreadSamples: snapshotMainThreadSamples,
                 commandSamples: commandSamples,
                 commandStatusSamples: commandStatusSamples,
                 publishSamples: publishSamples
@@ -163,6 +180,7 @@ struct WorkspaceMapPerformanceRecorder {
         return WorkspaceMapPerformancePolicy.evaluate(
             metrics: buildMetrics(
                 snapshotSamples: snapshotSamples,
+                snapshotMainThreadSamples: snapshotMainThreadSamples,
                 commandSamples: commandSamples,
                 commandStatusSamples: commandStatusSamples,
                 publishSamples: publishSamples
@@ -173,11 +191,13 @@ struct WorkspaceMapPerformanceRecorder {
 
     private func hasRequiredSamples(
         snapshotSamples: [Double],
+        snapshotMainThreadSamples: [Double],
         commandSamples: [Double],
         commandStatusSamples: [WorkspaceMapCommandStatus],
         publishSamples: [Date]
     ) -> Bool {
         !snapshotSamples.isEmpty &&
+            !snapshotMainThreadSamples.isEmpty &&
             !commandSamples.isEmpty &&
             !commandStatusSamples.isEmpty &&
             publishSamples.count > 1
@@ -185,6 +205,7 @@ struct WorkspaceMapPerformanceRecorder {
 
     private func buildMetrics(
         snapshotSamples: [Double],
+        snapshotMainThreadSamples: [Double],
         commandSamples: [Double],
         commandStatusSamples: [WorkspaceMapCommandStatus],
         publishSamples: [Date]
@@ -195,7 +216,7 @@ struct WorkspaceMapPerformanceRecorder {
             commandLatencyP95MS: WorkspaceMapPercentile.p95(commandSamples),
             publishCadencePerSecond: publishCadencePerSecond(for: publishSamples),
             mainThreadSpikeCount: mainThreadSpikeCount(
-                snapshotSamples: snapshotSamples,
+                snapshotMainThreadSamples: snapshotMainThreadSamples,
                 commandSamples: commandSamples
             ),
             commandFailureRate: commandFailureRate(commandStatusSamples)
@@ -213,9 +234,9 @@ struct WorkspaceMapPerformanceRecorder {
         return Double(timestamps.count - 1) / span
     }
 
-    private func mainThreadSpikeCount(snapshotSamples: [Double], commandSamples: [Double]) -> Int {
+    private func mainThreadSpikeCount(snapshotMainThreadSamples: [Double], commandSamples: [Double]) -> Int {
         let spikeThreshold = WorkspaceMapPerformanceBudget.mainThreadSpikeThresholdMS
-        let snapshotSpikes = snapshotSamples.filter { $0 > spikeThreshold }.count
+        let snapshotSpikes = snapshotMainThreadSamples.filter { $0 > spikeThreshold }.count
         let commandSpikes = commandSamples.filter { $0 > spikeThreshold }.count
         return snapshotSpikes + commandSpikes
     }

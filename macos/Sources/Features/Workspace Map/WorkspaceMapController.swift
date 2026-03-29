@@ -10,16 +10,22 @@ final class WorkspaceMapViewModel: ObservableObject {
     @Published private(set) var performance = WorkspaceMapPerformanceSnapshot.empty
     @Published private(set) var lastCommandResult: WorkspaceMapCommandResult?
 
-    private let projectionSource: () -> WorkspaceMapSnapshot
+    private let projectionSource: (() -> WorkspaceMapSnapshot)?
+    private let runtimeStateSource: (@MainActor () -> WorkspaceMapRuntimeState)?
+    private let backgroundProjector: @Sendable (WorkspaceMapRuntimeState, Date) -> WorkspaceMapSnapshot
     private let commandExecutor: (WorkspaceMapCommandRequest) -> WorkspaceMapCommandResult
     private let layoutStore: WorkspaceMapLayoutStore
     private let nowProvider: () -> Date
 
     private var refreshScheduled = false
+    private var refreshInFlight = false
+    private var refreshPending = false
+    private var refreshTask: Task<Void, Never>?
     private var layoutPersistScheduled = false
     private var performanceRecorder = WorkspaceMapPerformanceRecorder()
     private var workloadClassifier = WorkspaceMapWorkloadClassifier()
 
+    @available(*, deprecated, message: "Use runtimeStateSource/backgroundProjector path for better performance")
     init(
         projectionSource: @escaping () -> WorkspaceMapSnapshot,
         commandExecutor: @escaping (WorkspaceMapCommandRequest) -> WorkspaceMapCommandResult,
@@ -27,6 +33,32 @@ final class WorkspaceMapViewModel: ObservableObject {
         nowProvider: @escaping () -> Date = Date.init
     ) {
         self.projectionSource = projectionSource
+        self.runtimeStateSource = nil
+        self.backgroundProjector = { runtimeState, now in
+            WorkspaceMapProjectionService.makeSnapshot(from: runtimeState, now: now)
+        }
+        self.commandExecutor = commandExecutor
+        self.layoutStore = layoutStore
+        self.nowProvider = nowProvider
+        self.layout = layoutStore.load() ?? WorkspaceMapLayoutSnapshot(groups: [])
+    }
+
+    deinit {
+        refreshTask?.cancel()
+    }
+
+    init(
+        runtimeStateSource: @escaping @MainActor () -> WorkspaceMapRuntimeState,
+        backgroundProjector: @escaping @Sendable (WorkspaceMapRuntimeState, Date) -> WorkspaceMapSnapshot = { runtimeState, now in
+            WorkspaceMapProjectionService.makeSnapshot(from: runtimeState, now: now)
+        },
+        commandExecutor: @escaping (WorkspaceMapCommandRequest) -> WorkspaceMapCommandResult,
+        layoutStore: WorkspaceMapLayoutStore = .shared,
+        nowProvider: @escaping () -> Date = Date.init
+    ) {
+        self.projectionSource = nil
+        self.runtimeStateSource = runtimeStateSource
+        self.backgroundProjector = backgroundProjector
         self.commandExecutor = commandExecutor
         self.layoutStore = layoutStore
         self.nowProvider = nowProvider
@@ -38,7 +70,7 @@ final class WorkspaceMapViewModel: ObservableObject {
         nowProvider: @escaping () -> Date = Date.init
     ) {
         self.init(
-            projectionSource: { WorkspaceMapProjectionService.makeSnapshot() },
+            runtimeStateSource: { WorkspaceMapRuntimeAdapter.capture() },
             commandExecutor: { WorkspaceMapCommandHandler.execute($0) },
             layoutStore: layoutStore,
             nowProvider: nowProvider
@@ -53,15 +85,72 @@ final class WorkspaceMapViewModel: ObservableObject {
         CGFloat(layout.viewport.zoom)
     }
 
-    func refresh() {
+    @discardableResult
+    func refresh() -> Task<Void, Never>? {
+        if let projectionSource {
+            let start = CFAbsoluteTimeGetCurrent()
+            let newSnapshot = projectionSource()
+            let elapsedMS = (CFAbsoluteTimeGetCurrent() - start) * 1000
+            applyRefresh(newSnapshot, totalMS: elapsedMS, mainThreadMS: elapsedMS)
+            return nil
+        }
+
+        guard let runtimeStateSource else { return nil }
+        guard !refreshInFlight else {
+            refreshPending = true
+            return refreshTask
+        }
+
+        refreshInFlight = true
         let start = CFAbsoluteTimeGetCurrent()
-        let newSnapshot = projectionSource()
-        let elapsedMS = (CFAbsoluteTimeGetCurrent() - start) * 1000
+        let runtimeState = runtimeStateSource()
+        let mainThreadMS = (CFAbsoluteTimeGetCurrent() - start) * 1000
+        let snapshotNow = nowProvider()
+        let projector = backgroundProjector
+        let task = Task { [weak self, runtimeState, mainThreadMS, snapshotNow, start] in
+            let newSnapshot = await Task.detached(priority: .userInitiated) {
+                projector(runtimeState, snapshotNow)
+            }.value
+            guard !Task.isCancelled else { return }
+            let elapsedMS = (CFAbsoluteTimeGetCurrent() - start) * 1000
+            self?.finishRefresh(
+                newSnapshot,
+                totalMS: elapsedMS,
+                mainThreadMS: mainThreadMS
+            )
+        }
+        refreshTask = task
+        return task
+    }
+
+    private func finishRefresh(
+        _ newSnapshot: WorkspaceMapSnapshot,
+        totalMS: Double,
+        mainThreadMS: Double
+    ) {
+        applyRefresh(newSnapshot, totalMS: totalMS, mainThreadMS: mainThreadMS)
+        refreshInFlight = false
+        refreshTask = nil
+
+        guard refreshPending else { return }
+        refreshPending = false
+        _ = refresh()
+    }
+
+    private func applyRefresh(
+        _ newSnapshot: WorkspaceMapSnapshot,
+        totalMS: Double,
+        mainThreadMS: Double
+    ) {
         let now = nowProvider()
         workloadClassifier.recordRefresh(at: now)
         let workload = workloadClassifier.classify(snapshot: newSnapshot, at: now)
 
-        performanceRecorder.recordSnapshotBuild(ms: elapsedMS, workload: workload)
+        performanceRecorder.recordSnapshotBuild(
+            ms: totalMS,
+            mainThreadMS: mainThreadMS,
+            workload: workload
+        )
         if !newSnapshot.semanticallyEquals(snapshot) {
             snapshot = newSnapshot
             reconcileLayout(with: newSnapshot.groups)
@@ -82,11 +171,12 @@ final class WorkspaceMapViewModel: ObservableObject {
         }
     }
 
+    @discardableResult
     func execute(
         _ command: WorkspaceMapCommand,
         targetID: WorkspaceMapEntityID,
         title: String? = nil
-    ) {
+    ) -> Task<Void, Never>? {
         let request = WorkspaceMapCommandRequest(command: command, targetID: targetID, title: title)
         let start = CFAbsoluteTimeGetCurrent()
         let result = commandExecutor(request)
@@ -98,7 +188,7 @@ final class WorkspaceMapViewModel: ObservableObject {
         performanceRecorder.recordCommandLatency(ms: elapsedMS, workload: workload)
         performanceRecorder.recordCommandStatus(result.status, workload: workload)
         publishPerformance()
-        refresh()
+        return refresh()
     }
 
     func setViewportOffset(_ offset: CGSize) {

@@ -164,6 +164,56 @@ final class WorkspaceMapViewModelDeterminismTests: XCTestCase {
         }
     }
 
+    func testRuntimeRefreshMovesProjectionOffMainActorAndCoalescesInFlightRequests() async {
+        final class ProjectionProbe: @unchecked Sendable {
+            private let lock = NSLock()
+            private(set) var projectionCount = 0
+            private(set) var projectionMainThreadFlags: [Bool] = []
+
+            func recordProjection(isMainThread: Bool) {
+                lock.lock()
+                projectionCount += 1
+                projectionMainThreadFlags.append(isMainThread)
+                lock.unlock()
+            }
+        }
+
+        let probe = ProjectionProbe()
+        var captureCount = 0
+        let model = WorkspaceMapViewModel(
+            runtimeStateSource: {
+                captureCount += 1
+                return self.makeRuntimeState(sequence: captureCount)
+            },
+            backgroundProjector: { runtimeState, now in
+                probe.recordProjection(isMainThread: Thread.isMainThread)
+                Thread.sleep(forTimeInterval: 0.08)
+                return WorkspaceMapProjectionService.makeSnapshot(from: runtimeState, now: now)
+            },
+            commandExecutor: { _ in WorkspaceMapCommandResult(status: .executed, message: "ok") },
+            layoutStore: WorkspaceMapLayoutStore(
+                defaults: UserDefaults(suiteName: "WorkspaceMapViewModelDeterminismTests.async-refresh")!,
+                storageKey: UUID().uuidString
+            )
+        )
+
+        let firstTask = model.refresh()
+        for _ in 0..<20 {
+            _ = model.refresh()
+        }
+
+        await firstTask?.value
+        try? await Task.sleep(nanoseconds: 220_000_000)
+
+        XCTAssertEqual(captureCount, 2)
+        XCTAssertEqual(probe.projectionCount, 2)
+        XCTAssertEqual(probe.projectionMainThreadFlags, [false, false])
+        XCTAssertEqual(
+            model.snapshot.groups.first?.id,
+            WorkspaceMapEntityID("terminal-group:00000000-0000-0000-0000-000000000002")
+        )
+    }
+
     private func makeTerminalGroup(idToken: String) -> WorkspaceMapGroupSnapshot {
         WorkspaceMapGroupSnapshot(
             id: WorkspaceMapEntityID("terminal-group:\(idToken)"),
@@ -218,6 +268,33 @@ final class WorkspaceMapViewModelDeterminismTests: XCTestCase {
         return WorkspaceMapSnapshot(
             generatedAt: Date(timeIntervalSince1970: TimeInterval(sequence)),
             groups: terminalGroups + browserGroups
+        )
+    }
+
+    private func makeRuntimeState(sequence: Int) -> WorkspaceMapRuntimeState {
+        let idToken = String(format: "%012d", sequence)
+        return WorkspaceMapRuntimeState(
+            terminalGroups: [
+                WorkspaceMapRuntimeTerminalGroup(
+                    workspaceID: UUID(uuidString: "00000000-0000-0000-0000-\(idToken)")!,
+                    title: "Terminal \(sequence)",
+                    isFocused: sequence == 1,
+                    root: .pane(
+                        WorkspaceMapRuntimePane(
+                            id: UUID(uuidString: "10000000-0000-0000-0000-\(idToken)")!,
+                            isFocused: true,
+                            tabs: [
+                                WorkspaceMapRuntimePaneTab(
+                                    id: UUID(uuidString: "20000000-0000-0000-0000-\(idToken)")!,
+                                    title: "Tab \(sequence)",
+                                    isActive: true
+                                )
+                            ]
+                        )
+                    )
+                )
+            ],
+            browserGroups: []
         )
     }
 }
