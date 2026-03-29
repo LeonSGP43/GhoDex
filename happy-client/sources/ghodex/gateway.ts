@@ -45,6 +45,7 @@ interface GatewayRequest {
     mode?: string;
     command_text?: string;
     text?: string;
+    terminal_key?: string;
     working_directory?: string;
     title?: string;
     force?: boolean;
@@ -683,6 +684,39 @@ export async function sendTerminalText(input: GatewayConnection & {
             auth_token: authToken,
             terminal_id: terminalId,
             text: input.text,
+            expected_generation: input.expectedGeneration,
+        },
+    );
+    return parseTerminalMutationResult(envelope);
+}
+
+export async function sendTerminalKey(input: GatewayConnection & {
+    authToken: string;
+    terminalId: string;
+    terminalKey: string;
+    expectedGeneration?: number;
+}): Promise<TerminalMutationResult> {
+    const authToken = input.authToken.trim();
+    const terminalId = input.terminalId.trim();
+    const terminalKey = input.terminalKey.trim();
+    if (!authToken) {
+        throw new GatewayProtocolError('Auth token is empty');
+    }
+    if (!terminalId) {
+        throw new GatewayProtocolError('terminal_id is empty');
+    }
+    if (!terminalKey) {
+        throw new GatewayProtocolError('terminal_key is empty');
+    }
+
+    const envelope = await sendRequest(
+        input,
+        {
+            request_id: nextRequestId('send-key'),
+            command: 'send-key',
+            auth_token: authToken,
+            terminal_id: terminalId,
+            terminal_key: terminalKey,
             expected_generation: input.expectedGeneration,
         },
     );

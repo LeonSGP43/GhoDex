@@ -5,13 +5,14 @@ vi.mock('@/encryption/aes', () => ({
     decryptAESGCM: async (data: Uint8Array) => data,
 }));
 
-import { pairingBegin } from './gateway';
+import { pairingBegin, pairingExchange, sendTerminalKey } from './gateway';
 
 type MessageHandler = ((event: { data?: string }) => void) | null;
 type EventHandler = (() => void) | null;
 
 class MockWebSocket {
     static sentPayloads: Array<Record<string, unknown>> = [];
+    static openedUrls: string[] = [];
 
     onopen: EventHandler = null;
     onmessage: MessageHandler = null;
@@ -19,6 +20,7 @@ class MockWebSocket {
     onclose: ((event: { code: number; reason: string }) => void) | null = null;
 
     constructor(public readonly url: string) {
+        MockWebSocket.openedUrls.push(url);
         queueMicrotask(() => {
             this.onopen?.();
         });
@@ -28,6 +30,36 @@ class MockWebSocket {
         const parsed = JSON.parse(payload) as Record<string, unknown>;
         MockWebSocket.sentPayloads.push(parsed);
         queueMicrotask(() => {
+            if (parsed.command === 'send-key') {
+                this.onmessage?.({
+                    data: JSON.stringify({
+                        request_id: parsed.request_id,
+                        status: 'ok',
+                        result: {
+                            terminal_id: parsed.terminal_id,
+                            generation: 9,
+                            sequence: 101,
+                            operation: 'send-key',
+                            acknowledged: true,
+                            write_id: 'wr_101',
+                        },
+                    }),
+                });
+                return;
+            }
+            if (parsed.command === 'gateway.pairing.exchange') {
+                this.onmessage?.({
+                    data: JSON.stringify({
+                        request_id: parsed.request_id,
+                        status: 'ok',
+                        result: {
+                            auth_token: 'TOKEN-123',
+                            scopes: ['observe', 'mutate'],
+                        },
+                    }),
+                });
+                return;
+            }
             this.onmessage?.({
                 data: JSON.stringify({
                     request_id: parsed.request_id,
@@ -50,6 +82,7 @@ describe('ghodex gateway pairing', () => {
 
     afterEach(() => {
         MockWebSocket.sentPayloads = [];
+        MockWebSocket.openedUrls = [];
         globalThis.WebSocket = originalWebSocket;
     });
 
@@ -70,6 +103,45 @@ describe('ghodex gateway pairing', () => {
             client: 'ghodex-remote-client',
             device_id: 'device-alpha',
             device_label: 'Alpha phone',
+        });
+    });
+
+    it('uses relay websocket endpoint for pairing exchange when relay metadata is provided', async () => {
+        globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+
+        await pairingExchange({
+            host: '10.0.0.7',
+            port: 29527,
+            pairingCode: 'PAIR-RELAY',
+            transportMode: 'relay',
+            publicEndpoint: 'wss://edge.example.test/gateway',
+        });
+
+        expect(MockWebSocket.openedUrls).toEqual(['wss://edge.example.test/gateway']);
+        expect(MockWebSocket.sentPayloads).toHaveLength(1);
+        expect(MockWebSocket.sentPayloads[0]).toMatchObject({
+            command: 'gateway.pairing.exchange',
+            pairing_code: 'PAIR-RELAY',
+        });
+    });
+
+    it('sends terminal_key for send-key control mutations', async () => {
+        globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+
+        await sendTerminalKey({
+            host: '127.0.0.1',
+            port: 29527,
+            authToken: 'TOKEN-123',
+            terminalId: 'terminal-xyz',
+            terminalKey: 'enter',
+        });
+
+        expect(MockWebSocket.sentPayloads).toHaveLength(1);
+        expect(MockWebSocket.sentPayloads[0]).toMatchObject({
+            command: 'send-key',
+            auth_token: 'TOKEN-123',
+            terminal_id: 'terminal-xyz',
+            terminal_key: 'enter',
         });
     });
 });

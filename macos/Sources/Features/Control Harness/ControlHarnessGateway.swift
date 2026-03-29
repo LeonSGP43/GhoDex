@@ -949,7 +949,7 @@ final class ControlHarnessGateway {
         switch request.command {
         case "snapshot", "read-terminal", "events.subscribe":
             return .observe
-        case "new-tab", "close-tab", "rename-tab", "send-text", "run-command", "close-terminal":
+        case "new-tab", "close-tab", "rename-tab", "send-text", "send-key", "run-command", "close-terminal":
             return .mutate
         default:
             return nil
@@ -1814,7 +1814,7 @@ private final class ControlHarnessGatewayRateLimiter {
 
     private func category(for request: ControlHarnessRequest) -> Category? {
         switch request.command {
-        case "send-text", "run-command", "close-terminal", "new-tab", "close-tab", "rename-tab":
+        case "send-text", "send-key", "run-command", "close-terminal", "new-tab", "close-tab", "rename-tab":
             return .command
         case "snapshot":
             return .snapshot

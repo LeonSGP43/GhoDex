@@ -14,6 +14,7 @@ extension ControlHarnessRequest {
             "close-tab",
             "rename-tab",
             "send-text",
+            "send-key",
             "run-command",
             "close-terminal",
             "todo-add",

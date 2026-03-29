@@ -45,6 +45,7 @@ import {
 } from '@/ghodex/terminalTransport';
 import {
     appendLatencySample,
+    describeTerminalDebugText,
     deriveRealtimeInputDelta,
     normalizeCommandInput,
     resolveRealtimeKeyPayload,
@@ -106,6 +107,13 @@ const WRITE_SETTLE_ATTEMPTS = 6;
 const WRITE_SETTLE_INTERVAL_MS = 250;
 const REALTIME_INPUT_FLUSH_MS = 24;
 const REALTIME_INPUT_MAX_BATCH_SIZE = 48;
+const BACKSPACE_KEYPRESS_HINT_WINDOW_MS = 220;
+const REALTIME_BACKSPACE_KEY_SPEC: TerminalControlKeySpec = {
+    id: 'backspace',
+    label: '⌫',
+    payload: '\u007F',
+    terminalKey: 'backspace',
+};
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => {
@@ -481,6 +489,8 @@ export default function GhoDexWorkspaceScreen() {
     const realtimeInputInFlightRef = React.useRef(false);
     const realtimeMutationQueueRef = React.useRef<RealtimeMutationOperation[]>([]);
     const realtimeResyncPendingRef = React.useRef(false);
+    const realtimeLastBackspaceKeypressAtRef = React.useRef(0);
+    const realtimeInputDebugSeqRef = React.useRef(0);
     const loadTerminalViewRef = React.useRef<LoadTerminalViewFn | null>(null);
     const refreshSnapshotRef = React.useRef<RefreshSnapshotFn | null>(null);
     const driveSelectedTerminalFromSubscriptionRef = React.useRef<(() => void) | null>(null);
@@ -571,6 +581,30 @@ export default function GhoDexWorkspaceScreen() {
             recordGatewayLatency(startedAt);
         }
     }, [recordGatewayLatency]);
+
+    const logRealtimeInputDiagnostic = React.useCallback((event: string, payload: Record<string, unknown>) => {
+        let payloadJson = '';
+        try {
+            payloadJson = JSON.stringify(payload);
+        } catch {
+            payloadJson = '"[payload_unserializable]"';
+        }
+        realtimeInputDebugSeqRef.current += 1;
+        const line = `[ghodex-input] #${realtimeInputDebugSeqRef.current} ${event} ${payloadJson}`;
+
+        const nativeLogger = (globalThis as {
+            nativeLoggingHook?: (message: string, level: number) => void;
+        }).nativeLoggingHook;
+
+        if (typeof nativeLogger === 'function') {
+            // level=1 routes to warning-level native log output.
+            nativeLogger(line, 1);
+        }
+
+        if (__DEV__) {
+            console.warn(line);
+        }
+    }, []);
 
     const applyTerminalResult = React.useCallback((
         result: TerminalReadResult,
@@ -833,6 +867,11 @@ export default function GhoDexWorkspaceScreen() {
                 if (!operation) {
                     break;
                 }
+                logRealtimeInputDiagnostic('queue.consume', {
+                    kind: operation.kind,
+                    retries: operation.retries,
+                    queueRemaining: realtimeMutationQueueRef.current.length,
+                });
 
                 try {
                     let mutation: TerminalMutationResult;
@@ -848,6 +887,10 @@ export default function GhoDexWorkspaceScreen() {
                             }
                             payload += next.text;
                         }
+                        logRealtimeInputDiagnostic('queue.send_text', {
+                            payload: describeTerminalDebugText(payload, 48),
+                            terminalId: currentTerminal.terminalId,
+                        });
 
                         mutation = await runMeasuredGatewayRequest(() => sendTerminalText({
                             host: activeSession.host,
@@ -857,20 +900,26 @@ export default function GhoDexWorkspaceScreen() {
                             text: payload,
                         }));
                     } else {
-                        const expectedGeneration = terminalViewRef.current?.terminalId === currentTerminal.terminalId
-                            ? terminalViewRef.current.generation
-                            : currentTerminal.generation;
                         const terminalKey = operation.keySpec.terminalKey?.trim();
                         if (!terminalKey) {
+                            logRealtimeInputDiagnostic('queue.send_key_fallback_text', {
+                                keyId: operation.keySpec.id,
+                                payload: describeTerminalDebugText(operation.keySpec.payload, 16),
+                                terminalId: currentTerminal.terminalId,
+                            });
                             mutation = await runMeasuredGatewayRequest(() => sendTerminalText({
                                 host: activeSession.host,
                                 port: activeSession.port,
                                 authToken,
                                 terminalId: currentTerminal.terminalId,
                                 text: operation.keySpec.payload,
-                                expectedGeneration,
                             }));
                         } else {
+                            logRealtimeInputDiagnostic('queue.send_key', {
+                                keyId: operation.keySpec.id,
+                                terminalKey,
+                                terminalId: currentTerminal.terminalId,
+                            });
                             try {
                                 mutation = await runMeasuredGatewayRequest(() => sendTerminalKey({
                                     host: activeSession.host,
@@ -878,19 +927,22 @@ export default function GhoDexWorkspaceScreen() {
                                     authToken,
                                     terminalId: currentTerminal.terminalId,
                                     terminalKey,
-                                    expectedGeneration,
                                 }));
                             } catch (error) {
                                 if (!isUnsupportedGatewayCommand(error)) {
                                     throw error;
                                 }
+                                logRealtimeInputDiagnostic('queue.send_key_unsupported_fallback', {
+                                    keyId: operation.keySpec.id,
+                                    terminalKey,
+                                    payload: describeTerminalDebugText(operation.keySpec.payload, 16),
+                                });
                                 mutation = await runMeasuredGatewayRequest(() => sendTerminalText({
                                     host: activeSession.host,
                                     port: activeSession.port,
                                     authToken,
                                     terminalId: currentTerminal.terminalId,
                                     text: operation.keySpec.payload,
-                                    expectedGeneration,
                                 }));
                             }
                         }
@@ -901,6 +953,9 @@ export default function GhoDexWorkspaceScreen() {
                     realtimeResyncPendingRef.current = true;
                 } catch (error) {
                     if (isGatewayAuthError(error)) {
+                        logRealtimeInputDiagnostic('queue.error.auth', {
+                            message: error instanceof Error ? error.message : String(error ?? ''),
+                        });
                         setAuthorizationRequired(true);
                         setSubscriptionOpen(false);
                         setErrorMessage('Gateway authorization expired for this desktop build. Re-open Device and bind the phone again.');
@@ -909,6 +964,11 @@ export default function GhoDexWorkspaceScreen() {
                     }
 
                     if (isGatewayConcurrentSessionLimitError(error) && operation.retries < 6) {
+                        logRealtimeInputDiagnostic('queue.error.concurrent_retry', {
+                            kind: operation.kind,
+                            retries: operation.retries,
+                            message: error instanceof Error ? error.message : String(error ?? ''),
+                        });
                         realtimeMutationQueueRef.current.unshift({
                             ...operation,
                             retries: operation.retries + 1,
@@ -918,6 +978,11 @@ export default function GhoDexWorkspaceScreen() {
                     }
 
                     const message = error instanceof Error ? error.message : 'Unexpected gateway error';
+                    logRealtimeInputDiagnostic('queue.error.unexpected', {
+                        kind: operation.kind,
+                        retries: operation.retries,
+                        message,
+                    });
                     setErrorMessage(message);
                     realtimeResyncPendingRef.current = true;
                 }
@@ -933,12 +998,17 @@ export default function GhoDexWorkspaceScreen() {
                 driveSelectedTerminalFromSubscriptionRef.current?.();
             }
         }
-    }, [applyTerminalMutation, runMeasuredGatewayRequest]);
+    }, [applyTerminalMutation, logRealtimeInputDiagnostic, runMeasuredGatewayRequest]);
 
     const enqueueRealtimeMutation = React.useCallback((operation: RealtimeMutationOperation) => {
         realtimeMutationQueueRef.current.push(operation);
+        logRealtimeInputDiagnostic('queue.enqueue', {
+            kind: operation.kind,
+            retries: operation.retries,
+            queueSize: realtimeMutationQueueRef.current.length,
+        });
         void drainRealtimeMutationQueue();
-    }, [drainRealtimeMutationQueue]);
+    }, [drainRealtimeMutationQueue, logRealtimeInputDiagnostic]);
 
     const flushRealtimeInputBuffer = React.useCallback(() => {
         const payload = realtimeInputBufferRef.current;
@@ -946,18 +1016,29 @@ export default function GhoDexWorkspaceScreen() {
             return;
         }
         realtimeInputBufferRef.current = '';
+        logRealtimeInputDiagnostic('buffer.flush', {
+            payload: describeTerminalDebugText(payload, 48),
+        });
         enqueueRealtimeMutation({
             kind: 'text',
             text: payload,
             retries: 0,
         });
-    }, [enqueueRealtimeMutation]);
+    }, [enqueueRealtimeMutation, logRealtimeInputDiagnostic]);
 
     const enqueueRealtimeInputPayload = React.useCallback((payload: string) => {
         if (!payload) {
             return;
         }
+        logRealtimeInputDiagnostic('buffer.enqueue_input', {
+            payload: describeTerminalDebugText(payload, 32),
+            bufferBefore: describeTerminalDebugText(realtimeInputBufferRef.current, 48),
+        });
         realtimeInputBufferRef.current += payload;
+        logRealtimeInputDiagnostic('buffer.enqueue_result', {
+            bufferAfter: describeTerminalDebugText(realtimeInputBufferRef.current, 48),
+            flushTimerActive: realtimeInputFlushTimerRef.current !== null,
+        });
 
         if (realtimeInputBufferRef.current.length >= REALTIME_INPUT_MAX_BATCH_SIZE) {
             if (realtimeInputFlushTimerRef.current) {
@@ -976,7 +1057,7 @@ export default function GhoDexWorkspaceScreen() {
             realtimeInputFlushTimerRef.current = null;
             flushRealtimeInputBuffer();
         }, REALTIME_INPUT_FLUSH_MS);
-    }, [flushRealtimeInputBuffer]);
+    }, [flushRealtimeInputBuffer, logRealtimeInputDiagnostic]);
 
     React.useEffect(() => {
         if (isRealtimeInputMode) {
@@ -991,6 +1072,7 @@ export default function GhoDexWorkspaceScreen() {
         realtimeInputInFlightRef.current = false;
         realtimeResyncPendingRef.current = false;
         realtimeBackspaceFromKeyPressRef.current = 0;
+        realtimeLastBackspaceKeypressAtRef.current = 0;
         realtimeInputDraftRef.current = '';
         setRealtimeInputDraft('');
     }, [isRealtimeInputMode]);
@@ -1004,6 +1086,7 @@ export default function GhoDexWorkspaceScreen() {
         realtimeInputInFlightRef.current = false;
         realtimeResyncPendingRef.current = false;
         realtimeBackspaceFromKeyPressRef.current = 0;
+        realtimeLastBackspaceKeypressAtRef.current = 0;
         realtimeInputDraftRef.current = '';
         setRealtimeInputDraft('');
     }, [isRealtimeInputMode, selectedTerminalId]);
@@ -1521,10 +1604,27 @@ export default function GhoDexWorkspaceScreen() {
             return;
         }
 
+        const previousDraft = realtimeInputDraftRef.current;
+        const pendingBackspaces = realtimeBackspaceFromKeyPressRef.current;
+        const backspaceKeypressHint = Date.now() - realtimeLastBackspaceKeypressAtRef.current
+            <= BACKSPACE_KEYPRESS_HINT_WINDOW_MS;
+        logRealtimeInputDiagnostic('input.change.received', {
+            previousDraft: describeTerminalDebugText(previousDraft, 32),
+            nextDraft: describeTerminalDebugText(nextValue, 32),
+            pendingBackspaces,
+            backspaceKeypressHint,
+        });
+
         const delta = deriveRealtimeInputDelta({
-            previousDraft: realtimeInputDraftRef.current,
+            previousDraft,
             nextDraft: nextValue,
-            keypressBackspacesPending: realtimeBackspaceFromKeyPressRef.current,
+            keypressBackspacesPending: pendingBackspaces,
+            backspaceKeypressHint,
+        });
+        logRealtimeInputDiagnostic('input.change.delta', {
+            emittedText: describeTerminalDebugText(delta.emittedText, 32),
+            nextDraft: describeTerminalDebugText(delta.nextDraft, 32),
+            remainingKeypressBackspaces: delta.remainingKeypressBackspaces,
         });
         realtimeBackspaceFromKeyPressRef.current = delta.remainingKeypressBackspaces;
         realtimeInputDraftRef.current = delta.nextDraft;
@@ -1532,7 +1632,7 @@ export default function GhoDexWorkspaceScreen() {
         if (delta.emittedText) {
             enqueueRealtimeInputPayload(delta.emittedText);
         }
-    }, [enqueueRealtimeInputPayload, isRealtimeInputMode]);
+    }, [enqueueRealtimeInputPayload, isRealtimeInputMode, logRealtimeInputDiagnostic]);
 
     const handleRealtimeKeyPress = React.useCallback((event: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
         if (!isRealtimeInputMode) {
@@ -1540,20 +1640,42 @@ export default function GhoDexWorkspaceScreen() {
         }
 
         const key = event.nativeEvent.key;
-        if (key === 'Backspace' || key === 'Delete' || key === 'Del') {
+        const normalizedKey = typeof key === 'string' ? key.trim().toLowerCase() : '';
+        logRealtimeInputDiagnostic('input.keypress.received', {
+            key,
+            normalizedKey,
+            draft: describeTerminalDebugText(realtimeInputDraftRef.current, 32),
+            pendingBackspaces: realtimeBackspaceFromKeyPressRef.current,
+        });
+        if (normalizedKey === 'backspace' || normalizedKey === 'delete' || normalizedKey === 'del') {
+            realtimeLastBackspaceKeypressAtRef.current = Date.now();
             if (realtimeInputDraftRef.current.length > 0) {
                 realtimeBackspaceFromKeyPressRef.current += 1;
             }
-            enqueueRealtimeInputPayload('\u007F');
+            logRealtimeInputDiagnostic('input.keypress.backspace', {
+                draftLength: realtimeInputDraftRef.current.length,
+                pendingBackspaces: realtimeBackspaceFromKeyPressRef.current,
+            });
+            enqueueRealtimeMutation({
+                kind: 'key',
+                keySpec: REALTIME_BACKSPACE_KEY_SPEC,
+                retries: 0,
+            });
             return;
         }
-        if (key === 'Enter' || key === 'Tab') {
-            const payload = resolveRealtimeKeyPayload(key);
+        if (normalizedKey === 'enter' || normalizedKey === 'tab') {
+            const payload = resolveRealtimeKeyPayload(
+                normalizedKey === 'enter' ? 'Enter' : 'Tab',
+            );
             if (payload) {
+                logRealtimeInputDiagnostic('input.keypress.special', {
+                    normalizedKey,
+                    payload: describeTerminalDebugText(payload, 16),
+                });
                 enqueueRealtimeInputPayload(payload);
             }
         }
-    }, [enqueueRealtimeInputPayload, isRealtimeInputMode]);
+    }, [enqueueRealtimeInputPayload, enqueueRealtimeMutation, isRealtimeInputMode, logRealtimeInputDiagnostic]);
 
     const focusRealtimeTerminalInput = React.useCallback(() => {
         if (!isRealtimeInputMode || !selectedTerminal) {

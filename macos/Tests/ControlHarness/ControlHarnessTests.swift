@@ -644,6 +644,7 @@ struct ControlHarnessTests {
         var unavailableTerminals: Set<UUID> = []
         var managedStates: [UUID: AITerminalManagedState] = [:]
         var sentInputs: [(terminalID: UUID, text: String)] = []
+        var sentKeys: [(terminalID: UUID, key: String)] = []
         var executedCommands: [(terminalID: UUID, command: String)] = []
         var closedTerminals: [UUID] = []
         var readableSurfaces: [UUID: any ControlHarnessReadableSurface] = [:]
@@ -664,6 +665,15 @@ struct ControlHarnessTests {
             }
 
             sentInputs.append((terminalID, text))
+            return true
+        }
+
+        override func controlHarnessSendKey(_ key: String, to terminalID: UUID) -> Bool {
+            guard !unavailableTerminals.contains(terminalID) else {
+                return false
+            }
+
+            sentKeys.append((terminalID, key))
             return true
         }
 
@@ -1047,6 +1057,50 @@ struct ControlHarnessTests {
         #expect(delegate.sentInputs.isEmpty)
         #expect(eventHub.currentSequence() == 0)
         #expect(generations.currentTerminalGeneration(for: terminalID.uuidString) == 1)
+    }
+
+    @Test @MainActor func sendKeyUsesDedicatedKeyExecutionPath() throws {
+        let delegate = RecordingAppDelegate()
+        let bundleID = "ghdx.tests.send-key"
+        let (core, _, _) = makeCore(delegate: delegate, bundleID: bundleID)
+        let terminalID = UUID()
+        let request = ControlHarnessRequest(
+            requestID: "req-send-key",
+            protocolVersion: nil,
+            command: "send-key",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: terminalID.uuidString,
+            scope: nil,
+            text: nil,
+            terminalKey: "enter",
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil
+        )
+
+        let response = core.handle(request, socketPath: "/tmp/control-harness-test.sock")
+        let json = try responseJSON(response)
+        let result = try #require(json["result"] as? [String: Any])
+
+        #expect(response.status == "ok")
+        #expect(result["operation"] as? String == "send-key")
+        #expect(delegate.sentKeys.count == 1)
+        #expect(delegate.sentKeys[0].terminalID == terminalID)
+        #expect(delegate.sentKeys[0].key == "enter")
     }
 
     @Test @MainActor func runCommandRejectsNewlineOnlyPayloadWithoutEmittingEvents() {
@@ -3684,6 +3738,39 @@ struct ControlHarnessTests {
             commandText: nil,
             workingDirectory: nil,
             title: "Renamed",
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil
+        )
+        #expect(request.commandKind == .mutation)
+    }
+
+    @Test func sendKeyIsSupportedMutationCommand() {
+        #expect(ControlHarnessCore.supportedCommands.contains("send-key"))
+        let request = ControlHarnessRequest(
+            requestID: "req-send-key-kind",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "send-key",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: UUID().uuidString,
+            scope: nil,
+            text: nil,
+            terminalKey: "enter",
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
             environment: nil,
             force: nil,
             client: nil,

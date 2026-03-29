@@ -34,11 +34,34 @@ function getLanguageDisplayText(preferredLanguage: string | null) {
     return t('settingsLanguage.automatic');
 }
 
+function terminalInputModeCopy(preferredLanguage: string | null, mode: 'simple' | 'realtime') {
+    const isZh = preferredLanguage === 'zh-Hans' || (preferredLanguage === null && getDetectedLanguageCode() === 'zh-Hans');
+
+    if (isZh) {
+        return {
+            title: '终端输入模式',
+            subtitle: mode === 'simple'
+                ? '简单命令：点击发送后立即执行命令。'
+                : '实时按键流：输入即发送，接近 SSH 交互。',
+            detail: mode === 'simple' ? '简单命令' : '实时按键流',
+        };
+    }
+
+    return {
+        title: 'Terminal Input Mode',
+        subtitle: mode === 'simple'
+            ? 'Simple command mode executes immediately on Send.'
+            : 'Realtime key stream sends keys immediately like SSH.',
+        detail: mode === 'simple' ? 'Simple Command' : 'Realtime Key Stream',
+    };
+}
+
 export default function GhoDexSettingsScreen() {
     const router = useRouter();
     const { theme } = useUnistyles();
     const appVersion = Application.nativeApplicationVersion ?? Constants.expoConfig?.version ?? '1.0.0';
     const [themePreference, setThemePreference] = useLocalSettingMutable('themePreference');
+    const [mobileTerminalInputMode, setMobileTerminalInputMode] = useLocalSettingMutable('mobileTerminalInputMode');
     const [preferredLanguage] = useSettingMutable('preferredLanguage');
     const resolvedThemePreference = resolveThemePreference(themePreference, theme.dark);
     const iconColor = theme.colors.textSecondary;
@@ -53,6 +76,13 @@ export default function GhoDexSettingsScreen() {
         () => getLanguageDisplayText(preferredLanguage),
         [preferredLanguage]
     );
+    const inputModeCopy = React.useMemo(
+        () => terminalInputModeCopy(preferredLanguage, mobileTerminalInputMode),
+        [mobileTerminalInputMode, preferredLanguage],
+    );
+    const handleToggleTerminalInputMode = React.useCallback(() => {
+        setMobileTerminalInputMode(mobileTerminalInputMode === 'simple' ? 'realtime' : 'simple');
+    }, [mobileTerminalInputMode, setMobileTerminalInputMode]);
 
     return (
         <>
@@ -84,6 +114,14 @@ export default function GhoDexSettingsScreen() {
                         detail={languageDetail}
                         icon={<Ionicons name="language-outline" size={29} color={iconColor} />}
                         onPress={() => router.push('/settings/language')}
+                    />
+                    <Item
+                        title={inputModeCopy.title}
+                        subtitle={inputModeCopy.subtitle}
+                        detail={inputModeCopy.detail}
+                        icon={<Ionicons name="terminal-outline" size={29} color={iconColor} />}
+                        onPress={handleToggleTerminalInputMode}
+                        showChevron={false}
                     />
                 </ItemGroup>
 

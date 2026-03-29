@@ -29,6 +29,7 @@ struct ControlHarnessRequest: Codable {
     let todoID: String?
     let scope: String?
     let text: String?
+    let terminalKey: String?
     let commandText: String?
     let workingDirectory: String?
     let title: String?
@@ -68,6 +69,7 @@ struct ControlHarnessRequest: Codable {
         case todoID = "todo_id"
         case scope
         case text
+        case terminalKey = "terminal_key"
         case commandText = "command_text"
         case workingDirectory = "working_directory"
         case title
@@ -108,6 +110,7 @@ struct ControlHarnessRequest: Codable {
         todoID: String? = nil,
         scope: String?,
         text: String?,
+        terminalKey: String? = nil,
         commandText: String?,
         workingDirectory: String?,
         title: String?,
@@ -146,6 +149,7 @@ struct ControlHarnessRequest: Codable {
         self.todoID = todoID
         self.scope = scope
         self.text = text
+        self.terminalKey = terminalKey
         self.commandText = commandText
         self.workingDirectory = workingDirectory
         self.title = title
@@ -539,6 +543,7 @@ private struct ControlHarnessMutationFingerprint: Encodable {
     let todoID: String?
     let scope: String?
     let text: String?
+    let terminalKey: String?
     let commandText: String?
     let workingDirectory: String?
     let title: String?
@@ -560,6 +565,7 @@ private struct ControlHarnessMutationFingerprint: Encodable {
         case todoID = "todo_id"
         case scope
         case text
+        case terminalKey = "terminal_key"
         case commandText = "command_text"
         case workingDirectory = "working_directory"
         case title
@@ -669,6 +675,7 @@ final class ControlHarnessCore {
         "close-tab",
         "rename-tab",
         "send-text",
+        "send-key",
         "run-command",
         "read-terminal",
         "close-terminal",
@@ -679,6 +686,16 @@ final class ControlHarnessCore {
         "todo-assign",
         "todo-sync-stale",
         "events.subscribe"
+    ]
+    static let supportedTerminalKeys: Set<String> = [
+        "backspace",
+        "enter",
+        "tab",
+        "escape",
+        "arrow_up",
+        "arrow_down",
+        "ctrl_c",
+        "ctrl_d"
     ]
 
     private weak var appDelegate: AppDelegate?
@@ -969,6 +986,18 @@ final class ControlHarnessCore {
             )
         }
 
+        if request.command == "send-key" {
+            guard let terminalKey = request.terminalKey?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased(),
+                !terminalKey.isEmpty else {
+                throw ControlHarnessCoreError.invalidArgument("send-key requires non-empty terminal_key")
+            }
+            guard Self.supportedTerminalKeys.contains(terminalKey) else {
+                throw ControlHarnessCoreError.invalidArgument("Unsupported terminal_key: \(terminalKey)")
+            }
+        }
+
         if request.command == "read-terminal" {
             if let cursor = request.cursor?.trimmingCharacters(in: .whitespacesAndNewlines) {
                 guard !cursor.isEmpty, let cursorValue = Int(cursor), cursorValue >= 0 else {
@@ -1053,6 +1082,7 @@ final class ControlHarnessCore {
             todoID: request.todoID,
             scope: request.scope,
             text: request.text,
+            terminalKey: request.terminalKey,
             commandText: request.commandText,
             workingDirectory: request.workingDirectory,
             title: request.title,
@@ -1102,6 +1132,10 @@ final class ControlHarnessCore {
 
         case "send-text":
             let result = try sendText(from: request)
+            return (AnyEncodable(result), result.sequence)
+
+        case "send-key":
+            let result = try sendKey(from: request)
             return (AnyEncodable(result), result.sequence)
 
         case "run-command":
@@ -1354,6 +1388,57 @@ final class ControlHarnessCore {
             generation: generation,
             sequence: sequence,
             operation: "send-text",
+            acknowledged: true,
+            writeID: writeID
+        )
+    }
+
+    private func sendKey(from request: ControlHarnessRequest) throws -> ControlTerminalMutationResult {
+        guard let terminalKey = request.terminalKey?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased(),
+            !terminalKey.isEmpty else {
+            throw ControlHarnessCoreError.invalidArgument("Missing terminal_key payload")
+        }
+        guard Self.supportedTerminalKeys.contains(terminalKey) else {
+            throw ControlHarnessCoreError.invalidArgument("Unsupported terminal_key: \(terminalKey)")
+        }
+        let terminalID = try parseTerminalID(request.terminalID)
+        let terminalIDString = terminalID.uuidString
+        let currentGeneration = generations.currentTerminalGeneration(for: terminalIDString)
+        try generations.assertExpectedGeneration(
+            request.expectedGeneration,
+            resourceType: "terminal",
+            resourceID: terminalIDString,
+            currentGeneration: currentGeneration
+        )
+        guard let appDelegate else {
+            throw ControlHarnessCoreError.appUnavailable
+        }
+        guard appDelegate.controlHarnessSendKey(terminalKey, to: terminalID) else {
+            throw ControlHarnessCoreError.terminalNotFound(terminalID.uuidString)
+        }
+        let generation = generations.advanceTerminalGeneration(for: terminalIDString)
+        let sequence = eventHub.emit(
+            event: "terminal.key.sent",
+            requestID: request.requestID,
+            resource: .init(type: "terminal", id: terminalIDString, generation: generation),
+            payload: AnyEncodable(["terminal_key": terminalKey])
+        )
+        sampleStore.removeTerminal(terminalIDString)
+        let writeID = Self.writeID(forSequence: sequence)
+        readAfterWriteStore.recordTextWrite(
+            terminalID: terminalIDString,
+            writeID: writeID,
+            sequence: sequence,
+            visibleFrameID: readStore.latestFrameID(for: terminalIDString, scope: "visible"),
+            screenFrameID: readStore.latestFrameID(for: terminalIDString, scope: "screen")
+        )
+        return .init(
+            terminalID: terminalIDString,
+            generation: generation,
+            sequence: sequence,
+            operation: "send-key",
             acknowledged: true,
             writeID: writeID
         )

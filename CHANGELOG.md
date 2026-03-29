@@ -4,6 +4,42 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(macos): restore native control-key dispatch for gateway send-key interactions
+
+- What changed: Reverted `aiManagerSendControlKey` in `macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift` to native `sendKeyEvent` dispatch for `backspace`, `enter`, `tab`, `escape`, `arrow_up`, `arrow_down`, `ctrl_c`, and `ctrl_d`.
+- Why: Routing `send-key` through raw `sendText` bytes regressed interactive behavior: backspace and shortcut keys no longer matched terminal expectations (`[A`, `[B`, newline-only enter).
+- Impact: Remote preset keys and keyboard backspace/enter return to terminal-native behavior, matching the previously working interaction model.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' -derivedDataPath /tmp/ghodex-sendkey-focused -skip-testing:GhosttyUITests '-only-testing:GhosttyTests/ControlHarnessTests/sendKeyUsesDedicatedKeyExecutionPath()' test`
+- Files: `macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift`, `CHANGELOG.md`
+- Decision trail: Prioritize correct terminal semantics and interactive reliability. TCC/permission anomalies are handled operationally (single active app identity + clean TCC state), not by changing key dispatch semantics.
+
+### fix(happy-client): route realtime backspace keypress through send-key gateway path
+
+- What changed: Updated realtime keyboard handling in `happy-client/sources/app/(app)/index.tsx` so system Backspace now enqueues `send-key` (`terminal_key=backspace`) instead of sending raw DEL through `send-text`. Realtime queued key mutations also stop attaching `expected_generation` to avoid stale-generation rejects during rapid key bursts. Kept delta-suppression logic so onChange deletions are still de-duplicated after keypress.
+- Why: Field diagnostics (`[ghodex-input]`) showed mobile emits Backspace and DEL correctly, but the downstream `send-text` control-character path remained device/runtime-sensitive. `send-key` is the deterministic path already backed by desktop key-event dispatch.
+- Impact: Backspace behavior in realtime mode is now aligned with desktop terminal key events and no longer depends on DEL text interpretation; rapid backspace bursts avoid generation-mismatch drops.
+- Verification: `cd happy-client && yarn test sources/ghodex/terminalInput.spec.ts`; `cd happy-client && yarn typecheck`; on-device realtime typing + Backspace with `[ghodex-input]` logs confirming `queue.send_key` for backspace.
+- Files: `happy-client/sources/app/(app)/index.tsx`, `CHANGELOG.md`
+- Decision trail: Keep printable characters on buffered `send-text` for throughput, but force control-like Backspace onto `send-key` for correctness and stable terminal semantics.
+
+### fix(happy-client): add realtime input diagnostics to trace Android backspace-to-space regressions
+
+- What changed: Added `describeTerminalDebugText` in `happy-client/sources/ghodex/terminalInput.ts` (with tests) to render control characters and spaces in a log-safe readable form (`<DEL>`, `<SP>`, `<CR>`, etc.). Wired detailed realtime input diagnostics in `happy-client/sources/app/(app)/index.tsx` across keypress reception, text change delta derivation, buffer enqueue/flush, queue dispatch, and retry/error paths under `[ghodex-input]` log tags.
+- Why: Backspace still mutates into spaces on specific Android keyboard + hidden-input paths. We need an end-to-end observable event chain to identify exactly where the wrong payload is introduced.
+- Impact: With `adb logcat`, each user key action now exposes deterministic input-state transitions and emitted terminal payloads, so root-cause analysis is no longer guesswork.
+- Verification: `cd happy-client && yarn test sources/ghodex/terminalInput.spec.ts`; `cd happy-client && yarn typecheck`; `adb logcat -s ReactNativeJS | grep ghodex-input`
+- Files: `happy-client/sources/ghodex/terminalInput.ts`, `happy-client/sources/ghodex/terminalInput.spec.ts`, `happy-client/sources/app/(app)/index.tsx`, `CHANGELOG.md`
+- Decision trail: Keep diagnostics local to the mobile input coordinator and avoid protocol churn. Structured runtime logs provide immediate field evidence without altering gateway contracts.
+
+### fix(happy-client): stop Android IME backspace from injecting spaces in realtime terminal mode
+
+- What changed: Extended realtime input delta handling in `happy-client/sources/ghodex/terminalInput.ts` with a `backspaceKeypressHint` fallback so whitespace-only insertions immediately after a backspace keypress are treated as synthetic IME artifacts and ignored. Updated `happy-client/sources/app/(app)/index.tsx` to pass a short backspace hint window and normalize key detection (`backspace/delete/del`) case-insensitively before enqueueing terminal payloads. Added regression coverage in `happy-client/sources/ghodex/terminalInput.spec.ts` for the zero-delete Android path (`pending=0 + backspace hint + whitespace insertion`).
+- Why: On some Android keyboards, backspace in hidden realtime capture input can report a whitespace insertion instead of a delete delta, which made the terminal receive spaces when users pressed backspace.
+- Impact: System keyboard backspace in realtime mode no longer degrades into space insertion on affected Android IMEs; typing and erase behavior stays aligned with terminal expectations.
+- Verification: `cd happy-client && yarn test sources/ghodex/terminalInput.spec.ts`; `cd happy-client && yarn typecheck`; on-device realtime terminal manual check with system keyboard backspace.
+- Files: `happy-client/sources/ghodex/terminalInput.ts`, `happy-client/sources/ghodex/terminalInput.spec.ts`, `happy-client/sources/app/(app)/index.tsx`, `CHANGELOG.md`
+- Decision trail: Keep the fix local to mobile input normalization and avoid protocol changes. A bounded backspace hint from keypress events is the smallest reliable way to reject IME ghost whitespace without changing normal text streaming semantics.
+
 ### fix(happy-client): switch realtime terminal to viewport-first input and serialize gateway writes
 
 - What changed: Updated realtime terminal interaction in `happy-client/sources/app/(app)/index.tsx` to remove the visible bottom composer in realtime mode and capture typing via a hidden terminal-focus input (`tap viewport -> keyboard -> direct stream`). Realtime control keys and text now share one serialized mutation queue with bounded retry on `session_limit_exceeded`, and subscription-driven live reads are deferred while writes are in flight. Realtime quick-key strip no longer renders the standalone `⌫` button; Backspace is now expected from the system keyboard key path.

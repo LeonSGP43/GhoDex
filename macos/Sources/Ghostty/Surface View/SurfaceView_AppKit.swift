@@ -2622,6 +2622,47 @@ extension Ghostty.SurfaceView {
     }
 
     @MainActor
+    func aiManagerSendControlKey(_ key: String) -> Bool {
+        guard let surfaceModel else { return false }
+        switch key {
+        case "backspace":
+            surfaceModel.sendKeyEvent(.init(key: .backspace, action: .press))
+            surfaceModel.sendKeyEvent(.init(key: .backspace, action: .release))
+            return true
+        case "enter":
+            surfaceModel.sendKeyEvent(.init(key: .enter, action: .press))
+            surfaceModel.sendKeyEvent(.init(key: .enter, action: .release))
+            return true
+        case "tab":
+            surfaceModel.sendKeyEvent(.init(key: .tab, action: .press))
+            surfaceModel.sendKeyEvent(.init(key: .tab, action: .release))
+            return true
+        case "escape":
+            surfaceModel.sendKeyEvent(.init(key: .escape, action: .press))
+            surfaceModel.sendKeyEvent(.init(key: .escape, action: .release))
+            return true
+        case "arrow_up":
+            surfaceModel.sendKeyEvent(.init(key: .arrowUp, action: .press))
+            surfaceModel.sendKeyEvent(.init(key: .arrowUp, action: .release))
+            return true
+        case "arrow_down":
+            surfaceModel.sendKeyEvent(.init(key: .arrowDown, action: .press))
+            surfaceModel.sendKeyEvent(.init(key: .arrowDown, action: .release))
+            return true
+        case "ctrl_c":
+            surfaceModel.sendKeyEvent(.init(key: .c, action: .press, mods: .ctrl))
+            surfaceModel.sendKeyEvent(.init(key: .c, action: .release, mods: .ctrl))
+            return true
+        case "ctrl_d":
+            surfaceModel.sendKeyEvent(.init(key: .d, action: .press, mods: .ctrl))
+            surfaceModel.sendKeyEvent(.init(key: .d, action: .release, mods: .ctrl))
+            return true
+        default:
+            return false
+        }
+    }
+
+    @MainActor
     func aiManagerRunCommand(_ command: String) {
         let trimmed = command.trimmingCharacters(in: .newlines)
         guard !trimmed.isEmpty else { return }

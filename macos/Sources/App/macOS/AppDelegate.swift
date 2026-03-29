@@ -224,7 +224,7 @@ class AppDelegate: NSObject,
         case "handshake", "snapshot", "read-terminal", "events.subscribe":
             return .allow
 
-        case "send-text", "run-command", "close-terminal":
+        case "send-text", "send-key", "run-command", "close-terminal":
             guard let rawTerminalID = request.terminalID,
                   let terminalID = UUID(uuidString: rawTerminalID) else {
                 let error = ControlHarnessCoreError.invalidArgument("terminal_id is required")
@@ -2158,6 +2158,15 @@ class AppDelegate: NSObject,
 
         surface.aiManagerSendText(text)
         return true
+    }
+
+    @MainActor
+    func controlHarnessSendKey(_ key: String, to terminalID: UUID) -> Bool {
+        guard let surface = findSurface(forUUID: terminalID) else {
+            return false
+        }
+
+        return surface.aiManagerSendControlKey(key)
     }
 
     @MainActor
