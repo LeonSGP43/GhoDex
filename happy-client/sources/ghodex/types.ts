@@ -97,6 +97,66 @@ export interface TerminalReadResult {
     content: string;
 }
 
+export interface TerminalSnapshotV2Result {
+    terminalId: string;
+    generation: number;
+    scope: string;
+    snapshotFormat: string;
+    capturedAt: string | null;
+    cacheAgeMs: number;
+    frameId: string | null;
+    parentFrameId: string | null;
+    content: string;
+}
+
+export interface TerminalSemanticV2Result {
+    terminalId: string;
+    generation: number;
+    scope: string;
+    extractedAt: string | null;
+    logicalLines: string[];
+    exactText: string;
+    promptDetected: boolean;
+}
+
+export interface TerminalStreamOpenResult {
+    protocolVersion: string | null;
+    streamId: string;
+    terminalId: string;
+    generation: number;
+    mode: string;
+    lastSequence: number;
+    liveStreamOpen: boolean;
+    highWatermarkBytes: number;
+    lowWatermarkBytes: number;
+    unackedBytes: number;
+    flowPaused: boolean;
+}
+
+export interface TerminalStreamChunkRecord {
+    streamKind: string;
+    streamId: string;
+    terminalId: string;
+    generation: number;
+    frameId: string;
+    parentFrameId: string | null;
+    deltaKind: string;
+    content: string;
+    contentLength: number;
+    changedRows: TerminalChangedRow[];
+}
+
+export interface TerminalStreamAckResult {
+    terminalId: string;
+    streamId: string;
+    generation: number;
+    acknowledgedBytes: number;
+    remainingUnackedBytes: number;
+    highWatermarkBytes: number;
+    lowWatermarkBytes: number;
+    flowPaused: boolean;
+}
+
 export interface TerminalChangedRow {
     index: number;
     kind: string;

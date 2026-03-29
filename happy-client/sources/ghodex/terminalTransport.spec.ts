@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import type { TerminalReadResult } from './types';
+import type { TerminalReadResult, TerminalSnapshotV2Result, TerminalStreamChunkRecord } from './types';
 import {
     applyTerminalDelta,
+    accumulateTerminalStreamAckBytes,
+    mapSnapshotV2ToTerminalReadResult,
+    mapTerminalStreamChunkToTerminalReadResult,
     shouldFallbackToTerminalSnapshot,
     shouldRequestTerminalDelta,
 } from './terminalTransport';
@@ -31,6 +34,41 @@ function makeTerminalReadResult(overrides: Partial<TerminalReadResult> = {}): Te
         observedWriteId: null,
         readAfterReady: null,
         content: 'A\nB\nC\nD',
+        ...overrides,
+    };
+}
+
+function makeTerminalSnapshotV2Result(
+    overrides: Partial<TerminalSnapshotV2Result> = {},
+): TerminalSnapshotV2Result {
+    return {
+        terminalId: 'terminal-1',
+        generation: 2,
+        scope: 'visible',
+        snapshotFormat: 'ansi_text',
+        capturedAt: '2026-03-29T00:00:00Z',
+        cacheAgeMs: 8,
+        frameId: 'frm_2',
+        parentFrameId: 'frm_1',
+        content: 'A\nB\nC',
+        ...overrides,
+    };
+}
+
+function makeTerminalStreamChunkRecord(
+    overrides: Partial<TerminalStreamChunkRecord> = {},
+): TerminalStreamChunkRecord {
+    return {
+        streamKind: 'terminal_chunk',
+        streamId: 'stream-1',
+        terminalId: 'terminal-1',
+        generation: 3,
+        frameId: 'frm_3',
+        parentFrameId: 'frm_2',
+        deltaKind: 'reset',
+        content: 'A\nB\nC\nD\nE',
+        contentLength: 9,
+        changedRows: [],
         ...overrides,
     };
 }
@@ -117,5 +155,129 @@ describe('terminal transport helpers', () => {
                 changedRows: [],
             }),
         })).toBe(true);
+    });
+
+    it('maps v2 snapshot payloads into terminal read compatibility shape', () => {
+        const mapped = mapSnapshotV2ToTerminalReadResult(
+            makeTerminalSnapshotV2Result({
+                terminalId: 'terminal-2',
+                generation: 4,
+                scope: 'screen',
+                frameId: 'frm_9',
+                parentFrameId: 'frm_8',
+                content: 'OK\nDONE',
+            }),
+            null,
+        );
+
+        expect(mapped).toMatchObject({
+            terminalId: 'terminal-2',
+            generation: 4,
+            scope: 'screen',
+            mode: 'snapshot',
+            contentKind: 'snapshot',
+            frameId: 'frm_9',
+            parentFrameId: 'frm_8',
+            content: 'OK\nDONE',
+            totalLines: 2,
+            returnedLines: 2,
+            truncated: false,
+            hasChanges: true,
+            deltaKind: 'reset',
+        });
+    });
+
+    it('marks hasChanges=false when v2 snapshot frame id is unchanged', () => {
+        const previous = makeTerminalReadResult({
+            terminalId: 'terminal-1',
+            frameId: 'frm_2',
+            content: 'A\nB\nC',
+        });
+        const mapped = mapSnapshotV2ToTerminalReadResult(
+            makeTerminalSnapshotV2Result({
+                terminalId: 'terminal-1',
+                frameId: 'frm_2',
+                content: 'A\nB\nC',
+            }),
+            previous,
+        );
+
+        expect(mapped.hasChanges).toBe(false);
+        expect(mapped.deltaKind).toBe('none');
+    });
+
+    it('maps terminal stream reset chunk into snapshot compatibility result', () => {
+        const mapped = mapTerminalStreamChunkToTerminalReadResult(
+            makeTerminalStreamChunkRecord({
+                terminalId: 'terminal-2',
+                generation: 7,
+                deltaKind: 'reset',
+                frameId: 'frm_10',
+                parentFrameId: 'frm_9',
+                content: 'READY\n$',
+                changedRows: [],
+            }),
+            null,
+        );
+
+        expect(mapped).toMatchObject({
+            terminalId: 'terminal-2',
+            generation: 7,
+            mode: 'snapshot',
+            contentKind: 'snapshot',
+            frameId: 'frm_10',
+            parentFrameId: 'frm_9',
+            hasChanges: true,
+            deltaKind: 'reset',
+            changedRows: [],
+            content: 'READY\n$',
+        });
+    });
+
+    it('maps terminal stream row chunk into merge-safe delta compatibility result', () => {
+        const mapped = mapTerminalStreamChunkToTerminalReadResult(
+            makeTerminalStreamChunkRecord({
+                deltaKind: 'rows',
+                frameId: 'frm_4',
+                parentFrameId: 'frm_3',
+                content: '[line 3] DONE',
+                changedRows: [{ index: 3, kind: 'update', text: 'DONE' }],
+            }),
+            makeTerminalReadResult({
+                terminalId: 'terminal-1',
+                frameId: 'frm_3',
+                content: 'A\nB\nC\nOLD',
+            }),
+        );
+        expect(mapped).not.toBeNull();
+        if (!mapped) {
+            throw new Error('expected mapped stream delta result');
+        }
+
+        expect(mapped.mode).toBe('delta');
+        expect(mapped.contentKind).toBe('delta');
+        expect(mapped.deltaKind).toBe('rows');
+        expect(mapped.hasChanges).toBe(true);
+        expect(mapped.changedRows).toEqual([{ index: 3, kind: 'update', text: 'DONE' }]);
+    });
+
+    it('accumulates terminal stream ack bytes and signals when batch threshold is reached', () => {
+        expect(accumulateTerminalStreamAckBytes({
+            pendingBytes: 0,
+            incomingBytes: 200,
+            batchBytes: 512,
+        })).toEqual({
+            pendingBytes: 200,
+            shouldFlush: false,
+        });
+
+        expect(accumulateTerminalStreamAckBytes({
+            pendingBytes: 380,
+            incomingBytes: 160,
+            batchBytes: 512,
+        })).toEqual({
+            pendingBytes: 540,
+            shouldFlush: true,
+        });
     });
 });

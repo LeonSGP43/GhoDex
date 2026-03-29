@@ -25,13 +25,16 @@ import { getCurrentLanguage } from '@/text';
 import {
     closeTab as closeGatewayTab,
     createTab as createGatewayTab,
+    ackTerminalStream,
     fetchSnapshot,
     readTerminal,
+    readTerminalSnapshotV2,
     renameTab as renameGatewayTab,
     runTerminalCommand,
     sendTerminalKey,
     sendTerminalText,
     subscribeToGatewayEvents,
+    subscribeToTerminalStream,
 } from '@/ghodex/gateway';
 import { INITIAL_GATEWAY_SESSION } from '@/ghodex/sessionState';
 import { loadStoredSession, type StoredSession } from '@/ghodex/storage';
@@ -39,7 +42,10 @@ import { useLocalSetting } from '@/sync/storage';
 import { TerminalRenderer } from '@/ghodex/terminal/TerminalRenderer';
 import { applyTerminalRowDelta, buildTerminalRows, type TerminalRenderRow } from '@/ghodex/terminal/model';
 import {
+    accumulateTerminalStreamAckBytes,
     applyTerminalDelta,
+    mapSnapshotV2ToTerminalReadResult,
+    mapTerminalStreamChunkToTerminalReadResult,
     shouldFallbackToTerminalSnapshot,
     shouldRequestTerminalDelta,
 } from '@/ghodex/terminalTransport';
@@ -112,6 +118,8 @@ const REALTIME_INPUT_FLUSH_MS = 12;
 const REALTIME_INPUT_MAX_BATCH_SIZE = 48;
 const REALTIME_MUTATION_INTERLEAVE_MS = 12;
 const BACKSPACE_KEYPRESS_HINT_WINDOW_MS = 220;
+const TERMINAL_STREAM_ACK_BATCH_BYTES = 768;
+const TERMINAL_STREAM_ACK_FLUSH_MS = 40;
 const REALTIME_BACKSPACE_KEY_SPEC: TerminalControlKeySpec = {
     id: 'backspace',
     label: '⌫',
@@ -496,6 +504,12 @@ export default function GhoDexWorkspaceScreen() {
     const realtimeResyncPendingRef = React.useRef(false);
     const realtimeLastBackspaceKeypressAtRef = React.useRef(0);
     const realtimeInputDebugSeqRef = React.useRef(0);
+    const terminalStreamLiveRef = React.useRef(false);
+    const terminalStreamIdRef = React.useRef<string | null>(null);
+    const terminalStreamTerminalIdRef = React.useRef<string | null>(null);
+    const terminalStreamAckPendingBytesRef = React.useRef(0);
+    const terminalStreamAckInFlightRef = React.useRef(false);
+    const terminalStreamAckTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
     const loadTerminalViewRef = React.useRef<LoadTerminalViewFn | null>(null);
     const refreshSnapshotRef = React.useRef<RefreshSnapshotFn | null>(null);
     const driveSelectedTerminalFromSubscriptionRef = React.useRef<(() => void) | null>(null);
@@ -540,6 +554,10 @@ export default function GhoDexWorkspaceScreen() {
         if (realtimeInputFlushTimerRef.current) {
             clearTimeout(realtimeInputFlushTimerRef.current);
             realtimeInputFlushTimerRef.current = null;
+        }
+        if (terminalStreamAckTimerRef.current) {
+            clearTimeout(terminalStreamAckTimerRef.current);
+            terminalStreamAckTimerRef.current = null;
         }
     }, []);
 
@@ -615,6 +633,101 @@ export default function GhoDexWorkspaceScreen() {
             console.warn(line);
         }
     }, []);
+
+    const clearTerminalStreamAckTimer = React.useCallback(() => {
+        if (terminalStreamAckTimerRef.current) {
+            clearTimeout(terminalStreamAckTimerRef.current);
+            terminalStreamAckTimerRef.current = null;
+        }
+    }, []);
+
+    const resetTerminalStreamRuntime = React.useCallback(() => {
+        terminalStreamLiveRef.current = false;
+        terminalStreamIdRef.current = null;
+        terminalStreamTerminalIdRef.current = null;
+        terminalStreamAckPendingBytesRef.current = 0;
+        terminalStreamAckInFlightRef.current = false;
+        clearTerminalStreamAckTimer();
+    }, [clearTerminalStreamAckTimer]);
+
+    const flushTerminalStreamAck = React.useCallback(async () => {
+        if (terminalStreamAckInFlightRef.current) {
+            return;
+        }
+
+        const streamId = terminalStreamIdRef.current;
+        const terminalId = terminalStreamTerminalIdRef.current;
+        const pendingAckBytes = terminalStreamAckPendingBytesRef.current;
+        const activeSession = sessionRef.current;
+        const authToken = activeSession.authToken.trim();
+        if (!streamId || !terminalId || !authToken || pendingAckBytes <= 0) {
+            return;
+        }
+
+        terminalStreamAckPendingBytesRef.current = 0;
+        terminalStreamAckInFlightRef.current = true;
+
+        try {
+            await runMeasuredGatewayRequest(() => ackTerminalStream({
+                host: activeSession.host,
+                port: activeSession.port,
+                authToken,
+                terminalId,
+                streamId,
+                ackBytes: pendingAckBytes,
+            }));
+        } catch (error) {
+            terminalStreamAckPendingBytesRef.current += pendingAckBytes;
+
+            if (isGatewayAuthError(error)) {
+                setAuthorizationRequired(true);
+                setSubscriptionOpen(false);
+                setErrorMessage('Gateway authorization expired for this desktop build. Re-open Device and bind the phone again.');
+                return;
+            }
+
+            if (isGatewayConcurrentSessionLimitError(error)) {
+                setTimeout(() => {
+                    void flushTerminalStreamAck();
+                }, 120);
+                return;
+            }
+
+            console.warn('Failed to ack terminal stream chunk', error);
+        } finally {
+            terminalStreamAckInFlightRef.current = false;
+        }
+
+        if (terminalStreamAckPendingBytesRef.current > 0) {
+            setTimeout(() => {
+                void flushTerminalStreamAck();
+            }, 0);
+        }
+    }, [runMeasuredGatewayRequest]);
+
+    const queueTerminalStreamAck = React.useCallback((chunkBytes: number) => {
+        const accumulated = accumulateTerminalStreamAckBytes({
+            pendingBytes: terminalStreamAckPendingBytesRef.current,
+            incomingBytes: chunkBytes,
+            batchBytes: TERMINAL_STREAM_ACK_BATCH_BYTES,
+        });
+        terminalStreamAckPendingBytesRef.current = accumulated.pendingBytes;
+
+        if (accumulated.shouldFlush) {
+            clearTerminalStreamAckTimer();
+            void flushTerminalStreamAck();
+            return;
+        }
+
+        if (terminalStreamAckTimerRef.current) {
+            return;
+        }
+
+        terminalStreamAckTimerRef.current = setTimeout(() => {
+            terminalStreamAckTimerRef.current = null;
+            void flushTerminalStreamAck();
+        }, TERMINAL_STREAM_ACK_FLUSH_MS);
+    }, [clearTerminalStreamAckTimer, flushTerminalStreamAck]);
 
     const applyTerminalResult = React.useCallback((
         result: TerminalReadResult,
@@ -736,21 +849,39 @@ export default function GhoDexWorkspaceScreen() {
         const activeSession = sessionRef.current;
         const updateStartedAt = Date.now();
         const metricsSource = options?.metricsSource ?? (options?.mode === 'delta' ? 'live' : 'manual');
-        const result = await runMeasuredGatewayRequest(() => readTerminal({
-            host: activeSession.host,
-            port: activeSession.port,
-            authToken,
-            terminalId: terminal.terminalId,
-            expectedGeneration: options?.expectedGeneration ?? terminal.generation,
-            mode: options?.mode ?? 'snapshot',
-            sinceFrameId: options?.sinceFrameId,
-            maxChars: 24_000,
-            maxLines: 300,
-            readAfterWriteId: options?.readAfterWriteId,
-        }));
+        const readMode = options?.mode ?? 'snapshot';
+        const requiresReadAfterWrite = !!options?.readAfterWriteId;
+        const result = await runMeasuredGatewayRequest(() => {
+            if (readMode === 'delta' || requiresReadAfterWrite) {
+                return readTerminal({
+                    host: activeSession.host,
+                    port: activeSession.port,
+                    authToken,
+                    terminalId: terminal.terminalId,
+                    expectedGeneration: options?.expectedGeneration ?? terminal.generation,
+                    mode: readMode,
+                    sinceFrameId: options?.sinceFrameId,
+                    maxChars: 24_000,
+                    maxLines: 300,
+                    readAfterWriteId: options?.readAfterWriteId,
+                });
+            }
+
+            return readTerminalSnapshotV2({
+                host: activeSession.host,
+                port: activeSession.port,
+                authToken,
+                terminalId: terminal.terminalId,
+                expectedGeneration: options?.expectedGeneration ?? terminal.generation,
+                scope: 'visible',
+            }).then((snapshotV2Result) => mapSnapshotV2ToTerminalReadResult(
+                snapshotV2Result,
+                terminalViewRef.current,
+            ));
+        });
 
         const currentTerminalView = terminalViewRef.current;
-        const expectsDelta = options?.mode === 'delta';
+        const expectsDelta = readMode === 'delta';
         const deltaNeedsSnapshotFallback = shouldFallbackToTerminalSnapshot({
             requestMode: expectsDelta ? 'delta' : 'snapshot',
             requestedSinceFrameId: options?.sinceFrameId,
@@ -759,17 +890,33 @@ export default function GhoDexWorkspaceScreen() {
         });
 
         if (deltaNeedsSnapshotFallback) {
-            const snapshotResult = await runMeasuredGatewayRequest(() => readTerminal({
-                host: activeSession.host,
-                port: activeSession.port,
-                authToken,
-                terminalId: terminal.terminalId,
-                expectedGeneration: options?.expectedGeneration ?? result.generation,
-                mode: 'snapshot',
-                maxChars: 24_000,
-                maxLines: 300,
-                readAfterWriteId: options?.readAfterWriteId,
-            }));
+            const snapshotResult = await runMeasuredGatewayRequest(() => {
+                if (requiresReadAfterWrite) {
+                    return readTerminal({
+                        host: activeSession.host,
+                        port: activeSession.port,
+                        authToken,
+                        terminalId: terminal.terminalId,
+                        expectedGeneration: options?.expectedGeneration ?? result.generation,
+                        mode: 'snapshot',
+                        maxChars: 24_000,
+                        maxLines: 300,
+                        readAfterWriteId: options?.readAfterWriteId,
+                    });
+                }
+
+                return readTerminalSnapshotV2({
+                    host: activeSession.host,
+                    port: activeSession.port,
+                    authToken,
+                    terminalId: terminal.terminalId,
+                    expectedGeneration: options?.expectedGeneration ?? result.generation,
+                    scope: 'visible',
+                }).then((snapshotV2Result) => mapSnapshotV2ToTerminalReadResult(
+                    snapshotV2Result,
+                    terminalViewRef.current,
+                ));
+            });
             applyTerminalResult(snapshotResult);
             recordTerminalUpdate(metricsSource, Date.now() - updateStartedAt);
             return snapshotResult;
@@ -1125,6 +1272,11 @@ export default function GhoDexWorkspaceScreen() {
     }, [isRealtimeInputMode, selectedTerminalId]);
 
     const driveSelectedTerminalFromSubscription = React.useCallback(() => {
+        const streamTerminalId = terminalStreamTerminalIdRef.current;
+        if (terminalStreamLiveRef.current && streamTerminalId && streamTerminalId === selectedTerminalIdRef.current) {
+            return;
+        }
+
         if (shouldDeferRealtimeLiveRead({
             isRealtimeInputMode,
             writeInFlight: realtimeInputInFlightRef.current,
@@ -1195,7 +1347,6 @@ export default function GhoDexWorkspaceScreen() {
                 recordReconnectRecovered(reconnectStartedAtRef.current);
                 reconnectStartedAtRef.current = null;
             }
-            setSubscriptionOpen(true);
             return;
         }
 
@@ -1241,6 +1392,12 @@ export default function GhoDexWorkspaceScreen() {
         });
 
         if (resource.id === selectedTerminalIdRef.current) {
+            if (
+                terminalStreamLiveRef.current
+                && terminalStreamTerminalIdRef.current === resource.id
+            ) {
+                return;
+            }
             driveSelectedTerminalFromSubscription();
             return;
         }
@@ -1259,6 +1416,7 @@ export default function GhoDexWorkspaceScreen() {
 
         const authToken = stored.authToken.trim();
         if (!authToken) {
+            resetTerminalStreamRuntime();
             setSnapshot(null);
             setSelectedTerminalId(null);
             setTerminalView(null);
@@ -1287,7 +1445,7 @@ export default function GhoDexWorkspaceScreen() {
             setErrorMessage(message);
             recordScreenReady('workspace', workspaceOpenedAt);
         }
-    }, [refreshSnapshotImpl]);
+    }, [refreshSnapshotImpl, resetTerminalStreamRuntime]);
 
     useFocusEffect(React.useCallback(() => {
         void hydrateSession();
@@ -1721,8 +1879,139 @@ export default function GhoDexWorkspaceScreen() {
 
     React.useEffect(() => {
         const authToken = session.authToken.trim();
-        if (!isFocused || !loaded || !authToken || !session.liveUpdatesEnabled || authorizationRequired || sidebarVisible) {
+        const terminalId = selectedTerminal?.terminalId ?? null;
+        if (
+            !isFocused
+            || !loaded
+            || !authToken
+            || !terminalId
+            || !session.liveUpdatesEnabled
+            || authorizationRequired
+            || sidebarVisible
+        ) {
+            resetTerminalStreamRuntime();
             setSubscriptionOpen(false);
+            reconnectStartedAtRef.current = null;
+            return;
+        }
+
+        let cancelled = false;
+        let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+        let unsubscribe: (() => void) | null = null;
+
+        const openTerminalStream = () => {
+            if (cancelled) {
+                return;
+            }
+
+            try {
+                unsubscribe = subscribeToTerminalStream({
+                    host: session.host,
+                    port: session.port,
+                    authToken,
+                    terminalId,
+                    onOpen: (openResult) => {
+                        if (cancelled) {
+                            return;
+                        }
+                        terminalStreamLiveRef.current = true;
+                        terminalStreamIdRef.current = openResult.streamId;
+                        terminalStreamTerminalIdRef.current = openResult.terminalId;
+                        subscriptionSequenceRef.current = Math.max(
+                            subscriptionSequenceRef.current,
+                            openResult.lastSequence,
+                        );
+                        setSubscriptionOpen(true);
+                        if (reconnectStartedAtRef.current !== null) {
+                            recordReconnectRecovered(reconnectStartedAtRef.current);
+                            reconnectStartedAtRef.current = null;
+                        }
+                    },
+                    onChunk: (chunk) => {
+                        if (cancelled || chunk.terminalId !== selectedTerminalIdRef.current) {
+                            return;
+                        }
+
+                        const mappedResult = mapTerminalStreamChunkToTerminalReadResult(
+                            chunk,
+                            terminalViewRef.current,
+                        );
+                        if (mappedResult) {
+                            applyTerminalResult(
+                                mappedResult,
+                                { mergeDelta: mappedResult.mode === 'delta' && mappedResult.contentKind === 'delta' },
+                            );
+                        } else {
+                            scheduleSnapshotRefresh('resync');
+                        }
+
+                        const fallbackLength = chunk.content.length;
+                        const chunkBytes = chunk.contentLength > 0 ? chunk.contentLength : fallbackLength;
+                        if (chunkBytes > 0) {
+                            queueTerminalStreamAck(chunkBytes);
+                        }
+                    },
+                    onError: (error) => {
+                        if (cancelled) {
+                            return;
+                        }
+                        resetTerminalStreamRuntime();
+                        setSubscriptionOpen(false);
+                        if (isGatewayAuthError(error)) {
+                            setAuthorizationRequired(true);
+                            setErrorMessage('Gateway authorization expired for this desktop build. Re-open Device and bind the phone again.');
+                            return;
+                        }
+                        console.warn('Terminal stream subscription dropped', error);
+                        const delayMs = Math.max(500, session.pollIntervalMs * 2);
+                        reconnectStartedAtRef.current = recordReconnectScheduled('terminal_stream_drop', delayMs);
+                        reconnectTimer = setTimeout(openTerminalStream, delayMs);
+                    },
+                });
+            } catch (error) {
+                if (cancelled) {
+                    return;
+                }
+                resetTerminalStreamRuntime();
+                setSubscriptionOpen(false);
+                const delayMs = Math.max(500, session.pollIntervalMs * 2);
+                reconnectStartedAtRef.current = recordReconnectScheduled('terminal_stream_open_failed', delayMs);
+                reconnectTimer = setTimeout(openTerminalStream, delayMs);
+            }
+        };
+
+        openTerminalStream();
+
+        return () => {
+            cancelled = true;
+            setSubscriptionOpen(false);
+            resetTerminalStreamRuntime();
+            reconnectStartedAtRef.current = null;
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer);
+            }
+            unsubscribe?.();
+        };
+    }, [
+        applyTerminalResult,
+        authorizationRequired,
+        isFocused,
+        loaded,
+        queueTerminalStreamAck,
+        resetTerminalStreamRuntime,
+        scheduleSnapshotRefresh,
+        selectedTerminal?.terminalId,
+        session.authToken,
+        session.host,
+        session.liveUpdatesEnabled,
+        session.pollIntervalMs,
+        session.port,
+        sidebarVisible,
+    ]);
+
+    React.useEffect(() => {
+        const authToken = session.authToken.trim();
+        if (!isFocused || !loaded || !authToken || !session.liveUpdatesEnabled || authorizationRequired || sidebarVisible) {
             reconnectStartedAtRef.current = null;
             return;
         }
@@ -1755,13 +2044,11 @@ export default function GhoDexWorkspaceScreen() {
                         }
                         if (isGatewayAuthError(error)) {
                             setAuthorizationRequired(true);
-                            setSubscriptionOpen(false);
                             reconnectStartedAtRef.current = null;
                             setErrorMessage('Gateway authorization expired for this desktop build. Re-open Device and bind the phone again.');
                             return;
                         }
                         console.warn('Gateway subscription dropped', error);
-                        setSubscriptionOpen(false);
                         const delayMs = Math.max(500, session.pollIntervalMs * 4);
                         reconnectStartedAtRef.current = recordReconnectScheduled('subscription_drop', delayMs);
                         reconnectTimer = setTimeout(openSubscription, delayMs);
@@ -1770,7 +2057,6 @@ export default function GhoDexWorkspaceScreen() {
             } catch (error) {
                 const message = error instanceof Error ? error.message : 'Failed to open gateway subscription';
                 console.warn(message);
-                setSubscriptionOpen(false);
                 const delayMs = Math.max(500, session.pollIntervalMs * 4);
                 reconnectStartedAtRef.current = recordReconnectScheduled('subscription_open_failed', delayMs);
                 reconnectTimer = setTimeout(openSubscription, delayMs);
@@ -1781,7 +2067,6 @@ export default function GhoDexWorkspaceScreen() {
 
         return () => {
             cancelled = true;
-            setSubscriptionOpen(false);
             reconnectStartedAtRef.current = null;
             if (reconnectTimer) {
                 clearTimeout(reconnectTimer);

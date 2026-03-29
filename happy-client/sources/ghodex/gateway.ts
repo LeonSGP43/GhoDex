@@ -9,6 +9,11 @@ import type {
     TerminalChangedRow,
     TerminalMutationResult,
     TerminalReadResult,
+    TerminalStreamAckResult,
+    TerminalStreamChunkRecord,
+    TerminalStreamOpenResult,
+    TerminalSemanticV2Result,
+    TerminalSnapshotV2Result,
     TerminalRow,
 } from './types';
 import {
@@ -46,6 +51,8 @@ interface GatewayRequest {
     command_text?: string;
     text?: string;
     terminal_key?: string;
+    stream_id?: string;
+    ack_bytes?: number;
     working_directory?: string;
     title?: string;
     force?: boolean;
@@ -405,6 +412,122 @@ function parseTerminalReadResult(envelope: GatewayEnvelope): TerminalReadResult 
     };
 }
 
+function parseTerminalSnapshotV2Result(envelope: GatewayEnvelope): TerminalSnapshotV2Result {
+    const result = ensureObject(envelope.result, 'terminal snapshot v2 result');
+    const terminalId = readString(result, 'terminal_id');
+    if (!terminalId) {
+        throw new GatewayProtocolError('Gateway terminal snapshot v2 response is missing terminal_id');
+    }
+
+    return {
+        terminalId,
+        generation: readNumber(result, 'generation'),
+        scope: readString(result, 'scope') ?? 'visible',
+        snapshotFormat: readString(result, 'snapshot_format') ?? 'ansi_text',
+        capturedAt: readString(result, 'captured_at'),
+        cacheAgeMs: readNumber(result, 'cache_age_ms'),
+        frameId: readString(result, 'frame_id'),
+        parentFrameId: readString(result, 'parent_frame_id'),
+        content: readString(result, 'content') ?? '',
+    };
+}
+
+function parseTerminalSemanticV2Result(envelope: GatewayEnvelope): TerminalSemanticV2Result {
+    const result = ensureObject(envelope.result, 'terminal semantic v2 result');
+    const terminalId = readString(result, 'terminal_id');
+    if (!terminalId) {
+        throw new GatewayProtocolError('Gateway terminal semantic v2 response is missing terminal_id');
+    }
+
+    return {
+        terminalId,
+        generation: readNumber(result, 'generation'),
+        scope: readString(result, 'scope') ?? 'visible',
+        extractedAt: readString(result, 'extracted_at'),
+        logicalLines: readStringArray(result, 'logical_lines'),
+        exactText: readString(result, 'exact_text') ?? '',
+        promptDetected: readBoolean(result, 'prompt_detected'),
+    };
+}
+
+function parseTerminalStreamOpenResult(envelope: GatewayEnvelope): TerminalStreamOpenResult {
+    const result = ensureObject(envelope.result, 'terminal stream open result');
+    const streamId = readString(result, 'stream_id');
+    const terminalId = readString(result, 'terminal_id');
+    if (!streamId) {
+        throw new GatewayProtocolError('Gateway terminal stream open response is missing stream_id');
+    }
+    if (!terminalId) {
+        throw new GatewayProtocolError('Gateway terminal stream open response is missing terminal_id');
+    }
+
+    return {
+        protocolVersion: readString(result, 'protocol_version'),
+        streamId,
+        terminalId,
+        generation: readNumber(result, 'generation'),
+        mode: readString(result, 'mode') ?? 'stream',
+        lastSequence: readNumber(result, 'last_sequence'),
+        liveStreamOpen: readBoolean(result, 'live_stream_open'),
+        highWatermarkBytes: readNumber(result, 'high_watermark_bytes'),
+        lowWatermarkBytes: readNumber(result, 'low_watermark_bytes'),
+        unackedBytes: readNumber(result, 'unacked_bytes'),
+        flowPaused: readBoolean(result, 'flow_paused'),
+    };
+}
+
+function parseTerminalStreamChunkRecord(raw: Record<string, unknown>): TerminalStreamChunkRecord | null {
+    if (readString(raw, 'stream_kind') !== 'terminal_chunk') {
+        return null;
+    }
+
+    const streamId = readString(raw, 'stream_id');
+    const terminalId = readString(raw, 'terminal_id');
+    const frameId = readString(raw, 'frame_id');
+    if (!streamId || !terminalId || !frameId) {
+        throw new GatewayProtocolError('Gateway terminal stream chunk is missing required identifiers');
+    }
+
+    const content = readString(raw, 'content') ?? '';
+    const contentLength = readNumber(raw, 'content_length') || content.length;
+
+    return {
+        streamKind: 'terminal_chunk',
+        streamId,
+        terminalId,
+        generation: readNumber(raw, 'generation'),
+        frameId,
+        parentFrameId: readString(raw, 'parent_frame_id'),
+        deltaKind: readString(raw, 'delta_kind') ?? 'snapshot',
+        content,
+        contentLength,
+        changedRows: readChangedRows(raw, 'changed_rows'),
+    };
+}
+
+function parseTerminalStreamAckResult(envelope: GatewayEnvelope): TerminalStreamAckResult {
+    const result = ensureObject(envelope.result, 'terminal stream ack result');
+    const streamId = readString(result, 'stream_id');
+    const terminalId = readString(result, 'terminal_id');
+    if (!streamId) {
+        throw new GatewayProtocolError('Gateway terminal stream ack response is missing stream_id');
+    }
+    if (!terminalId) {
+        throw new GatewayProtocolError('Gateway terminal stream ack response is missing terminal_id');
+    }
+
+    return {
+        terminalId,
+        streamId,
+        generation: readNumber(result, 'generation'),
+        acknowledgedBytes: readNumber(result, 'acknowledged_bytes'),
+        remainingUnackedBytes: readNumber(result, 'remaining_unacked_bytes'),
+        highWatermarkBytes: readNumber(result, 'high_watermark_bytes'),
+        lowWatermarkBytes: readNumber(result, 'low_watermark_bytes'),
+        flowPaused: readBoolean(result, 'flow_paused'),
+    };
+}
+
 function parseTerminalMutationResult(envelope: GatewayEnvelope): TerminalMutationResult {
     const result = ensureObject(envelope.result, 'terminal mutation result');
     const terminalId = readString(result, 'terminal_id');
@@ -540,6 +663,258 @@ export async function readTerminal(input: GatewayConnection & {
         },
     );
     return parseTerminalReadResult(envelope);
+}
+
+export async function readTerminalSnapshotV2(input: GatewayConnection & {
+    authToken: string;
+    terminalId: string;
+    expectedGeneration?: number;
+    scope?: 'visible' | 'screen';
+}): Promise<TerminalSnapshotV2Result> {
+    const authToken = input.authToken.trim();
+    const terminalId = input.terminalId.trim();
+    if (!authToken) {
+        throw new GatewayProtocolError('Auth token is empty');
+    }
+    if (!terminalId) {
+        throw new GatewayProtocolError('terminal_id is empty');
+    }
+
+    const envelope = await sendRequest(
+        input,
+        {
+            request_id: nextRequestId('terminal-snapshot-v2'),
+            command: 'terminal.snapshot.v2',
+            auth_token: authToken,
+            terminal_id: terminalId,
+            expected_generation: input.expectedGeneration,
+            scope: input.scope ?? 'visible',
+        },
+    );
+    return parseTerminalSnapshotV2Result(envelope);
+}
+
+export async function readTerminalSemanticV2(input: GatewayConnection & {
+    authToken: string;
+    terminalId: string;
+    expectedGeneration?: number;
+    scope?: 'visible' | 'screen';
+}): Promise<TerminalSemanticV2Result> {
+    const authToken = input.authToken.trim();
+    const terminalId = input.terminalId.trim();
+    if (!authToken) {
+        throw new GatewayProtocolError('Auth token is empty');
+    }
+    if (!terminalId) {
+        throw new GatewayProtocolError('terminal_id is empty');
+    }
+
+    const envelope = await sendRequest(
+        input,
+        {
+            request_id: nextRequestId('terminal-semantic-v2'),
+            command: 'terminal.semantic.v2',
+            auth_token: authToken,
+            terminal_id: terminalId,
+            expected_generation: input.expectedGeneration,
+            scope: input.scope ?? 'visible',
+        },
+    );
+    return parseTerminalSemanticV2Result(envelope);
+}
+
+export async function ackTerminalStream(input: GatewayConnection & {
+    authToken: string;
+    terminalId: string;
+    streamId: string;
+    ackBytes: number;
+    expectedGeneration?: number;
+}): Promise<TerminalStreamAckResult> {
+    const authToken = input.authToken.trim();
+    const terminalId = input.terminalId.trim();
+    const streamId = input.streamId.trim();
+    const ackBytes = Math.max(1, Math.trunc(input.ackBytes));
+    if (!authToken) {
+        throw new GatewayProtocolError('Auth token is empty');
+    }
+    if (!terminalId) {
+        throw new GatewayProtocolError('terminal_id is empty');
+    }
+    if (!streamId) {
+        throw new GatewayProtocolError('stream_id is empty');
+    }
+
+    const envelope = await sendRequest(
+        input,
+        {
+            request_id: nextRequestId('terminal-stream-ack'),
+            command: 'terminal.stream.ack',
+            auth_token: authToken,
+            terminal_id: terminalId,
+            stream_id: streamId,
+            ack_bytes: ackBytes,
+            expected_generation: input.expectedGeneration,
+        },
+    );
+    return parseTerminalStreamAckResult(envelope);
+}
+
+export function subscribeToTerminalStream(input: GatewayConnection & {
+    authToken: string;
+    terminalId: string;
+    expectedGeneration?: number;
+    scope?: 'visible' | 'screen';
+    onOpen: (open: TerminalStreamOpenResult) => void;
+    onChunk: (chunk: TerminalStreamChunkRecord) => void;
+    onError?: (error: Error) => void;
+}): () => void {
+    const authToken = input.authToken.trim();
+    const terminalId = input.terminalId.trim();
+    if (!authToken) {
+        throw new GatewayProtocolError('Auth token is empty');
+    }
+    if (!terminalId) {
+        throw new GatewayProtocolError('terminal_id is empty');
+    }
+
+    const openVariant = (connection: GatewayConnection) => {
+        const socket = new WebSocket(resolveGatewaySocketUrl({
+            transportMode: connection.transportMode === 'relay' ? 'relay' : 'lan',
+            host: connection.host,
+            port: connection.port,
+            publicEndpoint: connection.publicEndpoint,
+            transportSharedSecret: connection.transportSharedSecret,
+        }));
+        return socket;
+    };
+    let closedByClient = false;
+    let settled = false;
+    let attemptedRelayFallback = false;
+    let streamOpenAcknowledged = false;
+    let socket = openVariant(input);
+    let activeConnection: GatewayConnection = input;
+
+    const finalizeWithError = (error: GatewayProtocolError) => {
+        if (closedByClient || settled) {
+            return;
+        }
+        settled = true;
+        input.onError?.(error);
+    };
+
+    const bindSocket = (connection: GatewayConnection) => {
+        const boundSocket = socket;
+
+        socket.onopen = () => {
+            if (boundSocket !== socket) {
+                return;
+            }
+            const request: GatewayRequest = {
+                request_id: nextRequestId('terminal-stream-open'),
+                command: 'terminal.stream.open',
+                auth_token: authToken,
+                terminal_id: terminalId,
+                expected_generation: input.expectedGeneration,
+                scope: input.scope ?? 'visible',
+            };
+            if (usesEncryptedGatewayTransport(connection)) {
+                void encodeEncryptedGatewayRequest({
+                    request: request as unknown as Record<string, unknown>,
+                    authToken,
+                    transportSharedSecret: connection.transportSharedSecret!.trim(),
+                }).then((encryptedRequest) => {
+                    socket.send(JSON.stringify(encryptedRequest));
+                }).catch((error) => {
+                    finalizeWithError(error instanceof Error ? error : new GatewayProtocolError('Failed to encrypt terminal stream request'));
+                    socket.close();
+                });
+                return;
+            }
+            socket.send(JSON.stringify(request));
+        };
+
+        socket.onmessage = async (event) => {
+            if (boundSocket !== socket) {
+                return;
+            }
+            try {
+                const rawText = typeof event.data === 'string' ? event.data : String(event.data ?? '');
+                const envelope = await parseReceivedEnvelope(rawText, connection);
+                if (!streamOpenAcknowledged) {
+                    if (envelope.status === 'error') {
+                        const error = new GatewayProtocolError(
+                            envelope.error_message ?? envelope.error_code ?? 'Gateway rejected terminal stream',
+                            envelope.error_code,
+                        );
+                        finalizeWithError(error);
+                        socket.close();
+                        return;
+                    }
+                    if (envelope.status === 'ok') {
+                        streamOpenAcknowledged = true;
+                        input.onOpen(parseTerminalStreamOpenResult(envelope));
+                        return;
+                    }
+                }
+
+                const chunk = parseTerminalStreamChunkRecord(envelope as unknown as Record<string, unknown>);
+                if (chunk) {
+                    input.onChunk(chunk);
+                }
+            } catch (error) {
+                finalizeWithError(
+                    error instanceof GatewayProtocolError
+                        ? error
+                        : new GatewayProtocolError(
+                            error instanceof Error ? error.message : 'Invalid terminal stream payload',
+                        ),
+                );
+                socket.close();
+            }
+        };
+
+        socket.onerror = () => {
+            if (boundSocket !== socket) {
+                return;
+            }
+            const relayConnection = !attemptedRelayFallback ? relayFallbackConnection(activeConnection) : null;
+            if (relayConnection) {
+                attemptedRelayFallback = true;
+                activeConnection = relayConnection;
+                socket = openVariant(relayConnection);
+                bindSocket(relayConnection);
+                return;
+            }
+            finalizeWithError(new GatewayProtocolError('Gateway terminal stream socket failed'));
+        };
+
+        socket.onclose = (event) => {
+            if (boundSocket !== socket) {
+                return;
+            }
+            if (closedByClient || settled) {
+                return;
+            }
+            const relayConnection = !attemptedRelayFallback ? relayFallbackConnection(activeConnection) : null;
+            if (relayConnection) {
+                attemptedRelayFallback = true;
+                activeConnection = relayConnection;
+                socket = openVariant(relayConnection);
+                bindSocket(relayConnection);
+                return;
+            }
+            finalizeWithError(new GatewayProtocolError(
+                event.reason || `Gateway terminal stream closed unexpectedly (code ${event.code})`,
+            ));
+        };
+    };
+
+    bindSocket(activeConnection);
+
+    return () => {
+        closedByClient = true;
+        socket.close();
+    };
 }
 
 export async function runTerminalCommand(input: GatewayConnection & {

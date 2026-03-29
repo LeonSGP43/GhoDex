@@ -186,6 +186,9 @@ struct ControlHarnessRequest: Codable {
     let maxLines: Int?
     let cursor: String?
     let readAfterWriteID: String?
+    let streamID: String?
+    let ackBytes: Int?
+    let lastAckSequence: Int64?
     let pairingCode: String?
     let requestedScopes: [String]?
 
@@ -226,6 +229,9 @@ struct ControlHarnessRequest: Codable {
         case maxLines = "max_lines"
         case cursor
         case readAfterWriteID = "read_after_write_id"
+        case streamID = "stream_id"
+        case ackBytes = "ack_bytes"
+        case lastAckSequence = "last_ack_sequence"
         case pairingCode = "pairing_code"
         case requestedScopes = "requested_scopes"
     }
@@ -267,6 +273,9 @@ struct ControlHarnessRequest: Codable {
         maxLines: Int?,
         cursor: String?,
         readAfterWriteID: String?,
+        streamID: String? = nil,
+        ackBytes: Int? = nil,
+        lastAckSequence: Int64? = nil,
         pairingCode: String? = nil,
         requestedScopes: [String]? = nil
     ) {
@@ -306,6 +315,9 @@ struct ControlHarnessRequest: Codable {
         self.maxLines = maxLines
         self.cursor = cursor
         self.readAfterWriteID = readAfterWriteID
+        self.streamID = streamID
+        self.ackBytes = ackBytes
+        self.lastAckSequence = lastAckSequence
         self.pairingCode = pairingCode
         self.requestedScopes = requestedScopes
     }
@@ -645,6 +657,126 @@ private struct ControlEventSubscriptionResult: Encodable {
     }
 }
 
+private struct ControlTerminalStreamOpenResult: Encodable {
+    let protocolVersion: String
+    let streamID: String
+    let terminalID: String
+    let generation: Int
+    let mode: String
+    let lastSequence: Int64
+    let liveStreamOpen: Bool
+    let highWatermarkBytes: Int
+    let lowWatermarkBytes: Int
+    let unackedBytes: Int
+    let flowPaused: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case streamID = "stream_id"
+        case terminalID = "terminal_id"
+        case generation
+        case mode
+        case lastSequence = "last_sequence"
+        case liveStreamOpen = "live_stream_open"
+        case highWatermarkBytes = "high_watermark_bytes"
+        case lowWatermarkBytes = "low_watermark_bytes"
+        case unackedBytes = "unacked_bytes"
+        case flowPaused = "flow_paused"
+    }
+}
+
+private struct ControlTerminalStreamAckResult: Encodable {
+    let terminalID: String
+    let streamID: String
+    let generation: Int
+    let acknowledgedBytes: Int
+    let remainingUnackedBytes: Int
+    let highWatermarkBytes: Int
+    let lowWatermarkBytes: Int
+    let flowPaused: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case terminalID = "terminal_id"
+        case streamID = "stream_id"
+        case generation
+        case acknowledgedBytes = "acknowledged_bytes"
+        case remainingUnackedBytes = "remaining_unacked_bytes"
+        case highWatermarkBytes = "high_watermark_bytes"
+        case lowWatermarkBytes = "low_watermark_bytes"
+        case flowPaused = "flow_paused"
+    }
+}
+
+private struct ControlTerminalStreamChunkRecord: Encodable {
+    let streamKind = "terminal_chunk"
+    let streamID: String
+    let terminalID: String
+    let generation: Int
+    let frameID: String
+    let parentFrameID: String?
+    let deltaKind: String
+    let content: String
+    let contentLength: Int
+    let changedRows: [ControlHarnessReadChangedRow]
+
+    enum CodingKeys: String, CodingKey {
+        case streamKind = "stream_kind"
+        case streamID = "stream_id"
+        case terminalID = "terminal_id"
+        case generation
+        case frameID = "frame_id"
+        case parentFrameID = "parent_frame_id"
+        case deltaKind = "delta_kind"
+        case content
+        case contentLength = "content_length"
+        case changedRows = "changed_rows"
+    }
+}
+
+private struct ControlTerminalSnapshotV2Result: Encodable {
+    let terminalID: String
+    let generation: Int
+    let scope: String
+    let snapshotFormat: String
+    let capturedAt: String
+    let cacheAgeMs: Int
+    let frameID: String
+    let parentFrameID: String?
+    let content: String
+
+    enum CodingKeys: String, CodingKey {
+        case terminalID = "terminal_id"
+        case generation
+        case scope
+        case snapshotFormat = "snapshot_format"
+        case capturedAt = "captured_at"
+        case cacheAgeMs = "cache_age_ms"
+        case frameID = "frame_id"
+        case parentFrameID = "parent_frame_id"
+        case content
+    }
+}
+
+private struct ControlTerminalSemanticV2Result: Encodable {
+    let terminalID: String
+    let generation: Int
+    let scope: String
+    let extractedAt: String
+    let logicalLines: [String]
+    let exactText: String
+    let promptDetected: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case terminalID = "terminal_id"
+        case generation
+        case scope
+        case extractedAt = "extracted_at"
+        case logicalLines = "logical_lines"
+        case exactText = "exact_text"
+        case promptDetected = "prompt_detected"
+    }
+}
+
 private struct ControlTabCreatedEventPayload: Encodable {
     let parentTabID: String?
     let workingDirectory: String?
@@ -812,6 +944,10 @@ final class ControlHarnessCore {
         "send-key",
         "run-command",
         "read-terminal",
+        "terminal.stream.open",
+        "terminal.stream.ack",
+        "terminal.snapshot.v2",
+        "terminal.semantic.v2",
         "close-terminal",
         "todo-snapshot",
         "todo-add",
@@ -839,9 +975,11 @@ final class ControlHarnessCore {
     private let idempotencyStore: ControlHarnessIdempotencyStore
     private let readStore: ControlHarnessTerminalReadStore
     private let readAfterWriteStore: ControlHarnessReadAfterWriteStore
+    private let streamStore: ControlHarnessTerminalStreamStore
     private let sampleStore: ControlHarnessSampleStore
     private let surfaceResolver: @MainActor (UUID) -> (any ControlHarnessReadableSurface)?
     private let samplingActivityResolver: @MainActor (UUID) -> ControlHarnessSamplingActivityClass?
+    private let streamPollInterval: TimeInterval
     private let now: @MainActor () -> Date
     private var terminalWindowBellObserver: NSObjectProtocol?
     private let logger = Logger(
@@ -876,9 +1014,11 @@ final class ControlHarnessCore {
         idempotencyStore: ControlHarnessIdempotencyStore,
         readStore: ControlHarnessTerminalReadStore,
         readAfterWriteStore: ControlHarnessReadAfterWriteStore,
+        streamStore: ControlHarnessTerminalStreamStore = ControlHarnessTerminalStreamStore(),
         sampleStore: ControlHarnessSampleStore,
         surfaceResolver: (@MainActor (UUID) -> (any ControlHarnessReadableSurface)?)? = nil,
         samplingActivityResolver: (@MainActor (UUID) -> ControlHarnessSamplingActivityClass?)? = nil,
+        streamPollInterval: TimeInterval = 0.08,
         now: @escaping @MainActor () -> Date = Date.init
     ) {
         self.appDelegate = appDelegate
@@ -888,6 +1028,7 @@ final class ControlHarnessCore {
         self.idempotencyStore = idempotencyStore
         self.readStore = readStore
         self.readAfterWriteStore = readAfterWriteStore
+        self.streamStore = streamStore
         self.sampleStore = sampleStore
         self.surfaceResolver = surfaceResolver ?? { [weak appDelegate] terminalID in
             appDelegate?.controlHarnessReadableSurface(for: terminalID)
@@ -895,6 +1036,7 @@ final class ControlHarnessCore {
         self.samplingActivityResolver = samplingActivityResolver ?? { [weak appDelegate] terminalID in
             appDelegate?.controlHarnessSamplingActivityClass(for: terminalID)
         }
+        self.streamPollInterval = max(0.01, streamPollInterval)
         self.now = now
         self.terminalWindowBellObserver = NotificationCenter.default.addObserver(
             forName: .terminalWindowBellDidChangeNotification,
@@ -917,15 +1059,15 @@ final class ControlHarnessCore {
     ) -> ControlHarnessSubscriptionEnvelope {
         let started = DispatchTime.now()
         let response: ControlHarnessResponse
-        let session: ControlHarnessEventSubscriptionSession?
+        let session: (any ControlHarnessSubscriptionSession)?
 
         do {
             try validateRequest(request)
-            let prepared = try makeEventSubscription(request, socketPath: socketPath)
+            let prepared = try makeSubscription(request, socketPath: socketPath)
             response = .init(
                 requestID: request.requestID,
                 status: "ok",
-                result: AnyEncodable(prepared.result),
+                result: prepared.payload,
                 errorCode: nil,
                 errorMessage: nil
             )
@@ -1151,6 +1293,26 @@ final class ControlHarnessCore {
             }
         }
 
+        if request.command == "terminal.stream.ack" {
+            guard let ackBytes = request.ackBytes, ackBytes > 0 else {
+                throw ControlHarnessCoreError.invalidArgument("terminal.stream.ack requires ack_bytes > 0")
+            }
+            if let lastAckSequence = request.lastAckSequence, lastAckSequence < 0 {
+                throw ControlHarnessCoreError.invalidArgument("last_ack_sequence must be >= 0")
+            }
+        }
+
+        if request.command == "terminal.stream.open" ||
+            request.command == "terminal.stream.ack" ||
+            request.command == "terminal.snapshot.v2" ||
+            request.command == "terminal.semantic.v2" {
+            guard let terminalID = request.terminalID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !terminalID.isEmpty,
+                  UUID(uuidString: terminalID) != nil else {
+                throw ControlHarnessCoreError.invalidArgument("\(request.command) requires valid terminal_id")
+            }
+        }
+
         if let date = request.date?.trimmingCharacters(in: .whitespacesAndNewlines),
            !date.isEmpty,
            AITerminalTodoSettings.date(fromDayString: date) == nil {
@@ -1278,6 +1440,15 @@ final class ControlHarnessCore {
 
         case "read-terminal":
             return (AnyEncodable(try readTerminal(from: request)), nil)
+
+        case "terminal.stream.ack":
+            return (AnyEncodable(try acknowledgeTerminalStream(from: request)), nil)
+
+        case "terminal.snapshot.v2":
+            return (AnyEncodable(try terminalSnapshotV2(from: request)), nil)
+
+        case "terminal.semantic.v2":
+            return (AnyEncodable(try terminalSemanticV2(from: request)), nil)
 
         case "close-terminal":
             let result = try closeTerminal(from: request)
@@ -1743,6 +1914,112 @@ final class ControlHarnessCore {
         )
     }
 
+    private func acknowledgeTerminalStream(from request: ControlHarnessRequest) throws -> ControlTerminalStreamAckResult {
+        let terminalID = try parseTerminalID(request.terminalID)
+        let terminalIDString = terminalID.uuidString
+        let generation = generations.currentTerminalGeneration(for: terminalIDString)
+        try generations.assertExpectedGeneration(
+            request.expectedGeneration,
+            resourceType: "terminal",
+            resourceID: terminalIDString,
+            currentGeneration: generation
+        )
+        guard let ackBytes = request.ackBytes, ackBytes > 0 else {
+            throw ControlHarnessCoreError.invalidArgument("terminal.stream.ack requires ack_bytes > 0")
+        }
+
+        let normalizedStreamID = request.streamID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let streamID = (normalizedStreamID?.isEmpty == false) ? normalizedStreamID : nil
+        guard let ackState = streamStore.acknowledge(
+            terminalID: terminalIDString,
+            streamID: streamID,
+            ackBytes: ackBytes
+        ) else {
+            throw ControlHarnessCoreError.invalidArgument(
+                "No active stream exists for terminal_id=\(terminalIDString)"
+            )
+        }
+
+        return .init(
+            terminalID: terminalIDString,
+            streamID: ackState.streamID,
+            generation: generation,
+            acknowledgedBytes: ackState.ackedBytes,
+            remainingUnackedBytes: ackState.remainingUnackedBytes,
+            highWatermarkBytes: ackState.highWatermarkBytes,
+            lowWatermarkBytes: ackState.lowWatermarkBytes,
+            flowPaused: ackState.flowPaused
+        )
+    }
+
+    private func terminalSnapshotV2(from request: ControlHarnessRequest) throws -> ControlTerminalSnapshotV2Result {
+        let terminalID = try parseTerminalID(request.terminalID)
+        let terminalIDString = terminalID.uuidString
+        let generation = generations.currentTerminalGeneration(for: terminalIDString)
+        try generations.assertExpectedGeneration(
+            request.expectedGeneration,
+            resourceType: "terminal",
+            resourceID: terminalIDString,
+            currentGeneration: generation
+        )
+
+        guard let surface = surfaceResolver(terminalID) else {
+            if appDelegate == nil {
+                throw ControlHarnessCoreError.appUnavailable
+            }
+            throw ControlHarnessCoreError.terminalNotFound(terminalID.uuidString)
+        }
+
+        let scope = request.scope ?? "visible"
+        switch scope {
+        case "visible", "screen":
+            break
+        default:
+            throw ControlHarnessCoreError.invalidArgument("Unsupported read scope: \(scope)")
+        }
+
+        let read = try resolveTerminalRead(
+            terminalUUID: terminalID,
+            terminalID: terminalIDString,
+            scope: scope,
+            surface: surface,
+            forceFresh: false
+        )
+        let frame = readStore.capture(terminalID: terminalIDString, scope: scope, content: read.content)
+
+        return .init(
+            terminalID: terminalIDString,
+            generation: generation,
+            scope: scope,
+            snapshotFormat: "ansi_text",
+            capturedAt: Self.iso8601(read.capturedAt),
+            cacheAgeMs: read.cacheAgeMs,
+            frameID: frame.frameID,
+            parentFrameID: frame.parentFrameID,
+            content: read.content
+        )
+    }
+
+    private func terminalSemanticV2(from request: ControlHarnessRequest) throws -> ControlTerminalSemanticV2Result {
+        let snapshot = try terminalSnapshotV2(from: request)
+        let logicalLines = controlHarnessSemanticLines(from: snapshot.content)
+        let promptDetected = logicalLines.contains { line in
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.hasPrefix("$") || trimmed.hasPrefix("#") || trimmed.hasPrefix("PS ")
+        }
+
+        return .init(
+            terminalID: snapshot.terminalID,
+            generation: snapshot.generation,
+            scope: snapshot.scope,
+            extractedAt: snapshot.capturedAt,
+            logicalLines: logicalLines,
+            exactText: snapshot.content,
+            promptDetected: promptDetected
+        )
+    }
+
     private func closeTerminal(from request: ControlHarnessRequest) throws -> ControlTerminalMutationResult {
         let terminalID = try parseTerminalID(request.terminalID)
         let terminalIDString = terminalID.uuidString
@@ -1762,6 +2039,7 @@ final class ControlHarnessCore {
         sampleStore.removeTerminal(terminalIDString)
         readStore.removeTerminal(terminalIDString)
         readAfterWriteStore.removeTerminal(terminalIDString)
+        streamStore.removeTerminal(terminalIDString)
         let generation = generations.advanceTerminalGeneration(for: terminalIDString)
         let sequence = eventHub.emit(
             event: "terminal.closed",
@@ -1981,10 +2259,162 @@ final class ControlHarnessCore {
         return sequence
     }
 
+    private struct ControlTerminalStreamDeltaSnapshot {
+        let frameID: String
+        let parentFrameID: String?
+        let deltaKind: String
+        let content: String
+        let changedRows: [ControlHarnessReadChangedRow]
+        let hasChanges: Bool
+    }
+
+    private nonisolated static func syncMainActor<T>(
+        _ body: @escaping @MainActor () -> T
+    ) -> T? {
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: T?
+        Task { @MainActor in
+            result = body()
+            semaphore.signal()
+        }
+        semaphore.wait()
+        return result
+    }
+
+    private func terminalStreamScope(from request: ControlHarnessRequest) throws -> String {
+        let scope = request.scope ?? "visible"
+        switch scope {
+        case "visible", "screen":
+            return scope
+        default:
+            throw ControlHarnessCoreError.invalidArgument("Unsupported read scope: \(scope)")
+        }
+    }
+
+    private func captureTerminalStreamDelta(
+        terminalUUID: UUID,
+        terminalID: String,
+        scope: String,
+        sinceFrameID: String?
+    ) throws -> ControlTerminalStreamDeltaSnapshot {
+        guard let surface = surfaceResolver(terminalUUID) else {
+            if appDelegate == nil {
+                throw ControlHarnessCoreError.appUnavailable
+            }
+            throw ControlHarnessCoreError.terminalNotFound(terminalID)
+        }
+
+        let read = try resolveTerminalRead(
+            terminalUUID: terminalUUID,
+            terminalID: terminalID,
+            scope: scope,
+            surface: surface,
+            forceFresh: true
+        )
+        let frame = readStore.capture(terminalID: terminalID, scope: scope, content: read.content)
+        let delta = readStore.delta(from: sinceFrameID, to: frame.frameID)
+        return .init(
+            frameID: frame.frameID,
+            parentFrameID: frame.parentFrameID,
+            deltaKind: delta.kind,
+            content: delta.text,
+            changedRows: delta.changedRows,
+            hasChanges: delta.hasChanges
+        )
+    }
+
+    private func encodeTerminalStreamChunk(
+        streamID: String,
+        terminalID: String,
+        generation: Int,
+        frameID: String,
+        parentFrameID: String?,
+        deltaKind: String,
+        content: String,
+        changedRows: [ControlHarnessReadChangedRow]
+    ) throws -> Data {
+        let record = ControlTerminalStreamChunkRecord(
+            streamID: streamID,
+            terminalID: terminalID,
+            generation: generation,
+            frameID: frameID,
+            parentFrameID: parentFrameID,
+            deltaKind: deltaKind,
+            content: content,
+            contentLength: content.utf8.count,
+            changedRows: changedRows
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        var data = try encoder.encode(record)
+        data.append(0x0A)
+        return data
+    }
+
+    private func pollTerminalStreamChunk(
+        terminalUUID: UUID,
+        terminalID: String,
+        streamID: String,
+        generation: Int,
+        scope: String,
+        sinceFrameID: String?
+    ) -> ControlHarnessTerminalStreamPollChunk? {
+        guard let flowState = streamStore.flowState(
+            terminalID: terminalID,
+            streamID: streamID
+        ) else {
+            return nil
+        }
+        guard flowState.flowPaused == false else {
+            return nil
+        }
+
+        let delta: ControlTerminalStreamDeltaSnapshot
+        do {
+            delta = try captureTerminalStreamDelta(
+                terminalUUID: terminalUUID,
+                terminalID: terminalID,
+                scope: scope,
+                sinceFrameID: sinceFrameID
+            )
+        } catch {
+            return nil
+        }
+        guard delta.hasChanges else {
+            return nil
+        }
+
+        let payload: Data
+        do {
+            payload = try encodeTerminalStreamChunk(
+                streamID: streamID,
+                terminalID: terminalID,
+                generation: generation,
+                frameID: delta.frameID,
+                parentFrameID: delta.parentFrameID,
+                deltaKind: delta.deltaKind,
+                content: delta.content,
+                changedRows: delta.changedRows
+            )
+        } catch {
+            return nil
+        }
+
+        guard let produceState = streamStore.produce(
+            terminalID: terminalID,
+            streamID: streamID,
+            chunkBytes: delta.content.utf8.count
+        ), produceState.accepted else {
+            return nil
+        }
+
+        return .init(frameID: delta.frameID, payload: payload)
+    }
+
     private func makeEventSubscription(
         _ request: ControlHarnessRequest,
         socketPath: String
-    ) throws -> (result: ControlEventSubscriptionResult, session: ControlHarnessEventSubscriptionSession?) {
+    ) throws -> (result: ControlEventSubscriptionResult, session: (any ControlHarnessSubscriptionSession)?) {
         guard request.command == "events.subscribe" else {
             throw ControlHarnessCoreError.unsupportedCommand(request.command)
         }
@@ -2004,6 +2434,105 @@ final class ControlHarnessCore {
             ),
             liveStreamOpen ? session : nil
         )
+    }
+
+    private func makeTerminalStreamSubscription(
+        _ request: ControlHarnessRequest
+    ) throws -> (result: ControlTerminalStreamOpenResult, session: (any ControlHarnessSubscriptionSession)?) {
+        let terminalID = try parseTerminalID(request.terminalID)
+        let terminalIDString = terminalID.uuidString
+        let generation = generations.currentTerminalGeneration(for: terminalIDString)
+        try generations.assertExpectedGeneration(
+            request.expectedGeneration,
+            resourceType: "terminal",
+            resourceID: terminalIDString,
+            currentGeneration: generation
+        )
+        guard surfaceResolver(terminalID) != nil else {
+            if appDelegate == nil {
+                throw ControlHarnessCoreError.appUnavailable
+            }
+            throw ControlHarnessCoreError.terminalNotFound(terminalIDString)
+        }
+
+        let scope = try terminalStreamScope(from: request)
+        let streamState = streamStore.openStream(terminalID: terminalIDString, generation: generation)
+        do {
+            let seedDelta = try captureTerminalStreamDelta(
+                terminalUUID: terminalID,
+                terminalID: terminalIDString,
+                scope: scope,
+                sinceFrameID: nil
+            )
+            let seedPayload = try encodeTerminalStreamChunk(
+                streamID: streamState.streamID,
+                terminalID: terminalIDString,
+                generation: generation,
+                frameID: seedDelta.frameID,
+                parentFrameID: seedDelta.parentFrameID,
+                deltaKind: "reset",
+                content: seedDelta.content,
+                changedRows: seedDelta.changedRows
+            )
+            let streamStore = self.streamStore
+            let streamID = streamState.streamID
+            let session = ControlHarnessTerminalStreamSubscriptionSession(
+                replayEvents: [seedPayload],
+                initialFrameID: seedDelta.frameID,
+                pollInterval: streamPollInterval,
+                pollChunk: { [weak self] sinceFrameID in
+                    guard let self else { return nil }
+                    return Self.syncMainActor {
+                        self.pollTerminalStreamChunk(
+                            terminalUUID: terminalID,
+                            terminalID: terminalIDString,
+                            streamID: streamID,
+                            generation: generation,
+                            scope: scope,
+                            sinceFrameID: sinceFrameID
+                        )
+                    } ?? nil
+                },
+                onClose: {
+                    streamStore.removeStream(streamID)
+                }
+            )
+
+            let result = ControlTerminalStreamOpenResult(
+                protocolVersion: Self.protocolVersion,
+                streamID: streamState.streamID,
+                terminalID: terminalIDString,
+                generation: generation,
+                mode: "stream",
+                lastSequence: eventHub.currentSequence(),
+                liveStreamOpen: true,
+                highWatermarkBytes: streamState.highWatermarkBytes,
+                lowWatermarkBytes: streamState.lowWatermarkBytes,
+                unackedBytes: streamState.unackedBytes,
+                flowPaused: streamState.flowPaused
+            )
+            return (result, session)
+        } catch {
+            streamStore.removeStream(streamState.streamID)
+            throw error
+        }
+    }
+
+    private func makeSubscription(
+        _ request: ControlHarnessRequest,
+        socketPath: String
+    ) throws -> (payload: AnyEncodable, session: (any ControlHarnessSubscriptionSession)?) {
+        _ = socketPath
+        switch request.command {
+        case "events.subscribe":
+            let prepared = try makeEventSubscription(request, socketPath: socketPath)
+            return (AnyEncodable(prepared.result), prepared.session)
+        case "terminal.stream.open":
+            let prepared = try makeTerminalStreamSubscription(request)
+            return (AnyEncodable(prepared.result), prepared.session)
+        default:
+            throw ControlHarnessCoreError.unsupportedCommand(request.command)
+        }
     }
 
     private func makeEventSubscriptionResult(
