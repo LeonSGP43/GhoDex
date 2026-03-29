@@ -2,32 +2,11 @@ import * as SecureStore from 'expo-secure-store';
 import { randomUUID } from 'expo-crypto';
 import { Platform } from 'react-native';
 import { delay } from '@/utils/time';
+import type { StoredSession, StoredTransportMode } from './sessionTypes';
 
 const STORAGE_KEY = 'ghodex.gateway.session.v1';
 const STORED_SESSION_TIMEOUT_MS = 1500;
 const DEFAULT_DEVICE_LABEL = 'This phone';
-
-export type StoredTransportMode = 'lan' | 'relay';
-
-export interface StoredSession {
-    deviceId: string;
-    deviceLabel: string;
-    desktopId: string;
-    desktopLabel: string;
-    preferredDesktopId: string;
-    transportMode: StoredTransportMode;
-    publicEndpoint: string;
-    transportSharedSecret: string;
-    host: string;
-    port: number;
-    pairingCode: string;
-    authToken: string;
-    tokenId: string;
-    scopes: string[];
-    requestedScopes: string[];
-    liveUpdatesEnabled: boolean;
-    pollIntervalMs: number;
-}
 
 const DEFAULT_DEVICE_ID = randomUUID();
 
@@ -193,3 +172,5 @@ export async function clearStoredSession(): Promise<void> {
     cachedSession = cloneStoredSession(clearedSession);
     await setStoredValue(JSON.stringify(clearedSession));
 }
+
+export type { StoredSession, StoredTransportMode } from './sessionTypes';

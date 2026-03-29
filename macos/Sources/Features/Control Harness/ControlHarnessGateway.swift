@@ -273,7 +273,11 @@ final class ControlHarnessGateway {
         guard listenerFD == -1 else { return }
 
         do {
-            let listener = try makeListener(host: configuration.listenHost, port: configuration.listenPort)
+            let requestedPort = configuration.listenPort
+            let listener = try makeListenerRecoveringPortConflict(
+                host: configuration.listenHost,
+                requestedPort: requestedPort
+            )
             listenerFD = listener.fd
             listenerPort = listener.port
             lastStartupError = nil
@@ -288,6 +292,11 @@ final class ControlHarnessGateway {
             }
             source.resume()
             acceptSource = source
+            if requestedPort > 0, listener.port != requestedPort {
+                logger.notice(
+                    "control harness gateway port \(requestedPort) was unavailable; recovered on \(listener.port)"
+                )
+            }
             logger.notice(
                 "control harness gateway listening at \(self.configuration.listenHost, privacy: .public):\(listener.port)"
             )
@@ -333,6 +342,26 @@ final class ControlHarnessGateway {
         }
         listenerPort = nil
         outboundQueue.async {}
+    }
+
+    private func makeListenerRecoveringPortConflict(
+        host: String,
+        requestedPort: UInt16
+    ) throws -> (fd: Int32, port: UInt16) {
+        do {
+            return try makeListener(host: host, port: requestedPort)
+        } catch let error as POSIXError
+            where error.code == .EADDRINUSE && requestedPort > 0 {
+            for candidatePort in Self.portConflictRecoveryCandidates(startingAt: requestedPort) {
+                do {
+                    return try makeListener(host: host, port: candidatePort)
+                } catch let candidateError as POSIXError where candidateError.code == .EADDRINUSE {
+                    continue
+                }
+            }
+
+            return try makeListener(host: host, port: 0)
+        }
     }
 
     private func acceptAvailableConnections() {
@@ -603,6 +632,13 @@ final class ControlHarnessGateway {
 
         if let requiredScope = requiredScope(for: request) {
             guard let authManager else {
+                if configuration.authToken == nil {
+                    return continueAuthorization(
+                        request: request,
+                        requestAuthorizer: requestAuthorizer,
+                        sessionIdentity: nil
+                    )
+                }
                 return .deny(ControlHarnessResponse(
                     requestID: request.requestID,
                     status: "error",
@@ -1096,7 +1132,22 @@ final class ControlHarnessGateway {
         let authIdentity = request.authToken
             .flatMap { $0.isEmpty ? nil : $0 }
             ?? "anonymous"
-        return "\(authIdentity)@\(peerDescription)"
+        let peerBucket = Self.rateLimitPeerBucket(peerDescription)
+        return "\(authIdentity)@\(peerBucket)"
+    }
+
+    private static func rateLimitPeerBucket(_ peerDescription: String) -> String {
+        if peerDescription == "unix-peer" || peerDescription.hasPrefix("fd-") || peerDescription.hasPrefix("peer-") {
+            return peerDescription
+        }
+
+        if let separator = peerDescription.lastIndex(of: ":") {
+            let host = String(peerDescription[..<separator])
+            if host.isEmpty == false {
+                return host
+            }
+        }
+        return peerDescription
     }
 
     private func streamSubscription(
@@ -1415,6 +1466,16 @@ final class ControlHarnessGateway {
         }
     }
 
+    private static func portConflictRecoveryCandidates(startingAt requestedPort: UInt16) -> [UInt16] {
+        guard requestedPort < UInt16.max else { return [] }
+
+        let maxSequentialAttempts = 16
+        let upperBound = min(Int(UInt16.max), Int(requestedPort) + maxSequentialAttempts)
+        guard upperBound > Int(requestedPort) else { return [] }
+
+        return ((Int(requestedPort) + 1)...upperBound).compactMap(UInt16.init)
+    }
+
     private static func setNonBlocking(_ fd: Int32) throws {
         let flags = fcntl(fd, F_GETFL, 0)
         guard flags >= 0 else {
@@ -1710,6 +1771,9 @@ final class ControlHarnessGateway {
 }
 
 private final class ControlHarnessGatewayRateLimiter {
+    private static let identityIdleTTLMinutes: Int64 = 30
+    private static let maxTrackedIdentities = 2_048
+
     private struct WindowCounter {
         var minuteWindow: Int64?
         var count = 0
@@ -1731,6 +1795,7 @@ private final class ControlHarnessGatewayRateLimiter {
         var command = WindowCounter()
         var snapshot = WindowCounter()
         var resync = WindowCounter()
+        var lastSeenMinuteWindow: Int64 = 0
     }
 
     private enum Category {
@@ -1763,6 +1828,7 @@ private final class ControlHarnessGatewayRateLimiter {
     ) -> ControlHarnessGateway.RequestAuthorization {
         queue.sync {
             let minuteWindow = Int64(now().timeIntervalSince1970 / 60.0)
+            pruneIdentitiesLocked(currentMinuteWindow: minuteWindow)
             guard globalCounter.allow(limit: configuration.maxGlobalRequestsPerMinute, minuteWindow: minuteWindow) else {
                 return .deny(
                     errorCode: "rate_limited",
@@ -1775,6 +1841,7 @@ private final class ControlHarnessGatewayRateLimiter {
             }
 
             var counters = identities[identity] ?? IdentityCounters()
+            counters.lastSeenMinuteWindow = minuteWindow
             let allowed: Bool
             let errorMessage: String
 
@@ -1800,6 +1867,7 @@ private final class ControlHarnessGatewayRateLimiter {
             }
 
             identities[identity] = counters
+            pruneIdentitiesLocked(currentMinuteWindow: minuteWindow)
 
             guard allowed else {
                 return .deny(
@@ -1810,6 +1878,53 @@ private final class ControlHarnessGatewayRateLimiter {
 
             return .allow
         }
+    }
+
+    private func pruneIdentitiesLocked(currentMinuteWindow: Int64) {
+        let idleCutoff = currentMinuteWindow - Self.identityIdleTTLMinutes
+        var removedIdle = 0
+        for (identity, counters) in identities where counters.lastSeenMinuteWindow < idleCutoff {
+            identities.removeValue(forKey: identity)
+            removedIdle += 1
+        }
+
+        let overflowCount = identities.count - Self.maxTrackedIdentities
+        guard overflowCount > 0 else {
+            if removedIdle > 0 {
+                RuntimeDiagnosticsLogger.log(
+                    component: "control_harness.gateway_rate_limiter",
+                    event: "prune_identities",
+                    details: [
+                        "removed_idle": "\(removedIdle)",
+                        "removed_capacity": "0",
+                        "remaining": "\(identities.count)",
+                    ]
+                )
+            }
+            return
+        }
+
+        let evictionKeys = identities
+            .sorted { lhs, rhs in
+                if lhs.value.lastSeenMinuteWindow != rhs.value.lastSeenMinuteWindow {
+                    return lhs.value.lastSeenMinuteWindow < rhs.value.lastSeenMinuteWindow
+                }
+                return lhs.key < rhs.key
+            }
+            .prefix(overflowCount)
+            .map(\.key)
+        for key in evictionKeys {
+            identities.removeValue(forKey: key)
+        }
+        RuntimeDiagnosticsLogger.log(
+            component: "control_harness.gateway_rate_limiter",
+            event: "prune_identities",
+            details: [
+                "removed_idle": "\(removedIdle)",
+                "removed_capacity": "\(evictionKeys.count)",
+                "remaining": "\(identities.count)",
+            ]
+        )
     }
 
     private func category(for request: ControlHarnessRequest) -> Category? {

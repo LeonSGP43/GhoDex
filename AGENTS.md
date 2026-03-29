@@ -143,6 +143,28 @@ A file for [guiding coding agents](https://agents.md/).
 - If a Browser-disabled build is intentional, make that choice explicit in the
   command line or in the user-facing report.
 
+## Runtime Memory Diagnostics Policy (Required)
+
+- GhoDex includes a runtime memory diagnostics JSONL log for long-run memory
+  regressions across CEF lifecycle and Control Harness / AI manager state
+  pruning paths.
+- Runtime toggle:
+  - `GHODEX_RUNTIME_DIAG_LOG=1` enables diagnostics logging.
+  - `GHODEX_RUNTIME_DIAG_LOG=0` disables diagnostics logging.
+  - Default behavior is enabled when the variable is not set.
+- Log files:
+  - Primary: `~/Library/Application Support/<bundle-id>/Diagnostics/runtime-memory-diagnostics.jsonl`
+  - Rotated backup: `~/Library/Application Support/<bundle-id>/Diagnostics/runtime-memory-diagnostics.1.jsonl`
+  - Rotation is size-based (4 MiB max for primary, then roll to `.1`).
+- Next-version build requirement:
+  - Before release verification, clear old diagnostics logs for the target
+    bundle id so evidence only contains the current build run.
+  - During build/test acceptance, execute at least one browser open/close cycle
+    and one Control Harness request cycle, then confirm the diagnostics log was
+    written.
+  - Build reports must explicitly state whether diagnostics logging was left
+    enabled or disabled for that build.
+
 ## Worktree Development Policy
 
 - The current primary coordination worktree is

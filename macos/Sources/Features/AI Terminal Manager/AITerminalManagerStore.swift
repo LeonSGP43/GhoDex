@@ -52,6 +52,12 @@ final class AITerminalManagerStore: ObservableObject {
         var item: AITerminalTodoItem
     }
 
+    private struct TodoDocumentCacheEntry {
+        var document: AITerminalTodoDayDocument
+        var cachedAt: Date
+        var lastAccessedAt: Date
+    }
+
     private enum ExternalHeartbeatTaskAction: String, Codable {
         case enqueue
         case cancel
@@ -157,8 +163,10 @@ final class AITerminalManagerStore: ObservableObject {
     private var sshSessionAuthStates: [UUID: AITerminalSSHSessionAuthState] = [:]
     private var pendingSSHPasswordAutomations: [UUID: PendingSSHPasswordAutomation] = [:]
     private var taskBindings: [UUID: UUID] = [:]
-    private var todoDocumentCache: [String: AITerminalTodoDayDocument] = [:]
+    private var todoDocumentCache: [String: TodoDocumentCacheEntry] = [:]
     private var sshPasswordAutomationTimer: Timer?
+    private var sshPasswordAutomationInterval: TimeInterval = 0.2
+    private var sshPasswordAutomationIdlePollCount = 0
     private var heartbeatTimer: Timer?
     private var heartbeatSchedulerTimer: Timer?
     private var ghosttyConfigObserver: NSObjectProtocol?
@@ -170,6 +178,13 @@ final class AITerminalManagerStore: ObservableObject {
     nonisolated private static let maxHeartbeatIntervalSeconds = 60.0
     nonisolated private static let minHeartbeatMaxConcurrentTasks = 1
     nonisolated private static let maxHeartbeatMaxConcurrentTasks = 16
+    nonisolated private static let maxHeartbeatTaskEntries = 1_024
+    nonisolated private static let heartbeatFinishedTaskRetentionSeconds: TimeInterval = 24 * 60 * 60
+    nonisolated private static let todoDocumentCacheMaxEntries = 128
+    nonisolated private static let todoDocumentCacheTTLSeconds: TimeInterval = 10 * 60
+    nonisolated private static let sshPasswordAutomationFastInterval: TimeInterval = 0.2
+    nonisolated private static let sshPasswordAutomationMaxInterval: TimeInterval = 2.0
+    nonisolated private static let sshPasswordAutomationBackoffMultiplier: TimeInterval = 1.5
     nonisolated private static let isRunningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     nonisolated private static let legacyConfigurationFilename = "ai-terminal-manager.json"
     nonisolated private static let managedConfigStartMarker = "# >>> GhoDex managed settings >>>"
@@ -684,6 +699,7 @@ final class AITerminalManagerStore: ObservableObject {
             heartbeatIntervalSeconds: interval,
             maxConcurrentTasks: maxConcurrentTasks
         )
+        pruneHeartbeatTasks()
         persistConfiguration()
         syncHeartbeatRuntime()
     }
@@ -706,6 +722,7 @@ final class AITerminalManagerStore: ObservableObject {
             executeAt: executeAt ?? .now
         )
         configuration.heartbeatTasks.append(task)
+        pruneHeartbeatTasks()
         persistConfiguration()
         lastError = nil
         syncHeartbeatRuntime()
@@ -717,6 +734,7 @@ final class AITerminalManagerStore: ObservableObject {
         guard configuration.heartbeatTasks[idx].status == .queued else { return }
         configuration.heartbeatTasks[idx].status = .cancelled
         configuration.heartbeatTasks[idx].updatedAt = .now
+        pruneHeartbeatTasks()
         persistConfiguration()
         syncHeartbeatRuntime()
     }
@@ -729,6 +747,7 @@ final class AITerminalManagerStore: ObservableObject {
             changed = true
         }
         guard changed else { return }
+        pruneHeartbeatTasks()
         persistConfiguration()
         syncHeartbeatRuntime()
     }
@@ -742,8 +761,25 @@ final class AITerminalManagerStore: ObservableObject {
                 return false
             }
         }
+        pruneHeartbeatTasks()
         persistConfiguration()
         syncHeartbeatRuntime()
+    }
+
+    private func pruneHeartbeatTasks(now: Date = .now) {
+        let beforeCount = configuration.heartbeatTasks.count
+        configuration.heartbeatTasks = Self.prunedHeartbeatTasks(configuration.heartbeatTasks, now: now)
+        let removedCount = beforeCount - configuration.heartbeatTasks.count
+        if removedCount > 0 {
+            RuntimeDiagnosticsLogger.log(
+                component: "ai_manager.heartbeat_tasks",
+                event: "prune",
+                details: [
+                    "removed": "\(removedCount)",
+                    "remaining": "\(configuration.heartbeatTasks.count)",
+                ]
+            )
+        }
     }
 
     var managedSkillStatuses: [ManagedSkillRepositoryStatus] {
@@ -2909,20 +2945,23 @@ final class AITerminalManagerStore: ObservableObject {
         }
     }
 
-    private func processPendingSSHPasswordPrompts() {
+    @discardableResult
+    private func processPendingSSHPasswordPrompts() -> Bool {
         guard !pendingSSHPasswordAutomations.isEmpty else {
             stopSSHPasswordAutomationTimer()
-            return
+            return false
         }
         guard let appDelegate = appDelegateProvider() else {
-            return
+            return false
         }
 
+        var observedActivity = false
         for (sessionID, pending) in pendingSSHPasswordAutomations {
             guard let surface = appDelegate.findSurface(forUUID: sessionID) else { continue }
             let visibleText = surface.aiManagerVisibleText().content
 
             if Self.containsSSHAuthenticationFailure(in: visibleText) {
+                observedActivity = true
                 sshSessionAuthStates[sessionID] = .failed
                 pendingSSHPasswordAutomations.removeValue(forKey: sessionID)
                 recordRecentHost(
@@ -2934,6 +2973,7 @@ final class AITerminalManagerStore: ObservableObject {
             }
 
             if pending.hasSentPassword {
+                observedActivity = true
                 if !Self.containsSSHPasswordPrompt(in: visibleText) {
                     sshSessionAuthStates[sessionID] = .connected
                     pendingSSHPasswordAutomations.removeValue(forKey: sessionID)
@@ -2942,6 +2982,7 @@ final class AITerminalManagerStore: ObservableObject {
             }
 
             if Self.containsSSHPasswordPrompt(in: visibleText) {
+                observedActivity = true
                 surface.aiManagerSendText("\(pending.password)\n")
                 pendingSSHPasswordAutomations[sessionID]?.hasSentPassword = true
                 sshSessionAuthStates[sessionID] = .authenticating
@@ -2953,33 +2994,106 @@ final class AITerminalManagerStore: ObservableObject {
         if pendingSSHPasswordAutomations.isEmpty {
             stopSSHPasswordAutomationTimer()
         }
+        return observedActivity
     }
 
     private func ensureSSHPasswordAutomationTimer() {
+        guard !pendingSSHPasswordAutomations.isEmpty else {
+            stopSSHPasswordAutomationTimer()
+            return
+        }
         guard sshPasswordAutomationTimer == nil else { return }
 
-        let timer = Timer(
-            timeInterval: 0.2,
-            repeats: true
-        ) { [weak self] _ in
-            guard let self else { return }
-            guard !self.pendingSSHPasswordAutomations.isEmpty else {
-                self.stopSSHPasswordAutomationTimer()
-                return
-            }
+        sshPasswordAutomationInterval = Self.sshPasswordAutomationFastInterval
+        sshPasswordAutomationIdlePollCount = 0
+        RuntimeDiagnosticsLogger.log(
+            component: "ai_manager.ssh_password_automation",
+            event: "start",
+            details: [
+                "pending_sessions": "\(pendingSSHPasswordAutomations.count)",
+                "interval_seconds": String(format: "%.3f", sshPasswordAutomationInterval),
+            ]
+        )
+        scheduleSSHPasswordAutomationTick(after: 0.01)
+    }
 
-            self.processPendingSSHPasswordPrompts()
-            let hostLookup = Dictionary(uniqueKeysWithValues: self.availableHosts.map { ($0.id, $0) })
-            self.rebuildRemoteSessions(hostLookup: hostLookup)
+    private func scheduleSSHPasswordAutomationTick(after interval: TimeInterval) {
+        sshPasswordAutomationTimer?.invalidate()
+
+        let resolvedInterval = max(0.05, interval)
+        let timer = Timer(
+            timeInterval: resolvedInterval,
+            repeats: false
+        ) { [weak self] _ in
+            self?.runSSHPasswordAutomationTick()
         }
-        timer.tolerance = 0.05
+        timer.tolerance = min(max(resolvedInterval * 0.25, 0.05), 0.25)
         RunLoop.main.add(timer, forMode: .common)
         sshPasswordAutomationTimer = timer
     }
 
+    private func runSSHPasswordAutomationTick() {
+        guard !pendingSSHPasswordAutomations.isEmpty else {
+            stopSSHPasswordAutomationTimer()
+            return
+        }
+
+        let observedActivity = processPendingSSHPasswordPrompts()
+        let hostLookup = Dictionary(uniqueKeysWithValues: availableHosts.map { ($0.id, $0) })
+        rebuildRemoteSessions(hostLookup: hostLookup)
+
+        guard !pendingSSHPasswordAutomations.isEmpty else {
+            stopSSHPasswordAutomationTimer()
+            return
+        }
+
+        let previousInterval = sshPasswordAutomationInterval
+        if observedActivity {
+            sshPasswordAutomationIdlePollCount = 0
+            sshPasswordAutomationInterval = Self.sshPasswordAutomationFastInterval
+        } else {
+            sshPasswordAutomationIdlePollCount += 1
+            if sshPasswordAutomationIdlePollCount == 1 {
+                sshPasswordAutomationInterval = min(
+                    Self.sshPasswordAutomationMaxInterval,
+                    max(sshPasswordAutomationInterval, 0.35)
+                )
+            } else {
+                sshPasswordAutomationInterval = min(
+                    Self.sshPasswordAutomationMaxInterval,
+                    sshPasswordAutomationInterval * Self.sshPasswordAutomationBackoffMultiplier
+                )
+            }
+        }
+
+        if abs(previousInterval - sshPasswordAutomationInterval) > 0.000_1 {
+            RuntimeDiagnosticsLogger.log(
+                component: "ai_manager.ssh_password_automation",
+                event: "interval_change",
+                details: [
+                    "observed_activity": observedActivity ? "true" : "false",
+                    "pending_sessions": "\(pendingSSHPasswordAutomations.count)",
+                    "previous_seconds": String(format: "%.3f", previousInterval),
+                    "next_seconds": String(format: "%.3f", sshPasswordAutomationInterval),
+                ]
+            )
+        }
+
+        scheduleSSHPasswordAutomationTick(after: sshPasswordAutomationInterval)
+    }
+
     private func stopSSHPasswordAutomationTimer() {
+        let hadTimer = sshPasswordAutomationTimer != nil
         sshPasswordAutomationTimer?.invalidate()
         sshPasswordAutomationTimer = nil
+        sshPasswordAutomationInterval = Self.sshPasswordAutomationFastInterval
+        sshPasswordAutomationIdlePollCount = 0
+        if hadTimer {
+            RuntimeDiagnosticsLogger.log(
+                component: "ai_manager.ssh_password_automation",
+                event: "stop"
+            )
+        }
     }
 
     private func updateTask(_ taskID: UUID, state: AITerminalTaskState, note: String?) {
@@ -3246,6 +3360,7 @@ final class AITerminalManagerStore: ObservableObject {
         }
 
         heartbeatIsExecutingTask = true
+        pruneHeartbeatTasks()
         persistConfiguration()
         scheduleNextHeartbeatExecution()
 
@@ -3262,6 +3377,7 @@ final class AITerminalManagerStore: ObservableObject {
     private func finishHeartbeatTask(taskID: UUID, succeeded: Bool, errorMessage: String?) {
         guard let index = configuration.heartbeatTasks.firstIndex(where: { $0.id == taskID }) else {
             heartbeatIsExecutingTask = configuration.heartbeatTasks.contains(where: { $0.status == .running })
+            pruneHeartbeatTasks()
             persistConfiguration()
             scheduleNextHeartbeatExecution()
             runDueHeartbeatTasksIfNeeded()
@@ -3272,6 +3388,7 @@ final class AITerminalManagerStore: ObservableObject {
         configuration.heartbeatTasks[index].updatedAt = .now
         configuration.heartbeatTasks[index].errorMessage = errorMessage
         heartbeatIsExecutingTask = configuration.heartbeatTasks.contains(where: { $0.status == .running })
+        pruneHeartbeatTasks()
         persistConfiguration()
         scheduleNextHeartbeatExecution()
         runDueHeartbeatTasksIfNeeded()
@@ -3459,6 +3576,92 @@ final class AITerminalManagerStore: ObservableObject {
         try text.write(to: url, atomically: true, encoding: .utf8)
     }
 
+    nonisolated private static func isFinishedHeartbeatTaskStatus(_ status: AITerminalHeartbeatTaskStatus) -> Bool {
+        switch status {
+        case .done, .failed, .cancelled:
+            return true
+        case .queued, .running:
+            return false
+        }
+    }
+
+    nonisolated private static func heartbeatTaskEvictionPriority(_ status: AITerminalHeartbeatTaskStatus) -> Int {
+        switch status {
+        case .done:
+            return 0
+        case .failed:
+            return 1
+        case .cancelled:
+            return 2
+        case .queued:
+            return 3
+        case .running:
+            return 4
+        }
+    }
+
+    nonisolated private static func prunedHeartbeatTasks(
+        _ tasks: [AITerminalHeartbeatTask],
+        now: Date = .now
+    ) -> [AITerminalHeartbeatTask] {
+        let finishedCutoff = now.addingTimeInterval(-Self.heartbeatFinishedTaskRetentionSeconds)
+        let initialCount = tasks.count
+        var filtered = tasks.filter { task in
+            guard isFinishedHeartbeatTaskStatus(task.status) else {
+                return true
+            }
+            return task.updatedAt >= finishedCutoff
+        }
+        let removedFinished = initialCount - filtered.count
+
+        let overflowCount = filtered.count - Self.maxHeartbeatTaskEntries
+        guard overflowCount > 0 else {
+            if removedFinished > 0 {
+                RuntimeDiagnosticsLogger.log(
+                    component: "ai_manager.heartbeat_tasks",
+                    event: "prune_reason",
+                    details: [
+                        "removed_finished": "\(removedFinished)",
+                        "removed_capacity": "0",
+                        "remaining": "\(filtered.count)",
+                    ]
+                )
+            }
+            return filtered
+        }
+
+        let evictionIDs = Set(
+            filtered
+                .sorted { lhs, rhs in
+                    let lhsPriority = heartbeatTaskEvictionPriority(lhs.status)
+                    let rhsPriority = heartbeatTaskEvictionPriority(rhs.status)
+                    if lhsPriority != rhsPriority {
+                        return lhsPriority < rhsPriority
+                    }
+                    if lhs.updatedAt != rhs.updatedAt {
+                        return lhs.updatedAt < rhs.updatedAt
+                    }
+                    if lhs.createdAt != rhs.createdAt {
+                        return lhs.createdAt < rhs.createdAt
+                    }
+                    return lhs.id.uuidString < rhs.id.uuidString
+                }
+                .prefix(overflowCount)
+                .map(\.id)
+        )
+        filtered.removeAll { evictionIDs.contains($0.id) }
+        RuntimeDiagnosticsLogger.log(
+            component: "ai_manager.heartbeat_tasks",
+            event: "prune_reason",
+            details: [
+                "removed_finished": "\(removedFinished)",
+                "removed_capacity": "\(evictionIDs.count)",
+                "remaining": "\(filtered.count)",
+            ]
+        )
+        return filtered
+    }
+
     nonisolated private static func sanitizeConfiguration(_ configuration: AITerminalManagerConfiguration) -> AITerminalManagerConfiguration {
         var next = configuration
         next.heartbeatQueueSettings.heartbeatIntervalSeconds = min(
@@ -3469,6 +3672,7 @@ final class AITerminalManagerStore: ObservableObject {
             max(next.heartbeatQueueSettings.maxConcurrentTasks, Self.minHeartbeatMaxConcurrentTasks),
             Self.maxHeartbeatMaxConcurrentTasks
         )
+        next.heartbeatTasks = prunedHeartbeatTasks(next.heartbeatTasks)
         next.todoSettings = .init(
             enabled: next.todoSettings.enabled,
             workspaceRootPath: next.todoSettings.workspaceRootPath.isEmpty
@@ -3731,21 +3935,87 @@ final class AITerminalManagerStore: ObservableObject {
     }
 
     private func cacheTodoDocument(_ document: AITerminalTodoDayDocument) {
+        let now = Date()
+        pruneTodoDocumentCache(now: now)
         let path = todoDocumentPath(forDayString: document.date)
-        todoDocumentCache[todoDocumentCacheKey(for: path)] = document
+        todoDocumentCache[todoDocumentCacheKey(for: path)] = .init(
+            document: document,
+            cachedAt: now,
+            lastAccessedAt: now
+        )
+        pruneTodoDocumentCache(now: now)
     }
 
     private func rawTodoDocument(forDayString dayString: String) throws -> AITerminalTodoDayDocument {
+        let now = Date()
+        pruneTodoDocumentCache(now: now)
         let normalizedDayString = AITerminalTodoSettings.normalizedDateAnchor(dayString)
         let path = todoDocumentPath(forDayString: normalizedDayString)
         let cacheKey = todoDocumentCacheKey(for: path)
-        if let cached = todoDocumentCache[cacheKey] {
-            return cached
+        if var cached = todoDocumentCache[cacheKey] {
+            if now.timeIntervalSince(cached.cachedAt) <= Self.todoDocumentCacheTTLSeconds {
+                cached.lastAccessedAt = now
+                todoDocumentCache[cacheKey] = cached
+                return cached.document
+            }
+            todoDocumentCache.removeValue(forKey: cacheKey)
         }
 
         let document = try Self.loadTodoDocument(at: path, date: normalizedDayString)
-        todoDocumentCache[cacheKey] = document
+        todoDocumentCache[cacheKey] = .init(
+            document: document,
+            cachedAt: now,
+            lastAccessedAt: now
+        )
+        pruneTodoDocumentCache(now: now)
         return document
+    }
+
+    private func pruneTodoDocumentCache(now: Date = .now) {
+        let cutoff = now.addingTimeInterval(-Self.todoDocumentCacheTTLSeconds)
+        var removedByTTL = 0
+        for (key, entry) in todoDocumentCache where entry.lastAccessedAt < cutoff {
+            todoDocumentCache.removeValue(forKey: key)
+            removedByTTL += 1
+        }
+
+        let overflowCount = todoDocumentCache.count - Self.todoDocumentCacheMaxEntries
+        guard overflowCount > 0 else {
+            if removedByTTL > 0 {
+                RuntimeDiagnosticsLogger.log(
+                    component: "ai_manager.todo_document_cache",
+                    event: "prune",
+                    details: [
+                        "removed_ttl": "\(removedByTTL)",
+                        "removed_capacity": "0",
+                        "remaining": "\(todoDocumentCache.count)",
+                    ]
+                )
+            }
+            return
+        }
+
+        let evictionKeys = todoDocumentCache
+            .sorted { lhs, rhs in
+                if lhs.value.lastAccessedAt != rhs.value.lastAccessedAt {
+                    return lhs.value.lastAccessedAt < rhs.value.lastAccessedAt
+                }
+                return lhs.key < rhs.key
+            }
+            .prefix(overflowCount)
+            .map(\.key)
+        for key in evictionKeys {
+            todoDocumentCache.removeValue(forKey: key)
+        }
+        RuntimeDiagnosticsLogger.log(
+            component: "ai_manager.todo_document_cache",
+            event: "prune",
+            details: [
+                "removed_ttl": "\(removedByTTL)",
+                "removed_capacity": "\(evictionKeys.count)",
+                "remaining": "\(todoDocumentCache.count)",
+            ]
+        )
     }
 
     private func refreshedTodoDocument(_ document: AITerminalTodoDayDocument) -> AITerminalTodoDayDocument {

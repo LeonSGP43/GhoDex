@@ -53,16 +53,21 @@ final class ControlHarnessReadSampler {
     private let policy: ControlHarnessSamplingPolicy
     private let inventoryProvider: @MainActor () -> [ControlHarnessSamplerTarget]
     private let performanceMonitor: ControlHarnessPerformanceMonitor?
-    private let tickInterval: TimeInterval
+    private let managedActiveTickInterval: TimeInterval
+    private let observedTickInterval: TimeInterval
+    private let backgroundTickInterval: TimeInterval
     private let logger: Logger
 
     private var timer: Timer?
+    private var currentTickInterval: TimeInterval?
 
     init(
         bundleID: String,
         sampleStore: ControlHarnessSampleStore,
         policy: ControlHarnessSamplingPolicy = .default,
         tickInterval: TimeInterval = 0.125,
+        observedTickInterval: TimeInterval = 0.5,
+        backgroundTickInterval: TimeInterval = 1.5,
         performanceMonitor: ControlHarnessPerformanceMonitor? = nil,
         inventoryProvider: @escaping @MainActor () -> [ControlHarnessSamplerTarget]
     ) {
@@ -70,33 +75,42 @@ final class ControlHarnessReadSampler {
         self.policy = policy
         self.inventoryProvider = inventoryProvider
         self.performanceMonitor = performanceMonitor
-        self.tickInterval = tickInterval
+        self.managedActiveTickInterval = max(0.05, tickInterval)
+        self.observedTickInterval = max(self.managedActiveTickInterval, observedTickInterval)
+        self.backgroundTickInterval = max(self.observedTickInterval, backgroundTickInterval)
         self.logger = Logger(subsystem: bundleID, category: "ControlHarnessReadSampler")
     }
 
     func start() {
         guard timer == nil else { return }
-
-        let timer = Timer(timeInterval: tickInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.refreshAllNow()
-            }
-        }
-        self.timer = timer
-        RunLoop.main.add(timer, forMode: .common)
-
+        scheduleTimer(interval: managedActiveTickInterval)
         refreshAllNow()
         logger.debug("control harness read sampler started")
+        RuntimeDiagnosticsLogger.log(
+            component: "control_harness.read_sampler",
+            event: "start",
+            details: [
+                "managed_active_tick_seconds": String(format: "%.3f", managedActiveTickInterval),
+                "observed_tick_seconds": String(format: "%.3f", observedTickInterval),
+                "background_tick_seconds": String(format: "%.3f", backgroundTickInterval),
+            ]
+        )
     }
 
     func stop() {
         timer?.invalidate()
         timer = nil
+        currentTickInterval = nil
+        RuntimeDiagnosticsLogger.log(
+            component: "control_harness.read_sampler",
+            event: "stop"
+        )
     }
 
     func refreshAllNow(now: Date = Date()) {
         let started = DispatchTime.now()
         let targets = inventoryProvider()
+        reconfigureTimerIfNeeded(for: targets)
         var refreshedCount = 0
 
         for target in targets {
@@ -154,6 +168,47 @@ final class ControlHarnessReadSampler {
         )
 
         return sample
+    }
+
+    private func desiredTickInterval(for targets: [ControlHarnessSamplerTarget]) -> TimeInterval {
+        guard !targets.isEmpty else {
+            return backgroundTickInterval
+        }
+        if targets.contains(where: { $0.activityClass == .managedActive }) {
+            return managedActiveTickInterval
+        }
+        if targets.contains(where: { $0.activityClass == .observed }) {
+            return observedTickInterval
+        }
+        return backgroundTickInterval
+    }
+
+    private func reconfigureTimerIfNeeded(for targets: [ControlHarnessSamplerTarget]) {
+        let desired = desiredTickInterval(for: targets)
+        guard currentTickInterval == nil || abs((currentTickInterval ?? 0) - desired) > 0.001 else {
+            return
+        }
+        scheduleTimer(interval: desired)
+    }
+
+    private func scheduleTimer(interval: TimeInterval) {
+        timer?.invalidate()
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.refreshAllNow()
+            }
+        }
+        timer.tolerance = min(max(interval * 0.2, 0.02), 0.5)
+        self.timer = timer
+        currentTickInterval = interval
+        RunLoop.main.add(timer, forMode: .common)
+        RuntimeDiagnosticsLogger.log(
+            component: "control_harness.read_sampler",
+            event: "schedule_timer",
+            details: [
+                "interval_seconds": String(format: "%.3f", interval),
+            ]
+        )
     }
 
     private func refreshIfDue(

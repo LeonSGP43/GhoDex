@@ -110,6 +110,29 @@ enum BrowserPaths {
         return URL(fileURLWithPath: standardized, isDirectory: true)
     }
 
+    static func shouldRestoreBrowserWindows(
+        windowSaveState: String,
+        configuredExternalProfile: String?,
+        isolatedAppSupportRootOverride: URL?
+    ) -> Bool {
+        guard windowSaveState != "never" else {
+            return false
+        }
+
+        if let configuredExternalProfile, !configuredExternalProfile.isEmpty {
+            return false
+        }
+
+        // Isolated Browser roots are used for automation and acceptance runs.
+        // Reopening stale browser windows from macOS restoration breaks the
+        // intended blank-slate context boundary before the first explicit open.
+        if isolatedAppSupportRootOverride != nil {
+            return false
+        }
+
+        return true
+    }
+
     static func shouldMirrorBrowserConfigIntoDefaults() -> Bool {
         isolatedAppSupportRootOverride() == nil
     }

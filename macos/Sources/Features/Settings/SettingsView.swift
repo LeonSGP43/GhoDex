@@ -53,6 +53,12 @@ struct SettingsView: View {
         gatewayDraftSettings() != appDelegate.controlHarnessGatewaySettings
     }
 
+    private var gatewayPortValidationMessage: String? {
+        ControlHarnessGatewayAppSettings.parseListenPort(gatewayPortText) == nil
+            ? L10n.Settings.gatewayPortInvalid
+            : nil
+    }
+
     private var savedIconSettings: AppIconSettings {
         appDelegate.appIconSettings.sanitized
     }
@@ -456,6 +462,12 @@ struct SettingsView: View {
                         .font(.headline)
                     TextField("9527", text: $gatewayPortText)
                         .textFieldStyle(.roundedBorder)
+                    if let gatewayPortValidationMessage {
+                        Text(gatewayPortValidationMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     Text(L10n.Settings.gatewayPortHelp)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -486,13 +498,14 @@ struct SettingsView: View {
                         appDelegate.saveControlHarnessGatewaySettings(gatewayDraftSettings())
                     }
                     .buttonStyle(.borderedProminent)
+                    .disabled(gatewayPortValidationMessage != nil)
 
                     Button(L10n.Settings.gatewayShowQr) {
                         appDelegate.saveControlHarnessGatewaySettings(gatewayDraftSettings())
                         appDelegate.showRemotePairingQRCode(nil)
                     }
                     .buttonStyle(.bordered)
-                    .disabled(!gatewayEnabled)
+                    .disabled(!gatewayEnabled || gatewayPortValidationMessage != nil)
                 }
 
                 if gatewaySettingsDirty {
@@ -627,8 +640,8 @@ struct SettingsView: View {
     }
 
     private func gatewayDraftSettings() -> ControlHarnessGatewayAppSettings {
-        let digits = gatewayPortText.filter(\.isNumber)
-        let parsedPort = UInt16(digits) ?? ControlHarnessGatewayAppSettings.defaultListenPort
+        let parsedPort = ControlHarnessGatewayAppSettings.parseListenPort(gatewayPortText)
+            ?? ControlHarnessGatewayAppSettings.defaultListenPort
         return ControlHarnessGatewayAppSettings(
             isEnabled: gatewayEnabled,
             listenHost: gatewayListenHost,

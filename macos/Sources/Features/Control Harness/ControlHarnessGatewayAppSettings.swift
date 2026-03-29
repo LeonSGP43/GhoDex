@@ -1,6 +1,30 @@
+import CryptoKit
 import Foundation
 
 struct ControlHarnessGatewayAppSettings: Equatable, Sendable {
+    struct StorageScope: Equatable, Sendable {
+        let namespaceKey: String
+
+        static func current(
+            bundle: Bundle = .main,
+            processInfo: ProcessInfo = .processInfo
+        ) -> Self {
+            let bundleID = normalizedValue(bundle.bundleIdentifier) ?? "com.leongong.ghodex"
+            let installPath = normalizedValue(
+                bundle.bundleURL.resolvingSymlinksInPath().path
+            ) ?? normalizedValue(
+                bundle.executableURL?.resolvingSymlinksInPath().path
+            ) ?? normalizedValue(
+                processInfo.arguments.first
+            ) ?? "unknown"
+
+            let material = "\(bundleID)|\(installPath)"
+            let digest = SHA256.hash(data: Data(material.utf8))
+            let suffix = digest.compactMap { String(format: "%02x", $0) }.joined().prefix(16)
+            return Self(namespaceKey: "ControlHarnessGateway.Scope.\(bundleID).\(suffix)")
+        }
+    }
+
     static let enabledKey = "ControlHarnessGateway.Enabled"
     static let listenHostKey = "ControlHarnessGateway.ListenHost"
     static let listenPortKey = "ControlHarnessGateway.ListenPort"
@@ -36,46 +60,64 @@ struct ControlHarnessGatewayAppSettings: Equatable, Sendable {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    static func registerDefaults(userDefaults: UserDefaults = .standard) {
-        userDefaults.register(defaults: [
-            enabledKey: defaultEnabled,
-            listenHostKey: defaultListenHost,
-            listenPortKey: Int(defaultListenPort),
-            pairingAdvertiseHostKey: "",
-            showPairingQrOnLaunchKey: false,
-        ])
+    static func parseListenPort(_ rawValue: String) -> UInt16? {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        guard trimmed.allSatisfy(\.isNumber) else { return nil }
+        guard let parsedPort = UInt16(trimmed), parsedPort > 0 else { return nil }
+        return parsedPort
     }
 
-    static func load(userDefaults: UserDefaults = .standard) -> Self {
-        registerDefaults(userDefaults: userDefaults)
+    static func load(
+        userDefaults: UserDefaults = .standard,
+        scope: StorageScope = .current()
+    ) -> Self {
+        let resolvedScope = hasScopedValues(userDefaults: userDefaults, scope: scope) ? scope : nil
 
         var settings = Self()
-        settings.isEnabled = userDefaults.object(forKey: enabledKey) == nil
+        settings.isEnabled = userDefaults.object(forKey: storageKey(enabledKey, scope: resolvedScope)) == nil
             ? defaultEnabled
-            : userDefaults.bool(forKey: enabledKey)
+            : userDefaults.bool(forKey: storageKey(enabledKey, scope: resolvedScope))
 
-        let storedHost = userDefaults.string(forKey: listenHostKey) ?? defaultListenHost
+        let storedHost = userDefaults.string(
+            forKey: storageKey(listenHostKey, scope: resolvedScope)
+        ) ?? defaultListenHost
         settings.listenHost = storedHost
 
-        let storedPort = userDefaults.integer(forKey: listenPortKey)
+        let storedPort = userDefaults.integer(
+            forKey: storageKey(listenPortKey, scope: resolvedScope)
+        )
         if storedPort >= 1 && storedPort <= 65_535 {
             settings.listenPort = UInt16(storedPort)
         } else {
             settings.listenPort = defaultListenPort
         }
 
-        settings.pairingAdvertiseHost = userDefaults.string(forKey: pairingAdvertiseHostKey) ?? ""
-        settings.showPairingQrOnLaunch = userDefaults.bool(forKey: showPairingQrOnLaunchKey)
+        settings.pairingAdvertiseHost = userDefaults.string(
+            forKey: storageKey(pairingAdvertiseHostKey, scope: resolvedScope)
+        ) ?? ""
+        settings.showPairingQrOnLaunch = userDefaults.bool(
+            forKey: storageKey(showPairingQrOnLaunchKey, scope: resolvedScope)
+        )
         return settings.sanitized()
     }
 
-    func save(userDefaults: UserDefaults = .standard) {
+    func save(
+        userDefaults: UserDefaults = .standard,
+        scope: StorageScope = .current()
+    ) {
         let sanitized = sanitized()
-        userDefaults.set(sanitized.isEnabled, forKey: Self.enabledKey)
-        userDefaults.set(sanitized.listenHost, forKey: Self.listenHostKey)
-        userDefaults.set(Int(sanitized.listenPort), forKey: Self.listenPortKey)
-        userDefaults.set(sanitized.pairingAdvertiseHost, forKey: Self.pairingAdvertiseHostKey)
-        userDefaults.set(sanitized.showPairingQrOnLaunch, forKey: Self.showPairingQrOnLaunchKey)
+        userDefaults.set(sanitized.isEnabled, forKey: Self.storageKey(Self.enabledKey, scope: scope))
+        userDefaults.set(sanitized.listenHost, forKey: Self.storageKey(Self.listenHostKey, scope: scope))
+        userDefaults.set(Int(sanitized.listenPort), forKey: Self.storageKey(Self.listenPortKey, scope: scope))
+        userDefaults.set(
+            sanitized.pairingAdvertiseHost,
+            forKey: Self.storageKey(Self.pairingAdvertiseHostKey, scope: scope)
+        )
+        userDefaults.set(
+            sanitized.showPairingQrOnLaunch,
+            forKey: Self.storageKey(Self.showPairingQrOnLaunchKey, scope: scope)
+        )
     }
 
     func resolvedConfiguration(
@@ -87,5 +129,36 @@ struct ControlHarnessGatewayAppSettings: Equatable, Sendable {
         configuration.listenHost = sanitized.listenHost
         configuration.listenPort = sanitized.listenPort
         return configuration
+    }
+
+    private static func hasScopedValues(
+        userDefaults: UserDefaults,
+        scope: StorageScope
+    ) -> Bool {
+        trackedKeys.contains {
+            userDefaults.object(forKey: storageKey($0, scope: scope)) != nil
+        }
+    }
+
+    private static func storageKey(
+        _ key: String,
+        scope: StorageScope?
+    ) -> String {
+        guard let scope else { return key }
+        return "\(scope.namespaceKey).\(key)"
+    }
+
+    private static let trackedKeys = [
+        enabledKey,
+        listenHostKey,
+        listenPortKey,
+        pairingAdvertiseHostKey,
+        showPairingQrOnLaunchKey,
+    ]
+
+    private static func normalizedValue(_ rawValue: String?) -> String? {
+        guard let rawValue else { return nil }
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

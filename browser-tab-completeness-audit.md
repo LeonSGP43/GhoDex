@@ -66,6 +66,7 @@ Evidence:
   `VIDEO_CODECS WARN h264: ""` in the mirrored-profile fingerprint lane
 - the fresh isolated managed lane in
   `/tmp/ghx-browser-media-debug-acceptance-postfix.json`
+  and `/tmp/ghx-browser-media-debug-acceptance-recheck-1.json`
   reports `h264_baseline = ""`, `mp4_aac = ""`,
   `MediaSource.isTypeSupported(...) = false`, and
   `PipelineStatus::DEMUXER_ERROR_NO_SUPPORTED_STREAMS`
@@ -94,6 +95,10 @@ Conclusion:
   `scripts/browser_media_debug_acceptance.py`
 - the remaining open question is execution evidence on a build-capable host,
   not missing product support for managed codec-enabled runtimes
+- this workstation currently has about `31Gi` free on
+  `/System/Volumes/Data`, below the ~`150Gi` CEF codec-build requirement, so
+  local source-build closure is blocked until a larger-capacity build host is
+  used or a trusted prebuilt codec-enabled runtime is supplied
 
 ### Tier 1: Product Boundary Choices That Prevent Full Chrome Equivalence
 

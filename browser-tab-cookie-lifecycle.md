@@ -253,6 +253,15 @@ Follow-on evidence after those harness fixes:
 
 The stable external protocol version is `browser.tab.v1`.
 
+Compatibility note:
+
+- `browser.context.v2` now documents the top-level object as `browserContext`
+- current `browserTabID` values and `browserContextID` values resolve to the
+  same live controller/context object
+- cookie commands are still page-targeted today, but their durable isolation
+  boundary is expected to move toward Browser Context ownership as the control
+  plane expands beyond document-visible cookie state
+
 Cookie-related command names:
 
 - `getCookies`
@@ -436,10 +445,10 @@ Browser page.
 
 Practical consequences:
 
-- results can differ across pages in the same Browser tab if they are on
+- results can differ across pages in the same Browser context if they are on
   different origins
 - callers should use `listPages` and `activatePage` or explicit `pageID` values
-  when they need deterministic targeting
+  when they need deterministic targeting inside one context
 
 ## Runtime, Debug, and Cookie Interplay
 
@@ -456,8 +465,8 @@ The debug lane and the cookie API are separate concerns.
 
 For deterministic cookie work:
 
-1. `listTabs`
-2. choose `browserTabID`
+1. `listContexts` or `listTabs`
+2. choose `browserContextID` or compatibility `browserTabID`
 3. `listPages`
 4. choose or activate `pageID`
 5. `loadURL` if needed

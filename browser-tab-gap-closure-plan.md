@@ -12,6 +12,28 @@ The target state is not full Chrome product parity. The target state is:
 - the browser does not expose obvious low-effort automation fingerprints created by our own runtime choices
 - remaining non-goals are explicit product boundaries, not accidental gaps
 
+Browser Context transition note:
+
+- the control-plane top-level object is now being formalized as `browserContext`
+  rather than reusing the overloaded Browser tab/window term
+- the current Browser tab controller remains the UI container during the
+  transition, but new protocol and acceptance work should describe top-level
+  isolation and lifecycle in terms of context/page/frame boundaries
+
+## Execution Rule
+
+All remaining work on this plan must follow atomic development rules.
+
+- one task at a time: do not mix two plan tasks in one implementation slice
+- before starting the next task, finish the current task end-to-end:
+  implementation, durable docs, tests or acceptance evidence, and verification
+- if a task changes behavior, update the relevant protocol/runtime/design docs in
+  the same atomic change
+- if a task cannot yet be covered by an automated test, record the exact
+  acceptance procedure and evidence path before marking it complete
+- do not begin the next phase until the current phase has a clear close-out with
+  code, documentation, and verification artifacts
+
 ## Current Baseline
 
 Current evidence already proves the branch is beyond prototype status:
@@ -25,8 +47,109 @@ Useful artifacts already produced during this branch:
 
 - popup follow-up visible acceptance: `/tmp/ghx-popup-followup-visible-acceptance.json`
 - control-surface proof: `/tmp/ghx-control-proof-b53caadb`
+- Browser teardown crash report: `/Users/leongong/Library/Logs/DiagnosticReports/GhoDex-2026-03-26-152602.ips`
 
 ## Workstreams
+
+### 0. BrowserTab Teardown Stability
+
+Problem:
+The current BrowserTab teardown path can abort the app on the main thread during
+SwiftUI view dismantle. The crash report from March 26, 2026 points to
+`BrowserCEFDeckView.Coordinator.reset(from:)` calling
+`BrowserTabModel.unbindBridge(for:)`, which then writes the `@Published`
+`BrowserPageState.isControlBridgeReady` flag while SwiftUI/Combine is already
+invalidating the same observable object graph.
+
+Key evidence:
+
+- crash thread: `CrBrowserMain` / `com.apple.main-thread`
+- termination: `SIGABRT`
+- runtime path: `swift_beginAccess` -> `Published.subscript.setter` ->
+  `BrowserPageState.isControlBridgeReady.setter`
+- source chain:
+  `BrowserTabView.swift:299` ->
+  `BrowserTabModel.swift:923` ->
+  `BrowserTabModel.swift:595`
+
+Deliverables:
+
+- remove synchronous `@Published` mutation from the Browser view dismantle path
+- choose one durable fix and record the decision near the implementation:
+  - defer `unbindBridge` work out of `dismantleNSView/reset`
+  - or stop mutating `isControlBridgeReady` during bridge teardown
+  - or move bridge-readiness bookkeeping to non-`@Published` internal state
+- add a narrow regression test or deterministic repro harness if practical
+- record the crash root cause and fix boundary in Browser durability docs so
+  later agents do not misattribute the failure to CEF worker threads
+
+Acceptance:
+
+- repeated Browser tab/context close and page teardown no longer crash the app
+- no `swift_beginAccess` / exclusivity abort appears in the teardown repro path
+- Browser bridge teardown still leaves page/control routing in a clean state
+- the fix does not regress page close, context close, or popup follow-up cleanup
+
+Close-out evidence in this worktree:
+
+- implementation:
+  `macos/Sources/Features/Browser/BrowserTabModel.swift`
+  `macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`
+- deterministic repro + regression harness:
+  `scripts/browser_teardown_stability_acceptance.py`
+- passing acceptance artifact:
+  `/tmp/ghx-browser-teardown-stability-acceptance.json`
+- status:
+  closed for this worktree; the March 26, 2026 `swift_beginAccess` teardown
+  abort no longer reproduces in the repeated context/page close harness
+  backed by the artifact above
+
+### 0.5 Browser Last-Window Close Semantics
+
+Problem:
+The current Browser UI container is still a top-level `NSWindowController`, so
+closing the last Browser window can accidentally terminate the whole app when
+`quit-after-last-window-closed = true` is enabled. That violates the intended
+product boundary: closing Browser should close that Browser surface, not quit
+GhoDex.
+
+Deliverables:
+
+- classify the last closed top-level window as Browser, Terminal, or Other
+- route `applicationShouldTerminateAfterLastWindowClosed(_:)` through a small
+  policy layer instead of directly returning the raw config flag
+- keep Terminal last-window behavior unchanged
+- treat dedicated Browser popup windows as Browser-owned closes too
+- add a deterministic regression test for the policy and controller
+  classification
+
+Acceptance:
+
+- closing the last Browser window/controller no longer terminates the app
+- closing the last Terminal window still honors `quit-after-last-window-closed`
+- Browser popup windows do not reintroduce the quit-on-close bug through a
+  separate controller class
+
+Close-out evidence in this worktree:
+
+- implementation:
+  `macos/Sources/App/macOS/AppDelegate.swift`
+  `macos/Sources/App/macOS/LastWindowCloseTerminationPolicy.swift`
+- regression tests:
+  `macos/Tests/LastWindowCloseTerminationPolicyTests.swift`
+- passing verification:
+  `nu macos/build.nu --configuration Debug --action build`
+  `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS,arch=arm64' test -only-testing:GhosttyTests/LastWindowCloseTerminationPolicyTests`
+- status:
+  closed for this worktree; Browser-owned top-level closes no longer route into
+  app termination, while Terminal last-window closes still follow the config
+  gate
+- note:
+  a higher-level window-close acceptance harness was drafted in
+  `scripts/browser_last_window_close_acceptance.py`, but end-to-end AppleScript
+  driving is currently blocked by the Debug app's broken scripting dictionary
+  (`osascript` returns `-2705`), so the durable evidence for this slice is the
+  product build plus the new policy regression tests
 
 ### 1. Media And Fingerprint Parity
 
@@ -47,6 +170,22 @@ Acceptance:
 - remote debug is proven closed by default and only open when explicitly configured
 - the resulting audit distinguishes "platform/build limitation" from "our own bad defaults"
 
+Current status:
+
+- remote-debug default-closed behavior is acceptance-backed
+- H.264/AAC is still blocked in both managed and external isolated lanes:
+  `/tmp/ghx-browser-media-debug-acceptance-postfix.json`
+  `/tmp/ghx-browser-media-debug-acceptance-recheck-1.json`
+- latest recheck still fails with:
+  empty `canPlayType` for H.264/AAC,
+  `MediaSource.isTypeSupported(...) = false`,
+  playback error `DEMUXER_ERROR_NO_SUPPORTED_STREAMS`
+- local host preflight is currently below CEF codec-build disk budget
+  (about `31Gi` free on `/System/Volumes/Data` vs roughly `150Gi` required by
+  the documented branch-7632 build flow), so closing this item now requires
+  either a prebuilt codec-enabled runtime artifact or a larger-capacity build
+  host
+
 ### 2. External And Mirror Service Surface
 
 Problem:
@@ -64,6 +203,20 @@ Acceptance:
 - same copied or dedicated profile can log in once, restart GhoDex, and stay logged in on the target site
 - mirror mode does not require the source Chrome app to be closed when using an already-created mirror snapshot
 - any required degradation is documented as product boundary, not discovered accidentally during runtime
+
+Current status:
+
+- one profile-boundary regression is now closed for this worktree:
+  Browser window restoration no longer reopens stale embedded Browser windows
+  when GhoDex is launched against a real external profile or an isolated
+  `GHODEX_BROWSER_APP_SUPPORT_ROOT`
+- the restore gate is intentionally narrow:
+  normal managed runs still keep macOS window restoration, while automation and
+  external-profile lanes now start from an explicit blank-slate Browser context
+- durable evidence for this sub-slice:
+  `macos/Sources/Features/Browser/BrowserPaths.swift`
+  `macos/Sources/Features/Browser/BrowserRestorable.swift`
+  `macos/Tests/Browser/BrowserRestorePolicyTests.swift`
 
 ### 3. Missing End-To-End Acceptance
 
@@ -92,6 +245,146 @@ Acceptance:
 - every handler surfaced in `GhoDexCEFBridge.mm` and related Swift routing has either passing evidence or an explicit red status
 - no handler remains in the ambiguous state of "implemented somewhere, probably works"
 
+### 3.5 Runtime Service Event Surface
+
+Problem:
+The CEF layer already handles downloads, JS dialogs, permission prompts, HTTP
+auth, and certificate warnings, but the external Browser control plane still
+cannot observe those flows as first-class events. That leaves automation blind
+exactly where real browser/runtime regressions are hardest to diagnose.
+
+Deliverables:
+
+- extend the external event stream so runtime-service flows are observable
+  without private logs
+- add stable event kinds for:
+  - download lifecycle
+  - JavaScript dialog lifecycle
+  - permission request lifecycle
+  - HTTP auth lifecycle
+  - certificate warning lifecycle
+- keep the first atomic slice to observability only; interactive resolve/cancel
+  commands remain a follow-up once the typed event model is stable
+- add unit coverage for broker kind mapping and payload contract stability
+
+Acceptance:
+
+- `subscribeEvents` can request the new runtime-service event kinds
+- the CEF-to-Swift path emits typed Browser control events for the five runtime
+  surfaces above
+- the external broker forwards those events with stable payload keys and page
+  targeting metadata
+- the acceptance matrix no longer treats these handler surfaces as "implemented
+  but externally invisible"
+
+### 3.6 Runtime Prompt Resolution Control
+
+Problem:
+Observability alone is not enough for real automation. JS dialogs, permission
+prompts, HTTP auth challenges, and certificate warnings still resolve only
+through native AppKit UI, which means the external Browser control plane can
+see the pause but cannot continue it. That keeps OAuth, login, and certificate
+triage flows partially manual even though the runtime already has typed
+handlers.
+
+Deliverables:
+
+- add external commands for:
+  - `resolveDialog`
+  - `resolvePermission`
+  - `resolveAuth`
+  - `resolveCertificate`
+- assign a stable `requestID` to each externally visible runtime prompt event
+- route resolve commands to the actual paused CEF callback rather than DOM
+  scripting or synthetic UI clicks
+- preserve normal browser usability by allowing native fallback UI when no
+  external resolution arrives within a short grace window
+- add unit coverage for request parsing, payload shape, and event contract
+
+Acceptance:
+
+- requested runtime prompt events expose a stable `requestID`
+- a matching resolve command can complete the paused CEF handler through IPC and
+  AppleScript entrypoints
+- invalid or stale `requestID` values fail as typed control errors instead of
+  silently no-oping
+- unresolved prompts still remain usable through native browser UI after the
+  external grace window expires
+- teardown clears pending prompt state without leaking callbacks into later page
+  lifecycles
+
+Next atomic acceptance slice:
+
+- add a dedicated JavaScript dialog acceptance harness first, because alert /
+  confirm / prompt can be triggered deterministically from a local page without
+  introducing extra HTTPS, certificate, or OS-permission variables
+- keep permission, auth, and certificate acceptance as later slices instead of
+  mixing all runtime prompt types into one unverifiable harness
+
+Current status:
+
+- the launch-time startup/control-path timeout is closed for this worktree
+- the first end-to-end runtime-prompt slice is also now closed for JavaScript
+  alert / confirm / prompt dialogs
+- root cause for the earlier startup timeout remains documented by
+  `/tmp/GhoDex_2026-03-27_014615_6qlP.sample.txt`
+- startup regression evidence remains:
+  `scripts/browser_ipc_startup_readiness_acceptance.py`
+  `/tmp/ghx-browser-ipc-startup-readiness-acceptance.json`
+- Browser Context protocol recheck remains green:
+  `/tmp/ghx-browser-context-protocol-acceptance-recheck-3.json`
+- JavaScript dialog resolution is now green end-to-end:
+  `scripts/browser_js_dialog_resolution_acceptance.py`
+  `/tmp/ghx-browser-js-dialog-resolution-acceptance-recheck-5.json`
+- runtime prompt resolution is now green end-to-end for permission, HTTP auth,
+  and certificate-warning lanes:
+  `scripts/browser_runtime_prompt_resolution_acceptance.py`
+  `/tmp/ghx-browser-runtime-prompt-resolution-acceptance-recheck-3.json`
+- the fix changed `OnJSDialog` from a synchronous grace-period wait into an
+  asynchronous continuation/fallback path, which lets `requested` events drain
+  and `resolveDialog` complete before native UI fallback is considered
+- runtime prompt status in this worktree is now closed for:
+  JavaScript dialog + permission + auth + certificate resolution
+- one context protocol recheck attempt on March 27, 2026 was interrupted before
+  socket readiness by an unrelated app panic in terminal surface event handling
+  (`Surface.mouseButtonCallback`), recorded in:
+  `/tmp/ghx-browser-context-protocol-acceptance-recheck-5.json`
+  `/tmp/ghx-browser-context-6069be04/app.log`
+- Browser harnesses now launch with
+  `GHODEX_SKIP_INITIAL_TERMINAL_WINDOW=1`, and context protocol recheck is
+  green again in:
+  `/tmp/ghx-browser-context-protocol-acceptance-recheck-6.json`
+
+### 3.7 Download Control Surface
+
+Problem:
+Download lifecycle events are now externally visible, but the control plane
+still cannot act on an in-flight download. That leaves agents able to observe a
+bad or unexpected download without any typed way to stop it, and it keeps the
+download handler in the ambiguous state of "visible but not actually
+controllable."
+
+Deliverables:
+
+- add a typed external `cancelDownload` command keyed by `downloadID`
+- route cancellation to the live paused/in-flight CEF download callback instead
+  of shelling out to filesystem cleanup
+- maintain a per-page/per-view registry of cancellable download handles and
+  clear it on terminal download phases or Browser teardown
+- add unit coverage for request parsing and acknowledgement payload shape
+
+Acceptance:
+
+- a live `download` event exposes the stable `downloadID` used by
+  `cancelDownload`
+- `cancelDownload` returns a typed acknowledgement when the Browser runtime
+  accepts the cancellation request
+- unknown or already-finished `downloadID` values fail as typed control errors
+  instead of silently succeeding
+- canceled downloads emit the existing `download` lifecycle event with
+  `phase=canceled`
+- Browser teardown clears any retained download-control handles
+
 ### 4. Popup And Open-Window Observability
 
 Problem:
@@ -115,15 +408,30 @@ Acceptance:
 
 - keep current popup/control/profile proofs reproducible after the `main` sync
 - avoid reopening already-closed routing issues while working on new gaps
+- close the BrowserTab teardown exclusivity crash before deeper Browser Context
+  refactors so the control-plane lifecycle remains stable during later work
+- keep Browser Context policy vocabulary explicit at the control-plane layer
+  (`profilePolicy`, `egressPolicy`, `fingerprintPolicy`,
+  `popupInheritancePolicy`) even before runtime enforcement is fully isolated
+- treat the crash fix itself as one atomic unit:
+  root-cause doc -> implementation -> regression test or acceptance repro ->
+  verification -> only then move on
 
 Exit:
 
 - existing popup and control proofs still pass on the merged branch
+- Browser teardown no longer aborts in the known `isControlBridgeReady`
+  dismantle path
+- Browser Context summaries expose stable policy metadata for profile/egress/
+  fingerprint/popup inheritance with deterministic defaults
+- teardown fix has durable documentation plus a reproducible verification path
 
 ### Phase 1. Media And Debug Surface
 
 - close H.264 and remote-debug-default questions first
 - remove or justify self-inflicted fingerprinting switches
+- finish media/debug docs and evidence before starting profile service-surface
+  closure
 
 Exit:
 
@@ -133,6 +441,7 @@ Exit:
 
 - compare Chrome-successful dedicated profile behavior versus GhoDex behavior
 - preserve only the web-visible state layers needed for durable login/session reuse
+- finish profile docs and restart acceptance before starting handler-surface work
 
 Exit:
 
@@ -141,6 +450,10 @@ Exit:
 ### Phase 3. Handler Acceptance Matrix
 
 - run or record every high-value browser-service path
+- finish the acceptance matrix and evidence set before starting popup broker
+  closure
+- close runtime prompt resolve control before claiming handler-surface
+  completeness for the interactive prompt subset
 
 Exit:
 
@@ -149,6 +462,7 @@ Exit:
 ### Phase 4. Popup Broker Closure
 
 - expose popup/open-window routing outcomes to external automation
+- finish protocol docs and popup evidence before declaring the plan complete
 
 Exit:
 
@@ -170,6 +484,10 @@ Until then, the branch should be treated as conditionally mergeable for continue
 
 ## Decision Trail
 
+- Fix the BrowserTab teardown crash before adding more lifecycle complexity. A
+  first-class Browser Context model increases object churn around page/context
+  creation and destruction, so leaving a known Swift exclusivity abort in the
+  teardown path would make later isolation work harder to diagnose.
 - Close self-inflicted parity gaps before chasing broad anti-bot claims. If our own flags or runtime defaults create the anomaly, fix that before blaming CEF or websites.
 - Separate Chrome account-service parity from website session parity. The product must preserve website login state; it does not need to impersonate the full Chrome sync stack unless that becomes an explicit requirement.
 - Prefer observable broker events over deeper hidden logging. If a popup regression cannot be diagnosed through the external control plane, automation will stay fragile.

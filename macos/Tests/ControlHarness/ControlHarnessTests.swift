@@ -2461,6 +2461,68 @@ struct ControlHarnessTests {
         #expect(envelope.errorCode == "unauthorized")
     }
 
+    @Test func gatewayRecoversFromPortConflictBySelectingAnotherPort() async throws {
+        let requestedPort: UInt16 = 29527
+        let primaryBundleID = "ghdx.tests.gateway-primary"
+        let primaryGateway = await MainActor.run {
+            let (core, _, _) = makeCore(bundleID: primaryBundleID)
+            return ControlHarnessGateway(
+                bundleID: primaryBundleID,
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: requestedPort,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096
+                ),
+                requestHandler: { request, socketPath in
+                    .single(core.handle(request, socketPath: socketPath))
+                }
+            )
+        }
+        defer { primaryGateway.stop() }
+        primaryGateway.startIfNeeded()
+        #expect(primaryGateway.listenerPort == requestedPort)
+
+        let fallbackBundleID = "ghdx.tests.gateway-fallback"
+        let fallbackGateway = await MainActor.run {
+            let (core, _, _) = makeCore(bundleID: fallbackBundleID)
+            return ControlHarnessGateway(
+                bundleID: fallbackBundleID,
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: requestedPort,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096
+                ),
+                requestHandler: { request, socketPath in
+                    .single(core.handle(request, socketPath: socketPath))
+                }
+            )
+        }
+        defer { fallbackGateway.stop() }
+        fallbackGateway.startIfNeeded()
+
+        let fallbackPort = try #require(fallbackGateway.listenerPort)
+        #expect(fallbackPort != requestedPort)
+        #expect(fallbackGateway.lastStartupError == nil)
+
+        let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: fallbackPort)
+        defer { Darwin.close(clientFD) }
+
+        let request = Data(#"{"request_id":"req-gateway-fallback","command":"handshake"}"#.utf8)
+        try ControlHarnessSocketSupport.writeAll(request, to: clientFD)
+        guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+
+        let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
+        let envelope = try JSONDecoder().decode(ControlHarnessHandshakeEnvelope.self, from: responseData)
+        #expect(envelope.status == "ok")
+        #expect(envelope.requestID == "req-gateway-fallback")
+    }
+
     @Test func gatewayMetricsReturnsPerformanceSnapshot() async throws {
         let bundleID = "ghdx.tests.gateway-metrics"
         let performanceMonitor = ControlHarnessPerformanceMonitor()
