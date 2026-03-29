@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(macos): attribute high footprint growth with vmmap deltas and browser model breadcrumbs
+
+- What changed: Expanded `RuntimeDiagnosticsLogger` vmmap sampling to parse full region summary buckets (`TOTAL`, `VM_ALLOCATE`, `Memory Tag 253`, `IOSurface`, `IOAccelerator (graphics)`, `MALLOC`) and emit both absolute and per-sample delta fields (`*_delta_bytes`, `vm_allocate_swapped_ratio`, `top_swapped_region`, `vmmap_growth_suspect`). Added process-level delta fields (`rss_delta_bytes`, `virtual_size_delta_bytes`, `physical_footprint_delta_bytes`) on every diagnostics record. Added Browser lifecycle breadcrumbs in `BrowserTabModel` so memory trend spikes can be correlated to concrete page/bridge/runtime activation operations.
+- Why: We could observe `3.8G+` process footprint growth, but previous logs only exposed coarse totals and could not answer which vmmap bucket was actually accumulating or which Browser operation sequence preceded the growth.
+- Impact: The diagnostics stream now directly surfaces whether growth is dominated by `VM_ALLOCATE` swapped pages, `Memory Tag 253`, graphics surfaces, or other buckets, and links those memory movements to tab/page bridge/runtime-activation lifecycle events without relying on ad-hoc manual vmmap sessions.
+- Verification: `nu macos/build.nu --scheme GhoDex --configuration Debug --action build`; overwrite-install `/Applications/GhoDex.app`; run with `GHODEX_RUNTIME_DIAG_LOG=1 GHODEX_RUNTIME_DIAG_VMMAP=1`; confirm `runtime.memory periodic_sample` records include `total_swapped_bytes`, `vm_allocate_swapped_bytes`, `vm_allocate_swapped_delta_bytes`, `vmmap_delta_interval_seconds`, and `vmmap_growth_suspect`.
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `macos/Sources/Features/Browser/BrowserTabModel.swift`, `CHANGELOG.md`
+- Decision trail: Keep vmmap sampling opt-in (`GHODEX_RUNTIME_DIAG_VMMAP=1`) for normal runs, but make opt-in samples attribution-complete so one capture session can answer “what is 3.8G” without adding another telemetry system.
+
+### fix(macos): disable vmmap region sampling by default in runtime diagnostics
+
+- What changed: Updated `RuntimeDiagnosticsLogger` so `vmmap`-based region sampling runs only when `GHODEX_RUNTIME_DIAG_VMMAP=1` is explicitly set. The default runtime diagnostics path now keeps periodic `runtime.memory` records but skips `vmmap` process spawning.
+- Why: Long-running sessions showed `physical_footprint` growing even while `rss` stayed low, and triage confirmed the high-overhead `vmmap` sampler itself was the dominant contributor.
+- Impact: Runtime diagnostics remains available, but default memory overhead is significantly reduced and the previous diagnostics-induced `physical_footprint` growth pattern is avoided.
+- Verification: `nu macos/build.nu --scheme GhoDex --configuration Debug --action build`; overwrite-install `/Applications/GhoDex.app`; verify new `runtime.memory` records continue without `vmmap_sampled_at` / `iosurface_resident_bytes` unless `GHODEX_RUNTIME_DIAG_VMMAP=1`.
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `CHANGELOG.md`
+- Decision trail: Keep the lightweight task-level memory telemetry on by default for ongoing observability, and move expensive region-level diagnostics behind an explicit opt-in switch for targeted investigations.
+
 ### fix(renderer): guard shaper index catch-up after preedit skip
 
 - What changed: Added an explicit `shaper_cells_i < shaper_cells_unwrapped.len` bound guard in `src/renderer/generic.zig` while catching up shaped-cell cursor position after preedit-range skipping in `rebuildRow`.

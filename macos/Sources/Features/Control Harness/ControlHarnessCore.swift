@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import OSLog
 import GhoDexKit
@@ -22,10 +23,128 @@ private struct RuntimeDiagnosticsRecord: Encodable {
     let details: [String: String]
 }
 
+private struct RuntimeDiagnosticsRegionSnapshot {
+    let sampleDate: Date
+    let sampledAt: String
+    let iosurfaceResidentBytes: Int64?
+    let ioacceleratorGraphicsResidentBytes: Int64?
+    let mallocResidentBytes: Int64?
+    let totalResidentBytes: Int64?
+    let totalDirtyBytes: Int64?
+    let totalSwappedBytes: Int64?
+    let vmAllocateVirtualBytes: Int64?
+    let vmAllocateResidentBytes: Int64?
+    let vmAllocateDirtyBytes: Int64?
+    let vmAllocateSwappedBytes: Int64?
+    let vmAllocateRegionCount: Int?
+    let vmAllocateSwappedRatio: Double?
+    let memoryTag253VirtualBytes: Int64?
+    let memoryTag253ResidentBytes: Int64?
+    let memoryTag253SwappedBytes: Int64?
+    let topSwappedRegionName: String?
+    let topSwappedRegionBytes: Int64?
+    let topResidentRegionName: String?
+    let topResidentRegionBytes: Int64?
+    let deltaIntervalSeconds: TimeInterval?
+    let totalResidentDeltaBytes: Int64?
+    let totalSwappedDeltaBytes: Int64?
+    let vmAllocateVirtualDeltaBytes: Int64?
+    let vmAllocateResidentDeltaBytes: Int64?
+    let vmAllocateSwappedDeltaBytes: Int64?
+    let memoryTag253SwappedDeltaBytes: Int64?
+    let growthSuspect: String?
+
+    func merge(into details: inout [String: String]) {
+        details["vmmap_sampled_at"] = sampledAt
+        if let iosurfaceResidentBytes {
+            details["iosurface_resident_bytes"] = "\(iosurfaceResidentBytes)"
+        }
+        if let ioacceleratorGraphicsResidentBytes {
+            details["ioaccelerator_graphics_resident_bytes"] = "\(ioacceleratorGraphicsResidentBytes)"
+        }
+        if let mallocResidentBytes {
+            details["malloc_resident_bytes"] = "\(mallocResidentBytes)"
+        }
+        if let totalResidentBytes {
+            details["total_resident_bytes"] = "\(totalResidentBytes)"
+        }
+        if let totalDirtyBytes {
+            details["total_dirty_bytes"] = "\(totalDirtyBytes)"
+        }
+        if let totalSwappedBytes {
+            details["total_swapped_bytes"] = "\(totalSwappedBytes)"
+        }
+        if let vmAllocateVirtualBytes {
+            details["vm_allocate_virtual_bytes"] = "\(vmAllocateVirtualBytes)"
+        }
+        if let vmAllocateResidentBytes {
+            details["vm_allocate_resident_bytes"] = "\(vmAllocateResidentBytes)"
+        }
+        if let vmAllocateDirtyBytes {
+            details["vm_allocate_dirty_bytes"] = "\(vmAllocateDirtyBytes)"
+        }
+        if let vmAllocateSwappedBytes {
+            details["vm_allocate_swapped_bytes"] = "\(vmAllocateSwappedBytes)"
+        }
+        if let vmAllocateRegionCount {
+            details["vm_allocate_region_count"] = "\(vmAllocateRegionCount)"
+        }
+        if let vmAllocateSwappedRatio {
+            details["vm_allocate_swapped_ratio"] = String(format: "%.6f", vmAllocateSwappedRatio)
+        }
+        if let memoryTag253VirtualBytes {
+            details["memory_tag_253_virtual_bytes"] = "\(memoryTag253VirtualBytes)"
+        }
+        if let memoryTag253ResidentBytes {
+            details["memory_tag_253_resident_bytes"] = "\(memoryTag253ResidentBytes)"
+        }
+        if let memoryTag253SwappedBytes {
+            details["memory_tag_253_swapped_bytes"] = "\(memoryTag253SwappedBytes)"
+        }
+        if let topSwappedRegionName {
+            details["top_swapped_region"] = topSwappedRegionName
+        }
+        if let topSwappedRegionBytes {
+            details["top_swapped_region_bytes"] = "\(topSwappedRegionBytes)"
+        }
+        if let topResidentRegionName {
+            details["top_resident_region"] = topResidentRegionName
+        }
+        if let topResidentRegionBytes {
+            details["top_resident_region_bytes"] = "\(topResidentRegionBytes)"
+        }
+        if let deltaIntervalSeconds {
+            details["vmmap_delta_interval_seconds"] = String(format: "%.3f", deltaIntervalSeconds)
+        }
+        if let totalResidentDeltaBytes {
+            details["total_resident_delta_bytes"] = "\(totalResidentDeltaBytes)"
+        }
+        if let totalSwappedDeltaBytes {
+            details["total_swapped_delta_bytes"] = "\(totalSwappedDeltaBytes)"
+        }
+        if let vmAllocateVirtualDeltaBytes {
+            details["vm_allocate_virtual_delta_bytes"] = "\(vmAllocateVirtualDeltaBytes)"
+        }
+        if let vmAllocateResidentDeltaBytes {
+            details["vm_allocate_resident_delta_bytes"] = "\(vmAllocateResidentDeltaBytes)"
+        }
+        if let vmAllocateSwappedDeltaBytes {
+            details["vm_allocate_swapped_delta_bytes"] = "\(vmAllocateSwappedDeltaBytes)"
+        }
+        if let memoryTag253SwappedDeltaBytes {
+            details["memory_tag_253_swapped_delta_bytes"] = "\(memoryTag253SwappedDeltaBytes)"
+        }
+        if let growthSuspect {
+            details["vmmap_growth_suspect"] = growthSuspect
+        }
+    }
+}
+
 final class RuntimeDiagnosticsLogger {
     private static let fileName = "runtime-memory-diagnostics.jsonl"
     private static let rotatedFileName = "runtime-memory-diagnostics.1.jsonl"
     private static let maxFileBytes: Int64 = 4 * 1024 * 1024
+    private static let periodicRegionSampleSeconds: TimeInterval = 60
 
     static let shared = RuntimeDiagnosticsLogger()
 
@@ -38,18 +157,27 @@ final class RuntimeDiagnosticsLogger {
     private let fileManager = FileManager.default
     private let fileURL: URL?
     private let rotatedFileURL: URL?
+    private let lockFileURL: URL?
     private let enabled: Bool
+    private let vmmapSamplingEnabled: Bool
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
         category: "RuntimeDiagnostics"
     )
+    private var periodicRegionSampler: DispatchSourceTimer?
+    private var latestRegionSnapshot: RuntimeDiagnosticsRegionSnapshot?
+    private var previousProcessMemorySnapshot: RuntimeProcessMemorySnapshot?
+    private var previousProcessMemorySampleDate: Date?
 
     private init() {
         let configured = Self.parseEnabledFlag(ProcessInfo.processInfo.environment["GHODEX_RUNTIME_DIAG_LOG"])
         self.enabled = configured ?? true
+        let vmmapConfigured = Self.parseEnabledFlag(ProcessInfo.processInfo.environment["GHODEX_RUNTIME_DIAG_VMMAP"])
+        self.vmmapSamplingEnabled = vmmapConfigured ?? false
         guard enabled else {
             self.fileURL = nil
             self.rotatedFileURL = nil
+            self.lockFileURL = nil
             return
         }
 
@@ -57,6 +185,8 @@ final class RuntimeDiagnosticsLogger {
         let directory = Self.diagnosticsDirectory(bundleID: bundleID)
         self.fileURL = directory.appendingPathComponent(Self.fileName, isDirectory: false)
         self.rotatedFileURL = directory.appendingPathComponent(Self.rotatedFileName, isDirectory: false)
+        self.lockFileURL = directory.appendingPathComponent("\(Self.fileName).lock", isDirectory: false)
+        self.startPeriodicRegionSampler()
     }
 
     static func log(component: String, event: String, details: [String: String] = [:]) {
@@ -90,40 +220,9 @@ final class RuntimeDiagnosticsLogger {
     }
 
     private func append(component: String, event: String, details: [String: String]) {
-        guard enabled, let fileURL, let rotatedFileURL else { return }
-
-        queue.async { [fileManager, encoder, logger] in
-            do {
-                try fileManager.createDirectory(
-                    at: fileURL.deletingLastPathComponent(),
-                    withIntermediateDirectories: true,
-                    attributes: nil
-                )
-
-                try Self.rotateIfNeeded(
-                    fileURL: fileURL,
-                    rotatedFileURL: rotatedFileURL,
-                    fileManager: fileManager
-                )
-
-                let record = RuntimeDiagnosticsRecord(
-                    timestamp: ISO8601DateFormatter().string(from: Date()),
-                    component: component,
-                    event: event,
-                    details: details
-                )
-                let data = try encoder.encode(record)
-                if !fileManager.fileExists(atPath: fileURL.path) {
-                    fileManager.createFile(atPath: fileURL.path, contents: nil)
-                }
-                let handle = try FileHandle(forWritingTo: fileURL)
-                defer { try? handle.close() }
-                try handle.seekToEnd()
-                try handle.write(contentsOf: data)
-                try handle.write(contentsOf: Data([0x0A]))
-            } catch {
-                logger.error("failed to write runtime diagnostics record: \(error.localizedDescription, privacy: .public)")
-            }
+        guard enabled else { return }
+        queue.async { [weak self] in
+            self?.writeRecordLocked(component: component, event: event, details: details)
         }
     }
 
@@ -146,6 +245,450 @@ final class RuntimeDiagnosticsLogger {
         if fileManager.fileExists(atPath: fileURL.path) {
             try fileManager.moveItem(at: fileURL, to: rotatedFileURL)
         }
+    }
+
+    private func startPeriodicRegionSampler() {
+        guard enabled else { return }
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(
+            deadline: .now(),
+            repeating: .seconds(Int(Self.periodicRegionSampleSeconds)),
+            leeway: .seconds(5)
+        )
+        timer.setEventHandler { [weak self] in
+            self?.capturePeriodicRegionSampleLocked()
+        }
+        periodicRegionSampler = timer
+        timer.resume()
+    }
+
+    private func capturePeriodicRegionSampleLocked() {
+        guard enabled else { return }
+        if vmmapSamplingEnabled {
+            if let snapshot = Self.captureRegionSnapshot(
+                processID: ProcessInfo.processInfo.processIdentifier,
+                previous: latestRegionSnapshot
+            ) {
+                latestRegionSnapshot = snapshot
+            }
+        }
+        writeRecordLocked(
+            component: "runtime.memory",
+            event: "periodic_sample",
+            details: [
+                "interval_seconds": String(format: "%.0f", Self.periodicRegionSampleSeconds),
+            ]
+        )
+    }
+
+    private func writeRecordLocked(component: String, event: String, details: [String: String]) {
+        guard
+            enabled,
+            let fileURL,
+            let rotatedFileURL,
+            let lockFileURL
+        else {
+            return
+        }
+
+        do {
+            try fileManager.createDirectory(
+                at: fileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
+
+            var enriched = details
+            let sampledAt = Date()
+            mergeProcessMemoryDetailsLocked(into: &enriched, sampledAt: sampledAt)
+            latestRegionSnapshot?.merge(into: &enriched)
+
+            let record = RuntimeDiagnosticsRecord(
+                timestamp: ISO8601DateFormatter().string(from: sampledAt),
+                component: component,
+                event: event,
+                details: enriched
+            )
+            var line = try encoder.encode(record)
+            line.append(0x0A)
+
+            try Self.withFileLock(lockFileURL: lockFileURL) {
+                try Self.rotateIfNeeded(
+                    fileURL: fileURL,
+                    rotatedFileURL: rotatedFileURL,
+                    fileManager: fileManager
+                )
+                try Self.appendLine(line, to: fileURL)
+            }
+        } catch {
+            logger.error("failed to write runtime diagnostics record: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private static func withFileLock(lockFileURL: URL, _ body: () throws -> Void) throws {
+        let fileDescriptor = open(
+            lockFileURL.path,
+            O_RDWR | O_CREAT,
+            mode_t(S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
+        )
+        guard fileDescriptor >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        defer { close(fileDescriptor) }
+
+        guard flock(fileDescriptor, LOCK_EX) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        defer { _ = flock(fileDescriptor, LOCK_UN) }
+
+        try body()
+    }
+
+    private static func appendLine(_ line: Data, to fileURL: URL) throws {
+        let fileDescriptor = open(
+            fileURL.path,
+            O_WRONLY | O_CREAT | O_APPEND,
+            mode_t(S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
+        )
+        guard fileDescriptor >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        defer { close(fileDescriptor) }
+
+        try line.withUnsafeBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress else { return }
+            var remaining = rawBuffer.count
+            var offset = 0
+            while remaining > 0 {
+                let wrote = Darwin.write(fileDescriptor, baseAddress.advanced(by: offset), remaining)
+                if wrote < 0 {
+                    if errno == EINTR {
+                        continue
+                    }
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                }
+                remaining -= wrote
+                offset += wrote
+            }
+        }
+    }
+
+    private struct RuntimeProcessMemorySnapshot {
+        let rssBytes: UInt64
+        let virtualSizeBytes: UInt64
+        let physicalFootprintBytes: UInt64?
+    }
+
+    private struct VmmapSummaryRow {
+        let regionType: String
+        let virtualBytes: Int64
+        let residentBytes: Int64
+        let dirtyBytes: Int64
+        let swappedBytes: Int64
+        let regionCount: Int
+    }
+
+    private func mergeProcessMemoryDetailsLocked(into details: inout [String: String], sampledAt: Date) {
+        details["pid"] = "\(ProcessInfo.processInfo.processIdentifier)"
+
+        guard let snapshot = Self.currentProcessMemorySnapshot() else { return }
+        details["rss_bytes"] = "\(snapshot.rssBytes)"
+        details["virtual_size_bytes"] = "\(snapshot.virtualSizeBytes)"
+        if let footprintBytes = snapshot.physicalFootprintBytes {
+            details["physical_footprint_bytes"] = "\(footprintBytes)"
+        }
+
+        if let previous = previousProcessMemorySnapshot {
+            details["rss_delta_bytes"] = "\(Self.deltaUInt64(current: snapshot.rssBytes, previous: previous.rssBytes))"
+            details["virtual_size_delta_bytes"] =
+                "\(Self.deltaUInt64(current: snapshot.virtualSizeBytes, previous: previous.virtualSizeBytes))"
+            if let currentFootprint = snapshot.physicalFootprintBytes,
+               let previousFootprint = previous.physicalFootprintBytes {
+                details["physical_footprint_delta_bytes"] =
+                    "\(Self.deltaUInt64(current: currentFootprint, previous: previousFootprint))"
+            }
+        }
+
+        if let previousSampleDate = previousProcessMemorySampleDate {
+            details["process_memory_delta_interval_seconds"] =
+                String(format: "%.3f", sampledAt.timeIntervalSince(previousSampleDate))
+        }
+
+        previousProcessMemorySnapshot = snapshot
+        previousProcessMemorySampleDate = sampledAt
+    }
+
+    private static func currentProcessMemorySnapshot() -> RuntimeProcessMemorySnapshot? {
+        var basicInfo = mach_task_basic_info()
+        var basicCount = mach_msg_type_number_t(
+            MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size
+        )
+        let basicResult: kern_return_t = withUnsafeMutablePointer(to: &basicInfo) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(basicCount)) { rebound in
+                task_info(
+                    mach_task_self_,
+                    task_flavor_t(MACH_TASK_BASIC_INFO),
+                    rebound,
+                    &basicCount
+                )
+            }
+        }
+        guard basicResult == KERN_SUCCESS else { return nil }
+
+        var vmInfo = task_vm_info_data_t()
+        var vmCount = mach_msg_type_number_t(
+            MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size
+        )
+        let vmResult: kern_return_t = withUnsafeMutablePointer(to: &vmInfo) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(vmCount)) { rebound in
+                task_info(
+                    mach_task_self_,
+                    task_flavor_t(TASK_VM_INFO),
+                    rebound,
+                    &vmCount
+                )
+            }
+        }
+
+        return RuntimeProcessMemorySnapshot(
+            rssBytes: UInt64(basicInfo.resident_size),
+            virtualSizeBytes: UInt64(basicInfo.virtual_size),
+            physicalFootprintBytes: vmResult == KERN_SUCCESS ? UInt64(vmInfo.phys_footprint) : nil
+        )
+    }
+
+    private static func captureRegionSnapshot(
+        processID: Int32,
+        previous: RuntimeDiagnosticsRegionSnapshot?
+    ) -> RuntimeDiagnosticsRegionSnapshot? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/vmmap")
+        process.arguments = ["-summary", "\(processID)"]
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        process.waitUntilExit()
+
+        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        guard !outputData.isEmpty else { return nil }
+        guard let output = String(data: outputData, encoding: .utf8) else { return nil }
+
+        let rows = parseVmmapSummaryRows(from: output)
+        guard !rows.isEmpty else { return nil }
+
+        let sampledAtDate = Date()
+        let totalRow = rows["TOTAL"]
+        let vmAllocateRow = rows["VM_ALLOCATE"]
+        let ioSurfaceRow = rows["IOSurface"]
+        let ioAcceleratorGraphicsRow = rows["IOAccelerator (graphics)"]
+        let mallocRow = rows["MALLOC"]
+        let memoryTag253Row = rows["Memory Tag 253"]
+        let topSwappedRow = rows.values
+            .filter { $0.regionType != "TOTAL" }
+            .max(by: { $0.swappedBytes < $1.swappedBytes })
+        let topResidentRow = rows.values
+            .filter { $0.regionType != "TOTAL" }
+            .max(by: { $0.residentBytes < $1.residentBytes })
+
+        let vmAllocateSwappedRatio: Double?
+        if let vmAllocateSwappedBytes = vmAllocateRow?.swappedBytes,
+           let totalSwappedBytes = totalRow?.swappedBytes,
+           totalSwappedBytes > 0 {
+            vmAllocateSwappedRatio = Double(vmAllocateSwappedBytes) / Double(totalSwappedBytes)
+        } else {
+            vmAllocateSwappedRatio = nil
+        }
+
+        let deltaIntervalSeconds = previous.map { sampledAtDate.timeIntervalSince($0.sampleDate) }
+        let totalResidentDeltaBytes = Self.delta(
+            current: totalRow?.residentBytes,
+            previous: previous?.totalResidentBytes
+        )
+        let totalSwappedDeltaBytes = Self.delta(
+            current: totalRow?.swappedBytes,
+            previous: previous?.totalSwappedBytes
+        )
+        let vmAllocateVirtualDeltaBytes = Self.delta(
+            current: vmAllocateRow?.virtualBytes,
+            previous: previous?.vmAllocateVirtualBytes
+        )
+        let vmAllocateResidentDeltaBytes = Self.delta(
+            current: vmAllocateRow?.residentBytes,
+            previous: previous?.vmAllocateResidentBytes
+        )
+        let vmAllocateSwappedDeltaBytes = Self.delta(
+            current: vmAllocateRow?.swappedBytes,
+            previous: previous?.vmAllocateSwappedBytes
+        )
+        let memoryTag253SwappedDeltaBytes = Self.delta(
+            current: memoryTag253Row?.swappedBytes,
+            previous: previous?.memoryTag253SwappedBytes
+        )
+        let growthSuspect = Self.growthSuspect(
+            vmAllocateSwappedRatio: vmAllocateSwappedRatio,
+            vmAllocateSwappedDeltaBytes: vmAllocateSwappedDeltaBytes,
+            totalSwappedDeltaBytes: totalSwappedDeltaBytes,
+            vmAllocateVirtualDeltaBytes: vmAllocateVirtualDeltaBytes,
+            memoryTag253SwappedDeltaBytes: memoryTag253SwappedDeltaBytes
+        )
+
+        return RuntimeDiagnosticsRegionSnapshot(
+            sampleDate: sampledAtDate,
+            sampledAt: ISO8601DateFormatter().string(from: sampledAtDate),
+            iosurfaceResidentBytes: ioSurfaceRow?.residentBytes,
+            ioacceleratorGraphicsResidentBytes: ioAcceleratorGraphicsRow?.residentBytes,
+            mallocResidentBytes: mallocRow?.residentBytes,
+            totalResidentBytes: totalRow?.residentBytes,
+            totalDirtyBytes: totalRow?.dirtyBytes,
+            totalSwappedBytes: totalRow?.swappedBytes,
+            vmAllocateVirtualBytes: vmAllocateRow?.virtualBytes,
+            vmAllocateResidentBytes: vmAllocateRow?.residentBytes,
+            vmAllocateDirtyBytes: vmAllocateRow?.dirtyBytes,
+            vmAllocateSwappedBytes: vmAllocateRow?.swappedBytes,
+            vmAllocateRegionCount: vmAllocateRow?.regionCount,
+            vmAllocateSwappedRatio: vmAllocateSwappedRatio,
+            memoryTag253VirtualBytes: memoryTag253Row?.virtualBytes,
+            memoryTag253ResidentBytes: memoryTag253Row?.residentBytes,
+            memoryTag253SwappedBytes: memoryTag253Row?.swappedBytes,
+            topSwappedRegionName: topSwappedRow?.regionType,
+            topSwappedRegionBytes: topSwappedRow?.swappedBytes,
+            topResidentRegionName: topResidentRow?.regionType,
+            topResidentRegionBytes: topResidentRow?.residentBytes,
+            deltaIntervalSeconds: deltaIntervalSeconds,
+            totalResidentDeltaBytes: totalResidentDeltaBytes,
+            totalSwappedDeltaBytes: totalSwappedDeltaBytes,
+            vmAllocateVirtualDeltaBytes: vmAllocateVirtualDeltaBytes,
+            vmAllocateResidentDeltaBytes: vmAllocateResidentDeltaBytes,
+            vmAllocateSwappedDeltaBytes: vmAllocateSwappedDeltaBytes,
+            memoryTag253SwappedDeltaBytes: memoryTag253SwappedDeltaBytes,
+            growthSuspect: growthSuspect
+        )
+    }
+
+    private static func parseVmmapSummaryRows(from vmmapSummary: String) -> [String: VmmapSummaryRow] {
+        var rows: [String: VmmapSummaryRow] = [:]
+        var inRegionSummaryTable = false
+
+        for rawLine in vmmapSummary.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
+            if line.contains("REGION TYPE") {
+                inRegionSummaryTable = true
+                continue
+            }
+            guard inRegionSummaryTable else { continue }
+
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, !trimmed.hasPrefix("==========") else { continue }
+
+            guard let row = parseVmmapSummaryRow(trimmed) else { continue }
+            rows[row.regionType] = row
+
+            if row.regionType == "TOTAL" {
+                break
+            }
+        }
+
+        return rows
+    }
+
+    private static func parseVmmapSummaryRow(_ line: String) -> VmmapSummaryRow? {
+        let tokens = line.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard tokens.count >= 9 else { return nil }
+
+        for valueStart in 1..<(tokens.count - 7) {
+            guard
+                let virtualBytes = parseByteToken(tokens[valueStart]),
+                let residentBytes = parseByteToken(tokens[valueStart + 1]),
+                let dirtyBytes = parseByteToken(tokens[valueStart + 2]),
+                let swappedBytes = parseByteToken(tokens[valueStart + 3]),
+                parseByteToken(tokens[valueStart + 4]) != nil,
+                parseByteToken(tokens[valueStart + 5]) != nil,
+                parseByteToken(tokens[valueStart + 6]) != nil
+            else {
+                continue
+            }
+
+            let regionCountToken = tokens[valueStart + 7].replacingOccurrences(of: ",", with: "")
+            guard let regionCount = Int(regionCountToken) else { continue }
+
+            let regionType = tokens[0..<valueStart].joined(separator: " ")
+            guard !regionType.isEmpty else { continue }
+
+            return VmmapSummaryRow(
+                regionType: regionType,
+                virtualBytes: virtualBytes,
+                residentBytes: residentBytes,
+                dirtyBytes: dirtyBytes,
+                swappedBytes: swappedBytes,
+                regionCount: regionCount
+            )
+        }
+
+        return nil
+    }
+
+    private static func delta(current: Int64?, previous: Int64?) -> Int64? {
+        guard let current, let previous else { return nil }
+        return current - previous
+    }
+
+    private static func deltaUInt64(current: UInt64, previous: UInt64) -> Int64 {
+        if current >= previous {
+            let difference = current - previous
+            return difference > UInt64(Int64.max) ? Int64.max : Int64(difference)
+        }
+        let difference = previous - current
+        return difference > UInt64(Int64.max) ? Int64.min : -Int64(difference)
+    }
+
+    private static func growthSuspect(
+        vmAllocateSwappedRatio: Double?,
+        vmAllocateSwappedDeltaBytes: Int64?,
+        totalSwappedDeltaBytes: Int64?,
+        vmAllocateVirtualDeltaBytes: Int64?,
+        memoryTag253SwappedDeltaBytes: Int64?
+    ) -> String? {
+        let positiveSignals: [(String, Int64)] = [
+            ("vm_allocate_swapped_growth", vmAllocateSwappedDeltaBytes ?? Int64.min),
+            ("total_swapped_growth", totalSwappedDeltaBytes ?? Int64.min),
+            ("vm_allocate_virtual_growth", vmAllocateVirtualDeltaBytes ?? Int64.min),
+            ("memory_tag_253_swapped_growth", memoryTag253SwappedDeltaBytes ?? Int64.min),
+        ]
+            .filter { $0.1 > 0 }
+
+        if let strongestSignal = positiveSignals.max(by: { $0.1 < $1.1 }) {
+            return strongestSignal.0
+        }
+        if let vmAllocateSwappedRatio, vmAllocateSwappedRatio >= 0.60 {
+            return "vm_allocate_dominant_swapped"
+        }
+        return nil
+    }
+
+    private static func parseByteToken(_ token: String) -> Int64? {
+        let normalized = token.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard !normalized.isEmpty else { return nil }
+        guard let lastCharacter = normalized.last else { return nil }
+        let multipliers: [Character: Double] = [
+            "K": 1_024,
+            "M": 1_024 * 1_024,
+            "G": 1_024 * 1_024 * 1_024,
+            "T": 1_024 * 1_024 * 1_024 * 1_024,
+        ]
+
+        if let multiplier = multipliers[lastCharacter] {
+            let numberPortion = normalized.dropLast()
+            guard let value = Double(numberPortion) else { return nil }
+            return Int64(value * multiplier)
+        }
+        guard let bytes = Double(normalized) else { return nil }
+        return Int64(bytes)
     }
 }
 
