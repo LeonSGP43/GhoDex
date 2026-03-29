@@ -6,8 +6,10 @@ import {
     describeTerminalDebugText,
     deriveRealtimeInputDelta,
     normalizeCommandInput,
+    resolveRealtimeMutationRetryDelayMs,
     resolveRealtimeKeyPayload,
     resolveTerminalSubmitMutation,
+    shouldDeferRealtimeLiveRead,
     shouldPasteRawInput,
     summarizeLatency,
     TERMINAL_CONTROL_KEYS,
@@ -144,6 +146,43 @@ describe('latency helpers', () => {
     it('summarizes last and average latency', () => {
         expect(summarizeLatency([100, 120, 140])).toEqual({ lastMs: 140, avgMs: 120 });
         expect(summarizeLatency([])).toEqual({ lastMs: null, avgMs: null });
+    });
+
+    it('defers realtime live read only when write or input buffer is active', () => {
+        expect(shouldDeferRealtimeLiveRead({
+            isRealtimeInputMode: false,
+            writeInFlight: true,
+            bufferedInputLength: 10,
+            flushTimerActive: true,
+        })).toBe(false);
+
+        expect(shouldDeferRealtimeLiveRead({
+            isRealtimeInputMode: true,
+            writeInFlight: false,
+            bufferedInputLength: 0,
+            flushTimerActive: false,
+        })).toBe(false);
+
+        expect(shouldDeferRealtimeLiveRead({
+            isRealtimeInputMode: true,
+            writeInFlight: true,
+            bufferedInputLength: 0,
+            flushTimerActive: false,
+        })).toBe(true);
+
+        expect(shouldDeferRealtimeLiveRead({
+            isRealtimeInputMode: true,
+            writeInFlight: false,
+            bufferedInputLength: 1,
+            flushTimerActive: false,
+        })).toBe(true);
+    });
+
+    it('computes bounded retry delay for realtime mutation queue', () => {
+        expect(resolveRealtimeMutationRetryDelayMs(0)).toBe(40);
+        expect(resolveRealtimeMutationRetryDelayMs(1)).toBe(70);
+        expect(resolveRealtimeMutationRetryDelayMs(3.8)).toBe(130);
+        expect(resolveRealtimeMutationRetryDelayMs(-2)).toBe(40);
     });
 });
 

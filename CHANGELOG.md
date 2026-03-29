@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(happy-client): interleave realtime writes and live reads to reduce input latency
+
+- What changed: Updated realtime mutation draining in `happy-client/sources/app/(app)/index.tsx` to process one queued write per tick (instead of draining the whole queue in one in-flight loop), add short interleave scheduling between writes, and defer write retries with `resolveRealtimeMutationRetryDelayMs`. Subscription-driven live reads now gate only on actual write-in-flight/buffered-input state via `shouldDeferRealtimeLiveRead` (moved to `happy-client/sources/ghodex/terminalInput.ts` with tests), not on mere queued backlog.
+- Why: The previous all-in-one write loop could keep the client in write mode for long bursts, starving live reads and making terminal echo feel delayed even when network RTT was acceptable.
+- Impact: Realtime typing/render feedback is more responsive under sustained input because read refreshes can interleave between queued writes, while retry backoff remains bounded for `session_limit_exceeded`.
+- Verification: `cd happy-client && yarn test sources/ghodex/terminalInput.spec.ts`; `cd happy-client && yarn typecheck`.
+- Files: `happy-client/sources/app/(app)/index.tsx`, `happy-client/sources/ghodex/terminalInput.ts`, `happy-client/sources/ghodex/terminalInput.spec.ts`, `CHANGELOG.md`.
+- Decision trail: Keep protocol unchanged and reduce perceived latency by scheduler changes first (write/read cooperation), before introducing heavier transport refactors.
+
 ### fix(macos): restore native control-key dispatch for gateway send-key interactions
 
 - What changed: Reverted `aiManagerSendControlKey` in `macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift` to native `sendKeyEvent` dispatch for `backspace`, `enter`, `tab`, `escape`, `arrow_up`, `arrow_down`, `ctrl_c`, and `ctrl_d`.

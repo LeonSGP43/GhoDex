@@ -48,8 +48,10 @@ import {
     describeTerminalDebugText,
     deriveRealtimeInputDelta,
     normalizeCommandInput,
+    resolveRealtimeMutationRetryDelayMs,
     resolveRealtimeKeyPayload,
     resolveTerminalSubmitMutation,
+    shouldDeferRealtimeLiveRead,
     summarizeLatency,
     TERMINAL_CONTROL_KEYS,
     type TerminalControlKeySpec,
@@ -105,8 +107,9 @@ type RefreshSnapshotFn = (
 
 const WRITE_SETTLE_ATTEMPTS = 6;
 const WRITE_SETTLE_INTERVAL_MS = 250;
-const REALTIME_INPUT_FLUSH_MS = 24;
+const REALTIME_INPUT_FLUSH_MS = 12;
 const REALTIME_INPUT_MAX_BATCH_SIZE = 48;
+const REALTIME_MUTATION_INTERLEAVE_MS = 12;
 const BACKSPACE_KEYPRESS_HINT_WINDOW_MS = 220;
 const REALTIME_BACKSPACE_KEY_SPEC: TerminalControlKeySpec = {
     id: 'backspace',
@@ -852,60 +855,96 @@ export default function GhoDexWorkspaceScreen() {
         if (realtimeInputInFlightRef.current) {
             return;
         }
+        if (liveReadInFlightRef.current) {
+            setTimeout(() => {
+                void drainRealtimeMutationQueue();
+            }, REALTIME_MUTATION_INTERLEAVE_MS);
+            return;
+        }
         realtimeInputInFlightRef.current = true;
+        let nextDrainDelayMs = REALTIME_MUTATION_INTERLEAVE_MS;
         try {
-            while (realtimeMutationQueueRef.current.length > 0) {
-                const activeSession = sessionRef.current;
-                const authToken = activeSession.authToken.trim();
-                const currentTerminal = selectedTerminalRef.current;
-                if (!authToken || !currentTerminal) {
-                    realtimeMutationQueueRef.current = [];
-                    break;
-                }
+            const activeSession = sessionRef.current;
+            const authToken = activeSession.authToken.trim();
+            const currentTerminal = selectedTerminalRef.current;
+            if (!authToken || !currentTerminal) {
+                realtimeMutationQueueRef.current = [];
+                return;
+            }
 
-                const operation = realtimeMutationQueueRef.current.shift();
-                if (!operation) {
-                    break;
-                }
-                logRealtimeInputDiagnostic('queue.consume', {
-                    kind: operation.kind,
-                    retries: operation.retries,
-                    queueRemaining: realtimeMutationQueueRef.current.length,
-                });
+            const operation = realtimeMutationQueueRef.current.shift();
+            if (!operation) {
+                return;
+            }
+            logRealtimeInputDiagnostic('queue.consume', {
+                kind: operation.kind,
+                retries: operation.retries,
+                queueRemaining: realtimeMutationQueueRef.current.length,
+            });
 
-                try {
-                    let mutation: TerminalMutationResult;
-                    if (operation.kind === 'text') {
-                        let payload = operation.text;
-                        while (
-                            realtimeMutationQueueRef.current[0]?.kind === 'text'
-                            && payload.length < REALTIME_INPUT_MAX_BATCH_SIZE * 4
-                        ) {
-                            const next = realtimeMutationQueueRef.current.shift();
-                            if (!next || next.kind !== 'text') {
-                                break;
-                            }
-                            payload += next.text;
+            try {
+                let mutation: TerminalMutationResult;
+                if (operation.kind === 'text') {
+                    let payload = operation.text;
+                    while (
+                        realtimeMutationQueueRef.current[0]?.kind === 'text'
+                        && payload.length < REALTIME_INPUT_MAX_BATCH_SIZE * 4
+                    ) {
+                        const next = realtimeMutationQueueRef.current.shift();
+                        if (!next || next.kind !== 'text') {
+                            break;
                         }
-                        logRealtimeInputDiagnostic('queue.send_text', {
-                            payload: describeTerminalDebugText(payload, 48),
+                        payload += next.text;
+                    }
+                    logRealtimeInputDiagnostic('queue.send_text', {
+                        payload: describeTerminalDebugText(payload, 48),
+                        terminalId: currentTerminal.terminalId,
+                    });
+
+                    mutation = await runMeasuredGatewayRequest(() => sendTerminalText({
+                        host: activeSession.host,
+                        port: activeSession.port,
+                        authToken,
+                        terminalId: currentTerminal.terminalId,
+                        text: payload,
+                    }));
+                } else {
+                    const terminalKey = operation.keySpec.terminalKey?.trim();
+                    if (!terminalKey) {
+                        logRealtimeInputDiagnostic('queue.send_key_fallback_text', {
+                            keyId: operation.keySpec.id,
+                            payload: describeTerminalDebugText(operation.keySpec.payload, 16),
                             terminalId: currentTerminal.terminalId,
                         });
-
                         mutation = await runMeasuredGatewayRequest(() => sendTerminalText({
                             host: activeSession.host,
                             port: activeSession.port,
                             authToken,
                             terminalId: currentTerminal.terminalId,
-                            text: payload,
+                            text: operation.keySpec.payload,
                         }));
                     } else {
-                        const terminalKey = operation.keySpec.terminalKey?.trim();
-                        if (!terminalKey) {
-                            logRealtimeInputDiagnostic('queue.send_key_fallback_text', {
-                                keyId: operation.keySpec.id,
-                                payload: describeTerminalDebugText(operation.keySpec.payload, 16),
+                        logRealtimeInputDiagnostic('queue.send_key', {
+                            keyId: operation.keySpec.id,
+                            terminalKey,
+                            terminalId: currentTerminal.terminalId,
+                        });
+                        try {
+                            mutation = await runMeasuredGatewayRequest(() => sendTerminalKey({
+                                host: activeSession.host,
+                                port: activeSession.port,
+                                authToken,
                                 terminalId: currentTerminal.terminalId,
+                                terminalKey,
+                            }));
+                        } catch (error) {
+                            if (!isUnsupportedGatewayCommand(error)) {
+                                throw error;
+                            }
+                            logRealtimeInputDiagnostic('queue.send_key_unsupported_fallback', {
+                                keyId: operation.keySpec.id,
+                                terminalKey,
+                                payload: describeTerminalDebugText(operation.keySpec.payload, 16),
                             });
                             mutation = await runMeasuredGatewayRequest(() => sendTerminalText({
                                 host: activeSession.host,
@@ -914,83 +953,56 @@ export default function GhoDexWorkspaceScreen() {
                                 terminalId: currentTerminal.terminalId,
                                 text: operation.keySpec.payload,
                             }));
-                        } else {
-                            logRealtimeInputDiagnostic('queue.send_key', {
-                                keyId: operation.keySpec.id,
-                                terminalKey,
-                                terminalId: currentTerminal.terminalId,
-                            });
-                            try {
-                                mutation = await runMeasuredGatewayRequest(() => sendTerminalKey({
-                                    host: activeSession.host,
-                                    port: activeSession.port,
-                                    authToken,
-                                    terminalId: currentTerminal.terminalId,
-                                    terminalKey,
-                                }));
-                            } catch (error) {
-                                if (!isUnsupportedGatewayCommand(error)) {
-                                    throw error;
-                                }
-                                logRealtimeInputDiagnostic('queue.send_key_unsupported_fallback', {
-                                    keyId: operation.keySpec.id,
-                                    terminalKey,
-                                    payload: describeTerminalDebugText(operation.keySpec.payload, 16),
-                                });
-                                mutation = await runMeasuredGatewayRequest(() => sendTerminalText({
-                                    host: activeSession.host,
-                                    port: activeSession.port,
-                                    authToken,
-                                    terminalId: currentTerminal.terminalId,
-                                    text: operation.keySpec.payload,
-                                }));
-                            }
                         }
                     }
+                }
 
-                    setAuthorizationRequired(false);
-                    applyTerminalMutation(mutation);
-                    realtimeResyncPendingRef.current = true;
-                } catch (error) {
-                    if (isGatewayAuthError(error)) {
-                        logRealtimeInputDiagnostic('queue.error.auth', {
-                            message: error instanceof Error ? error.message : String(error ?? ''),
-                        });
-                        setAuthorizationRequired(true);
-                        setSubscriptionOpen(false);
-                        setErrorMessage('Gateway authorization expired for this desktop build. Re-open Device and bind the phone again.');
-                        realtimeMutationQueueRef.current = [];
-                        break;
-                    }
+                setAuthorizationRequired(false);
+                applyTerminalMutation(mutation);
+                realtimeResyncPendingRef.current = true;
+            } catch (error) {
+                if (isGatewayAuthError(error)) {
+                    logRealtimeInputDiagnostic('queue.error.auth', {
+                        message: error instanceof Error ? error.message : String(error ?? ''),
+                    });
+                    setAuthorizationRequired(true);
+                    setSubscriptionOpen(false);
+                    setErrorMessage('Gateway authorization expired for this desktop build. Re-open Device and bind the phone again.');
+                    realtimeMutationQueueRef.current = [];
+                    return;
+                }
 
-                    if (isGatewayConcurrentSessionLimitError(error) && operation.retries < 6) {
-                        logRealtimeInputDiagnostic('queue.error.concurrent_retry', {
-                            kind: operation.kind,
-                            retries: operation.retries,
-                            message: error instanceof Error ? error.message : String(error ?? ''),
-                        });
-                        realtimeMutationQueueRef.current.unshift({
-                            ...operation,
-                            retries: operation.retries + 1,
-                        });
-                        await sleep(40 + operation.retries * 30);
-                        continue;
-                    }
-
-                    const message = error instanceof Error ? error.message : 'Unexpected gateway error';
-                    logRealtimeInputDiagnostic('queue.error.unexpected', {
+                if (isGatewayConcurrentSessionLimitError(error) && operation.retries < 6) {
+                    logRealtimeInputDiagnostic('queue.error.concurrent_retry', {
                         kind: operation.kind,
                         retries: operation.retries,
-                        message,
+                        message: error instanceof Error ? error.message : String(error ?? ''),
                     });
-                    setErrorMessage(message);
-                    realtimeResyncPendingRef.current = true;
+                    realtimeMutationQueueRef.current.unshift({
+                        ...operation,
+                        retries: operation.retries + 1,
+                    });
+                    nextDrainDelayMs = resolveRealtimeMutationRetryDelayMs(operation.retries);
+                    return;
                 }
+
+                const message = error instanceof Error ? error.message : 'Unexpected gateway error';
+                logRealtimeInputDiagnostic('queue.error.unexpected', {
+                    kind: operation.kind,
+                    retries: operation.retries,
+                    message,
+                });
+                setErrorMessage(message);
+                realtimeResyncPendingRef.current = true;
             }
         } finally {
             realtimeInputInFlightRef.current = false;
             if (realtimeMutationQueueRef.current.length > 0) {
-                void drainRealtimeMutationQueue();
+                // Yield between queued writes so subscription-driven reads can
+                // interleave and reduce perceived input-to-render latency.
+                setTimeout(() => {
+                    void drainRealtimeMutationQueue();
+                }, nextDrainDelayMs);
                 return;
             }
             if (realtimeResyncPendingRef.current) {
@@ -1092,15 +1104,12 @@ export default function GhoDexWorkspaceScreen() {
     }, [isRealtimeInputMode, selectedTerminalId]);
 
     const driveSelectedTerminalFromSubscription = React.useCallback(() => {
-        if (
-            isRealtimeInputMode
-            && (
-                realtimeInputInFlightRef.current
-                || realtimeMutationQueueRef.current.length > 0
-                || realtimeInputBufferRef.current.length > 0
-                || realtimeInputFlushTimerRef.current !== null
-            )
-        ) {
+        if (shouldDeferRealtimeLiveRead({
+            isRealtimeInputMode,
+            writeInFlight: realtimeInputInFlightRef.current,
+            bufferedInputLength: realtimeInputBufferRef.current.length,
+            flushTimerActive: realtimeInputFlushTimerRef.current !== null,
+        })) {
             realtimeResyncPendingRef.current = true;
             return;
         }

@@ -188,6 +188,26 @@ export function appendLatencySample(
     return next.slice(next.length - clampedMaxSamples);
 }
 
+export function shouldDeferRealtimeLiveRead(input: {
+    isRealtimeInputMode: boolean;
+    writeInFlight: boolean;
+    bufferedInputLength: number;
+    flushTimerActive: boolean;
+}): boolean {
+    if (!input.isRealtimeInputMode) {
+        return false;
+    }
+
+    return input.writeInFlight
+        || input.bufferedInputLength > 0
+        || input.flushTimerActive;
+}
+
+export function resolveRealtimeMutationRetryDelayMs(retries: number): number {
+    const safeRetries = Math.max(0, Math.floor(retries));
+    return 40 + (safeRetries * 30);
+}
+
 export function summarizeLatency(samples: readonly number[]): {
     lastMs: number | null;
     avgMs: number | null;
