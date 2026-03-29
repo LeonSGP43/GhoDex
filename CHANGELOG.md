@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(happy-client): bound terminal stream ack retries and wire semantic-default automation read call site
+
+- What changed: Updated `happy-client/sources/app/(app)/index.tsx` stream-ack flush path to use bounded retry budgets (attempt/window caps + exponential backoff), clear retry state on success/auth errors, and force a stream reopen when retry budget is exhausted instead of scheduling unbounded retries. Added semantic-default automation compatibility mapping in `happy-client/sources/ghodex/terminalTransport.ts`, and wired a real non-render automation read call site in write-settle flow via `readTerminalSemanticDefault` + compatibility adapter. Added unit coverage for the adapter and bounded retry resolver in `happy-client/sources/ghodex/terminalTransport.spec.ts`.
+- Why: Opus acceptance flagged two blockers: Task 10 ack recovery was unbounded under concurrent-session errors, and Task 11 semantic-default helper had no real harness/automation call-site usage.
+- Impact: Stream ack retry behavior is now bounded and recoverable under contention, preventing runaway timer/retry growth. Semantic-default read is now exercised by production automation/read-settle code without changing renderer-facing snapshot/delta update paths.
+- Verification: `cd happy-client && yarn test sources/ghodex/terminalTransport.spec.ts sources/ghodex/gateway.spec.ts sources/ghodex/gateway.v2.spec.ts sources/ghodex/gateway.stream.spec.ts`; `cd happy-client && yarn typecheck`.
+- Files: `happy-client/sources/app/(app)/index.tsx`, `happy-client/sources/ghodex/terminalTransport.ts`, `happy-client/sources/ghodex/terminalTransport.spec.ts`, `CHANGELOG.md`.
+- Decision trail: Keep renderer transport logic unchanged; constrain only ack retry scheduling with explicit budget policy, and satisfy semantic-default cutover by adding an automation-only adapter + call site in write-settle path rather than replacing live render reads.
+
 ### feat(happy-client): switch workspace live refresh to terminal stream chunk+ack default path
 
 - What changed: Reworked workspace realtime transport in `happy-client/sources/app/(app)/index.tsx` so live terminal updates now open `terminal.stream.open`, consume `terminal_chunk` records, batch/flush `terminal.stream.ack`, and only fallback to snapshot refresh when stream chunk lineage cannot be safely applied. Added stream-compat mapping and ack batching helpers in `happy-client/sources/ghodex/terminalTransport.ts` with coverage in `happy-client/sources/ghodex/terminalTransport.spec.ts`. Extended chunk payload contracts to carry `changed_rows` across desktop/mobile (`macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `happy-client/sources/ghodex/gateway.ts`, `happy-client/sources/ghodex/types.ts`) and validated parse coverage in `happy-client/sources/ghodex/gateway.stream.spec.ts`.

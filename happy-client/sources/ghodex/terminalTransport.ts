@@ -1,6 +1,7 @@
 import type {
     TerminalChangedRow,
     TerminalReadResult,
+    TerminalSemanticDefaultReadResult,
     TerminalSnapshotV2Result,
     TerminalStreamChunkRecord,
 } from './types';
@@ -12,6 +13,26 @@ interface TerminalStreamAckAccumulatorInput {
     pendingBytes: number;
     incomingBytes: number;
     batchBytes: number;
+}
+
+interface TerminalStreamAckRetryDelayInput {
+    attempt: number;
+    elapsedMs: number;
+    maxAttempts: number;
+    maxWindowMs: number;
+    baseDelayMs: number;
+    maxDelayMs: number;
+}
+
+export interface TerminalAutomationReadResult {
+    source: 'semantic' | 'snapshot';
+    terminalId: string;
+    generation: number;
+    scope: string;
+    extractedAt: string | null;
+    promptDetected: boolean | null;
+    lines: string[];
+    text: string;
 }
 
 export function applyTerminalDelta(content: string, changedRows: TerminalChangedRow[]): string | null {
@@ -130,6 +151,55 @@ export function mapSnapshotV2ToTerminalReadResult(
         readAfterReady: null,
         content: snapshot.content,
     };
+}
+
+function splitTerminalText(text: string): string[] {
+    if (!text) {
+        return [];
+    }
+    return text.split('\n');
+}
+
+export function mapTerminalSemanticDefaultToAutomationRead(
+    read: TerminalSemanticDefaultReadResult,
+): TerminalAutomationReadResult {
+    if (read.kind === 'semantic') {
+        const text = read.result.exactText;
+        return {
+            source: 'semantic',
+            terminalId: read.result.terminalId,
+            generation: read.result.generation,
+            scope: read.result.scope,
+            extractedAt: read.result.extractedAt,
+            promptDetected: read.result.promptDetected,
+            lines: read.result.logicalLines.length ? read.result.logicalLines : splitTerminalText(text),
+            text,
+        };
+    }
+
+    return {
+        source: 'snapshot',
+        terminalId: read.result.terminalId,
+        generation: read.result.generation,
+        scope: read.result.scope,
+        extractedAt: read.result.capturedAt,
+        promptDetected: null,
+        lines: splitTerminalText(read.result.content),
+        text: read.result.content,
+    };
+}
+
+export function resolveTerminalStreamAckRetryDelay(input: TerminalStreamAckRetryDelayInput): number | null {
+    if (input.attempt < 1) {
+        return null;
+    }
+
+    if (input.attempt > input.maxAttempts || input.elapsedMs > input.maxWindowMs) {
+        return null;
+    }
+
+    const rawDelay = input.baseDelayMs * (2 ** (input.attempt - 1));
+    return Math.min(rawDelay, input.maxDelayMs);
 }
 
 function countTerminalLines(content: string): number {

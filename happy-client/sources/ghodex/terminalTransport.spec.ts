@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
-import type { TerminalReadResult, TerminalSnapshotV2Result, TerminalStreamChunkRecord } from './types';
+import type {
+    TerminalReadResult,
+    TerminalSemanticDefaultReadResult,
+    TerminalSnapshotV2Result,
+    TerminalStreamChunkRecord,
+} from './types';
 import {
     applyTerminalDelta,
     accumulateTerminalStreamAckBytes,
+    mapTerminalSemanticDefaultToAutomationRead,
     mapSnapshotV2ToTerminalReadResult,
     mapTerminalStreamChunkToTerminalReadResult,
+    resolveTerminalStreamAckRetryDelay,
     shouldFallbackToTerminalSnapshot,
     shouldRequestTerminalDelta,
 } from './terminalTransport';
@@ -71,6 +78,24 @@ function makeTerminalStreamChunkRecord(
         changedRows: [],
         ...overrides,
     };
+}
+
+function makeTerminalSemanticDefaultReadResult(
+    overrides: Partial<TerminalSemanticDefaultReadResult> = {},
+): TerminalSemanticDefaultReadResult {
+    return {
+        kind: 'semantic',
+        result: {
+            terminalId: 'terminal-1',
+            generation: 12,
+            scope: 'visible',
+            extractedAt: '2026-03-29T04:00:00Z',
+            logicalLines: ['$ ls', 'README.md'],
+            exactText: '$ ls\nREADME.md',
+            promptDetected: true,
+        },
+        ...overrides,
+    } as TerminalSemanticDefaultReadResult;
 }
 
 describe('terminal transport helpers', () => {
@@ -279,5 +304,88 @@ describe('terminal transport helpers', () => {
             pendingBytes: 540,
             shouldFlush: true,
         });
+    });
+
+    it('maps semantic-default result into automation read shape without command branching', () => {
+        const mapped = mapTerminalSemanticDefaultToAutomationRead(makeTerminalSemanticDefaultReadResult());
+
+        expect(mapped).toEqual({
+            source: 'semantic',
+            terminalId: 'terminal-1',
+            generation: 12,
+            scope: 'visible',
+            extractedAt: '2026-03-29T04:00:00Z',
+            promptDetected: true,
+            lines: ['$ ls', 'README.md'],
+            text: '$ ls\nREADME.md',
+        });
+    });
+
+    it('maps semantic fallback snapshot into the same automation read shape', () => {
+        const mapped = mapTerminalSemanticDefaultToAutomationRead(
+            makeTerminalSemanticDefaultReadResult({
+                kind: 'snapshot',
+                result: {
+                    terminalId: 'terminal-1',
+                    generation: 13,
+                    scope: 'visible',
+                    snapshotFormat: 'ansi_text',
+                    capturedAt: '2026-03-29T04:01:00Z',
+                    cacheAgeMs: 2,
+                    frameId: 'frm_20',
+                    parentFrameId: 'frm_19',
+                    content: 'line1\nline2',
+                },
+            }),
+        );
+
+        expect(mapped).toEqual({
+            source: 'snapshot',
+            terminalId: 'terminal-1',
+            generation: 13,
+            scope: 'visible',
+            extractedAt: '2026-03-29T04:01:00Z',
+            promptDetected: null,
+            lines: ['line1', 'line2'],
+            text: 'line1\nline2',
+        });
+    });
+
+    it('computes bounded terminal stream ack retry delay and cuts off beyond budget', () => {
+        expect(resolveTerminalStreamAckRetryDelay({
+            attempt: 1,
+            elapsedMs: 0,
+            maxAttempts: 6,
+            maxWindowMs: 6_000,
+            baseDelayMs: 120,
+            maxDelayMs: 1_000,
+        })).toBe(120);
+
+        expect(resolveTerminalStreamAckRetryDelay({
+            attempt: 4,
+            elapsedMs: 1_200,
+            maxAttempts: 6,
+            maxWindowMs: 6_000,
+            baseDelayMs: 120,
+            maxDelayMs: 1_000,
+        })).toBe(960);
+
+        expect(resolveTerminalStreamAckRetryDelay({
+            attempt: 7,
+            elapsedMs: 1_400,
+            maxAttempts: 6,
+            maxWindowMs: 6_000,
+            baseDelayMs: 120,
+            maxDelayMs: 1_000,
+        })).toBeNull();
+
+        expect(resolveTerminalStreamAckRetryDelay({
+            attempt: 2,
+            elapsedMs: 6_500,
+            maxAttempts: 6,
+            maxWindowMs: 6_000,
+            baseDelayMs: 120,
+            maxDelayMs: 1_000,
+        })).toBeNull();
     });
 });
