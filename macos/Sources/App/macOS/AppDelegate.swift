@@ -2471,13 +2471,20 @@ class AppDelegate: NSObject,
                 ?? self.selectedTopLevelWindow(for: NSApp.keyWindow)
             _ = BrowserTabController.newTab(self.ghostty, from: parentWindow)
         }
+        let workspaceMapAction = { [weak self] in
+            guard let self else { return }
+            let parentWindow = self.selectedTopLevelWindow(for: window)
+                ?? self.selectedTopLevelWindow(for: NSApp.keyWindow)
+            _ = WorkspaceMapController.newTab(self.ghostty, from: parentWindow)
+        }
 
         if let window {
             newTabPickerController.show(
                 relativeTo: window,
                 mode: .topLevel,
                 includeBrowserEntry: true,
-                onOpenBrowser: browserAction
+                onOpenBrowser: browserAction,
+                onOpenWorkspaceMap: workspaceMapAction
             )
             return
         }
@@ -2486,7 +2493,8 @@ class AppDelegate: NSObject,
             relativeTo: nil,
             mode: .topLevel,
             includeBrowserEntry: true,
-            onOpenBrowser: browserAction
+            onOpenBrowser: browserAction,
+            onOpenWorkspaceMap: workspaceMapAction
         )
     }
 
@@ -2571,6 +2579,7 @@ class AppDelegate: NSObject,
 
     @IBAction func closeAllWindows(_ sender: Any?) {
         let browserControllers = BrowserTabController.all
+        let workspaceMapControllers = WorkspaceMapController.all
         let confirmWindow = TerminalController.all
             .first(where: { $0.allSurfaces.contains(where: { $0.needsConfirmQuit }) })?
             .allSurfaces.first(where: { $0.needsConfirmQuit })?
@@ -2579,6 +2588,7 @@ class AppDelegate: NSObject,
         guard let confirmWindow else {
             TerminalController.closeAllWindowsImmediately()
             BrowserTabController.closeAllWindowsImmediately()
+            WorkspaceMapController.closeAllWindowsImmediately()
             AboutController.shared.hide()
             return
         }
@@ -2596,6 +2606,7 @@ class AppDelegate: NSObject,
             alert.window.orderOut(nil)
             TerminalController.closeAllWindowsImmediately()
             browserControllers.forEach { $0.window?.close() }
+            workspaceMapControllers.forEach { $0.window?.close() }
             AboutController.shared.hide()
         }
 
