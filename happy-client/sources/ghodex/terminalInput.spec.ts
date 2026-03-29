@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+    applyRealtimeLocalEchoPayload,
     appendLatencySample,
     buildTerminalTextPayload,
     describeTerminalDebugText,
@@ -183,6 +184,30 @@ describe('latency helpers', () => {
         expect(resolveRealtimeMutationRetryDelayMs(1)).toBe(70);
         expect(resolveRealtimeMutationRetryDelayMs(3.8)).toBe(130);
         expect(resolveRealtimeMutationRetryDelayMs(-2)).toBe(40);
+    });
+});
+
+describe('realtime local echo', () => {
+    it('appends printable chars and trims on backspace', () => {
+        let preview = '';
+        preview = applyRealtimeLocalEchoPayload(preview, 'abc');
+        expect(preview).toBe('abc');
+        preview = applyRealtimeLocalEchoPayload(preview, '\u007F');
+        expect(preview).toBe('ab');
+    });
+
+    it('resets preview line on enter and keeps tab', () => {
+        let preview = applyRealtimeLocalEchoPayload('', 'ls');
+        expect(preview).toBe('ls');
+        preview = applyRealtimeLocalEchoPayload(preview, '\t');
+        expect(preview).toBe('ls\t');
+        preview = applyRealtimeLocalEchoPayload(preview, '\r');
+        expect(preview).toBe('');
+    });
+
+    it('ignores non-printable control chars', () => {
+        const preview = applyRealtimeLocalEchoPayload('ab', '\u0001\u0002');
+        expect(preview).toBe('ab');
     });
 });
 

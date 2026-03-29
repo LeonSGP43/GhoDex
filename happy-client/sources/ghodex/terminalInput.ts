@@ -188,6 +188,41 @@ export function appendLatencySample(
     return next.slice(next.length - clampedMaxSamples);
 }
 
+export function applyRealtimeLocalEchoPayload(current: string, payload: string): string {
+    let next = current;
+    const chars = Array.from(payload);
+    for (const char of chars) {
+        if (char === '\u007F') {
+            const currentChars = Array.from(next);
+            currentChars.pop();
+            next = currentChars.join('');
+            continue;
+        }
+
+        if (char === '\r' || char === '\n') {
+            next = '';
+            continue;
+        }
+
+        if (char === '\t') {
+            next += '\t';
+            continue;
+        }
+
+        const code = char.charCodeAt(0);
+        if (code < 0x20 || code === 0x7F) {
+            continue;
+        }
+        next += char;
+    }
+
+    const MAX_PREVIEW_CHARS = 256;
+    if (Array.from(next).length > MAX_PREVIEW_CHARS) {
+        return Array.from(next).slice(-MAX_PREVIEW_CHARS).join('');
+    }
+    return next;
+}
+
 export function shouldDeferRealtimeLiveRead(input: {
     isRealtimeInputMode: boolean;
     writeInFlight: boolean;

@@ -44,6 +44,7 @@ import {
     shouldRequestTerminalDelta,
 } from '@/ghodex/terminalTransport';
 import {
+    applyRealtimeLocalEchoPayload,
     appendLatencySample,
     describeTerminalDebugText,
     deriveRealtimeInputDelta,
@@ -408,6 +409,7 @@ export default function GhoDexWorkspaceScreen() {
     const [terminalRows, setTerminalRows] = React.useState<TerminalRenderRow[]>([]);
     const [terminalCommand, setTerminalCommand] = React.useState('');
     const [realtimeInputDraft, setRealtimeInputDraft] = React.useState('');
+    const [realtimeLocalEcho, setRealtimeLocalEcho] = React.useState('');
     const [latencySamples, setLatencySamples] = React.useState<number[]>([]);
     const [renameTabTarget, setRenameTabTarget] = React.useState<TabRow | null>(null);
     const [renameTabDraft, setRenameTabDraft] = React.useState('');
@@ -498,6 +500,7 @@ export default function GhoDexWorkspaceScreen() {
     const refreshSnapshotRef = React.useRef<RefreshSnapshotFn | null>(null);
     const driveSelectedTerminalFromSubscriptionRef = React.useRef<(() => void) | null>(null);
     const reconnectStartedAtRef = React.useRef<number | null>(null);
+    const isRealtimeInputModeRef = React.useRef(isRealtimeInputMode);
 
     React.useEffect(() => {
         sessionRef.current = session;
@@ -528,6 +531,10 @@ export default function GhoDexWorkspaceScreen() {
     React.useEffect(() => {
         realtimeInputDraftRef.current = realtimeInputDraft;
     }, [realtimeInputDraft]);
+
+    React.useEffect(() => {
+        isRealtimeInputModeRef.current = isRealtimeInputMode;
+    }, [isRealtimeInputMode]);
 
     React.useEffect(() => () => {
         if (realtimeInputFlushTimerRef.current) {
@@ -644,6 +651,9 @@ export default function GhoDexWorkspaceScreen() {
 
             return buildTerminalRows(result.content);
         });
+        if (isRealtimeInputModeRef.current && result.hasChanges) {
+            setRealtimeLocalEcho('');
+        }
 
         setSnapshot((current) => {
             if (!current) {
@@ -667,6 +677,13 @@ export default function GhoDexWorkspaceScreen() {
                 )),
             };
         });
+    }, []);
+
+    const applyRealtimeLocalEcho = React.useCallback((payload: string) => {
+        if (!payload) {
+            return;
+        }
+        setRealtimeLocalEcho((current) => applyRealtimeLocalEchoPayload(current, payload));
     }, []);
 
     const applyTerminalMutation = React.useCallback((mutation: TerminalMutationResult) => {
@@ -1042,6 +1059,9 @@ export default function GhoDexWorkspaceScreen() {
         if (!payload) {
             return;
         }
+        if (isRealtimeInputModeRef.current) {
+            applyRealtimeLocalEcho(payload);
+        }
         logRealtimeInputDiagnostic('buffer.enqueue_input', {
             payload: describeTerminalDebugText(payload, 32),
             bufferBefore: describeTerminalDebugText(realtimeInputBufferRef.current, 48),
@@ -1069,7 +1089,7 @@ export default function GhoDexWorkspaceScreen() {
             realtimeInputFlushTimerRef.current = null;
             flushRealtimeInputBuffer();
         }, REALTIME_INPUT_FLUSH_MS);
-    }, [flushRealtimeInputBuffer, logRealtimeInputDiagnostic]);
+    }, [applyRealtimeLocalEcho, flushRealtimeInputBuffer, logRealtimeInputDiagnostic]);
 
     React.useEffect(() => {
         if (isRealtimeInputMode) {
@@ -1086,6 +1106,7 @@ export default function GhoDexWorkspaceScreen() {
         realtimeBackspaceFromKeyPressRef.current = 0;
         realtimeLastBackspaceKeypressAtRef.current = 0;
         realtimeInputDraftRef.current = '';
+        setRealtimeLocalEcho('');
         setRealtimeInputDraft('');
     }, [isRealtimeInputMode]);
 
@@ -1100,6 +1121,7 @@ export default function GhoDexWorkspaceScreen() {
         realtimeBackspaceFromKeyPressRef.current = 0;
         realtimeLastBackspaceKeypressAtRef.current = 0;
         realtimeInputDraftRef.current = '';
+        setRealtimeLocalEcho('');
         setRealtimeInputDraft('');
     }, [isRealtimeInputMode, selectedTerminalId]);
 
@@ -1573,6 +1595,9 @@ export default function GhoDexWorkspaceScreen() {
 
         if (isRealtimeInputMode) {
             if (keySpec.terminalKey) {
+                if (keySpec.id === 'enter' || keySpec.id === 'tab') {
+                    applyRealtimeLocalEcho(keySpec.payload);
+                }
                 enqueueRealtimeMutation({
                     kind: 'key',
                     keySpec,
@@ -1598,6 +1623,7 @@ export default function GhoDexWorkspaceScreen() {
     }, [
         enqueueRealtimeMutation,
         runAction,
+        applyRealtimeLocalEcho,
         enqueueRealtimeInputPayload,
         isRealtimeInputMode,
         sendControlKeyMutation,
@@ -1665,6 +1691,7 @@ export default function GhoDexWorkspaceScreen() {
                 draftLength: realtimeInputDraftRef.current.length,
                 pendingBackspaces: realtimeBackspaceFromKeyPressRef.current,
             });
+            applyRealtimeLocalEcho('\u007F');
             enqueueRealtimeMutation({
                 kind: 'key',
                 keySpec: REALTIME_BACKSPACE_KEY_SPEC,
@@ -1684,7 +1711,7 @@ export default function GhoDexWorkspaceScreen() {
                 enqueueRealtimeInputPayload(payload);
             }
         }
-    }, [enqueueRealtimeInputPayload, enqueueRealtimeMutation, isRealtimeInputMode, logRealtimeInputDiagnostic]);
+    }, [applyRealtimeLocalEcho, enqueueRealtimeInputPayload, enqueueRealtimeMutation, isRealtimeInputMode, logRealtimeInputDiagnostic]);
 
     const focusRealtimeTerminalInput = React.useCallback(() => {
         if (!isRealtimeInputMode || !selectedTerminal) {
@@ -2097,7 +2124,10 @@ export default function GhoDexWorkspaceScreen() {
                                     style={styles.terminalViewport}
                                 >
                                     {terminalRows.length > 0 ? (
-                                        <TerminalRenderer rows={terminalRows} />
+                                        <TerminalRenderer
+                                            optimisticInput={isRealtimeInputMode ? realtimeLocalEcho : ''}
+                                            rows={terminalRows}
+                                        />
                                     ) : (
                                         <ScrollView nestedScrollEnabled style={styles.terminalScroll}>
                                             <Text selectable style={styles.terminalContent}>

@@ -6,12 +6,15 @@ import type { TerminalRenderRow } from './model';
 
 export function TerminalRenderer({
     rows,
+    optimisticInput,
 }: {
     rows: TerminalRenderRow[];
+    optimisticInput?: string;
 }) {
     const { theme } = useUnistyles();
+    const rowCount = rows.length;
 
-    const renderItem = React.useCallback(({ item }: { item: TerminalRenderRow }) => (
+    const renderItem = React.useCallback(({ item, index }: { item: TerminalRenderRow; index: number }) => (
         <View style={styles.row}>
             <Text selectable style={[styles.rowText, { color: theme.colors.terminal.stdout }]}>
                 {item.segments.map((segment, index) => (
@@ -26,9 +29,14 @@ export function TerminalRenderer({
                         {segment.text}
                     </Text>
                 ))}
+                {index === rowCount - 1 && optimisticInput ? (
+                    <Text style={[styles.optimisticText, { color: theme.colors.terminal.stdout }]}>
+                        {optimisticInput}
+                    </Text>
+                ) : null}
             </Text>
         </View>
-    ), [theme.colors.terminal.stdout]);
+    ), [optimisticInput, rowCount, theme.colors.terminal.stdout]);
 
     return (
         <FlatList
@@ -59,5 +67,8 @@ const styles = StyleSheet.create(() => ({
         fontSize: 13,
         lineHeight: 20,
         fontFamily: 'monospace',
+    },
+    optimisticText: {
+        opacity: 0.85,
     },
 }));

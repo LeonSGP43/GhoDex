@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(happy-client): add optimistic local echo for realtime terminal typing
+
+- What changed: Added `applyRealtimeLocalEchoPayload` in `happy-client/sources/ghodex/terminalInput.ts` (with tests) and wired realtime input paths in `happy-client/sources/app/(app)/index.tsx` to update a local optimistic preview immediately for typed characters, Tab, Enter, and Backspace. Extended `happy-client/sources/ghodex/terminal/TerminalRenderer.tsx` to append this optimistic preview to the active terminal line while waiting for remote refresh.
+- Why: Even with reduced gateway scheduling delay, user-visible echo still waited for network + gateway + remote processing roundtrips, so typing felt behind SSH.
+- Impact: Realtime mode now shows immediate local key echo on mobile and then reconciles with server-side output when terminal content updates, significantly reducing perceived input lag.
+- Verification: `cd happy-client && yarn test sources/ghodex/terminalInput.spec.ts`; `cd happy-client && yarn typecheck`.
+- Files: `happy-client/sources/app/(app)/index.tsx`, `happy-client/sources/ghodex/terminalInput.ts`, `happy-client/sources/ghodex/terminalInput.spec.ts`, `happy-client/sources/ghodex/terminal/TerminalRenderer.tsx`, `CHANGELOG.md`.
+- Decision trail: Implement low-risk client-side prediction first to match SSH-like responsiveness without introducing protocol changes or compatibility risk to existing gateways.
+
 ### fix(happy-client): interleave realtime writes and live reads to reduce input latency
 
 - What changed: Updated realtime mutation draining in `happy-client/sources/app/(app)/index.tsx` to process one queued write per tick (instead of draining the whole queue in one in-flight loop), add short interleave scheduling between writes, and defer write retries with `resolveRealtimeMutationRetryDelayMs`. Subscription-driven live reads now gate only on actual write-in-flight/buffered-input state via `shouldDeferRealtimeLiveRead` (moved to `happy-client/sources/ghodex/terminalInput.ts` with tests), not on mere queued backlog.
