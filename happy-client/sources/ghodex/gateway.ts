@@ -13,6 +13,7 @@ import type {
     TerminalStreamChunkRecord,
     TerminalStreamOpenResult,
     TerminalSemanticV2Result,
+    TerminalSemanticDefaultReadResult,
     TerminalSnapshotV2Result,
     TerminalRow,
 } from './types';
@@ -450,6 +451,20 @@ function parseTerminalSemanticV2Result(envelope: GatewayEnvelope): TerminalSeman
     };
 }
 
+function shouldFallbackToSnapshotFromSemanticError(error: unknown): boolean {
+    if (!(error instanceof GatewayProtocolError)) {
+        return false;
+    }
+
+    const code = (error.code ?? '').toLowerCase();
+    if (code === 'unsupported_command' || code === 'invalid_argument') {
+        return true;
+    }
+
+    const message = error.message.toLowerCase();
+    return message.includes('terminal semantic v2');
+}
+
 function parseTerminalStreamOpenResult(envelope: GatewayEnvelope): TerminalStreamOpenResult {
     const result = ensureObject(envelope.result, 'terminal stream open result');
     const streamId = readString(result, 'stream_id');
@@ -721,6 +736,31 @@ export async function readTerminalSemanticV2(input: GatewayConnection & {
         },
     );
     return parseTerminalSemanticV2Result(envelope);
+}
+
+export async function readTerminalSemanticDefault(input: GatewayConnection & {
+    authToken: string;
+    terminalId: string;
+    expectedGeneration?: number;
+    scope?: 'visible' | 'screen';
+}): Promise<TerminalSemanticDefaultReadResult> {
+    try {
+        const semantic = await readTerminalSemanticV2(input);
+        return {
+            kind: 'semantic',
+            result: semantic,
+        };
+    } catch (error) {
+        if (!shouldFallbackToSnapshotFromSemanticError(error)) {
+            throw error;
+        }
+
+        const snapshot = await readTerminalSnapshotV2(input);
+        return {
+            kind: 'snapshot',
+            result: snapshot,
+        };
+    }
 }
 
 export async function ackTerminalStream(input: GatewayConnection & {

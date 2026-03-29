@@ -224,3 +224,22 @@ Build a high-performance terminal synchronization and extraction architecture th
 - Unit test: map `terminal_chunk` row delta payload with `changed_rows` to merge-safe compatibility shape.
 - Unit test: stream ack byte accounting helper batches and drains pending bytes deterministically.
 - Existing gateway stream API tests remain green.
+
+## Task 11 - Phase 4 Slice A: Semantic-Default Harness Read Entry (Additive Cutover)
+
+### SPEC
+- Introduce a semantic-first read entry for automation/harness use:
+  - default to `terminal.semantic.v2`,
+  - preserve explicit snapshot fallback when exact frame render text is required.
+- Keep renderer-facing paths unchanged (UI render still driven by snapshot/delta transport).
+- Provide one typed compatibility adapter so semantic payload can be consumed by higher layers without command-specific branching.
+
+### Acceptance Strategy
+- Semantic-default helper is available and used by harness/automation read call sites in this repo that do not require raw row rendering.
+- Snapshot fallback remains available and deterministic for raw-render-required scenarios.
+- No behavior regression for existing renderer update loop.
+
+### Tests
+- Unit test: semantic-first helper calls `terminal.semantic.v2` by default and maps typed output.
+- Unit test: semantic helper falls back to snapshot path when semantic command fails with unsupported/invalid response.
+- Existing snapshot and stream transport tests remain green.

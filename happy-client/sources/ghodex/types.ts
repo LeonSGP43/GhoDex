@@ -157,6 +157,10 @@ export interface TerminalStreamAckResult {
     flowPaused: boolean;
 }
 
+export type TerminalSemanticDefaultReadResult =
+    | { kind: 'semantic'; result: TerminalSemanticV2Result }
+    | { kind: 'snapshot'; result: TerminalSnapshotV2Result };
+
 export interface TerminalChangedRow {
     index: number;
     kind: string;

@@ -13,6 +13,15 @@ All notable changes to this project are documented in this file.
 - Files: `ghodex-terminal-core-v2-development-plan.md`, `happy-client/sources/app/(app)/index.tsx`, `happy-client/sources/ghodex/terminalTransport.ts`, `happy-client/sources/ghodex/terminalTransport.spec.ts`, `happy-client/sources/ghodex/gateway.ts`, `happy-client/sources/ghodex/gateway.stream.spec.ts`, `happy-client/sources/ghodex/types.ts`, `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `CHANGELOG.md`.
 - Decision trail: Keep structure updates on `events.subscribe`, but migrate selected-terminal content updates to stream-first with bounded ack batching. This minimizes protocol churn while removing read-poll latency from the primary interaction path.
 
+### feat(happy-client): add semantic-first terminal read helper with snapshot fallback
+
+- What changed: Added `readTerminalSemanticDefault` in `happy-client/sources/ghodex/gateway.ts`, returning semantic V2 data by default and falling back to snapshot V2 when semantic is unsupported/invalid. Added shared result typing in `happy-client/sources/ghodex/types.ts` and focused coverage in `happy-client/sources/ghodex/gateway.v2.spec.ts`.
+- Why: Phase 4 needs an additive semantic-default read entry for automation/harness use without breaking existing renderer-facing snapshot paths.
+- Impact: Callers now have a single semantic-first gateway read API with deterministic fallback behavior, reducing command-specific branching and compatibility risk across mixed desktop versions.
+- Verification: `cd happy-client && yarn test sources/ghodex/gateway.v2.spec.ts`; `cd happy-client && yarn typecheck`.
+- Files: `ghodex-terminal-core-v2-development-plan.md`, `happy-client/sources/ghodex/gateway.ts`, `happy-client/sources/ghodex/types.ts`, `happy-client/sources/ghodex/gateway.v2.spec.ts`, `CHANGELOG.md`.
+- Decision trail: Prefer semantic as the default automation read surface, but keep snapshot fallback inside the same helper so unsupported desktop builds degrade gracefully without forcing callers to implement dual-command recovery logic.
+
 ### feat(happy-client): add mobile gateway APIs for terminal.stream.open and terminal.stream.ack
 
 - What changed: Added terminal stream gateway contracts in `happy-client/sources/ghodex/gateway.ts`: `subscribeToTerminalStream` (open handshake + chunk callback parsing) and `ackTerminalStream` (flow-control ack request/response). Extended shared types in `happy-client/sources/ghodex/types.ts` with `TerminalStreamOpenResult`, `TerminalStreamChunkRecord`, and `TerminalStreamAckResult`. Added focused API tests in `happy-client/sources/ghodex/gateway.stream.spec.ts`.
