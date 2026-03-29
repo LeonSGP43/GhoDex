@@ -902,19 +902,8 @@ export default function GhoDexWorkspaceScreen() {
             try {
                 let mutation: TerminalMutationResult;
                 if (operation.kind === 'text') {
-                    let payload = operation.text;
-                    while (
-                        realtimeMutationQueueRef.current[0]?.kind === 'text'
-                        && payload.length < REALTIME_INPUT_MAX_BATCH_SIZE * 4
-                    ) {
-                        const next = realtimeMutationQueueRef.current.shift();
-                        if (!next || next.kind !== 'text') {
-                            break;
-                        }
-                        payload += next.text;
-                    }
                     logRealtimeInputDiagnostic('queue.send_text', {
-                        payload: describeTerminalDebugText(payload, 48),
+                        payload: describeTerminalDebugText(operation.text, 48),
                         terminalId: currentTerminal.terminalId,
                     });
 
@@ -923,7 +912,7 @@ export default function GhoDexWorkspaceScreen() {
                         port: activeSession.port,
                         authToken,
                         terminalId: currentTerminal.terminalId,
-                        text: payload,
+                        text: operation.text,
                     }));
                 } else {
                     const terminalKey = operation.keySpec.terminalKey?.trim();
@@ -1071,6 +1060,16 @@ export default function GhoDexWorkspaceScreen() {
             bufferAfter: describeTerminalDebugText(realtimeInputBufferRef.current, 48),
             flushTimerActive: realtimeInputFlushTimerRef.current !== null,
         });
+
+        const shouldImmediateFlush = payload.length <= 2;
+        if (shouldImmediateFlush) {
+            if (realtimeInputFlushTimerRef.current) {
+                clearTimeout(realtimeInputFlushTimerRef.current);
+                realtimeInputFlushTimerRef.current = null;
+            }
+            flushRealtimeInputBuffer();
+            return;
+        }
 
         if (realtimeInputBufferRef.current.length >= REALTIME_INPUT_MAX_BATCH_SIZE) {
             if (realtimeInputFlushTimerRef.current) {

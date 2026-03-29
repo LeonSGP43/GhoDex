@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(happy-client): simplify realtime pipeline to ssh-style immediate key dispatch
+
+- What changed: In `happy-client/sources/app/(app)/index.tsx`, realtime typed payloads now flush immediately for short key-sized input (`payload.length <= 2`) instead of waiting for timer batching, and queued text operations no longer coalesce multiple buffered writes before dispatch.
+- Why: Extra client-side batching/merge improved throughput but made the interaction model feel less like SSH under normal typing.
+- Impact: Realtime mode now prioritizes per-keystroke responsiveness and behavior consistency over aggressive write aggregation, matching SSH interaction expectations more closely.
+- Verification: `cd happy-client && yarn test sources/ghodex/terminalInput.spec.ts sources/ghodex/gateway.spec.ts`; `cd happy-client && yarn typecheck`.
+- Files: `happy-client/sources/app/(app)/index.tsx`, `CHANGELOG.md`.
+- Decision trail: Keep the protocol unchanged and reduce local scheduling complexity first so user-visible behavior aligns with SSH mental model.
+
 ### fix(happy-client): add optimistic local echo for realtime terminal typing
 
 - What changed: Added `applyRealtimeLocalEchoPayload` in `happy-client/sources/ghodex/terminalInput.ts` (with tests) and wired realtime input paths in `happy-client/sources/app/(app)/index.tsx` to update a local optimistic preview immediately for typed characters, Tab, Enter, and Backspace. Extended `happy-client/sources/ghodex/terminal/TerminalRenderer.tsx` to append this optimistic preview to the active terminal line while waiting for remote refresh.
