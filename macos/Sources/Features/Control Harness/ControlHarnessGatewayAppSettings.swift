@@ -30,16 +30,39 @@ struct ControlHarnessGatewayAppSettings: Equatable, Sendable {
     static let listenPortKey = "ControlHarnessGateway.ListenPort"
     static let pairingAdvertiseHostKey = "ControlHarnessGateway.PairingAdvertiseHost"
     static let showPairingQrOnLaunchKey = "ControlHarnessGateway.ShowPairingQrOnLaunch"
+    static let semanticProfileKey = "ControlHarnessGateway.SemanticProfile"
 
     static let defaultEnabled = true
     static let defaultListenHost = "0.0.0.0"
     static let defaultListenPort: UInt16 = 9527
+    static let defaultSemanticProfile = ControlHarnessSemanticProfile.defaultValue.rawValue
 
     var isEnabled = Self.defaultEnabled
     var listenHost = Self.defaultListenHost
     var listenPort = Self.defaultListenPort
     var pairingAdvertiseHost = ""
     var showPairingQrOnLaunch = false
+    var semanticProfile = Self.defaultSemanticProfile
+
+    var semanticProfileValue: ControlHarnessSemanticProfile {
+        ControlHarnessSemanticProfile.parse(semanticProfile)
+    }
+
+    init(
+        isEnabled: Bool = Self.defaultEnabled,
+        listenHost: String = Self.defaultListenHost,
+        listenPort: UInt16 = Self.defaultListenPort,
+        pairingAdvertiseHost: String = "",
+        showPairingQrOnLaunch: Bool = false,
+        semanticProfile: String = Self.defaultSemanticProfile
+    ) {
+        self.isEnabled = isEnabled
+        self.listenHost = listenHost
+        self.listenPort = listenPort
+        self.pairingAdvertiseHost = pairingAdvertiseHost
+        self.showPairingQrOnLaunch = showPairingQrOnLaunch
+        self.semanticProfile = semanticProfile
+    }
 
     func sanitized() -> Self {
         var copy = self
@@ -52,6 +75,7 @@ struct ControlHarnessGatewayAppSettings: Equatable, Sendable {
 
         copy.pairingAdvertiseHost = copy.pairingAdvertiseHost
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        copy.semanticProfile = ControlHarnessSemanticProfile.parse(copy.semanticProfile).rawValue
         return copy
     }
 
@@ -99,6 +123,9 @@ struct ControlHarnessGatewayAppSettings: Equatable, Sendable {
         settings.showPairingQrOnLaunch = userDefaults.bool(
             forKey: storageKey(showPairingQrOnLaunchKey, scope: resolvedScope)
         )
+        settings.semanticProfile = userDefaults.string(
+            forKey: storageKey(semanticProfileKey, scope: resolvedScope)
+        ) ?? defaultSemanticProfile
         return settings.sanitized()
     }
 
@@ -118,6 +145,10 @@ struct ControlHarnessGatewayAppSettings: Equatable, Sendable {
             sanitized.showPairingQrOnLaunch,
             forKey: Self.storageKey(Self.showPairingQrOnLaunchKey, scope: scope)
         )
+        userDefaults.set(
+            sanitized.semanticProfile,
+            forKey: Self.storageKey(Self.semanticProfileKey, scope: scope)
+        )
     }
 
     func resolvedConfiguration(
@@ -128,6 +159,7 @@ struct ControlHarnessGatewayAppSettings: Equatable, Sendable {
         configuration.isEnabled = sanitized.isEnabled
         configuration.listenHost = sanitized.listenHost
         configuration.listenPort = sanitized.listenPort
+        configuration.semanticProfile = sanitized.semanticProfileValue
         return configuration
     }
 
@@ -154,6 +186,7 @@ struct ControlHarnessGatewayAppSettings: Equatable, Sendable {
         listenPortKey,
         pairingAdvertiseHostKey,
         showPairingQrOnLaunchKey,
+        semanticProfileKey,
     ]
 
     private static func normalizedValue(_ rawValue: String?) -> String? {

@@ -65,8 +65,10 @@ final class ControlHarnessGateway {
         var maxConcurrentSessionsPerIdentity = 2
         var maxGlobalRequestsPerMinute = 240
         var maxCommandsPerMinute = 60
+        var maxInputEventsPerMinute = 900
         var maxSnapshotRequestsPerMinute = 30
         var maxResyncAttemptsPerMinute = 30
+        var semanticProfile: ControlHarnessSemanticProfile = .defaultValue
 
         static func environment(
             _ environment: [String: String] = ProcessInfo.processInfo.environment
@@ -103,11 +105,17 @@ final class ControlHarnessGateway {
             if let value = parseInt(environment["GHODEX_CONTROL_HARNESS_GATEWAY_MAX_COMMANDS_PER_MINUTE"]) {
                 configuration.maxCommandsPerMinute = max(1, value)
             }
+            if let value = parseInt(environment["GHODEX_CONTROL_HARNESS_GATEWAY_MAX_INPUT_EVENTS_PER_MINUTE"]) {
+                configuration.maxInputEventsPerMinute = max(1, value)
+            }
             if let value = parseInt(environment["GHODEX_CONTROL_HARNESS_GATEWAY_MAX_SNAPSHOT_REQUESTS_PER_MINUTE"]) {
                 configuration.maxSnapshotRequestsPerMinute = max(1, value)
             }
             if let value = parseInt(environment["GHODEX_CONTROL_HARNESS_GATEWAY_MAX_RESYNC_ATTEMPTS_PER_MINUTE"]) {
                 configuration.maxResyncAttemptsPerMinute = max(1, value)
+            }
+            if let value = parseString(environment["GHODEX_CONTROL_HARNESS_SEMANTIC_PROFILE"]) {
+                configuration.semanticProfile = ControlHarnessSemanticProfile.parse(value)
             }
 
             return configuration
@@ -983,7 +991,13 @@ final class ControlHarnessGateway {
 
     private func requiredScope(for request: ControlHarnessRequest) -> ControlHarnessAuthScope? {
         switch request.command {
-        case "snapshot", "read-terminal", "events.subscribe":
+        case "snapshot",
+            "read-terminal",
+            "events.subscribe",
+            "terminal.stream.open",
+            "terminal.stream.ack",
+            "terminal.snapshot.v2",
+            "terminal.semantic.v2":
             return .observe
         case "new-tab", "close-tab", "rename-tab", "send-text", "send-key", "run-command", "close-terminal":
             return .mutate
@@ -1052,6 +1066,10 @@ final class ControlHarnessGateway {
             try operation()
             return
         }
+        guard shouldReserveSessionSlot(for: request) else {
+            try operation()
+            return
+        }
         guard sessionRegistry.acquire(identity: sessionIdentity) else {
             try responseWriter(ControlHarnessResponse(
                 requestID: request.requestID,
@@ -1068,6 +1086,14 @@ final class ControlHarnessGateway {
         }
 
         try operation()
+    }
+
+    private func shouldReserveSessionSlot(for request: ControlHarnessRequest) -> Bool {
+        // Session caps are intended to guard long-lived streams only.
+        // One-shot requests (snapshot/read/input/ack/etc.) should not consume
+        // the same concurrency budget, otherwise refresh and typing can fail
+        // while an observe stream is active.
+        request.commandKind == .subscription
     }
 
     private func registerActiveStream(
@@ -1793,6 +1819,7 @@ private final class ControlHarnessGatewayRateLimiter {
 
     private struct IdentityCounters {
         var command = WindowCounter()
+        var input = WindowCounter()
         var snapshot = WindowCounter()
         var resync = WindowCounter()
         var lastSeenMinuteWindow: Int64 = 0
@@ -1800,6 +1827,7 @@ private final class ControlHarnessGatewayRateLimiter {
 
     private enum Category {
         case command
+        case input
         case snapshot
         case resync
     }
@@ -1852,6 +1880,12 @@ private final class ControlHarnessGatewayRateLimiter {
                     minuteWindow: minuteWindow
                 )
                 errorMessage = "Gateway command rate limit exceeded"
+            case .input:
+                allowed = counters.input.allow(
+                    limit: configuration.maxInputEventsPerMinute,
+                    minuteWindow: minuteWindow
+                )
+                errorMessage = "Gateway input rate limit exceeded"
             case .snapshot:
                 allowed = counters.snapshot.allow(
                     limit: configuration.maxSnapshotRequestsPerMinute,
@@ -1929,13 +1963,15 @@ private final class ControlHarnessGatewayRateLimiter {
 
     private func category(for request: ControlHarnessRequest) -> Category? {
         switch request.command {
-        case "send-text", "send-key", "run-command", "close-terminal", "new-tab", "close-tab", "rename-tab":
+        case "send-text", "send-key":
+            return .input
+        case "run-command", "close-terminal", "new-tab", "close-tab", "rename-tab":
             return .command
-        case "snapshot":
+        case "snapshot", "terminal.snapshot.v2", "terminal.semantic.v2":
             return .snapshot
         case "read-terminal" where request.mode == "snapshot":
             return .snapshot
-        case "events.subscribe":
+        case "events.subscribe", "terminal.stream.open":
             return .resync
         default:
             return nil

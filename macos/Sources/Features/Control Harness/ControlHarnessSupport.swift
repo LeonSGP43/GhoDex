@@ -23,7 +23,8 @@ extension ControlHarnessRequest {
             "todo-assign",
             "todo-sync-stale":
             return .mutation
-        case "events.subscribe":
+        case "events.subscribe",
+            "terminal.stream.open":
             return .subscription
         default:
             return .query
@@ -790,6 +791,464 @@ final class ControlHarnessReadAfterWriteStore {
     }
 }
 
+struct ControlHarnessTerminalStreamOpenState {
+    let streamID: String
+    let unackedBytes: Int
+    let highWatermarkBytes: Int
+    let lowWatermarkBytes: Int
+    let flowPaused: Bool
+}
+
+struct ControlHarnessTerminalStreamAckState {
+    let streamID: String
+    let ackedBytes: Int
+    let remainingUnackedBytes: Int
+    let highWatermarkBytes: Int
+    let lowWatermarkBytes: Int
+    let flowPaused: Bool
+}
+
+struct ControlHarnessTerminalStreamFlowState {
+    let streamID: String
+    let generation: Int
+    let unackedBytes: Int
+    let highWatermarkBytes: Int
+    let lowWatermarkBytes: Int
+    let flowPaused: Bool
+}
+
+struct ControlHarnessTerminalStreamProduceState {
+    let streamID: String
+    let generation: Int
+    let producedBytes: Int
+    let remainingUnackedBytes: Int
+    let highWatermarkBytes: Int
+    let lowWatermarkBytes: Int
+    let flowPaused: Bool
+    let accepted: Bool
+}
+
+final class ControlHarnessTerminalStreamStore {
+    struct DebugSnapshot {
+        let streamCount: Int
+        let terminalCount: Int
+        let pausedStreamCount: Int
+        let totalUnackedBytes: Int
+        let maxTotalStreams: Int
+        let maxStreamsPerTerminal: Int
+    }
+
+    private struct StreamEntry {
+        let streamID: String
+        let terminalID: String
+        let generation: Int
+        let createdAt: Date
+        var lastTouchedAt: Date
+        var unackedBytes: Int
+        var flowPaused: Bool
+    }
+
+    private let queue = DispatchQueue(label: "com.leongong.ghodex.control-harness.stream-store")
+    private let maxTotalStreams: Int
+    private let maxStreamsPerTerminal: Int
+    private let highWatermarkBytes: Int
+    private let lowWatermarkBytes: Int
+
+    private var streamsByID: [String: StreamEntry] = [:]
+    private var streamOrder: [String] = []
+    private var terminalStreamIDs: [String: [String]] = [:]
+
+    init(
+        maxTotalStreams: Int = 512,
+        maxStreamsPerTerminal: Int = 8,
+        highWatermarkBytes: Int = 200_000,
+        lowWatermarkBytes: Int = 20_000
+    ) {
+        self.maxTotalStreams = max(1, maxTotalStreams)
+        self.maxStreamsPerTerminal = max(1, maxStreamsPerTerminal)
+        self.highWatermarkBytes = max(1, highWatermarkBytes)
+        self.lowWatermarkBytes = max(0, min(lowWatermarkBytes, highWatermarkBytes))
+    }
+
+    func openStream(terminalID: String, generation: Int) -> ControlHarnessTerminalStreamOpenState {
+        queue.sync {
+            let now = Date()
+            let streamID = "strm_\(UUID().uuidString.lowercased())"
+            let entry = StreamEntry(
+                streamID: streamID,
+                terminalID: terminalID,
+                generation: generation,
+                createdAt: now,
+                lastTouchedAt: now,
+                unackedBytes: 0,
+                flowPaused: false
+            )
+            streamsByID[streamID] = entry
+            streamOrder.append(streamID)
+            terminalStreamIDs[terminalID, default: []].append(streamID)
+            pruneLocked(for: terminalID)
+            return .init(
+                streamID: streamID,
+                unackedBytes: 0,
+                highWatermarkBytes: highWatermarkBytes,
+                lowWatermarkBytes: lowWatermarkBytes,
+                flowPaused: false
+            )
+        }
+    }
+
+    func acknowledge(
+        terminalID: String,
+        streamID: String?,
+        ackBytes: Int
+    ) -> ControlHarnessTerminalStreamAckState? {
+        queue.sync {
+            let targetStreamID: String?
+            if let streamID, !streamID.isEmpty {
+                targetStreamID = streamID
+            } else {
+                targetStreamID = terminalStreamIDs[terminalID]?.last
+            }
+            guard let targetStreamID, var entry = streamsByID[targetStreamID], entry.terminalID == terminalID else {
+                return nil
+            }
+
+            let now = Date()
+            let clampedAck = max(0, ackBytes)
+            let ackedBytes = min(clampedAck, entry.unackedBytes)
+            entry.unackedBytes = max(0, entry.unackedBytes - clampedAck)
+            if entry.flowPaused, entry.unackedBytes <= lowWatermarkBytes {
+                entry.flowPaused = false
+            }
+            entry.lastTouchedAt = now
+
+            streamsByID[targetStreamID] = entry
+            touchLocked(targetStreamID)
+            return .init(
+                streamID: targetStreamID,
+                ackedBytes: ackedBytes,
+                remainingUnackedBytes: entry.unackedBytes,
+                highWatermarkBytes: highWatermarkBytes,
+                lowWatermarkBytes: lowWatermarkBytes,
+                flowPaused: entry.flowPaused
+            )
+        }
+    }
+
+    func flowState(
+        terminalID: String,
+        streamID: String
+    ) -> ControlHarnessTerminalStreamFlowState? {
+        queue.sync {
+            guard var entry = streamsByID[streamID], entry.terminalID == terminalID else {
+                return nil
+            }
+            entry.lastTouchedAt = Date()
+            streamsByID[streamID] = entry
+            touchLocked(streamID)
+            return .init(
+                streamID: streamID,
+                generation: entry.generation,
+                unackedBytes: entry.unackedBytes,
+                highWatermarkBytes: highWatermarkBytes,
+                lowWatermarkBytes: lowWatermarkBytes,
+                flowPaused: entry.flowPaused
+            )
+        }
+    }
+
+    func produce(
+        terminalID: String,
+        streamID: String,
+        chunkBytes: Int
+    ) -> ControlHarnessTerminalStreamProduceState? {
+        queue.sync {
+            guard var entry = streamsByID[streamID], entry.terminalID == terminalID else {
+                return nil
+            }
+
+            entry.lastTouchedAt = Date()
+            if entry.flowPaused {
+                streamsByID[streamID] = entry
+                touchLocked(streamID)
+                return .init(
+                    streamID: streamID,
+                    generation: entry.generation,
+                    producedBytes: 0,
+                    remainingUnackedBytes: entry.unackedBytes,
+                    highWatermarkBytes: highWatermarkBytes,
+                    lowWatermarkBytes: lowWatermarkBytes,
+                    flowPaused: entry.flowPaused,
+                    accepted: false
+                )
+            }
+
+            let requestedBytes = max(0, chunkBytes)
+            var producedBytes = 0
+            if requestedBytes > 0 {
+                let remainingCapacity = Int.max - entry.unackedBytes
+                let appliedBytes = min(remainingCapacity, requestedBytes)
+                entry.unackedBytes += appliedBytes
+                producedBytes = appliedBytes
+            }
+            if entry.unackedBytes >= highWatermarkBytes {
+                entry.flowPaused = true
+            }
+
+            streamsByID[streamID] = entry
+            touchLocked(streamID)
+            return .init(
+                streamID: streamID,
+                generation: entry.generation,
+                producedBytes: producedBytes,
+                remainingUnackedBytes: entry.unackedBytes,
+                highWatermarkBytes: highWatermarkBytes,
+                lowWatermarkBytes: lowWatermarkBytes,
+                flowPaused: entry.flowPaused,
+                accepted: true
+            )
+        }
+    }
+
+    func removeStream(_ streamID: String) {
+        queue.sync {
+            removeStreamLocked(streamID)
+        }
+    }
+
+    func removeTerminal(_ terminalID: String) {
+        queue.sync {
+            guard let streamIDs = terminalStreamIDs.removeValue(forKey: terminalID), !streamIDs.isEmpty else {
+                return
+            }
+            let removed = Set(streamIDs)
+            for streamID in streamIDs {
+                streamsByID.removeValue(forKey: streamID)
+            }
+            streamOrder.removeAll { removed.contains($0) }
+        }
+    }
+
+    func debugSnapshot() -> DebugSnapshot {
+        queue.sync {
+            let streamEntries = Array(streamsByID.values)
+            return .init(
+                streamCount: streamEntries.count,
+                terminalCount: terminalStreamIDs.count,
+                pausedStreamCount: streamEntries.filter(\.flowPaused).count,
+                totalUnackedBytes: streamEntries.reduce(0) { partialResult, entry in
+                    partialResult + entry.unackedBytes
+                },
+                maxTotalStreams: maxTotalStreams,
+                maxStreamsPerTerminal: maxStreamsPerTerminal
+            )
+        }
+    }
+
+    private func pruneLocked(for terminalID: String) {
+        if var perTerminal = terminalStreamIDs[terminalID] {
+            while perTerminal.count > maxStreamsPerTerminal {
+                guard let oldest = perTerminal.first else { break }
+                perTerminal.removeFirst()
+                streamsByID.removeValue(forKey: oldest)
+                streamOrder.removeAll { $0 == oldest }
+            }
+            if perTerminal.isEmpty {
+                terminalStreamIDs.removeValue(forKey: terminalID)
+            } else {
+                terminalStreamIDs[terminalID] = perTerminal
+            }
+        }
+
+        while streamsByID.count > maxTotalStreams, let oldest = streamOrder.first {
+            streamOrder.removeFirst()
+            guard let removed = streamsByID.removeValue(forKey: oldest) else { continue }
+            if var ids = terminalStreamIDs[removed.terminalID] {
+                ids.removeAll { $0 == oldest }
+                if ids.isEmpty {
+                    terminalStreamIDs.removeValue(forKey: removed.terminalID)
+                } else {
+                    terminalStreamIDs[removed.terminalID] = ids
+                }
+            }
+        }
+    }
+
+    private func touchLocked(_ streamID: String) {
+        streamOrder.removeAll { $0 == streamID }
+        streamOrder.append(streamID)
+    }
+
+    private func removeStreamLocked(_ streamID: String) {
+        guard let removed = streamsByID.removeValue(forKey: streamID) else {
+            return
+        }
+        streamOrder.removeAll { $0 == streamID }
+        if var terminalIDs = terminalStreamIDs[removed.terminalID] {
+            terminalIDs.removeAll { $0 == streamID }
+            if terminalIDs.isEmpty {
+                terminalStreamIDs.removeValue(forKey: removed.terminalID)
+            } else {
+                terminalStreamIDs[removed.terminalID] = terminalIDs
+            }
+        }
+    }
+}
+
+enum ControlHarnessSemanticProfile: String, CaseIterable, Sendable {
+    case generic = "generic"
+    case codex = "codex"
+    case claudeCode = "claude_code"
+
+    static let defaultValue: Self = .generic
+
+    static func parse(_ rawValue: String?) -> Self {
+        guard let rawValue else { return .defaultValue }
+        let normalized = rawValue
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard normalized.isEmpty == false else { return .defaultValue }
+        return Self(rawValue: normalized) ?? .defaultValue
+    }
+}
+
+func controlHarnessSemanticLines(
+    from text: String,
+    profile: ControlHarnessSemanticProfile = .defaultValue
+) -> [String] {
+    let rows = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
+    var merged: [String] = []
+    var current = ""
+
+    func flushCurrent() {
+        guard !current.isEmpty else { return }
+        merged.append(current)
+        current = ""
+    }
+
+    for row in rows {
+        let semanticRow = sanitizeSemanticRow(row)
+        let trimmedRight = semanticRow.trimmingCharacters(in: .newlines)
+        let trimmed = trimmedRight.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty {
+            flushCurrent()
+            merged.append("")
+            continue
+        }
+        if isSemanticHardBreakLine(trimmedRight, trimmed: trimmed, profile: profile) {
+            flushCurrent()
+            merged.append(trimmedRight)
+            continue
+        }
+        if current.isEmpty {
+            current = trimmedRight
+        } else {
+            current += trimmedRight.trimmingCharacters(in: .whitespaces)
+        }
+    }
+    flushCurrent()
+    return merged
+}
+
+struct ControlHarnessSemanticProjection {
+    let exactText: String
+    let logicalLines: [String]
+    let promptDetected: Bool
+}
+
+func controlHarnessSemanticProjection(
+    from text: String,
+    profile: ControlHarnessSemanticProfile = .defaultValue
+) -> ControlHarnessSemanticProjection {
+    let logicalLines = controlHarnessSemanticLines(from: text, profile: profile)
+    let promptDetected = logicalLines.contains { line in
+        isSemanticPromptLine(line.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+    return .init(
+        exactText: text,
+        logicalLines: logicalLines,
+        promptDetected: promptDetected
+    )
+}
+
+private func sanitizeSemanticRow(_ row: String) -> String {
+    let escape = "\u{001B}"
+    var sanitized = row.replacingOccurrences(
+        of: "\(escape)\\[[0-9;?]*[ -/]*[@-~]",
+        with: "",
+        options: .regularExpression
+    )
+    sanitized = sanitized.replacingOccurrences(
+        of: "\(escape)\\][^\u{0007}\u{001B}]*(?:\u{0007}|\(escape)\\\\)",
+        with: "",
+        options: .regularExpression
+    )
+
+    let filteredScalars = sanitized.unicodeScalars.filter { scalar in
+        if scalar == "\t" {
+            return true
+        }
+        if scalar.value < 0x20 || scalar.value == 0x7F {
+            return false
+        }
+        return true
+    }
+    return String(String.UnicodeScalarView(filteredScalars))
+}
+
+private func isSemanticPromptLine(_ trimmed: String) -> Bool {
+    trimmed.hasPrefix("$")
+        || trimmed.hasPrefix("#")
+        || trimmed.hasPrefix("PS ")
+        || trimmed.hasPrefix("❯")
+}
+
+private func isSemanticHardBreakLine(
+    _ row: String,
+    trimmed: String,
+    profile: ControlHarnessSemanticProfile
+) -> Bool {
+    if trimmed.hasPrefix("$ ") || trimmed == "$" || trimmed.hasPrefix("# ") || trimmed == "#" || trimmed.hasPrefix(">") || trimmed.hasPrefix("PS ") || trimmed.hasPrefix("❯") {
+        return true
+    }
+    if row.hasPrefix("    ") || row.hasPrefix("\t") {
+        return true
+    }
+    if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
+        return true
+    }
+
+    switch profile {
+    case .generic:
+        return false
+    case .codex:
+        if trimmed.hasPrefix("›") || trimmed.hasPrefix("•") || trimmed.hasPrefix("```") {
+            return true
+        }
+        return isOrderedListPrefix(trimmed)
+    case .claudeCode:
+        if trimmed.hasPrefix("Human:") || trimmed.hasPrefix("Assistant:") || trimmed.hasPrefix("```") || trimmed.hasPrefix("|") || trimmed.hasPrefix("•") {
+            return true
+        }
+        return isOrderedListPrefix(trimmed)
+    }
+}
+
+private func isOrderedListPrefix(_ trimmed: String) -> Bool {
+    guard let firstDot = trimmed.firstIndex(of: ".") else {
+        return false
+    }
+    let prefix = trimmed[..<firstDot]
+    guard !prefix.isEmpty, prefix.allSatisfy(\.isNumber) else {
+        return false
+    }
+    let nextIndex = trimmed.index(after: firstDot)
+    guard nextIndex < trimmed.endIndex else {
+        return false
+    }
+    return trimmed[nextIndex] == " "
+}
+
 @MainActor
 final class ControlHarnessGenerationTracker {
     private enum ResourceType: String {
@@ -1056,9 +1515,19 @@ final class ControlHarnessEventHub {
     }
 }
 
+protocol ControlHarnessSubscriptionSession: AnyObject {
+    var replayEvents: [Data] { get }
+    func addSubscriber(
+        sink: @escaping @Sendable (Data) -> Bool,
+        onFinish: @escaping @Sendable () -> Void
+    ) -> UUID?
+    func completeReplay()
+    func removeSubscriber(_ id: UUID?)
+}
+
 struct ControlHarnessSubscriptionEnvelope {
     let response: ControlHarnessResponse
-    let session: ControlHarnessEventSubscriptionSession?
+    let session: (any ControlHarnessSubscriptionSession)?
 }
 
 enum ControlHarnessServiceReply {
@@ -1066,7 +1535,7 @@ enum ControlHarnessServiceReply {
     case subscription(ControlHarnessSubscriptionEnvelope)
 }
 
-final class ControlHarnessEventSubscriptionSession {
+final class ControlHarnessEventSubscriptionSession: ControlHarnessSubscriptionSession {
     private let queue = DispatchQueue(label: "com.leongong.ghodex.control-harness.subscription")
     private let eventHub: ControlHarnessEventHub
     private let maxBufferedLiveEvents: Int
@@ -1232,5 +1701,131 @@ final class ControlHarnessEventSubscriptionSession {
             let dropped = bufferedLiveEvents.removeFirst()
             bufferedLiveEventBytes = max(0, bufferedLiveEventBytes - dropped.count)
         }
+    }
+}
+
+struct ControlHarnessTerminalStreamPollChunk {
+    let frameID: String
+    let payload: Data
+}
+
+final class ControlHarnessTerminalStreamSubscriptionSession: ControlHarnessSubscriptionSession {
+    typealias PollChunk = (_ sinceFrameID: String?) -> ControlHarnessTerminalStreamPollChunk?
+
+    private let queue = DispatchQueue(label: "com.leongong.ghodex.control-harness.terminal-stream.subscription")
+    private let pollChunk: PollChunk
+    private let pollInterval: TimeInterval
+    private let onClose: () -> Void
+    let replayEvents: [Data]
+
+    private var finished = false
+    private var replayCompleted = false
+    private var finishSignaled = false
+    private var closeSignaled = false
+    private var subscriberID: UUID?
+    private var sinceFrameID: String?
+    private var deliverySink: (@Sendable (Data) -> Bool)?
+    private var finishHandler: (@Sendable () -> Void)?
+    private var timer: DispatchSourceTimer?
+
+    init(
+        replayEvents: [Data],
+        initialFrameID: String?,
+        pollInterval: TimeInterval,
+        pollChunk: @escaping PollChunk,
+        onClose: @escaping () -> Void
+    ) {
+        self.replayEvents = replayEvents
+        self.sinceFrameID = initialFrameID
+        self.pollInterval = max(0.01, pollInterval)
+        self.pollChunk = pollChunk
+        self.onClose = onClose
+    }
+
+    func addSubscriber(
+        sink: @escaping @Sendable (Data) -> Bool,
+        onFinish: @escaping @Sendable () -> Void
+    ) -> UUID? {
+        queue.sync {
+            guard !finished else {
+                signalFinishLocked(onFinish)
+                return nil
+            }
+            let id = UUID()
+            subscriberID = id
+            replayCompleted = false
+            deliverySink = sink
+            finishHandler = onFinish
+            ensureTimerLocked()
+            return id
+        }
+    }
+
+    func completeReplay() {
+        queue.sync {
+            replayCompleted = true
+        }
+    }
+
+    func removeSubscriber(_ id: UUID?) {
+        queue.sync {
+            guard !finished else { return }
+            if let id, subscriberID != id {
+                return
+            }
+            finishLocked()
+        }
+    }
+
+    private func ensureTimerLocked() {
+        guard timer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + pollInterval, repeating: pollInterval)
+        timer.setEventHandler { [weak self] in
+            self?.pumpLocked()
+        }
+        self.timer = timer
+        timer.resume()
+    }
+
+    private func pumpLocked() {
+        guard !finished, replayCompleted else { return }
+        guard let sink = deliverySink else {
+            finishLocked()
+            return
+        }
+        guard let nextChunk = pollChunk(sinceFrameID) else {
+            return
+        }
+        sinceFrameID = nextChunk.frameID
+        if sink(nextChunk.payload) == false {
+            finishLocked()
+        }
+    }
+
+    private func finishLocked() {
+        guard !finished else { return }
+        finished = true
+        subscriberID = nil
+        replayCompleted = false
+        sinceFrameID = nil
+        timer?.cancel()
+        timer = nil
+        deliverySink = nil
+        signalCloseLocked()
+        signalFinishLocked()
+    }
+
+    private func signalCloseLocked() {
+        guard !closeSignaled else { return }
+        closeSignaled = true
+        onClose()
+    }
+
+    private func signalFinishLocked(_ finishHandlerOverride: (@Sendable () -> Void)? = nil) {
+        guard !finishSignaled else { return }
+        finishSignaled = true
+        (finishHandlerOverride ?? finishHandler)?()
+        finishHandler = nil
     }
 }

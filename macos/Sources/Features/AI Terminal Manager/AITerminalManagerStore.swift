@@ -2643,8 +2643,9 @@ final class AITerminalManagerStore: ObservableObject {
             return
         }
 
-        selectedSessionVisibleText = surface.aiManagerVisibleText().content
-        selectedSessionScreenText = surface.aiManagerScreenText().content
+        let semanticSnapshot = semanticSnapshot(from: surface, refresh: false)
+        selectedSessionVisibleText = semanticSnapshot.visibleExactText
+        selectedSessionScreenText = semanticSnapshot.screenExactText
         lastError = nil
     }
 
@@ -2958,7 +2959,7 @@ final class AITerminalManagerStore: ObservableObject {
         var observedActivity = false
         for (sessionID, pending) in pendingSSHPasswordAutomations {
             guard let surface = appDelegate.findSurface(forUUID: sessionID) else { continue }
-            let visibleText = surface.aiManagerVisibleText().content
+            let visibleText = semanticSnapshot(from: surface, refresh: true).visibleExactText
 
             if Self.containsSSHAuthenticationFailure(in: visibleText) {
                 observedActivity = true
@@ -3210,6 +3211,28 @@ final class AITerminalManagerStore: ObservableObject {
             index += 1
         }
         return candidate
+    }
+
+    private func semanticSnapshot(
+        from surface: Ghostty.SurfaceView,
+        refresh: Bool
+    ) -> (visibleExactText: String, screenExactText: String) {
+        let semanticProfile = appDelegateProvider()?.controlHarnessGatewaySettings.semanticProfileValue
+            ?? .defaultValue
+        let visible = surface.controlHarnessVisibleText(refresh: refresh).content
+        let screen = surface.controlHarnessScreenText(refresh: refresh).content
+        let visibleProjection = controlHarnessSemanticProjection(
+            from: visible,
+            profile: semanticProfile
+        )
+        let screenProjection = controlHarnessSemanticProjection(
+            from: screen,
+            profile: semanticProfile
+        )
+        return (
+            visibleExactText: visibleProjection.exactText,
+            screenExactText: screenProjection.exactText
+        )
     }
 
     nonisolated static func containsSSHPasswordPrompt(in text: String) -> Bool {

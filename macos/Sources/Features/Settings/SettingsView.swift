@@ -24,6 +24,7 @@ struct SettingsView: View {
     @State private var gatewayPortText = ""
     @State private var gatewayPairingHost = ""
     @State private var gatewayShowQrOnLaunch = false
+    @State private var gatewaySemanticProfile: ControlHarnessSemanticProfile = .defaultValue
     @State private var iconSource: IconSource = .builtIn
     @State private var builtInIconSelection: Ghostty.MacOSIcon = .official
     @State private var customIconPath = AppIconSettings.defaultCustomIconPath
@@ -485,6 +486,21 @@ struct SettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(L10n.Settings.gatewaySemanticProfile)
+                        .font(.headline)
+                    Picker(L10n.Settings.gatewaySemanticProfile, selection: $gatewaySemanticProfile) {
+                        Text(L10n.Settings.gatewaySemanticProfileGeneric).tag(ControlHarnessSemanticProfile.generic)
+                        Text(L10n.Settings.gatewaySemanticProfileCodex).tag(ControlHarnessSemanticProfile.codex)
+                        Text(L10n.Settings.gatewaySemanticProfileClaudeCode).tag(ControlHarnessSemanticProfile.claudeCode)
+                    }
+                    .pickerStyle(.segmented)
+                    Text(L10n.Settings.gatewaySemanticProfileHelp)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 VStack(alignment: .leading, spacing: 6) {
                     Text(L10n.Settings.gatewayStatus)
                         .font(.headline)
@@ -526,6 +542,7 @@ struct SettingsView: View {
         gatewayPortText = String(settings.listenPort)
         gatewayPairingHost = settings.pairingAdvertiseHost
         gatewayShowQrOnLaunch = settings.showPairingQrOnLaunch
+        gatewaySemanticProfile = settings.semanticProfileValue
     }
 
     private func syncIconForm(clearFeedback: Bool) {
@@ -647,7 +664,8 @@ struct SettingsView: View {
             listenHost: gatewayListenHost,
             listenPort: parsedPort,
             pairingAdvertiseHost: gatewayPairingHost,
-            showPairingQrOnLaunch: gatewayShowQrOnLaunch
+            showPairingQrOnLaunch: gatewayShowQrOnLaunch,
+            semanticProfile: gatewaySemanticProfile.rawValue
         ).sanitized()
     }
 }

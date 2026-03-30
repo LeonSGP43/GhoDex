@@ -1805,30 +1805,8 @@ final class ControlHarnessCore {
             resourceID: terminalIDString,
             currentGeneration: generation
         )
-        guard let surface = surfaceResolver(terminalID) else {
-            if appDelegate == nil {
-                throw ControlHarnessCoreError.appUnavailable
-            }
-            throw ControlHarnessCoreError.terminalNotFound(terminalID.uuidString)
-        }
 
         let scope = request.scope ?? "visible"
-        let mode = request.mode ?? "snapshot"
-        let observedWriteID = request.readAfterWriteID?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let forceFreshRead = observedWriteID?.isEmpty == false
-            || mode == "delta"
-            || request.sinceFrameID != nil
-        let read = try resolveTerminalRead(
-            terminalUUID: terminalID,
-            terminalID: terminalIDString,
-            scope: scope,
-            surface: surface,
-            forceFresh: forceFreshRead
-        )
-        let content = read.content
-        let consistency = read.consistency
-        let cacheAgeMs = read.cacheAgeMs
-
         switch scope {
         case "visible", "screen":
             break
@@ -1836,6 +1814,7 @@ final class ControlHarnessCore {
             throw ControlHarnessCoreError.invalidArgument("Unsupported read scope: \(scope)")
         }
 
+        let mode = request.mode ?? "snapshot"
         switch mode {
         case "snapshot", "delta":
             break
@@ -1843,10 +1822,22 @@ final class ControlHarnessCore {
             throw ControlHarnessCoreError.invalidArgument("Unsupported read mode: \(mode)")
         }
 
-        let frame = readStore.capture(terminalID: terminalIDString, scope: scope, content: content)
-        let delta = readStore.delta(from: request.sinceFrameID, to: frame.frameID)
+        let observedWriteID = request.readAfterWriteID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let forceFreshRead = observedWriteID?.isEmpty == false
+            || mode == "delta"
+            || request.sinceFrameID != nil
+        let snapshot = try captureTerminalSnapshot(
+            terminalID: terminalID,
+            terminalIDString: terminalIDString,
+            scope: scope,
+            forceFresh: forceFreshRead
+        )
+
+        // read-terminal is now a compatibility adapter over the V2 snapshot
+        // capture path so V2 remains the single read source of truth.
+        let delta = readStore.delta(from: request.sinceFrameID, to: snapshot.frame.frameID)
         let window = readStore.window(
-            frameID: frame.frameID,
+            frameID: snapshot.frame.frameID,
             cursor: request.cursor,
             maxLines: request.maxLines,
             maxChars: request.maxChars
@@ -1881,7 +1872,7 @@ final class ControlHarnessCore {
                 terminalID: terminalIDString,
                 scope: scope,
                 currentSequence: eventHub.currentSequence(),
-                frame: frame,
+                frame: snapshot.frame,
                 delta: delta
             )
         } else {
@@ -1894,12 +1885,12 @@ final class ControlHarnessCore {
             scope: scope,
             mode: mode,
             contentKind: contentKind,
-            consistency: consistency,
-            capturedAt: Self.iso8601(read.capturedAt),
-            cacheAgeMs: cacheAgeMs,
+            consistency: snapshot.consistency,
+            capturedAt: Self.iso8601(snapshot.capturedAt),
+            cacheAgeMs: snapshot.cacheAgeMs,
             lastSequence: eventHub.currentSequence(),
-            frameID: frame.frameID,
-            parentFrameID: frame.parentFrameID,
+            frameID: snapshot.frame.frameID,
+            parentFrameID: snapshot.frame.parentFrameID,
             hasChanges: delta.hasChanges,
             deltaKind: delta.kind,
             deltaText: delta.text.isEmpty ? nil : Self.applyTextBudget(delta.text, maxChars: request.maxChars),
@@ -1964,13 +1955,6 @@ final class ControlHarnessCore {
             currentGeneration: generation
         )
 
-        guard let surface = surfaceResolver(terminalID) else {
-            if appDelegate == nil {
-                throw ControlHarnessCoreError.appUnavailable
-            }
-            throw ControlHarnessCoreError.terminalNotFound(terminalID.uuidString)
-        }
-
         let scope = request.scope ?? "visible"
         switch scope {
         case "visible", "screen":
@@ -1979,44 +1963,81 @@ final class ControlHarnessCore {
             throw ControlHarnessCoreError.invalidArgument("Unsupported read scope: \(scope)")
         }
 
-        let read = try resolveTerminalRead(
-            terminalUUID: terminalID,
-            terminalID: terminalIDString,
+        let snapshot = try captureTerminalSnapshot(
+            terminalID: terminalID,
+            terminalIDString: terminalIDString,
             scope: scope,
-            surface: surface,
             forceFresh: false
         )
-        let frame = readStore.capture(terminalID: terminalIDString, scope: scope, content: read.content)
 
         return .init(
             terminalID: terminalIDString,
             generation: generation,
             scope: scope,
             snapshotFormat: "ansi_text",
-            capturedAt: Self.iso8601(read.capturedAt),
-            cacheAgeMs: read.cacheAgeMs,
-            frameID: frame.frameID,
-            parentFrameID: frame.parentFrameID,
-            content: read.content
+            capturedAt: Self.iso8601(snapshot.capturedAt),
+            cacheAgeMs: snapshot.cacheAgeMs,
+            frameID: snapshot.frame.frameID,
+            parentFrameID: snapshot.frame.parentFrameID,
+            content: snapshot.content
         )
     }
 
     private func terminalSemanticV2(from request: ControlHarnessRequest) throws -> ControlTerminalSemanticV2Result {
         let snapshot = try terminalSnapshotV2(from: request)
-        let logicalLines = controlHarnessSemanticLines(from: snapshot.content)
-        let promptDetected = logicalLines.contains { line in
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.hasPrefix("$") || trimmed.hasPrefix("#") || trimmed.hasPrefix("PS ")
-        }
+        let projection = controlHarnessSemanticProjection(
+            from: snapshot.content,
+            profile: currentSemanticProfile()
+        )
 
         return .init(
             terminalID: snapshot.terminalID,
             generation: snapshot.generation,
             scope: snapshot.scope,
             extractedAt: snapshot.capturedAt,
-            logicalLines: logicalLines,
-            exactText: snapshot.content,
-            promptDetected: promptDetected
+            logicalLines: projection.logicalLines,
+            exactText: projection.exactText,
+            promptDetected: projection.promptDetected
+        )
+    }
+
+    private func currentSemanticProfile() -> ControlHarnessSemanticProfile {
+        appDelegate?.controlHarnessGatewaySettings.semanticProfileValue ?? .defaultValue
+    }
+
+    private func captureTerminalSnapshot(
+        terminalID: UUID,
+        terminalIDString: String,
+        scope: String,
+        forceFresh: Bool
+    ) throws -> (
+        content: String,
+        consistency: String,
+        cacheAgeMs: Int,
+        capturedAt: Date,
+        frame: ControlHarnessReadFrameSnapshot
+    ) {
+        guard let surface = surfaceResolver(terminalID) else {
+            if appDelegate == nil {
+                throw ControlHarnessCoreError.appUnavailable
+            }
+            throw ControlHarnessCoreError.terminalNotFound(terminalID.uuidString)
+        }
+
+        let read = try resolveTerminalRead(
+            terminalUUID: terminalID,
+            terminalID: terminalIDString,
+            scope: scope,
+            surface: surface,
+            forceFresh: forceFresh
+        )
+        let frame = readStore.capture(terminalID: terminalIDString, scope: scope, content: read.content)
+        return (
+            content: read.content,
+            consistency: read.consistency,
+            cacheAgeMs: read.cacheAgeMs,
+            capturedAt: read.capturedAt,
+            frame: frame
         )
     }
 

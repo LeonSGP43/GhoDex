@@ -26,7 +26,8 @@ struct ControlHarnessGatewayAppSettingsTests {
             listenHost: "192.168.3.145",
             listenPort: 29527,
             pairingAdvertiseHost: "desktop.local",
-            showPairingQrOnLaunch: true
+            showPairingQrOnLaunch: true,
+            semanticProfile: ControlHarnessSemanticProfile.codex.rawValue
         )
         saved.save(userDefaults: userDefaults, scope: scopeA)
 
@@ -58,6 +59,7 @@ struct ControlHarnessGatewayAppSettingsTests {
         #expect(loaded.listenPort == 19527)
         #expect(loaded.pairingAdvertiseHost == "legacy.local")
         #expect(loaded.showPairingQrOnLaunch == true)
+        #expect(loaded.semanticProfile == ControlHarnessSemanticProfile.generic.rawValue)
     }
 
     @Test func resolvedConfigurationPrefersScopedSettingsOverEnvironment() {
@@ -66,7 +68,8 @@ struct ControlHarnessGatewayAppSettingsTests {
             listenHost: "0.0.0.0",
             listenPort: 29527,
             pairingAdvertiseHost: "",
-            showPairingQrOnLaunch: false
+            showPairingQrOnLaunch: false,
+            semanticProfile: ControlHarnessSemanticProfile.claudeCode.rawValue
         )
 
         let configuration = settings.resolvedConfiguration(environment: [
@@ -78,5 +81,6 @@ struct ControlHarnessGatewayAppSettingsTests {
         #expect(configuration.isEnabled == true)
         #expect(configuration.listenHost == "0.0.0.0")
         #expect(configuration.listenPort == 29527)
+        #expect(configuration.semanticProfile == .claudeCode)
     }
 }
