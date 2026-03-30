@@ -51,6 +51,7 @@ class AppDelegate: NSObject,
     @IBOutlet private var menuOpenConfig: NSMenuItem?
     @IBOutlet private var menuSettingsPanel: NSMenuItem?
     private var menuTodoWorkspace: NSMenuItem?
+    private var menuWorkspaceMapMode: NSMenuItem?
     @IBOutlet private var menuReloadConfig: NSMenuItem?
     @IBOutlet private var menuSecureInput: NSMenuItem?
     @IBOutlet private var menuQuit: NSMenuItem?
@@ -851,7 +852,9 @@ class AppDelegate: NSObject,
     /// to track our runtime language selection.
     private func setupMenuLocalization() {
         installTodoWorkspaceMenuItemIfNeeded()
+        installWorkspaceMapMenuItemIfNeeded()
         menuTodoWorkspace?.title = L10n.SSHConnections.todoPanelTitle
+        menuWorkspaceMapMode?.title = AppLocalization.localizedText("Workspace Map")
         menuSaveWorkspace?.title = L10n.AITerminalManager.saveWorkspaceAction
     }
 
@@ -1394,6 +1397,7 @@ class AppDelegate: NSObject,
         self.menuOpenConfig?.setImageIfDesired(systemSymbolName: "gear")
         self.menuSettingsPanel?.setImageIfDesired(systemSymbolName: "slider.horizontal.3")
         self.menuTodoWorkspace?.setImageIfDesired(systemSymbolName: "checklist")
+        self.menuWorkspaceMapMode?.setImageIfDesired(systemSymbolName: "map")
         self.menuReloadConfig?.setImageIfDesired(systemSymbolName: "arrow.trianglehead.2.clockwise.rotate.90")
         self.menuSecureInput?.setImageIfDesired(systemSymbolName: "lock.display")
         self.menuNewWindow?.setImageIfDesired(systemSymbolName: "macwindow.badge.plus")
@@ -1538,6 +1542,31 @@ class AppDelegate: NSObject,
         let insertionIndex = menu.index(of: settingsItem) + 1
         menu.insertItem(item, at: max(insertionIndex, 0))
         menuTodoWorkspace = item
+    }
+
+    private func installWorkspaceMapMenuItemIfNeeded() {
+        guard menuWorkspaceMapMode == nil,
+              let fileMenu = menuNewTab?.menu ?? menuSaveWorkspace?.menu else { return }
+
+        let item = NSMenuItem(
+            title: AppLocalization.localizedText("Workspace Map"),
+            action: #selector(toggleWorkspaceMapMode(_:)),
+            keyEquivalent: "m"
+        )
+        item.target = self
+        item.keyEquivalentModifierMask = [.command, .option]
+
+        let insertionIndex: Int
+        if let newPaneItem = fileMenu.items.first(where: { $0.action == #selector(newPaneTab(_:)) }) {
+            insertionIndex = fileMenu.index(of: newPaneItem) + 1
+        } else if let saveWorkspaceItem = menuSaveWorkspace, fileMenu.index(of: saveWorkspaceItem) >= 0 {
+            insertionIndex = fileMenu.index(of: saveWorkspaceItem)
+        } else {
+            insertionIndex = min(4, fileMenu.items.count)
+        }
+
+        fileMenu.insertItem(item, at: max(insertionIndex, 0))
+        menuWorkspaceMapMode = item
     }
 
     // MARK: Notifications and Events
@@ -2342,6 +2371,28 @@ class AppDelegate: NSObject,
         activeTerminalController()?.newPaneTab(sender)
     }
 
+    @IBAction func toggleWorkspaceMapMode(_ sender: Any?) {
+        let preferredWindow = selectedTopLevelWindow(for: NSApp.keyWindow)
+            ?? selectedTopLevelWindow(for: TerminalController.preferredParent?.window)
+        let activeWorkspaceMapController = activeTopLevelTabController(preferred: preferredWindow) as? WorkspaceMapController
+        let existingController = activeWorkspaceMapController == nil
+            ? existingWorkspaceMapController(preferred: preferredWindow)
+            : nil
+
+        switch Self.resolveWorkspaceMapModeToggleAction(
+            isCurrentWorkspaceMapActive: activeWorkspaceMapController != nil,
+            hasExistingWorkspaceMap: existingController != nil
+        ) {
+        case .closeActive:
+            activeWorkspaceMapController?.closeTabImmediately(registerRedo: true)
+        case .focusExisting:
+            guard let existingController else { return }
+            focusWorkspaceMapController(existingController)
+        case .openNew:
+            _ = WorkspaceMapController.newTab(ghostty, from: preferredWindow)
+        }
+    }
+
     @IBAction func saveWorkspace(_ sender: Any?) {
         guard let controller = saveWorkspaceController(for: sender) else { return }
         presentSaveWorkspacePrompt(for: controller)
@@ -2471,20 +2522,13 @@ class AppDelegate: NSObject,
                 ?? self.selectedTopLevelWindow(for: NSApp.keyWindow)
             _ = BrowserTabController.newTab(self.ghostty, from: parentWindow)
         }
-        let workspaceMapAction = { [weak self] in
-            guard let self else { return }
-            let parentWindow = self.selectedTopLevelWindow(for: window)
-                ?? self.selectedTopLevelWindow(for: NSApp.keyWindow)
-            _ = WorkspaceMapController.newTab(self.ghostty, from: parentWindow)
-        }
 
         if let window {
             newTabPickerController.show(
                 relativeTo: window,
                 mode: .topLevel,
                 includeBrowserEntry: true,
-                onOpenBrowser: browserAction,
-                onOpenWorkspaceMap: workspaceMapAction
+                onOpenBrowser: browserAction
             )
             return
         }
@@ -2493,8 +2537,7 @@ class AppDelegate: NSObject,
             relativeTo: nil,
             mode: .topLevel,
             includeBrowserEntry: true,
-            onOpenBrowser: browserAction,
-            onOpenWorkspaceMap: workspaceMapAction
+            onOpenBrowser: browserAction
         )
     }
 
@@ -2569,6 +2612,36 @@ class AppDelegate: NSObject,
 
     private func selectedTopLevelWindow(for window: NSWindow?) -> NSWindow? {
         window?.tabGroup?.selectedWindow ?? window
+    }
+
+    private func existingWorkspaceMapController(preferred window: NSWindow?) -> WorkspaceMapController? {
+        if let workspaceMapController = selectedTopLevelTabController(for: window) as? WorkspaceMapController {
+            return workspaceMapController
+        }
+
+        if let groupController = window?.tabGroup?.windows.compactMap({ $0.windowController as? WorkspaceMapController }).first {
+            return groupController
+        }
+
+        if let keyController = selectedTopLevelTabController(for: NSApp.keyWindow) as? WorkspaceMapController {
+            return keyController
+        }
+
+        if let mainController = selectedTopLevelTabController(for: NSApp.mainWindow) as? WorkspaceMapController {
+            return mainController
+        }
+
+        return WorkspaceMapController.all.first
+    }
+
+    private func focusWorkspaceMapController(_ controller: WorkspaceMapController) {
+        guard let window = controller.window else { return }
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
+        controller.showWindow(nil)
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func activePaneSurface(
@@ -2786,6 +2859,10 @@ extension AppDelegate: NSMenuItemValidation {
         case #selector(saveWorkspace(_:)):
             return saveWorkspaceController(for: item) != nil
 
+        case #selector(toggleWorkspaceMapMode(_:)):
+            item.state = activeTopLevelTabController(preferred: nil) is WorkspaceMapController ? .on : .off
+            return true
+
         case #selector(undo(_:)):
             if undoManager.canUndo {
                 item.title = L10n.App.undo(undoManager.undoActionName)
@@ -2809,6 +2886,27 @@ extension AppDelegate: NSMenuItemValidation {
 }
 
 extension AppDelegate {
+    enum WorkspaceMapModeToggleAction: Equatable {
+        case closeActive
+        case focusExisting
+        case openNew
+    }
+
+    static func resolveWorkspaceMapModeToggleAction(
+        isCurrentWorkspaceMapActive: Bool,
+        hasExistingWorkspaceMap: Bool
+    ) -> WorkspaceMapModeToggleAction {
+        if isCurrentWorkspaceMapActive {
+            return .closeActive
+        }
+
+        if hasExistingWorkspaceMap {
+            return .focusExisting
+        }
+
+        return .openNew
+    }
+
     private static let browserSettingsStartMarker = "# >>> GhoDex browser settings >>>"
     private static let browserSettingsEndMarker = "# <<< GhoDex browser settings <<<"
     private static let iconSettingsStartMarker = "# >>> GhoDex app icon settings >>>"
