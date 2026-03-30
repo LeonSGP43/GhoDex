@@ -1,14 +1,14 @@
 import Foundation
 
 final class ControlHarnessGatewaySubscription {
-    private weak var subscriptionSession: ControlHarnessEventSubscriptionSession?
+    private weak var subscriptionSession: (any ControlHarnessSubscriptionSession)?
     private let queue = DispatchQueue(label: "com.leongong.ghodex.control-harness.gateway.subscription")
 
     private var subscriberID: UUID?
     private var closed = false
 
     init(
-        subscriptionSession: ControlHarnessEventSubscriptionSession?,
+        subscriptionSession: (any ControlHarnessSubscriptionSession)?,
         subscriberID: UUID?
     ) {
         self.subscriptionSession = subscriptionSession
@@ -16,7 +16,7 @@ final class ControlHarnessGatewaySubscription {
     }
 
     func close() {
-        let payload = queue.sync { () -> (ControlHarnessEventSubscriptionSession?, UUID?) in
+        let payload = queue.sync { () -> ((any ControlHarnessSubscriptionSession)?, UUID?) in
             guard !closed else { return (nil, nil) }
             closed = true
             let payload = (subscriptionSession, subscriberID)
