@@ -242,6 +242,8 @@ extension Ghostty {
         // The cached contents of the screen.
         private(set) var cachedScreenContents: CachedValue<String>
         private(set) var cachedVisibleContents: CachedValue<String>
+        private(set) var cachedControlHarnessScreenContents: CachedValue<String>
+        private(set) var cachedControlHarnessVisibleContents: CachedValue<String>
 
         /// Event monitor (see individual events for why)
         private var eventMonitor: Any?
@@ -265,6 +267,8 @@ extension Ghostty {
             // fix at some point.
             self.cachedScreenContents = .init(duration: .milliseconds(500)) { "" }
             self.cachedVisibleContents = self.cachedScreenContents
+            self.cachedControlHarnessScreenContents = self.cachedScreenContents
+            self.cachedControlHarnessVisibleContents = self.cachedScreenContents
 
             // Initialize with some default frame size. The important thing is that this
             // is non-zero so that our layer bounds are non-zero so that our renderer
@@ -311,6 +315,14 @@ extension Ghostty {
                 guard ghostty_surface_read_text(surface, sel, &text) else { return "" }
                 defer { ghostty_surface_free_text(surface, &text) }
                 return String(cString: text.text)
+            }
+            cachedControlHarnessScreenContents = .init(duration: .milliseconds(500)) { [weak self] in
+                guard let self else { return "" }
+                return self.readControlHarnessText(tag: GHOSTTY_POINT_SCREEN)
+            }
+            cachedControlHarnessVisibleContents = .init(duration: .milliseconds(500)) { [weak self] in
+                guard let self else { return "" }
+                return self.readControlHarnessText(tag: GHOSTTY_POINT_VIEWPORT)
             }
 
             // Set a timer to show the ghost emoji after 500ms if no title is set
@@ -2617,6 +2629,24 @@ extension Ghostty.SurfaceView {
     }
 
     @MainActor
+    func controlHarnessVisibleText(refresh: Bool = false) -> (content: String, cacheAgeMs: Int) {
+        if refresh {
+            return (readControlHarnessText(tag: GHOSTTY_POINT_VIEWPORT), 0)
+        }
+        let content = cachedControlHarnessVisibleContents.get()
+        return (content, cachedControlHarnessVisibleContents.cacheAgeMilliseconds() ?? 0)
+    }
+
+    @MainActor
+    func controlHarnessScreenText(refresh: Bool = false) -> (content: String, cacheAgeMs: Int) {
+        if refresh {
+            return (readControlHarnessText(tag: GHOSTTY_POINT_SCREEN), 0)
+        }
+        let content = cachedControlHarnessScreenContents.get()
+        return (content, cachedControlHarnessScreenContents.cacheAgeMilliseconds() ?? 0)
+    }
+
+    @MainActor
     func aiManagerSendText(_ text: String) {
         surfaceModel?.sendText(text)
     }
@@ -2693,6 +2723,34 @@ extension Ghostty.SurfaceView {
         guard ghostty_surface_read_text(surface, selection, &text) else { return "" }
         defer { ghostty_surface_free_text(surface, &text) }
         return String(cString: text.text)
+    }
+
+    @MainActor
+    private func readControlHarnessText(tag: ghostty_point_tag_e) -> String {
+        guard let surface else { return "" }
+        var text = ghostty_text_s()
+        let selection = ghostty_selection_s(
+            top_left: ghostty_point_s(
+                tag: tag,
+                coord: GHOSTTY_POINT_COORD_TOP_LEFT,
+                x: 0,
+                y: 0
+            ),
+            bottom_right: ghostty_point_s(
+                tag: tag,
+                coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
+                x: 0,
+                y: 0
+            ),
+            rectangle: false
+        )
+        guard ghostty_surface_read_text_vt(surface, selection, &text) else { return "" }
+        defer { ghostty_surface_free_text(surface, &text) }
+        return normalizeControlHarnessText(String(cString: text.text))
+    }
+
+    private func normalizeControlHarnessText(_ text: String) -> String {
+        text.replacingOccurrences(of: "\r\n", with: "\n")
     }
 }
 

@@ -1606,7 +1606,7 @@ pub const CAPI = struct {
         const core_sel = core_surface.io.terminal.screens.active.selection orelse return false;
 
         // Read the text from the selection.
-        return readTextLocked(surface, core_sel, result);
+        return readTextLocked(surface, core_sel, result, .plain);
     }
 
     /// Read some arbitrary text from the surface.
@@ -1626,20 +1626,39 @@ pub const CAPI = struct {
             surface.core_surface.renderer_state.terminal.screens.active,
         ) orelse return false;
 
-        return readTextLocked(surface, core_sel, result);
+        return readTextLocked(surface, core_sel, result, .plain);
+    }
+
+    /// Same as ghostty_surface_read_text but preserves VT/ANSI styling
+    /// sequences so consumers can render colors and text attributes.
+    export fn ghostty_surface_read_text_vt(
+        surface: *Surface,
+        sel: Selection,
+        result: *Text,
+    ) bool {
+        surface.core_surface.renderer_state.mutex.lock();
+        defer surface.core_surface.renderer_state.mutex.unlock();
+
+        const core_sel = sel.core(
+            surface.core_surface.renderer_state.terminal.screens.active,
+        ) orelse return false;
+
+        return readTextLocked(surface, core_sel, result, .vt);
     }
 
     fn readTextLocked(
         surface: *Surface,
         core_sel: terminal.Selection,
         result: *Text,
+        format: terminal.formatter.Format,
     ) bool {
         const core_surface = &surface.core_surface;
 
         // Get our text directly from the core surface.
-        const text = core_surface.dumpTextLocked(
+        const text = core_surface.dumpTextLockedWithFormat(
             global.alloc,
             core_sel,
+            format,
         ) catch |err| {
             log.warn("error reading text err={}", .{err});
             return false;
@@ -2189,7 +2208,7 @@ pub const CAPI = struct {
             };
 
             // Read the selection
-            return readTextLocked(ptr, sel, result);
+            return readTextLocked(ptr, sel, result, .plain);
         }
 
         export fn ghostty_inspector_metal_init(ptr: *Inspector, device: objc.c.id) bool {

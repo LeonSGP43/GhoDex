@@ -9,11 +9,11 @@ protocol ControlHarnessReadableSurface: AnyObject {
 
 extension Ghostty.SurfaceView: ControlHarnessReadableSurface {
     func controlHarnessReadVisibleText(refresh: Bool) -> (content: String, cacheAgeMs: Int) {
-        aiManagerVisibleText(refresh: refresh)
+        controlHarnessVisibleText(refresh: refresh)
     }
 
     func controlHarnessReadScreenText(refresh: Bool) -> (content: String, cacheAgeMs: Int) {
-        aiManagerScreenText(refresh: refresh)
+        controlHarnessScreenText(refresh: refresh)
     }
 }
 

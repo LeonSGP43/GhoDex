@@ -135,6 +135,22 @@ Verified with:
 - `cd happy-client && yarn test sources/ghodex/terminal/model.spec.ts sources/ghodex/terminalTransport.spec.ts sources/ghodex/gateway.spec.ts sources/ghodex/transport.spec.ts`
 - `cd happy-client && yarn typecheck`
 
+Post-completion correction on 2026-03-27:
+
+- root-caused the "all white text" field issue to desktop read output being plain-text-only in the control-harness sampling path, which stripped terminal styling before mobile parsing
+- added a VT-preserving desktop read path (`ghostty_surface_read_text_vt`) and switched control-harness readable-surface sampling to that path
+- normalized VT newline output from `\r\n` to `\n` before `read-terminal` framing so row indexes stay aligned with mobile row rendering
+- added a ControlHarness regression test that locks ANSI row preservation across `snapshot` -> `delta` reads
+- rebuilt `macos/GhoDexKit.xcframework` so the new VT read symbol is available to the macOS app target
+
+Verified with:
+
+- `cd happy-client && yarn test sources/ghodex/terminal/model.spec.ts sources/ghodex/terminalTransport.spec.ts sources/ghodex/gateway.spec.ts sources/ghodex/transport.spec.ts`
+- `cd happy-client && yarn typecheck`
+- `zig build -Demit-xcframework=true -Demit-macos-app=false`
+- `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -derivedDataPath /tmp/ghodex-ansi-read-deriveddata -destination 'platform=macOS' -skip-testing:GhosttyUITests CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build-for-testing`
+- `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -derivedDataPath /tmp/ghodex-ansi-read-deriveddata -destination 'platform=macOS' -skip-testing:GhosttyUITests CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO -only-testing:GhosttyTests/ControlHarnessTests/readTerminalDeltaPreservesCompleteChangedRowsWhenMaxLinesIsSmall -only-testing:GhosttyTests/ControlHarnessTests/readTerminalDeltaPreservesAnsiRowsForMobileRenderer test-without-building`
+
 ## Decision Trail
 
 The narrowest coherent renderer upgrade is row-based parsing plus a list viewport.
