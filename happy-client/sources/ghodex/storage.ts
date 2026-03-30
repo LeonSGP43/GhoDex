@@ -116,7 +116,12 @@ async function setStoredValue(value: string): Promise<void> {
         localStorage.setItem(STORAGE_KEY, value);
         return;
     }
-    await SecureStore.setItemAsync(STORAGE_KEY, value);
+    await Promise.race([
+        SecureStore.setItemAsync(STORAGE_KEY, value),
+        delay(STORED_SESSION_TIMEOUT_MS).then(() => {
+            console.warn(`Timed out persisting stored GhoDex session after ${STORED_SESSION_TIMEOUT_MS}ms`);
+        }),
+    ]);
 }
 
 function clearStoredSessionBinding(session: StoredSession): StoredSession {
@@ -149,7 +154,10 @@ export async function loadStoredSession(): Promise<StoredSession> {
         const nextSession = stored ? sanitizeStoredSession(JSON.parse(stored)) : cloneDefaultSession();
         cachedSession = cloneStoredSession(nextSession);
         if (!stored) {
-            await setStoredValue(JSON.stringify(nextSession));
+            // Never block app bootstrap on first-write persistence.
+            void setStoredValue(JSON.stringify(nextSession)).catch((error) => {
+                console.warn('Failed to persist default GhoDex session state', error);
+            });
         }
         return cloneStoredSession(nextSession);
     } catch (error) {
