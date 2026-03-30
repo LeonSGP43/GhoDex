@@ -4,7 +4,7 @@ import AppKit
 
 @MainActor
 final class WorkspaceMapLiveCanvasContentProviderTests: XCTestCase {
-    func testAcquireLeaseUsesMirrorWithoutMutatingSourceWindowOwnership() {
+    func testAcquireLeaseUsesInteractiveMirrorWithoutMutatingSourceWindowOwnership() {
         let sourceWindow = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 880, height: 560),
             styleMask: [.titled],
@@ -23,8 +23,8 @@ final class WorkspaceMapLiveCanvasContentProviderTests: XCTestCase {
         case .lease(let lease):
             XCTAssertTrue(sourceWindow.contentView === sourceView)
             XCTAssertFalse(lease.borrowedView === sourceView)
-            guard let mirror = lease.borrowedView as? WorkspaceMapRuntimeLiveMirrorView else {
-                XCTFail("Expected runtime mirror lease view")
+            guard let mirror = lease.borrowedView as? WorkspaceMapRuntimeInteractiveMirrorView else {
+                XCTFail("Expected runtime interactive mirror lease view")
                 return
             }
             XCTAssertTrue(mirror.isMirroringActive)
@@ -45,8 +45,8 @@ final class WorkspaceMapLiveCanvasContentProviderTests: XCTestCase {
         let result = provider.acquireLease(for: makeTerminalGroup())
         switch result {
         case .lease(let lease):
-            guard let mirror = lease.borrowedView as? WorkspaceMapRuntimeLiveMirrorView else {
-                XCTFail("Expected runtime mirror lease view")
+            guard let mirror = lease.borrowedView as? WorkspaceMapRuntimeInteractiveMirrorView else {
+                XCTFail("Expected runtime interactive mirror lease view")
                 return
             }
             XCTAssertTrue(mirror.isMirroringActive)

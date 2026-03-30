@@ -9,6 +9,7 @@ final class WorkspaceMapViewModel: ObservableObject {
     @Published private(set) var layout: WorkspaceMapLayoutSnapshot
     @Published private(set) var performance = WorkspaceMapPerformanceSnapshot.empty
     @Published private(set) var lastCommandResult: WorkspaceMapCommandResult?
+    @Published private(set) var isCanvasPresentationActive = false
 
     private let projectionSource: (() -> WorkspaceMapSnapshot)?
     private let runtimeStateSource: (@MainActor () -> WorkspaceMapRuntimeState)?
@@ -237,6 +238,11 @@ final class WorkspaceMapViewModel: ObservableObject {
         }
     }
 
+    func setCanvasPresentationActive(_ isActive: Bool) {
+        guard isCanvasPresentationActive != isActive else { return }
+        isCanvasPresentationActive = isActive
+    }
+
     func groupPosition(for groupID: WorkspaceMapEntityID) -> CGPoint {
         guard let group = layout.groups.first(where: { $0.id == groupID }) else {
             return .init(x: 160, y: 120)
@@ -370,186 +376,19 @@ final class WorkspaceMapViewModel: ObservableObject {
 
 struct WorkspaceMapView: View {
     @ObservedObject var model: WorkspaceMapViewModel
-
-    @State private var groupDragStart: [WorkspaceMapEntityID: CGPoint] = [:]
-    @State private var canvasPanStart: CGSize?
-    @State private var magnificationStartZoom: CGFloat?
+    let contentProvider: WorkspaceMapLiveCanvasContentProvider
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Text(AppLocalization.localizedText("Workspace Map"))
-                    .font(.title2.weight(.semibold))
-                Spacer()
-
-                Button(AppLocalization.localizedText("Refresh")) {
-                    model.refresh()
-                }
-                .buttonStyle(.bordered)
-
-                Button(AppLocalization.localizedText("Auto Layout")) {
-                    model.autoLayoutGroups()
-                }
-                .buttonStyle(.bordered)
-
-                Button("-") {
-                    model.adjustZoom(delta: -0.1)
-                }
-                .buttonStyle(.bordered)
-
-                Text(String(format: "%.2fx", model.zoomScale))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 54, alignment: .center)
-
-                Button("+") {
-                    model.adjustZoom(delta: 0.1)
-                }
-                .buttonStyle(.bordered)
-
-                Button(AppLocalization.localizedText("Reset View")) {
-                    model.resetViewport()
-                }
-                .buttonStyle(.bordered)
-            }
-
-            Text(AppLocalization.localizedText("Projection-only v1 map. Runtime remains source of truth; commands route through gateway only."))
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            Text(
-                String(
-                    format: "p95 snapshot %.2fms | p99 snapshot %.2fms | p95 command %.2fms | cadence %.2f/s | spikes %d | fail-rate %.2f | gate %@",
-                    model.performance.snapshotBuildP95MS,
-                    model.performance.snapshotBuildP99MS,
-                    model.performance.commandLatencyP95MS,
-                    model.performance.publishCadencePerSecond,
-                    model.performance.mainThreadSpikeCount,
-                    model.performance.commandFailureRate,
-                    model.performance.gate.rawValue
-                )
-            )
-            .font(.caption.monospacedDigit())
-            .foregroundStyle(model.performance.gate == .pass ? .secondary : Color.red)
-
-            if !model.performance.workloadResults.isEmpty {
-                Text(
-                    model.performance.workloadResults
-                        .map { "\($0.workload.displayName)=\($0.status.rawValue)" }
-                        .joined(separator: " | ")
-                )
-                .font(.caption2.monospaced())
-                .foregroundStyle(
-                    model.performance.workloadResults.allSatisfy { $0.status == .pass } ? .secondary : Color.red
-                )
-            }
-
-            if let lastCommandResult = model.lastCommandResult {
-                Text(lastCommandResult.message)
-                    .font(.caption)
-                    .foregroundStyle(lastCommandResult.status == .executed ? Color.secondary : Color.red)
-                    .lineLimit(2)
-            }
-
+        ZStack {
+            WorkspaceMapLiveCanvasView(model: model, contentProvider: contentProvider)
             if model.snapshot.groups.isEmpty {
-                Spacer()
                 Text(AppLocalization.localizedText("No top-level tabs available."))
                     .foregroundStyle(.secondary)
-                Spacer()
-            } else {
-                GeometryReader { _ in
-                    ZStack(alignment: .topLeading) {
-                        WorkspaceMapCanvasBackground()
-
-                        ZStack(alignment: .topLeading) {
-                            ForEach(model.snapshot.groups) { group in
-                                WorkspaceMapGroupCard(
-                                    group: group,
-                                    isCollapsed: model.isGroupCollapsed(group.id),
-                                    onToggleCollapse: { model.toggleGroupCollapsed(group.id) },
-                                    onFocus: { model.execute(.focusTopLevelGroup, targetID: group.id) },
-                                    onRename: { model.execute(.renameTopLevelGroup, targetID: group.id) },
-                                    onClose: { model.execute(.closeTopLevelGroup, targetID: group.id) },
-                                    onJumpToPaneTab: { paneTabID in
-                                        model.execute(.jumpToTerminalPaneTab, targetID: paneTabID)
-                                    }
-                                )
-                                .position(model.groupPosition(for: group.id))
-                                .highPriorityGesture(groupDragGesture(for: group.id))
-                            }
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        .scaleEffect(model.zoomScale, anchor: .topLeading)
-                        .offset(model.viewportOffset)
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
-                    )
-                    .contentShape(Rectangle())
-                    .gesture(canvasPanGesture())
-                    .simultaneousGesture(canvasMagnificationGesture())
-                }
             }
         }
-        .padding(16)
         .onAppear {
             model.scheduleRefresh()
         }
-    }
-
-    private func canvasPanGesture() -> some Gesture {
-        DragGesture(minimumDistance: 4)
-            .onChanged { gesture in
-                let start = canvasPanStart ?? model.viewportOffset
-                if canvasPanStart == nil {
-                    canvasPanStart = start
-                }
-                model.setViewportOffset(
-                    CGSize(
-                        width: start.width + gesture.translation.width,
-                        height: start.height + gesture.translation.height
-                    )
-                )
-            }
-            .onEnded { _ in
-                canvasPanStart = nil
-            }
-    }
-
-    private func canvasMagnificationGesture() -> some Gesture {
-        MagnificationGesture()
-            .onChanged { value in
-                let start = magnificationStartZoom ?? model.zoomScale
-                if magnificationStartZoom == nil {
-                    magnificationStartZoom = start
-                }
-                model.setZoom(start * value)
-            }
-            .onEnded { _ in
-                magnificationStartZoom = nil
-            }
-    }
-
-    private func groupDragGesture(for groupID: WorkspaceMapEntityID) -> some Gesture {
-        DragGesture(minimumDistance: 2)
-            .onChanged { gesture in
-                let start = groupDragStart[groupID] ?? model.groupPosition(for: groupID)
-                if groupDragStart[groupID] == nil {
-                    groupDragStart[groupID] = start
-                }
-
-                let scale = max(model.zoomScale, 0.001)
-                let nextPoint = CGPoint(
-                    x: start.x + gesture.translation.width / scale,
-                    y: start.y + gesture.translation.height / scale
-                )
-                model.setGroupPosition(groupID, point: nextPoint)
-            }
-            .onEnded { _ in
-                groupDragStart[groupID] = nil
-            }
     }
 }
 
@@ -822,7 +661,9 @@ final class WorkspaceMapController: NSWindowController, NSWindowDelegate, TopLev
 
     private let ghostty: Ghostty.App
     private let viewModel = WorkspaceMapViewModel()
+    private let liveCanvasContentProvider: WorkspaceMapLiveCanvasContentProvider = WorkspaceMapRuntimeLiveCanvasContentProvider()
     private var windowLifecycleCancellables: Set<AnyCancellable> = []
+    private var windowContentConfigured = false
 
     var titleOverride: String? {
         didSet {
@@ -842,7 +683,7 @@ final class WorkspaceMapController: NSWindowController, NSWindowDelegate, TopLev
         window.tabbingMode = .preferred
         window.isRestorable = false
         super.init(window: window)
-        window.delegate = self
+        configureWindowIfNeeded()
     }
 
     @available(*, unavailable)
@@ -852,14 +693,13 @@ final class WorkspaceMapController: NSWindowController, NSWindowDelegate, TopLev
 
     override func windowDidLoad() {
         super.windowDidLoad()
-        guard let window else { return }
-        window.contentView = NSHostingView(rootView: WorkspaceMapView(model: viewModel))
-        applyWindowTitle()
-        setupWindowLifecycleRefresh()
+        configureWindowIfNeeded()
     }
 
     override func showWindow(_ sender: Any?) {
+        configureWindowIfNeeded()
         super.showWindow(sender)
+        viewModel.setCanvasPresentationActive(true)
         viewModel.scheduleRefresh()
         applyWindowTitle()
     }
@@ -891,7 +731,12 @@ final class WorkspaceMapController: NSWindowController, NSWindowDelegate, TopLev
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
+        viewModel.setCanvasPresentationActive(true)
         viewModel.scheduleRefresh()
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        viewModel.setCanvasPresentationActive(false)
     }
 
     static func newWindow(
@@ -959,12 +804,22 @@ final class WorkspaceMapController: NSWindowController, NSWindowDelegate, TopLev
         (window as? TerminalWindow)?.title = title
     }
 
+    private func configureWindowIfNeeded() {
+        guard !windowContentConfigured, let window else { return }
+        window.delegate = self
+        window.contentView = NSHostingView(rootView: WorkspaceMapView(model: viewModel, contentProvider: liveCanvasContentProvider))
+        windowContentConfigured = true
+        applyWindowTitle()
+        setupWindowLifecycleRefresh()
+    }
+
     private func setupWindowLifecycleRefresh() {
         windowLifecycleCancellables.removeAll()
 
         NotificationCenter.default.publisher(for: NSWindow.willCloseNotification, object: nil)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
+                self?.viewModel.setCanvasPresentationActive(false)
                 self?.viewModel.scheduleRefresh()
             }
             .store(in: &windowLifecycleCancellables)
