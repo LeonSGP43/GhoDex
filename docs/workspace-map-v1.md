@@ -6,6 +6,18 @@ Workspace Map is a top-level tab mode that projects all top-level terminal and b
 
 In v1, "infinite canvas" means the viewport pans and zooms over an unbounded logical coordinate space. Group cards are positioned by persisted logical coordinates instead of by a fixed backing frame.
 
+Entry policy (required):
+
+- Workspace Map is a mode switch, not a new-tab content type.
+- Entry points are menu/shortcut/settings toggle only.
+- New Tab Picker top-level and pane-child flows must not expose a Workspace Map creation entry.
+
+Rendering policy (v1 safety boundary):
+
+- Terminal groups are presented as non-owning mirrored surfaces in canvas mode.
+- Browser groups remain non-destructive summary/live-control nodes until a dedicated browser host abstraction is introduced.
+- Rendering paths must not mutate runtime `NSWindow`/`NSView` ownership outside the explicit command gateway.
+
 Deferred v2 scope:
 
 - split-tree structural editing

@@ -74,14 +74,14 @@
   - All contracts are value types (`Codable`, `Hashable`, `Sendable` where applicable).
   - ID parse/build paths are deterministic and test-covered.
 
-### WS1. Entry Integration (Top-Level Tab Mode)
+### WS1. Entry Integration (Mode Toggle Only)
 
-- [x] WS1-T1 Add `Workspace Map` item in top-level new-tab picker.
-- [x] WS1-T2 Ensure picker filtering/search exposes the map entry.
-- [x] WS1-T3 Restrict visibility to top-level picker (exclude pane-child mode).
-- [x] WS1-T4 Wire opening flow via `AppDelegate -> WorkspaceMapController.newTab`.
+- [x] WS1-T1 Expose `Workspace Map` only as a mode switch entrypoint (menu/shortcut/settings), not as a new-tab type.
+- [x] WS1-T2 Ensure top-level and pane-child New Tab Picker flows never surface a workspace-map creation entry.
+- [x] WS1-T3 Keep picker filtering/search free from workspace-map synthetic entries.
+- [x] WS1-T4 Wire toggle behavior through `AppDelegate` open/focus/close mode semantics.
 - Acceptance:
-  - `NewTabPickerWorkspaceMapTests` all pass.
+  - `NewTabPickerWorkspaceMapTests` and `AppDelegateWorkspaceMapModeTests` pass.
 
 ### WS2. Runtime Adapter and Projection Foundation
 
@@ -271,3 +271,21 @@ Each completed task must include:
 - No blocking findings remain.
   - `.github/workflows/test.yml`
   - `.github/PULL_REQUEST_TEMPLATE.md`
+
+## 12) Post-PASS Hardening Follow-up (2026-03-30)
+
+- [x] WS5-H1 Replace live-canvas runtime ownership mutation path with non-owning mirrored lease provider.
+  - `WorkspaceMapRuntimeLiveCanvasContentProvider` now resolves source views read-only and returns mirror surfaces.
+  - No `sourceWindow.contentView = ...` ownership reassignment remains in Workspace Map provider path.
+- [x] WS8-H1 Add lease safety and policy tests for live content provider.
+  - Added `WorkspaceMapLiveCanvasContentProviderTests` covering:
+    - acquire/release without source window mutation,
+    - release idempotency,
+    - browser-group hard reject before resolver use,
+    - terminal-unavailable path.
+- [x] WS8-H2 Extend Workspace Map matrix to include newly added canvas interaction/provider tests.
+  - `WorkspaceMapCanvasInputPolicyTests`
+  - `WorkspaceMapLiveCanvasViewVisibilityTests`
+  - `WorkspaceMapLiveCanvasContentProviderTests`
+- [x] WS11-H1 Re-run strict Opus acceptance for Req4/Req6 closure and archive PASS/FAIL evidence.
+  - `opus_workspace_map_acceptance` verdict: `PASS` (Req4=`PASS`, Req6=`PASS`), reviewed on 2026-03-30.

@@ -53,6 +53,9 @@ run_matrix() {
     WorkspaceMapViewModelDeterminismTests
     WorkspaceMapPerformanceRegressionTests
     WorkspaceMapPerformancePolicyTests
+    WorkspaceMapCanvasInputPolicyTests
+    WorkspaceMapLiveCanvasViewVisibilityTests
+    WorkspaceMapLiveCanvasContentProviderTests
   )
 
   local class_name
