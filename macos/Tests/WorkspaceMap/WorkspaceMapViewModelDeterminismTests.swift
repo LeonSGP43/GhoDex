@@ -1,5 +1,6 @@
 import XCTest
 import Foundation
+import Combine
 @testable import GhoDex
 
 @MainActor
@@ -180,6 +181,8 @@ final class WorkspaceMapViewModelDeterminismTests: XCTestCase {
 
         let probe = ProjectionProbe()
         var captureCount = 0
+        var cancellables: Set<AnyCancellable> = []
+        var publishedGroupIDs: [WorkspaceMapEntityID] = []
         let model = WorkspaceMapViewModel(
             runtimeStateSource: {
                 captureCount += 1
@@ -197,6 +200,12 @@ final class WorkspaceMapViewModelDeterminismTests: XCTestCase {
             )
         )
 
+        model.$snapshot
+            .dropFirst()
+            .compactMap { $0.groups.first?.id }
+            .sink { publishedGroupIDs.append($0) }
+            .store(in: &cancellables)
+
         let firstTask = model.refresh()
         for _ in 0..<20 {
             _ = model.refresh()
@@ -208,6 +217,10 @@ final class WorkspaceMapViewModelDeterminismTests: XCTestCase {
         XCTAssertEqual(captureCount, 2)
         XCTAssertEqual(probe.projectionCount, 2)
         XCTAssertEqual(probe.projectionMainThreadFlags, [false, false])
+        XCTAssertEqual(
+            publishedGroupIDs,
+            [WorkspaceMapEntityID("terminal-group:00000000-0000-0000-0000-000000000002")]
+        )
         XCTAssertEqual(
             model.snapshot.groups.first?.id,
             WorkspaceMapEntityID("terminal-group:00000000-0000-0000-0000-000000000002")
@@ -274,6 +287,7 @@ final class WorkspaceMapViewModelDeterminismTests: XCTestCase {
     private func makeRuntimeState(sequence: Int) -> WorkspaceMapRuntimeState {
         let idToken = String(format: "%012d", sequence)
         return WorkspaceMapRuntimeState(
+            captureSequence: UInt64(sequence),
             terminalGroups: [
                 WorkspaceMapRuntimeTerminalGroup(
                     workspaceID: UUID(uuidString: "00000000-0000-0000-0000-\(idToken)")!,

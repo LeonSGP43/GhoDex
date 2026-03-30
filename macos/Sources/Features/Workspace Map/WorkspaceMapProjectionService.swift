@@ -1,18 +1,6 @@
 import Foundation
 
 enum WorkspaceMapProjectionService {
-    private struct ProjectionStrings {
-        let paneTitle: String
-        let splitTitle: String
-
-        static func resolve() -> Self {
-            Self(
-                paneTitle: AppLocalization.localizedText("Pane"),
-                splitTitle: AppLocalization.localizedText("Split")
-            )
-        }
-    }
-
     private struct TerminalHierarchyProjection {
         let rootID: WorkspaceMapEntityID?
         let nodes: [WorkspaceMapNodeSnapshot]
@@ -59,8 +47,8 @@ enum WorkspaceMapProjectionService {
         from runtimeState: WorkspaceMapRuntimeState,
         now: Date = Date()
     ) -> WorkspaceMapSnapshot {
-        let strings = ProjectionStrings.resolve()
-        let terminalGroups = runtimeState.terminalGroups.map { makeTerminalGroupSnapshot($0, strings: strings) }
+        let labels = runtimeState.projectionLabels
+        let terminalGroups = runtimeState.terminalGroups.map { makeTerminalGroupSnapshot($0, labels: labels) }
         let browserGroups = runtimeState.browserGroups.map(makeBrowserGroupSnapshot)
         let groups = (terminalGroups + browserGroups).sorted(by: groupSortKey)
         return WorkspaceMapSnapshot(generatedAt: now, groups: groups)
@@ -68,10 +56,10 @@ enum WorkspaceMapProjectionService {
 
     private static func makeTerminalGroupSnapshot(
         _ group: WorkspaceMapRuntimeTerminalGroup,
-        strings: ProjectionStrings
+        labels: WorkspaceMapProjectionLabels
     ) -> WorkspaceMapGroupSnapshot {
         let groupID = WorkspaceMapEntityID.terminalGroup(group.workspaceID)
-        let projection = projectTerminalHierarchy(group.root, groupID: groupID, strings: strings)
+        let projection = projectTerminalHierarchy(group.root, groupID: groupID, labels: labels)
 
         return WorkspaceMapGroupSnapshot(
             id: groupID,
@@ -119,7 +107,7 @@ enum WorkspaceMapProjectionService {
     private static func projectTerminalHierarchy(
         _ root: WorkspaceMapRuntimeTerminalNode?,
         groupID: WorkspaceMapEntityID,
-        strings: ProjectionStrings
+        labels: WorkspaceMapProjectionLabels
     ) -> TerminalHierarchyProjection {
         guard let root else { return .empty }
         var nodes: [WorkspaceMapNodeSnapshot] = []
@@ -128,7 +116,7 @@ enum WorkspaceMapProjectionService {
             parentID: nil,
             path: [],
             groupID: groupID,
-            strings: strings,
+            labels: labels,
             nodes: &nodes
         )
         return TerminalHierarchyProjection(
@@ -146,7 +134,7 @@ enum WorkspaceMapProjectionService {
         parentID: WorkspaceMapEntityID?,
         path: [WorkspaceMapSplitBranch],
         groupID: WorkspaceMapEntityID,
-        strings: ProjectionStrings,
+        labels: WorkspaceMapProjectionLabels,
         nodes: inout [WorkspaceMapNodeSnapshot]
     ) -> TerminalHierarchyMeta {
         switch node {
@@ -157,7 +145,7 @@ enum WorkspaceMapProjectionService {
             let paneSnapshot = WorkspaceMapNodeSnapshot(
                 id: paneID,
                 kind: .pane,
-                title: strings.paneTitle,
+                title: labels.paneTitle,
                 parentID: parentID,
                 isActive: pane.isFocused,
                 childIDs: pane.tabs.map { WorkspaceMapEntityID.paneTab($0.id) }
@@ -183,7 +171,7 @@ enum WorkspaceMapProjectionService {
                 WorkspaceMapNodeSnapshot(
                     id: splitID,
                     kind: .split,
-                    title: strings.splitTitle,
+                    title: labels.splitTitle,
                     parentID: parentID,
                     isActive: false,
                     childIDs: [],
@@ -197,7 +185,7 @@ enum WorkspaceMapProjectionService {
                 parentID: splitID,
                 path: path + [.left],
                 groupID: groupID,
-                strings: strings,
+                labels: labels,
                 nodes: &nodes
             )
             let rightProjection = projectTerminalNode(
@@ -205,7 +193,7 @@ enum WorkspaceMapProjectionService {
                 parentID: splitID,
                 path: path + [.right],
                 groupID: groupID,
-                strings: strings,
+                labels: labels,
                 nodes: &nodes
             )
             let childIDs = [leftProjection.rootID, rightProjection.rootID].compactMap { $0 }
@@ -213,7 +201,7 @@ enum WorkspaceMapProjectionService {
             nodes[splitIndex] = WorkspaceMapNodeSnapshot(
                 id: splitID,
                 kind: .split,
-                title: strings.splitTitle,
+                title: labels.splitTitle,
                 parentID: parentID,
                 isActive: leftProjection.hasFocusedPane || rightProjection.hasFocusedPane,
                 childIDs: childIDs,

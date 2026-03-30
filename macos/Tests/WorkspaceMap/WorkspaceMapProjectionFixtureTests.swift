@@ -78,7 +78,30 @@ final class WorkspaceMapProjectionFixtureTests: XCTestCase {
         XCTAssertEqual(lhsJSON, rhsJSON)
     }
 
-    private func makeDeterministicRuntimeState() -> WorkspaceMapRuntimeState {
+    func testProjectionUsesCapturedLabels() throws {
+        let runtime = makeDeterministicRuntimeState(
+            projectionLabels: WorkspaceMapProjectionLabels(
+                paneTitle: "Captured Pane",
+                splitTitle: "Captured Split"
+            )
+        )
+        let snapshot = WorkspaceMapProjectionService.makeSnapshot(
+            from: runtime,
+            now: Date(timeIntervalSince1970: 100)
+        )
+
+        let terminalGroup = try XCTUnwrap(snapshot.groups.first(where: { $0.kind == .terminal }))
+        let terminal = try XCTUnwrap(terminalGroup.terminal)
+        let splitNode = try XCTUnwrap(terminal.nodes.first(where: { $0.kind == .split }))
+        let paneNode = try XCTUnwrap(terminal.nodes.first(where: { $0.kind == .pane }))
+
+        XCTAssertEqual(splitNode.title, "Captured Split")
+        XCTAssertEqual(paneNode.title, "Captured Pane")
+    }
+
+    private func makeDeterministicRuntimeState(
+        projectionLabels: WorkspaceMapProjectionLabels = .fallback
+    ) -> WorkspaceMapRuntimeState {
         let terminalWorkspace1 = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
         let terminalWorkspace2 = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
         let browserWorkspaceA = UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!
@@ -87,6 +110,7 @@ final class WorkspaceMapProjectionFixtureTests: XCTestCase {
         let paneRight = UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-000000000002")!
 
         return WorkspaceMapRuntimeState(
+            projectionLabels: projectionLabels,
             terminalGroups: [
                 WorkspaceMapRuntimeTerminalGroup(
                     workspaceID: terminalWorkspace2,

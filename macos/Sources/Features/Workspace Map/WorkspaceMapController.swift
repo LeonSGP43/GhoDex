@@ -21,6 +21,8 @@ final class WorkspaceMapViewModel: ObservableObject {
     private var refreshInFlight = false
     private var refreshPending = false
     private var refreshTask: Task<Void, Never>?
+    private var latestRefreshGeneration: UInt64 = 0
+    private var latestAppliedCaptureSequence: UInt64?
     private var layoutPersistScheduled = false
     private var performanceRecorder = WorkspaceMapPerformanceRecorder()
     private var workloadClassifier = WorkspaceMapWorkloadClassifier()
@@ -87,6 +89,9 @@ final class WorkspaceMapViewModel: ObservableObject {
 
     @discardableResult
     func refresh() -> Task<Void, Never>? {
+        latestRefreshGeneration &+= 1
+        let refreshGeneration = latestRefreshGeneration
+
         if let projectionSource {
             let start = CFAbsoluteTimeGetCurrent()
             let newSnapshot = projectionSource()
@@ -106,8 +111,9 @@ final class WorkspaceMapViewModel: ObservableObject {
         let runtimeState = runtimeStateSource()
         let mainThreadMS = (CFAbsoluteTimeGetCurrent() - start) * 1000
         let snapshotNow = nowProvider()
+        let captureSequence = runtimeState.captureSequence
         let projector = backgroundProjector
-        let task = Task { [weak self, runtimeState, mainThreadMS, snapshotNow, start] in
+        let task = Task { [weak self, runtimeState, captureSequence, refreshGeneration, mainThreadMS, snapshotNow, start] in
             let newSnapshot = await Task.detached(priority: .userInitiated) {
                 projector(runtimeState, snapshotNow)
             }.value
@@ -115,6 +121,8 @@ final class WorkspaceMapViewModel: ObservableObject {
             let elapsedMS = (CFAbsoluteTimeGetCurrent() - start) * 1000
             self?.finishRefresh(
                 newSnapshot,
+                captureSequence: captureSequence,
+                refreshGeneration: refreshGeneration,
                 totalMS: elapsedMS,
                 mainThreadMS: mainThreadMS
             )
@@ -125,16 +133,31 @@ final class WorkspaceMapViewModel: ObservableObject {
 
     private func finishRefresh(
         _ newSnapshot: WorkspaceMapSnapshot,
+        captureSequence: UInt64,
+        refreshGeneration: UInt64,
         totalMS: Double,
         mainThreadMS: Double
     ) {
-        applyRefresh(newSnapshot, totalMS: totalMS, mainThreadMS: mainThreadMS)
-        refreshInFlight = false
-        refreshTask = nil
+        defer {
+            refreshInFlight = false
+            refreshTask = nil
 
-        guard refreshPending else { return }
-        refreshPending = false
-        _ = refresh()
+            if refreshPending {
+                refreshPending = false
+                _ = refresh()
+            }
+        }
+
+        guard refreshGeneration == latestRefreshGeneration else { return }
+        let hasMonotonicCaptureSequence = captureSequence > 0
+        if hasMonotonicCaptureSequence {
+            guard latestAppliedCaptureSequence.map({ captureSequence > $0 }) ?? true else { return }
+        }
+
+        applyRefresh(newSnapshot, totalMS: totalMS, mainThreadMS: mainThreadMS)
+        if hasMonotonicCaptureSequence {
+            latestAppliedCaptureSequence = captureSequence
+        }
     }
 
     private func applyRefresh(

@@ -1,9 +1,49 @@
 import Foundation
 
+struct WorkspaceMapProjectionLabels: Hashable, Sendable {
+    let paneTitle: String
+    let splitTitle: String
+
+    static let fallback = WorkspaceMapProjectionLabels(
+        paneTitle: "Pane",
+        splitTitle: "Split"
+    )
+
+    @MainActor
+    static func capture(
+        preferredLanguages: [String] = AppLanguageSetting.preferredLanguages()
+    ) -> Self {
+        Self(
+            paneTitle: AppLocalization.localizedText(
+                "Pane",
+                preferredLanguages: preferredLanguages
+            ),
+            splitTitle: AppLocalization.localizedText(
+                "Split",
+                preferredLanguages: preferredLanguages
+            )
+        )
+    }
+}
+
 /// Runtime-backed input model that can be projected into immutable Workspace Map snapshots.
 struct WorkspaceMapRuntimeState: Hashable, Sendable {
+    let captureSequence: UInt64
+    let projectionLabels: WorkspaceMapProjectionLabels
     var terminalGroups: [WorkspaceMapRuntimeTerminalGroup]
     var browserGroups: [WorkspaceMapRuntimeBrowserGroup]
+
+    init(
+        captureSequence: UInt64 = 0,
+        projectionLabels: WorkspaceMapProjectionLabels = .fallback,
+        terminalGroups: [WorkspaceMapRuntimeTerminalGroup],
+        browserGroups: [WorkspaceMapRuntimeBrowserGroup]
+    ) {
+        self.captureSequence = captureSequence
+        self.projectionLabels = projectionLabels
+        self.terminalGroups = terminalGroups
+        self.browserGroups = browserGroups
+    }
 
     static let empty = WorkspaceMapRuntimeState(terminalGroups: [], browserGroups: [])
 }
@@ -47,11 +87,25 @@ indirect enum WorkspaceMapRuntimeTerminalNode: Hashable, Sendable {
 
 @MainActor
 enum WorkspaceMapRuntimeAdapter {
+    private static var lastCaptureSequence: UInt64 = 0
+
     static func capture() -> WorkspaceMapRuntimeState {
-        WorkspaceMapRuntimeState(
+        let preferredLanguages = AppLanguageSetting.preferredLanguages()
+        return WorkspaceMapRuntimeState(
+            captureSequence: nextCaptureSequence(),
+            projectionLabels: WorkspaceMapProjectionLabels.capture(
+                preferredLanguages: preferredLanguages
+            ),
             terminalGroups: TerminalController.all.map(makeTerminalGroup),
-            browserGroups: BrowserTabController.all.map(makeBrowserGroup)
+            browserGroups: BrowserTabController.all.map {
+                makeBrowserGroup($0, preferredLanguages: preferredLanguages)
+            }
         )
+    }
+
+    private static func nextCaptureSequence() -> UInt64 {
+        lastCaptureSequence &+= 1
+        return lastCaptureSequence
     }
 
     private static func makeTerminalGroup(_ controller: TerminalController) -> WorkspaceMapRuntimeTerminalGroup {
@@ -64,10 +118,16 @@ enum WorkspaceMapRuntimeAdapter {
         )
     }
 
-    private static func makeBrowserGroup(_ controller: BrowserTabController) -> WorkspaceMapRuntimeBrowserGroup {
+    private static func makeBrowserGroup(
+        _ controller: BrowserTabController,
+        preferredLanguages: [String]
+    ) -> WorkspaceMapRuntimeBrowserGroup {
         WorkspaceMapRuntimeBrowserGroup(
             workspaceID: controller.workspaceID,
-            title: controller.titleOverride ?? controller.window?.title ?? AppLocalization.localizedText("Browser"),
+            title: controller.titleOverride ?? controller.window?.title ?? AppLocalization.localizedText(
+                "Browser",
+                preferredLanguages: preferredLanguages
+            ),
             isFocused: controller.window?.isKeyWindow ?? false,
             selectedPageID: controller.model.selectedPageID.uuidString.lowercased(),
             displayedURL: controller.model.displayedURL
