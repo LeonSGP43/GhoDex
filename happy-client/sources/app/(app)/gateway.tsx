@@ -15,7 +15,7 @@ import { CameraView } from 'expo-camera';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { pairingBegin, pairingExchange } from '@/ghodex/gateway';
 import { recordScreenReady, recordScreenStarted } from '@/ghodex/observability';
-import { parseGatewayPairingQrPayload } from '@/ghodex/pairingQr';
+import { buildGatewayPairingExchangeAttempts, parseGatewayPairingQrPayload } from '@/ghodex/pairingQr';
 import {
     applyPairingExchangeToSession,
     INITIAL_GATEWAY_SESSION,
@@ -294,25 +294,70 @@ export default function GhoDexGatewayScreen() {
         }
 
         void runAction('scan', async () => {
-            const exchange = await pairingExchange({
+            const attempts = buildGatewayPairingExchangeAttempts(payload);
+            let exchange: Awaited<ReturnType<typeof pairingExchange>> | null = null;
+            let selectedAttempt = attempts[0] ?? {
                 host: payload.host,
                 port: payload.port,
-                pairingCode: payload.pairingCode,
-            });
+                transportMode: 'lan' as const,
+                publicEndpoint: undefined,
+            };
+            let lastError: unknown = null;
+
+            for (const attempt of attempts) {
+                try {
+                    exchange = await pairingExchange({
+                        host: attempt.host,
+                        port: attempt.port,
+                        pairingCode: payload.pairingCode,
+                        transportMode: attempt.transportMode,
+                        publicEndpoint: attempt.publicEndpoint,
+                    });
+                    selectedAttempt = attempt;
+                    break;
+                } catch (error) {
+                    lastError = error;
+                }
+            }
+
+            if (!exchange) {
+                if (lastError instanceof Error) {
+                    throw lastError;
+                }
+                throw new Error('Unable to exchange pairing code');
+            }
+
+            const resolvedPublicEndpoint = exchange.publicEndpoint ?? payload.publicEndpoint ?? session.publicEndpoint;
+            const resolvedTransportMode = exchange.transportMode === 'relay'
+                ? 'relay'
+                : (selectedAttempt.transportMode === 'relay' && !!resolvedPublicEndpoint)
+                    ? 'relay'
+                    : session.transportMode;
+            const resolvedHost = selectedAttempt.host;
+            const resolvedPort = selectedAttempt.port;
 
             const nextSession = buildSession(
                 applyPairingExchangeToSession(
                     session,
                     {
-                        host: payload.host,
-                        port: payload.port,
+                        host: resolvedHost,
+                        port: resolvedPort,
                         pairingCode: payload.pairingCode,
                     },
-                    exchange,
+                    {
+                        ...exchange,
+                        transportMode: resolvedTransportMode,
+                        publicEndpoint: resolvedPublicEndpoint,
+                        transportSharedSecret: exchange.transportSharedSecret ?? session.transportSharedSecret,
+                    },
                 ),
+                {
+                    host: resolvedHost,
+                    port: resolvedPort,
+                },
             );
-            setHost(payload.host);
-            setPortText(String(payload.port));
+            setHost(resolvedHost);
+            setPortText(String(resolvedPort));
             await saveStoredSession(nextSession);
             setSession(nextSession);
             router.replace('/');

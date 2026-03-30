@@ -2,6 +2,15 @@ export interface GatewayPairingQrPayload {
     host: string;
     port: number;
     pairingCode: string;
+    transportMode?: 'lan' | 'relay';
+    publicEndpoint?: string;
+}
+
+export interface GatewayPairingExchangeAttempt {
+    host: string;
+    port: number;
+    transportMode: 'lan' | 'relay';
+    publicEndpoint?: string;
 }
 
 const EXPECTED_KIND = 'ghodex.gateway.pairing';
@@ -36,10 +45,18 @@ function parseJsonPayload(rawPayload: string): GatewayPairingQrPayload {
         throw new Error('QR kind is not a GhoDex pairing payload');
     }
 
+    const publicEndpoint = parsePublicEndpoint(object.public_endpoint);
+    const transportMode = normalizeTransportMode(
+        parseTransportMode(object.preferred_transport ?? object.transport_mode ?? object.transport),
+        publicEndpoint,
+    );
+
     return {
         host: requireNonBlank(object.host, 'QR host is missing'),
         port: requirePort(object.port),
         pairingCode: requireNonBlank(object.pairing_code, 'QR pairing code is missing'),
+        transportMode,
+        publicEndpoint,
     };
 }
 
@@ -60,11 +77,46 @@ function parseUrlPayload(rawPayload: string): GatewayPairingQrPayload {
         throw new Error('QR route is not a pairing payload');
     }
 
+    const publicEndpoint = parsePublicEndpoint(url.searchParams.get('public_endpoint'));
+    const transportMode = normalizeTransportMode(
+        parseTransportMode(
+            url.searchParams.get('preferred_transport')
+            ?? url.searchParams.get('transport_mode')
+            ?? url.searchParams.get('transport'),
+        ),
+        publicEndpoint,
+    );
+
     return {
         host: requireNonBlank(url.searchParams.get('host'), 'QR host is missing'),
         port: requirePort(url.searchParams.get('port')),
         pairingCode: requireNonBlank(url.searchParams.get('pairing_code'), 'QR pairing code is missing'),
+        transportMode,
+        publicEndpoint,
     };
+}
+
+export function buildGatewayPairingExchangeAttempts(payload: GatewayPairingQrPayload): GatewayPairingExchangeAttempt[] {
+    const lanAttempt: GatewayPairingExchangeAttempt = {
+        host: payload.host,
+        port: payload.port,
+        transportMode: 'lan',
+        publicEndpoint: undefined,
+    };
+
+    if (!payload.publicEndpoint) {
+        return [lanAttempt];
+    }
+
+    const relayAttempt: GatewayPairingExchangeAttempt = {
+        host: payload.host,
+        port: payload.port,
+        transportMode: 'relay',
+        publicEndpoint: payload.publicEndpoint,
+    };
+
+    const preferRelay = payload.transportMode === 'relay' || payload.transportMode === undefined;
+    return preferRelay ? [relayAttempt, lanAttempt] : [lanAttempt, relayAttempt];
 }
 
 function requireNonBlank(value: unknown, message: string): string {
@@ -91,4 +143,55 @@ function requirePort(value: unknown): number {
     }
 
     return Math.trunc(port);
+}
+
+function parseTransportMode(value: unknown): 'lan' | 'relay' | undefined {
+    if (typeof value !== 'string') {
+        return undefined;
+    }
+
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'relay') {
+        return 'relay';
+    }
+    if (normalized === 'lan' || normalized === 'tcp') {
+        return 'lan';
+    }
+    return undefined;
+}
+
+function parsePublicEndpoint(value: unknown): string | undefined {
+    if (typeof value !== 'string') {
+        return undefined;
+    }
+    const trimmed = value.trim();
+    if (!trimmed || !trimmed.startsWith('wss://')) {
+        return undefined;
+    }
+
+    try {
+        const parsed = new URL(trimmed);
+        if (parsed.protocol !== 'wss:') {
+            return undefined;
+        }
+        return trimmed;
+    } catch {
+        return undefined;
+    }
+}
+
+function normalizeTransportMode(
+    transportMode: 'lan' | 'relay' | undefined,
+    publicEndpoint: string | undefined,
+): 'lan' | 'relay' | undefined {
+    if (transportMode === 'relay' && !publicEndpoint) {
+        return undefined;
+    }
+    if (transportMode) {
+        return transportMode;
+    }
+    if (publicEndpoint) {
+        return 'relay';
+    }
+    return undefined;
 }

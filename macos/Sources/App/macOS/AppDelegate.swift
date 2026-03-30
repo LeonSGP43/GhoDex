@@ -941,6 +941,7 @@ class AppDelegate: NSObject,
         }
 
         let host = try preferredGatewayPairingHost()
+        let publicEndpoint = resolvedGatewayPairingPublicEndpoint()
         let pairing = try await controlHarnessAuth.beginPairing(
             client: "android-qr",
             requestedScopes: ["observe", "mutate"]
@@ -951,29 +952,25 @@ class AppDelegate: NSObject,
             port: port,
             pairingCode: pairing.pairingCode,
             expiresAt: pairing.expiresAt,
-            scopes: pairing.scopes
+            scopes: pairing.scopes,
+            preferredTransport: publicEndpoint == nil ? "lan" : "relay",
+            publicEndpoint: publicEndpoint
         )
         let payloadJSON = try payload.serialized()
         presentRemotePairingQRCodeWindow(
             payloadJSON: payloadJSON,
-            host: host,
-            port: port,
-            pairingCode: pairing.pairingCode,
-            expiresAt: pairing.expiresAt
+            payload: payload
         )
     }
 
     @MainActor
     private func presentRemotePairingQRCodeWindow(
         payloadJSON: String,
-        host: String,
-        port: UInt16,
-        pairingCode: String,
-        expiresAt: String
+        payload: RemotePairingQRCodePayload
     ) {
         closeRemotePairingQRCodeWindow(nil)
         remotePairingQRCodePayloadJSON = payloadJSON
-        remotePairingQRCodePairingCode = pairingCode
+        remotePairingQRCodePairingCode = payload.pairingCode
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 360, height: 478),
@@ -987,10 +984,7 @@ class AppDelegate: NSObject,
         window.center()
         window.contentView = makeRemotePairingWindowContentView(
             payloadJSON: payloadJSON,
-            host: host,
-            port: port,
-            pairingCode: pairingCode,
-            expiresAt: expiresAt
+            payload: payload
         )
 
         remotePairingQRCodeWindowCloseObserver = NotificationCenter.default.addObserver(
@@ -1018,10 +1012,7 @@ class AppDelegate: NSObject,
     @MainActor
     private func makeRemotePairingWindowContentView(
         payloadJSON: String,
-        host: String,
-        port: UInt16,
-        pairingCode: String,
-        expiresAt: String
+        payload: RemotePairingQRCodePayload
     ) -> NSView {
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: 478))
         let stack = NSStackView()
@@ -1037,7 +1028,7 @@ class AppDelegate: NSObject,
         titleLabel.lineBreakMode = .byWordWrapping
         stack.addArrangedSubview(titleLabel)
 
-        let subtitleLabel = NSTextField(labelWithString: "It fills host, port, and a short-lived pairing code automatically.")
+        let subtitleLabel = NSTextField(labelWithString: "It fills host, port, pairing code, and relay metadata when available.")
         subtitleLabel.alignment = .center
         subtitleLabel.textColor = .secondaryLabelColor
         subtitleLabel.maximumNumberOfLines = 2
@@ -1046,10 +1037,7 @@ class AppDelegate: NSObject,
 
         let accessoryView = makeRemotePairingAccessoryView(
             payloadJSON: payloadJSON,
-            host: host,
-            port: port,
-            pairingCode: pairingCode,
-            expiresAt: expiresAt
+            payload: payload
         )
         accessoryView.translatesAutoresizingMaskIntoConstraints = false
         stack.addArrangedSubview(accessoryView)
@@ -1138,10 +1126,7 @@ class AppDelegate: NSObject,
     @MainActor
     private func makeRemotePairingAccessoryView(
         payloadJSON: String,
-        host: String,
-        port: UInt16,
-        pairingCode: String,
-        expiresAt: String
+        payload: RemotePairingQRCodePayload
     ) -> NSView {
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 410))
         let stack = NSStackView()
@@ -1162,11 +1147,16 @@ class AppDelegate: NSObject,
         summary.isEditable = false
         summary.isSelectable = true
         summary.drawsBackground = false
-        summary.string = """
-        host: \(host):\(port)
-        pairing_code: \(pairingCode)
-        expires_at: \(expiresAt)
+        var summaryText = """
+        host: \(payload.host):\(payload.port)
+        pairing_code: \(payload.pairingCode)
+        expires_at: \(payload.expiresAt)
+        preferred_transport: \(payload.preferredTransport)
         """
+        if let publicEndpoint = payload.publicEndpoint, publicEndpoint.isEmpty == false {
+            summaryText += "\npublic_endpoint: \(publicEndpoint)"
+        }
+        summary.string = summaryText
 
         let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 320, height: 110))
         scrollView.hasVerticalScroller = true
@@ -1238,6 +1228,18 @@ class AppDelegate: NSObject,
         default:
             return host
         }
+    }
+
+    private func resolvedGatewayPairingPublicEndpoint() -> String? {
+        guard let endpoint = controlHarnessGateway.configuration.publicEndpoint?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              endpoint.isEmpty == false,
+              endpoint.hasPrefix("wss://"),
+              let parsed = URL(string: endpoint),
+              parsed.scheme?.lowercased() == "wss" else {
+            return nil
+        }
+        return endpoint
     }
 
     private func firstNonLoopbackIPv4Address() -> String? {
@@ -1315,6 +1317,8 @@ class AppDelegate: NSObject,
         let pairingCode: String
         let expiresAt: String
         let scopes: [String]
+        let preferredTransport: String
+        let publicEndpoint: String?
 
         enum CodingKeys: String, CodingKey {
             case version
@@ -1325,6 +1329,8 @@ class AppDelegate: NSObject,
             case pairingCode = "pairing_code"
             case expiresAt = "expires_at"
             case scopes
+            case preferredTransport = "preferred_transport"
+            case publicEndpoint = "public_endpoint"
         }
 
         func serialized() throws -> String {

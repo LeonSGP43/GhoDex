@@ -86,10 +86,9 @@ class MockWebSocket {
                         client: parsed.client,
                         scopes: ['observe', 'mutate'],
                     },
-                };
-            this.onmessage?.({
-                data: JSON.stringify(response),
+                }),
             });
+            return;
         });
     }
 
