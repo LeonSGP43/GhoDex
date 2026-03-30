@@ -142,9 +142,11 @@ final class ControlHarnessReadSampler {
         let read: (content: String, cacheAgeMs: Int)
         switch scope {
         case "visible":
-            read = surface.controlHarnessReadVisibleText(refresh: true)
+            // Avoid forcing a full terminal dump on every sampler tick.
+            // Cached reads still refresh automatically when the cache expires.
+            read = surface.controlHarnessReadVisibleText(refresh: false)
         case "screen":
-            read = surface.controlHarnessReadScreenText(refresh: true)
+            read = surface.controlHarnessReadScreenText(refresh: false)
         default:
             read = ("", 0)
         }

@@ -275,9 +275,10 @@ actor ControlHarnessAuth {
 
     func exchangePairingCode(_ pairingCode: String) throws -> ControlHarnessTokenIssueResult {
         let currentTime = now()
+        let record = pairingRecords.removeValue(forKey: pairingCode)
         pruneExpiredState(referenceDate: currentTime)
 
-        guard let record = pairingRecords.removeValue(forKey: pairingCode) else {
+        guard let record else {
             throw ControlHarnessAuthError.invalidPairingCode
         }
         guard record.expiresAt > currentTime else {

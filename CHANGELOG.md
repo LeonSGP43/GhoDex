@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(macos): stop forcing terminal text refresh on every control-harness sampler tick
+
+- What changed: Updated `ControlHarnessReadSampler.captureFreshSample` to stop forcing `refresh: true` reads for both `visible` and `screen` scopes. Sampler reads now use cached surface content (`refresh: false`), allowing the existing `CachedValue` expiry path in `SurfaceView_AppKit` to decide when a fresh terminal dump is required.
+- Why: Live `sample` + `vmmap` analysis on high-footprint sessions showed repeated `mmap` allocations in the `ControlHarnessReadSampler -> aiManagerVisibleText/readAIManagerText -> ghostty_surface_read_text` path, with `VM_ALLOCATE` dominated by many small regions (notably 128K/80K buckets). Forcing full reads on every sampler interval amplified allocation churn and long-run footprint growth.
+- Impact: Reduces high-frequency terminal text extraction pressure from the sampler loop, which lowers VM allocation churn and slows/avoids long-session memory accumulation while preserving on-demand fresh reads for explicit control operations.
+- Verification: `sample <pid>` for a high-footprint app process now attributes less time to forced refresh reads during steady-state sampler ticks; `vmmap -summary <pid>` trend checks show reduced `VM_ALLOCATE` growth rate under the same idle workload.
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessReadSampler.swift`, `CHANGELOG.md`
+- Decision trail: Keep the fix narrow and reversible at the sampler boundary rather than changing Ghostty text-read internals first. This addresses the highest-frequency caller immediately while preserving existing direct read semantics for explicit commands.
+
 ### fix(macos): attribute high footprint growth with vmmap deltas and browser model breadcrumbs
 
 - What changed: Expanded `RuntimeDiagnosticsLogger` vmmap sampling to parse full region summary buckets (`TOTAL`, `VM_ALLOCATE`, `Memory Tag 253`, `IOSurface`, `IOAccelerator (graphics)`, `MALLOC`) and emit both absolute and per-sample delta fields (`*_delta_bytes`, `vm_allocate_swapped_ratio`, `top_swapped_region`, `vmmap_growth_suspect`). Added process-level delta fields (`rss_delta_bytes`, `virtual_size_delta_bytes`, `physical_footprint_delta_bytes`) on every diagnostics record. Added Browser lifecycle breadcrumbs in `BrowserTabModel` so memory trend spikes can be correlated to concrete page/bridge/runtime activation operations.

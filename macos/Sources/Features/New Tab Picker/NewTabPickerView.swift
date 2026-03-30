@@ -9,8 +9,10 @@ struct NewTabPickerView: View {
     let subtitle: String
     let onClose: () -> Void
     let includeBrowserEntry: Bool
+    let onCancel: (() -> Void)?
     let onOpenHost: ((AITerminalHost) -> Void)?
     let onOpenBrowser: (() -> Void)?
+    let onOpenWorkspaceMap: (() -> Void)?
     let onOpenWorkspace: ((AITerminalSavedWorkspaceTemplate) -> Void)?
 
     @State private var searchText = ""
@@ -41,6 +43,10 @@ struct NewTabPickerView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
+                        if !workspaceMapEntries.isEmpty {
+                            section(title: nil, entries: workspaceMapEntries)
+                        }
+
                         if !browserEntries.isEmpty {
                             section(title: nil, entries: browserEntries)
                         }
@@ -224,7 +230,7 @@ struct NewTabPickerView: View {
             Spacer()
 
             Button(L10n.Common.cancel) {
-                onClose()
+                cancel()
             }
             .keyboardShortcut(.cancelAction)
         }
@@ -275,11 +281,15 @@ struct NewTabPickerView: View {
         let baseEntries = store.newTabPickerEntries(mode: mode)
         let allEntries = NewTabPickerModel.withBrowserEntry(
             baseEntries,
-            includeBrowserEntry: includeBrowserEntry
+            includeBrowserEntry: includeBrowserEntry,
+            includeWorkspaceMapEntry: mode == .topLevel
         )
         return NewTabPickerModel.filteredEntries(allEntries, query: searchText)
     }
 
+    private var workspaceMapEntries: [NewTabPickerEntry] {
+        entries.filter { $0.section == .workspaceMap }
+    }
 
     private var browserEntries: [NewTabPickerEntry] {
         entries.filter { $0.section == .browser }
@@ -318,8 +328,15 @@ struct NewTabPickerView: View {
         open(entry)
     }
 
+    private func cancel() {
+        onCancel?()
+        onClose()
+    }
+
     private func open(_ entry: NewTabPickerEntry) {
         switch entry.kind {
+        case .workspaceMap:
+            onOpenWorkspaceMap?()
         case .browser:
             onOpenBrowser?()
         case .host(let host):
@@ -340,6 +357,8 @@ struct NewTabPickerView: View {
 
     private func primaryTitle(for entry: NewTabPickerEntry) -> String {
         switch entry.kind {
+        case .workspaceMap:
+            return AppLocalization.localizedText("Workspace Map")
         case .browser:
             return AppLocalization.localizedText("Browser")
         case .host(let host):
@@ -351,6 +370,8 @@ struct NewTabPickerView: View {
 
     private func primarySubtitle(for entry: NewTabPickerEntry) -> String {
         switch entry.kind {
+        case .workspaceMap:
+            return AppLocalization.localizedText("Open a projection-only overview of all top-level tabs")
         case .browser:
             return AppLocalization.localizedText("Open a web page inside a GhoDex tab")
         case .host(let host):
@@ -364,6 +385,8 @@ struct NewTabPickerView: View {
 
     private func sourceLabel(for entry: NewTabPickerEntry) -> String? {
         switch entry.section {
+        case .workspaceMap:
+            return AppLocalization.localizedText("Built-in")
         case .browser:
             return AppLocalization.localizedText("Built-in")
         case .local:
@@ -383,6 +406,8 @@ struct NewTabPickerView: View {
 
     private func iconName(for entry: NewTabPickerEntry) -> String {
         switch entry.kind {
+        case .workspaceMap:
+            return "map"
         case .browser:
             return "globe"
         case .host(let host):

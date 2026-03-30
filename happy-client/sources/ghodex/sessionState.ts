@@ -25,6 +25,26 @@ export const INITIAL_GATEWAY_SESSION: StoredSession = {
 
 export const POLL_INTERVAL_OPTIONS = [250, 500, 1000, 2000] as const;
 
+export function applyGatewayConnectionSettings(
+    base: StoredSession,
+    input: {
+        host: string;
+        port: number;
+        liveUpdatesEnabled: boolean;
+        pollIntervalMs: number;
+    },
+    overrides?: Partial<StoredSession>,
+): StoredSession {
+    return {
+        ...base,
+        host: input.host,
+        port: input.port,
+        liveUpdatesEnabled: input.liveUpdatesEnabled,
+        pollIntervalMs: input.pollIntervalMs,
+        ...overrides,
+    };
+}
+
 export function sanitizePort(raw: string | number): number {
     const normalized = typeof raw === 'number' ? String(raw) : raw;
     const digits = normalized.replace(/[^0-9]/g, '');

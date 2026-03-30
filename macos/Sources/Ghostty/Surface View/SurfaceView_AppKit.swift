@@ -1660,21 +1660,37 @@ extension Ghostty {
         }
 
         @IBAction func splitRight(_ sender: Any) {
+            if let appDelegate = NSApp.delegate as? AppDelegate {
+                appDelegate.splitRight(self)
+                return
+            }
             guard let surface = self.surface else { return }
             ghostty_surface_split(surface, GHOSTTY_SPLIT_DIRECTION_RIGHT)
         }
 
         @IBAction func splitLeft(_ sender: Any) {
+            if let appDelegate = NSApp.delegate as? AppDelegate {
+                appDelegate.splitLeft(self)
+                return
+            }
             guard let surface = self.surface else { return }
             ghostty_surface_split(surface, GHOSTTY_SPLIT_DIRECTION_LEFT)
         }
 
         @IBAction func splitDown(_ sender: Any) {
+            if let appDelegate = NSApp.delegate as? AppDelegate {
+                appDelegate.splitDown(self)
+                return
+            }
             guard let surface = self.surface else { return }
             ghostty_surface_split(surface, GHOSTTY_SPLIT_DIRECTION_DOWN)
         }
 
         @IBAction func splitUp(_ sender: Any) {
+            if let appDelegate = NSApp.delegate as? AppDelegate {
+                appDelegate.splitUp(self)
+                return
+            }
             guard let surface = self.surface else { return }
             ghostty_surface_split(surface, GHOSTTY_SPLIT_DIRECTION_UP)
         }

@@ -1408,21 +1408,37 @@ class BaseTerminalController: NSWindowController,
     }
 
     @IBAction func splitRight(_ sender: Any) {
+        if !(sender is AppDelegate), let appDelegate = NSApp.delegate as? AppDelegate {
+            appDelegate.splitRight(self)
+            return
+        }
         guard let surface = focusedSurface?.surface else { return }
         ghostty.split(surface: surface, direction: GHOSTTY_SPLIT_DIRECTION_RIGHT)
     }
 
     @IBAction func splitLeft(_ sender: Any) {
+        if !(sender is AppDelegate), let appDelegate = NSApp.delegate as? AppDelegate {
+            appDelegate.splitLeft(self)
+            return
+        }
         guard let surface = focusedSurface?.surface else { return }
         ghostty.split(surface: surface, direction: GHOSTTY_SPLIT_DIRECTION_LEFT)
     }
 
     @IBAction func splitDown(_ sender: Any) {
+        if !(sender is AppDelegate), let appDelegate = NSApp.delegate as? AppDelegate {
+            appDelegate.splitDown(self)
+            return
+        }
         guard let surface = focusedSurface?.surface else { return }
         ghostty.split(surface: surface, direction: GHOSTTY_SPLIT_DIRECTION_DOWN)
     }
 
     @IBAction func splitUp(_ sender: Any) {
+        if !(sender is AppDelegate), let appDelegate = NSApp.delegate as? AppDelegate {
+            appDelegate.splitUp(self)
+            return
+        }
         guard let surface = focusedSurface?.surface else { return }
         ghostty.split(surface: surface, direction: GHOSTTY_SPLIT_DIRECTION_UP)
     }

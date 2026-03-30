@@ -17,6 +17,7 @@ import { pairingBegin, pairingExchange } from '@/ghodex/gateway';
 import { recordScreenReady, recordScreenStarted } from '@/ghodex/observability';
 import { parseGatewayPairingQrPayload } from '@/ghodex/pairingQr';
 import {
+    applyGatewayConnectionSettings,
     applyPairingExchangeToSession,
     INITIAL_GATEWAY_SESSION,
     POLL_INTERVAL_OPTIONS,
@@ -188,14 +189,18 @@ export default function GhoDexGatewayScreen() {
     const resolvedPort = sanitizePort(portText);
     const sanitizedPollIntervalMs = sanitizePollInterval(pollIntervalMs);
     const paired = !!session.authToken.trim();
-    const buildSession = React.useCallback((base: StoredSession, delta?: Partial<StoredSession>): StoredSession => ({
-        ...base,
-        host: resolvedHost,
-        port: resolvedPort,
-        liveUpdatesEnabled,
-        pollIntervalMs: sanitizedPollIntervalMs,
-        ...delta,
-    }), [liveUpdatesEnabled, resolvedHost, resolvedPort, sanitizedPollIntervalMs]);
+    const buildSession = React.useCallback((base: StoredSession, delta?: Partial<StoredSession>): StoredSession => (
+        applyGatewayConnectionSettings(
+            base,
+            {
+                host: resolvedHost,
+                port: resolvedPort,
+                liveUpdatesEnabled,
+                pollIntervalMs: sanitizedPollIntervalMs,
+            },
+            delta,
+        )
+    ), [liveUpdatesEnabled, resolvedHost, resolvedPort, sanitizedPollIntervalMs]);
 
     const runAction = React.useCallback(async (action: BusyAction, task: () => Promise<void>) => {
         setBusyAction(action);
@@ -310,6 +315,10 @@ export default function GhoDexGatewayScreen() {
                     },
                     exchange,
                 ),
+                {
+                    host: payload.host,
+                    port: payload.port,
+                },
             );
             setHost(payload.host);
             setPortText(String(payload.port));

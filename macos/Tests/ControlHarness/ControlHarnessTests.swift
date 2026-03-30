@@ -276,11 +276,16 @@ private enum ControlHarnessSocketSupport {
         }
     }
 
-    static func readLine(from fd: Int32) throws -> Data {
+    static func readLine(
+        from fd: Int32,
+        timeoutSeconds: TimeInterval = 2.0
+    ) throws -> Data {
         var data = Data()
         var byte: UInt8 = 0
-        while true {
-            let amount = Darwin.read(fd, &byte, 1)
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+
+        while Date() < deadline {
+            let amount = Darwin.recv(fd, &byte, 1, MSG_DONTWAIT)
             if amount == 1 {
                 data.append(byte)
                 if byte == 0x0A {
@@ -291,11 +296,18 @@ private enum ControlHarnessSocketSupport {
             if amount == 0 {
                 return data
             }
-            if errno == EINTR {
+            switch errno {
+            case EINTR:
                 continue
+            case EAGAIN, EWOULDBLOCK:
+                usleep(10_000)
+                continue
+            default:
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
-            throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
+
+        throw POSIXError(.ETIMEDOUT)
     }
 
     static func readAll(from fd: Int32) throws -> Data {
@@ -315,6 +327,36 @@ private enum ControlHarnessSocketSupport {
             }
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
+    }
+
+    static func waitForDisconnect(
+        from fd: Int32,
+        timeoutSeconds: TimeInterval
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        var probe: UInt8 = 0
+
+        while Date() < deadline {
+            let count = Darwin.recv(fd, &probe, 1, MSG_PEEK | MSG_DONTWAIT)
+            if count == 0 {
+                return true
+            }
+            if count > 0 {
+                return false
+            }
+
+            switch errno {
+            case EAGAIN, EWOULDBLOCK:
+                usleep(20_000)
+                continue
+            case EINTR:
+                continue
+            default:
+                return true
+            }
+        }
+
+        return false
     }
 
     static func connectTCP(host: String, port: UInt16) throws -> Int32 {
@@ -395,15 +437,15 @@ private enum ControlHarnessSocketSupport {
         do {
             let key = Data("test-websocket-key".utf8).base64EncodedString()
             let request = Data(
-                """
-                GET /control-harness HTTP/1.1\r
-                Host: \(host):\(port)\r
-                Upgrade: websocket\r
-                Connection: Upgrade\r
-                Sec-WebSocket-Key: \(key)\r
-                Sec-WebSocket-Version: 13\r
-                \r
-                """.utf8
+                (
+                    "GET /control-harness HTTP/1.1\r\n" +
+                    "Host: \(host):\(port)\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Sec-WebSocket-Key: \(key)\r\n" +
+                    "Sec-WebSocket-Version: 13\r\n" +
+                    "\r\n"
+                ).utf8
             )
             try writeAll(request, to: fd)
             let response = try readHTTPHeaders(from: fd)
@@ -687,6 +729,14 @@ struct ControlHarnessTests {
     }
 
     @MainActor
+    private func makeFreshEventHub(bundleID: String) -> ControlHarnessEventHub {
+        let eventsFileURL = ControlHarnessAuditLogger.baseDirectory(bundleID: bundleID)
+            .appendingPathComponent("control-harness-events.jsonl", isDirectory: false)
+        try? FileManager.default.removeItem(at: eventsFileURL)
+        return ControlHarnessEventHub(bundleID: bundleID)
+    }
+
+    @MainActor
     private func makeCore(
         delegate: AppDelegate? = nil,
         bundleID: String = "ghdx.tests.control-harness",
@@ -701,7 +751,7 @@ struct ControlHarnessTests {
         eventHub: ControlHarnessEventHub,
         generations: ControlHarnessGenerationTracker
     ) {
-        let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+        let eventHub = makeFreshEventHub(bundleID: bundleID)
         let generations = ControlHarnessGenerationTracker()
         let resolvedSampleStore = sampleStore ?? ControlHarnessSampleStore()
         let resolvedReadStore = readStore ?? ControlHarnessTerminalReadStore()
@@ -1581,6 +1631,7 @@ struct ControlHarnessTests {
             (refresh: true, content: "A\nB", cacheAgeMs: 0),
             (refresh: true, content: "A\nB\nC", cacheAgeMs: 0),
         ]
+        let clock = MutableClock(Date(timeIntervalSince1970: 10))
         let readStore = ControlHarnessTerminalReadStore(
             maxFramesPerKey: 1,
             maxTotalFrames: 16,
@@ -1592,7 +1643,8 @@ struct ControlHarnessTests {
             readStore: readStore,
             surfaceResolver: { requestedID in
                 requestedID == terminalID ? surface : nil
-            }
+            },
+            now: { clock.now() }
         )
 
         let firstResponse = core.handle(
@@ -1627,6 +1679,7 @@ struct ControlHarnessTests {
         let firstJSON = try responseJSON(firstResponse)
         let firstResult = try #require(firstJSON["result"] as? [String: Any])
         let firstFrameID = try #require(firstResult["frame_id"] as? String)
+        clock.advance(by: 1.0)
 
         _ = core.handle(
             ControlHarnessRequest(
@@ -1657,6 +1710,7 @@ struct ControlHarnessTests {
             ),
             socketPath: "/tmp/control-harness-test.sock"
         )
+        clock.advance(by: 1.0)
 
         let deltaResponse = core.handle(
             ControlHarnessRequest(
@@ -3123,7 +3177,7 @@ struct ControlHarnessTests {
         let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
         let (eventHub, gateway) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
-            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let eventHub = makeFreshEventHub(bundleID: bundleID)
             let core = ControlHarnessCore(
                 appDelegate: nil,
                 auditLogger: auditLogger,
@@ -3270,7 +3324,7 @@ struct ControlHarnessTests {
         let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
         let (eventHub, gateway) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
-            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let eventHub = makeFreshEventHub(bundleID: bundleID)
             let core = ControlHarnessCore(
                 appDelegate: nil,
                 auditLogger: auditLogger,
@@ -3767,7 +3821,7 @@ struct ControlHarnessTests {
         let bundleID = "ghdx.tests.gateway-tcp-subscribe"
         let (eventHub, gateway) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
-            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let eventHub = makeFreshEventHub(bundleID: bundleID)
             let core = ControlHarnessCore(
                 appDelegate: nil,
                 auditLogger: auditLogger,
@@ -3868,7 +3922,7 @@ struct ControlHarnessTests {
         let bundleID = "ghdx.tests.gateway-ws-subscribe"
         let (eventHub, gateway) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
-            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let eventHub = makeFreshEventHub(bundleID: bundleID)
             let core = ControlHarnessCore(
                 appDelegate: nil,
                 auditLogger: auditLogger,
@@ -3937,7 +3991,7 @@ struct ControlHarnessTests {
         let bundleID = "ghdx.tests.gateway-stop-stream"
         let (eventHub, gateway) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
-            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let eventHub = makeFreshEventHub(bundleID: bundleID)
             let core = ControlHarnessCore(
                 appDelegate: nil,
                 auditLogger: auditLogger,
@@ -3985,8 +4039,7 @@ struct ControlHarnessTests {
             payload: AnyEncodable(["text_length": 1])
         )
 
-        let postStopRead = try ControlHarnessSocketSupport.readLine(from: clientFD)
-        #expect(postStopRead.isEmpty)
+        #expect(ControlHarnessSocketSupport.waitForDisconnect(from: clientFD, timeoutSeconds: 2.0))
     }
 
     @Test func eventsSubscribeStreamsReplayAndLiveEvents() async throws {
@@ -3996,7 +4049,7 @@ struct ControlHarnessTests {
         let bundleID = "ghdx.tests.\(suffix)"
         let (eventHub, core) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
-            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let eventHub = makeFreshEventHub(bundleID: bundleID)
             let core = ControlHarnessCore(
                 appDelegate: nil,
                 auditLogger: auditLogger,
@@ -4087,7 +4140,7 @@ struct ControlHarnessTests {
         let bundleID = "ghdx.tests.\(suffix)"
         let (eventHub, core) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
-            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let eventHub = makeFreshEventHub(bundleID: bundleID)
             let core = ControlHarnessCore(
                 appDelegate: nil,
                 auditLogger: auditLogger,

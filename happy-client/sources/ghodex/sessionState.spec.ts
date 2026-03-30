@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { applyPairingExchangeToSession, INITIAL_GATEWAY_SESSION } from './sessionState';
+import {
+    applyGatewayConnectionSettings,
+    applyPairingExchangeToSession,
+    INITIAL_GATEWAY_SESSION,
+} from './sessionState';
 
 describe('ghodex session pairing merge', () => {
     it('clears stale relay metadata when a LAN pairing exchange completes', () => {
@@ -105,5 +109,32 @@ describe('ghodex session pairing merge', () => {
         expect(merged.transportMode).toBe('lan');
         expect(merged.publicEndpoint).toBe('');
         expect(merged.transportSharedSecret).toBe('');
+    });
+
+    it('lets a scanned QR endpoint override stale manual host and port', () => {
+        const merged = applyGatewayConnectionSettings(
+            {
+                ...INITIAL_GATEWAY_SESSION,
+                host: '192.168.3.145',
+                port: 29527,
+                authToken: 'token-scan',
+            },
+            {
+                host: '192.168.3.100',
+                port: 9527,
+                liveUpdatesEnabled: false,
+                pollIntervalMs: 1000,
+            },
+            {
+                host: '192.168.3.145',
+                port: 29527,
+            },
+        );
+
+        expect(merged.host).toBe('192.168.3.145');
+        expect(merged.port).toBe(29527);
+        expect(merged.liveUpdatesEnabled).toBe(false);
+        expect(merged.pollIntervalMs).toBe(1000);
+        expect(merged.authToken).toBe('token-scan');
     });
 });

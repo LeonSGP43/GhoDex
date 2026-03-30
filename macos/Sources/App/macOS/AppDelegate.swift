@@ -51,7 +51,6 @@ class AppDelegate: NSObject,
     @IBOutlet private var menuOpenConfig: NSMenuItem?
     @IBOutlet private var menuSettingsPanel: NSMenuItem?
     private var menuTodoWorkspace: NSMenuItem?
-    private var menuWorkspaceMapMode: NSMenuItem?
     @IBOutlet private var menuReloadConfig: NSMenuItem?
     @IBOutlet private var menuSecureInput: NSMenuItem?
     @IBOutlet private var menuQuit: NSMenuItem?
@@ -287,13 +286,10 @@ class AppDelegate: NSObject,
                     errorMessage: "Remote \(request.command) requires desktop approval for terminal_id=\(rawTerminalID)"
                 )
             case .manual:
-                if request.command == "close-terminal" {
-                    return .deny(
-                        errorCode: "remote_policy_blocked",
-                        errorMessage: "Remote \(request.command) is disabled for terminal state \(managedState.rawValue)"
-                    )
-                }
-                return .allow
+                return .deny(
+                    errorCode: "remote_policy_blocked",
+                    errorMessage: "Remote \(request.command) is disabled for terminal state \(managedState.rawValue)"
+                )
             case .managedPaused, .managedCompleted, .managedFailed:
                 return .deny(
                     errorCode: "remote_policy_blocked",
@@ -852,9 +848,7 @@ class AppDelegate: NSObject,
     /// to track our runtime language selection.
     private func setupMenuLocalization() {
         installTodoWorkspaceMenuItemIfNeeded()
-        installWorkspaceMapMenuItemIfNeeded()
         menuTodoWorkspace?.title = L10n.SSHConnections.todoPanelTitle
-        menuWorkspaceMapMode?.title = AppLocalization.localizedText("Workspace Map")
         menuSaveWorkspace?.title = L10n.AITerminalManager.saveWorkspaceAction
     }
 
@@ -1397,7 +1391,6 @@ class AppDelegate: NSObject,
         self.menuOpenConfig?.setImageIfDesired(systemSymbolName: "gear")
         self.menuSettingsPanel?.setImageIfDesired(systemSymbolName: "slider.horizontal.3")
         self.menuTodoWorkspace?.setImageIfDesired(systemSymbolName: "checklist")
-        self.menuWorkspaceMapMode?.setImageIfDesired(systemSymbolName: "map")
         self.menuReloadConfig?.setImageIfDesired(systemSymbolName: "arrow.trianglehead.2.clockwise.rotate.90")
         self.menuSecureInput?.setImageIfDesired(systemSymbolName: "lock.display")
         self.menuNewWindow?.setImageIfDesired(systemSymbolName: "macwindow.badge.plus")
@@ -1542,31 +1535,6 @@ class AppDelegate: NSObject,
         let insertionIndex = menu.index(of: settingsItem) + 1
         menu.insertItem(item, at: max(insertionIndex, 0))
         menuTodoWorkspace = item
-    }
-
-    private func installWorkspaceMapMenuItemIfNeeded() {
-        guard menuWorkspaceMapMode == nil,
-              let fileMenu = menuNewTab?.menu ?? menuSaveWorkspace?.menu else { return }
-
-        let item = NSMenuItem(
-            title: AppLocalization.localizedText("Workspace Map"),
-            action: #selector(toggleWorkspaceMapMode(_:)),
-            keyEquivalent: "m"
-        )
-        item.target = self
-        item.keyEquivalentModifierMask = [.command, .option]
-
-        let insertionIndex: Int
-        if let newPaneItem = fileMenu.items.first(where: { $0.action == #selector(newPaneTab(_:)) }) {
-            insertionIndex = fileMenu.index(of: newPaneItem) + 1
-        } else if let saveWorkspaceItem = menuSaveWorkspace, fileMenu.index(of: saveWorkspaceItem) >= 0 {
-            insertionIndex = fileMenu.index(of: saveWorkspaceItem)
-        } else {
-            insertionIndex = min(4, fileMenu.items.count)
-        }
-
-        fileMenu.insertItem(item, at: max(insertionIndex, 0))
-        menuWorkspaceMapMode = item
     }
 
     // MARK: Notifications and Events
@@ -2371,25 +2339,59 @@ class AppDelegate: NSObject,
         activeTerminalController()?.newPaneTab(sender)
     }
 
-    @IBAction func toggleWorkspaceMapMode(_ sender: Any?) {
-        let preferredWindow = selectedTopLevelWindow(for: NSApp.keyWindow)
-            ?? selectedTopLevelWindow(for: TerminalController.preferredParent?.window)
-        let activeWorkspaceMapController = activeTopLevelTabController(preferred: preferredWindow) as? WorkspaceMapController
-        let existingController = activeWorkspaceMapController == nil
-            ? existingWorkspaceMapController(preferred: preferredWindow)
-            : nil
+    @IBAction func closeTab(_ sender: Any?) {
+        let actionTopLevelWindow = preferredTopLevelWindow(for: sender)
 
-        switch Self.resolveWorkspaceMapModeToggleAction(
-            isCurrentWorkspaceMapActive: activeWorkspaceMapController != nil,
-            hasExistingWorkspaceMap: existingController != nil
-        ) {
-        case .closeActive:
-            activeWorkspaceMapController?.closeTabImmediately(registerRedo: true)
-        case .focusExisting:
-            guard let existingController else { return }
-            focusWorkspaceMapController(existingController)
-        case .openNew:
-            _ = WorkspaceMapController.newTab(ghostty, from: preferredWindow)
+        if let terminalController = actionTopLevelWindow?.windowController as? TerminalController {
+            terminalController.closeTab(sender)
+            return
+        }
+
+        if let tabController = activeTopLevelTabController(preferred: actionTopLevelWindow) {
+            tabController.closeTabImmediately(registerRedo: true)
+            return
+        }
+
+        (actionTopLevelWindow ?? NSApp.keyWindow)?.performClose(sender)
+    }
+
+    @IBAction func splitRight(_ sender: Any?) {
+        handleSplitActionFallback(
+            sender,
+            browserSplitAxis: .vertical,
+            terminalSplitDirection: .right
+        ) { controller, resolvedSender in
+            controller.splitRight(resolvedSender)
+        }
+    }
+
+    @IBAction func splitLeft(_ sender: Any?) {
+        handleSplitActionFallback(
+            sender,
+            browserSplitAxis: .vertical,
+            terminalSplitDirection: .left
+        ) { controller, resolvedSender in
+            controller.splitLeft(resolvedSender)
+        }
+    }
+
+    @IBAction func splitDown(_ sender: Any?) {
+        handleSplitActionFallback(
+            sender,
+            browserSplitAxis: .horizontal,
+            terminalSplitDirection: .down
+        ) { controller, resolvedSender in
+            controller.splitDown(resolvedSender)
+        }
+    }
+
+    @IBAction func splitUp(_ sender: Any?) {
+        handleSplitActionFallback(
+            sender,
+            browserSplitAxis: .horizontal,
+            terminalSplitDirection: .up
+        ) { controller, resolvedSender in
+            controller.splitUp(resolvedSender)
         }
     }
 
@@ -2522,13 +2524,20 @@ class AppDelegate: NSObject,
                 ?? self.selectedTopLevelWindow(for: NSApp.keyWindow)
             _ = BrowserTabController.newTab(self.ghostty, from: parentWindow)
         }
+        let workspaceMapAction = { [weak self] in
+            guard let self else { return }
+            let parentWindow = self.selectedTopLevelWindow(for: window)
+                ?? self.selectedTopLevelWindow(for: NSApp.keyWindow)
+            _ = WorkspaceMapController.newTab(self.ghostty, from: parentWindow)
+        }
 
         if let window {
             newTabPickerController.show(
                 relativeTo: window,
                 mode: .topLevel,
                 includeBrowserEntry: true,
-                onOpenBrowser: browserAction
+                onOpenBrowser: browserAction,
+                onOpenWorkspaceMap: workspaceMapAction
             )
             return
         }
@@ -2537,7 +2546,8 @@ class AppDelegate: NSObject,
             relativeTo: nil,
             mode: .topLevel,
             includeBrowserEntry: true,
-            onOpenBrowser: browserAction
+            onOpenBrowser: browserAction,
+            onOpenWorkspaceMap: workspaceMapAction
         )
     }
 
@@ -2564,6 +2574,83 @@ class AppDelegate: NSObject,
         }
 
         aiTerminalManagerStore.openInPaneTab(host: .local, controller: controller, sourceSurface: sourceSurface)
+    }
+
+    @MainActor
+    private func handleSplitActionFallback(
+        _ sender: Any?,
+        browserSplitAxis: BrowserDeckSplitAxis,
+        terminalSplitDirection: SplitTree<TerminalPane>.NewDirection,
+        terminalAction: @escaping (TerminalController, Any) -> Void
+    ) {
+        guard let context = splitActionContext(for: sender) else { return }
+
+        switch context {
+        case .terminal(let terminalController):
+            guard let sourceSurface = activePaneSurface(in: terminalController) else {
+                terminalAction(terminalController, self)
+                return
+            }
+
+            let defaultSplit: () -> Void = { [weak self, weak terminalController, weak sourceSurface] in
+                guard let self, let terminalController else { return }
+                let splitSource = self.activePaneSurface(in: terminalController) ?? sourceSurface
+                guard let splitSource else {
+                    terminalAction(terminalController, self)
+                    return
+                }
+                _ = terminalController.newSplit(
+                    at: splitSource,
+                    direction: terminalSplitDirection
+                )
+            }
+
+            showSplitPicker(
+                relativeTo: terminalController.window,
+                title: AppLocalization.localizedText("Split Pane"),
+                subtitle: AppLocalization.localizedText("Choose a target for the new split pane."),
+                includeBrowserEntry: false,
+                onCancel: defaultSplit,
+                onOpenHost: { [weak self, weak terminalController, weak sourceSurface] host in
+                    guard let self, let terminalController else { return }
+                    let splitSource = self.activePaneSurface(in: terminalController) ?? sourceSurface
+                    guard let splitSource else { return }
+                    self.aiTerminalManagerStore.openInSplit(
+                        host: host,
+                        controller: terminalController,
+                        sourceSurface: splitSource,
+                        direction: terminalSplitDirection
+                    )
+                },
+                onOpenBrowser: nil
+            )
+
+        case .browser(let browserController):
+            _ = browserSplitAxis
+            browserController.model.collapseSplitDeck()
+        }
+    }
+
+    @MainActor
+    private func showSplitPicker(
+        relativeTo window: NSWindow?,
+        title: String,
+        subtitle: String,
+        includeBrowserEntry: Bool,
+        onCancel: (() -> Void)?,
+        onOpenHost: ((AITerminalHost) -> Void)?,
+        onOpenBrowser: (() -> Void)?
+    ) {
+        newTabPickerController.show(
+            relativeTo: window,
+            mode: .paneChild,
+            title: title,
+            subtitle: subtitle,
+            includeBrowserEntry: includeBrowserEntry,
+            onCancel: onCancel,
+            onOpenHost: onOpenHost,
+            onOpenBrowser: onOpenBrowser
+        )
     }
 
     private func activeTerminalController(preferred window: NSWindow? = nil) -> TerminalController? {
@@ -2614,34 +2701,73 @@ class AppDelegate: NSObject,
         window?.tabGroup?.selectedWindow ?? window
     }
 
-    private func existingWorkspaceMapController(preferred window: NSWindow?) -> WorkspaceMapController? {
-        if let workspaceMapController = selectedTopLevelTabController(for: window) as? WorkspaceMapController {
-            return workspaceMapController
+    private func topLevelWindow(from sender: Any?) -> NSWindow? {
+        if let window = sender as? NSWindow {
+            return selectedTopLevelWindow(for: window)
         }
 
-        if let groupController = window?.tabGroup?.windows.compactMap({ $0.windowController as? WorkspaceMapController }).first {
-            return groupController
+        if let view = sender as? NSView {
+            return selectedTopLevelWindow(for: view.window)
         }
 
-        if let keyController = selectedTopLevelTabController(for: NSApp.keyWindow) as? WorkspaceMapController {
-            return keyController
+        if let windowController = sender as? NSWindowController {
+            return selectedTopLevelWindow(for: windowController.window)
         }
 
-        if let mainController = selectedTopLevelTabController(for: NSApp.mainWindow) as? WorkspaceMapController {
-            return mainController
+        if let menuItem = sender as? NSMenuItem {
+            if let window = menuItem.representedObject as? NSWindow {
+                return selectedTopLevelWindow(for: window)
+            }
+
+            if let windowController = menuItem.representedObject as? NSWindowController {
+                return selectedTopLevelWindow(for: windowController.window)
+            }
         }
 
-        return WorkspaceMapController.all.first
+        return nil
     }
 
-    private func focusWorkspaceMapController(_ controller: WorkspaceMapController) {
-        guard let window = controller.window else { return }
-        if window.isMiniaturized {
-            window.deminiaturize(nil)
+    private func preferredTopLevelWindow(for sender: Any?) -> NSWindow? {
+        if let senderWindow = topLevelWindow(from: sender) {
+            return senderWindow
         }
-        controller.showWindow(nil)
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+
+        if let keyWindow = selectedTopLevelWindow(for: NSApp.keyWindow) {
+            return keyWindow
+        }
+
+        if let mainWindow = selectedTopLevelWindow(for: NSApp.mainWindow) {
+            return mainWindow
+        }
+
+        return selectedTopLevelWindow(for: TerminalController.preferredParent?.window)
+    }
+
+    private enum SplitActionContext {
+        case terminal(TerminalController)
+        case browser(BrowserTabController)
+    }
+
+    private func splitActionContext(for sender: Any?) -> SplitActionContext? {
+        let preferredWindow = preferredTopLevelWindow(for: sender)
+
+        if let terminalController = selectedTerminalController(for: preferredWindow) {
+            return .terminal(terminalController)
+        }
+
+        if let browserController = selectedTopLevelTabController(for: preferredWindow) as? BrowserTabController {
+            return .browser(browserController)
+        }
+
+        if let browserController = activeTopLevelTabController(preferred: preferredWindow) as? BrowserTabController {
+            return .browser(browserController)
+        }
+
+        if let terminalController = activeTerminalController(preferred: preferredWindow) {
+            return .terminal(terminalController)
+        }
+
+        return nil
     }
 
     private func activePaneSurface(
@@ -2859,10 +2985,6 @@ extension AppDelegate: NSMenuItemValidation {
         case #selector(saveWorkspace(_:)):
             return saveWorkspaceController(for: item) != nil
 
-        case #selector(toggleWorkspaceMapMode(_:)):
-            item.state = activeTopLevelTabController(preferred: nil) is WorkspaceMapController ? .on : .off
-            return true
-
         case #selector(undo(_:)):
             if undoManager.canUndo {
                 item.title = L10n.App.undo(undoManager.undoActionName)
@@ -2886,27 +3008,6 @@ extension AppDelegate: NSMenuItemValidation {
 }
 
 extension AppDelegate {
-    enum WorkspaceMapModeToggleAction: Equatable {
-        case closeActive
-        case focusExisting
-        case openNew
-    }
-
-    static func resolveWorkspaceMapModeToggleAction(
-        isCurrentWorkspaceMapActive: Bool,
-        hasExistingWorkspaceMap: Bool
-    ) -> WorkspaceMapModeToggleAction {
-        if isCurrentWorkspaceMapActive {
-            return .closeActive
-        }
-
-        if hasExistingWorkspaceMap {
-            return .focusExisting
-        }
-
-        return .openNew
-    }
-
     private static let browserSettingsStartMarker = "# >>> GhoDex browser settings >>>"
     private static let browserSettingsEndMarker = "# <<< GhoDex browser settings <<<"
     private static let iconSettingsStartMarker = "# >>> GhoDex app icon settings >>>"
