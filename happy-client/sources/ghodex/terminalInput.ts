@@ -243,6 +243,12 @@ export function resolveRealtimeMutationRetryDelayMs(retries: number): number {
     return 40 + (safeRetries * 30);
 }
 
+export function resolveRealtimeRateLimitRetryDelayMs(retries: number): number {
+    const safeRetries = Math.max(0, Math.floor(retries));
+    const delay = 160 * (2 ** safeRetries);
+    return Math.min(delay, 1_280);
+}
+
 export function summarizeLatency(samples: readonly number[]): {
     lastMs: number | null;
     avgMs: number | null;

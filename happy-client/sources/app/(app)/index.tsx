@@ -58,6 +58,7 @@ import {
     describeTerminalDebugText,
     deriveRealtimeInputDelta,
     normalizeCommandInput,
+    resolveRealtimeRateLimitRetryDelayMs,
     resolveRealtimeMutationRetryDelayMs,
     resolveRealtimeKeyPayload,
     resolveTerminalSubmitMutation,
@@ -120,6 +121,8 @@ const WRITE_SETTLE_INTERVAL_MS = 250;
 const REALTIME_INPUT_FLUSH_MS = 12;
 const REALTIME_INPUT_MAX_BATCH_SIZE = 48;
 const REALTIME_MUTATION_INTERLEAVE_MS = 12;
+const REALTIME_CONCURRENT_SESSION_RETRY_ATTEMPTS = 20;
+const REALTIME_RATE_LIMIT_RETRY_ATTEMPTS = 10;
 const BACKSPACE_KEYPRESS_HINT_WINDOW_MS = 220;
 const TERMINAL_STREAM_ACK_BATCH_BYTES = 768;
 const TERMINAL_STREAM_ACK_FLUSH_MS = 40;
@@ -305,6 +308,20 @@ function isGatewayConcurrentSessionLimitError(error: unknown): boolean {
     return code === 'session_limit_exceeded'
         || message.includes('concurrent session limit')
         || message.includes('session_limit_exceeded');
+}
+
+function isGatewayRateLimitError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message.toLowerCase() : '';
+    const code = (
+        error
+        && typeof error === 'object'
+        && 'code' in error
+    )
+        ? String((error as { code?: unknown }).code ?? '').toLowerCase()
+        : '';
+    return code === 'rate_limited'
+        || message.includes('rate limit')
+        || message.includes('ratelimit');
 }
 
 function renameTabErrorMessage(error: unknown): string {
@@ -1200,8 +1217,38 @@ export default function GhoDexWorkspaceScreen() {
                     return;
                 }
 
-                if (isGatewayConcurrentSessionLimitError(error) && operation.retries < 6) {
-                    logRealtimeInputDiagnostic('queue.error.concurrent_retry', {
+                if (isGatewayConcurrentSessionLimitError(error)) {
+                    if (operation.retries < REALTIME_CONCURRENT_SESSION_RETRY_ATTEMPTS) {
+                        logRealtimeInputDiagnostic('queue.error.concurrent_retry', {
+                            kind: operation.kind,
+                            retries: operation.retries,
+                            message: error instanceof Error ? error.message : String(error ?? ''),
+                        });
+                        realtimeMutationQueueRef.current.unshift({
+                            ...operation,
+                            retries: operation.retries + 1,
+                        });
+                        nextDrainDelayMs = resolveRealtimeMutationRetryDelayMs(operation.retries);
+                        return;
+                    }
+
+                    logRealtimeInputDiagnostic('queue.error.concurrent_recover', {
+                        kind: operation.kind,
+                        retries: operation.retries,
+                        message: error instanceof Error ? error.message : String(error ?? ''),
+                    });
+                    realtimeMutationQueueRef.current.unshift({
+                        ...operation,
+                        retries: 0,
+                    });
+                    setSubscriptionOpen(false);
+                    setTerminalStreamReconnectNonce((current) => current + 1);
+                    nextDrainDelayMs = 180;
+                    return;
+                }
+
+                if (isGatewayRateLimitError(error) && operation.retries < REALTIME_RATE_LIMIT_RETRY_ATTEMPTS) {
+                    logRealtimeInputDiagnostic('queue.error.rate_limited_retry', {
                         kind: operation.kind,
                         retries: operation.retries,
                         message: error instanceof Error ? error.message : String(error ?? ''),
@@ -1210,7 +1257,7 @@ export default function GhoDexWorkspaceScreen() {
                         ...operation,
                         retries: operation.retries + 1,
                     });
-                    nextDrainDelayMs = resolveRealtimeMutationRetryDelayMs(operation.retries);
+                    nextDrainDelayMs = resolveRealtimeRateLimitRetryDelayMs(operation.retries);
                     return;
                 }
 

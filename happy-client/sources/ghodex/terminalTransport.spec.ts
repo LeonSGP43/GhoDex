@@ -286,6 +286,40 @@ describe('terminal transport helpers', () => {
         expect(mapped.changedRows).toEqual([{ index: 3, kind: 'update', text: 'DONE' }]);
     });
 
+    it('returns null on stream lineage gap so callers can force snapshot resync', () => {
+        const mapped = mapTerminalStreamChunkToTerminalReadResult(
+            makeTerminalStreamChunkRecord({
+                deltaKind: 'rows',
+                frameId: 'frm_40',
+                parentFrameId: 'frm_39',
+                content: '[line 0] NEW',
+                changedRows: [{ index: 0, kind: 'update', text: 'NEW' }],
+            }),
+            makeTerminalReadResult({
+                terminalId: 'terminal-1',
+                frameId: 'frm_10',
+                content: 'OLD',
+            }),
+        );
+
+        expect(mapped).toBeNull();
+    });
+
+    it('returns null for non-reset stream rows when no base view exists', () => {
+        const mapped = mapTerminalStreamChunkToTerminalReadResult(
+            makeTerminalStreamChunkRecord({
+                deltaKind: 'rows',
+                frameId: 'frm_41',
+                parentFrameId: 'frm_40',
+                content: '[line 2] NEXT',
+                changedRows: [{ index: 2, kind: 'update', text: 'NEXT' }],
+            }),
+            null,
+        );
+
+        expect(mapped).toBeNull();
+    });
+
     it('accumulates terminal stream ack bytes and signals when batch threshold is reached', () => {
         expect(accumulateTerminalStreamAckBytes({
             pendingBytes: 0,

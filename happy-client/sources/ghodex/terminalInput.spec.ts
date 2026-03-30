@@ -7,6 +7,7 @@ import {
     describeTerminalDebugText,
     deriveRealtimeInputDelta,
     normalizeCommandInput,
+    resolveRealtimeRateLimitRetryDelayMs,
     resolveRealtimeMutationRetryDelayMs,
     resolveRealtimeKeyPayload,
     resolveTerminalSubmitMutation,
@@ -184,6 +185,14 @@ describe('latency helpers', () => {
         expect(resolveRealtimeMutationRetryDelayMs(1)).toBe(70);
         expect(resolveRealtimeMutationRetryDelayMs(3.8)).toBe(130);
         expect(resolveRealtimeMutationRetryDelayMs(-2)).toBe(40);
+    });
+
+    it('computes exponential backoff delay for gateway rate-limited retries', () => {
+        expect(resolveRealtimeRateLimitRetryDelayMs(0)).toBe(160);
+        expect(resolveRealtimeRateLimitRetryDelayMs(1)).toBe(320);
+        expect(resolveRealtimeRateLimitRetryDelayMs(3.2)).toBe(1280);
+        expect(resolveRealtimeRateLimitRetryDelayMs(10)).toBe(1280);
+        expect(resolveRealtimeRateLimitRetryDelayMs(-2)).toBe(160);
     });
 });
 
