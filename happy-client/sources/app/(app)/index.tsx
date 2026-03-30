@@ -39,7 +39,7 @@ import {
 } from '@/ghodex/gateway';
 import { INITIAL_GATEWAY_SESSION } from '@/ghodex/sessionState';
 import { loadStoredSession, type StoredSession } from '@/ghodex/storage';
-import { useLocalSetting } from '@/sync/storage';
+import { useLocalSetting, useLocalSettingMutable } from '@/sync/storage';
 import { TerminalRenderer } from '@/ghodex/terminal/TerminalRenderer';
 import { applyTerminalRowDelta, buildTerminalRows, type TerminalRenderRow } from '@/ghodex/terminal/model';
 import {
@@ -363,6 +363,9 @@ function getWorkspaceCopy(language = getCurrentLanguage()) {
             selectTerminalFromSidebar: '从侧边栏选择一个终端',
             commandPlaceholder: '直接输入终端文本；单行会自动回车执行。',
             commandPlaceholderRealtime: '实时按键流：在这里直接输入，按键会立即发送到终端。',
+            displayModeLabel: '显示模式',
+            displayModeTerminal: '终端',
+            displayModeText: '文本流',
             tabLabel: '标签',
             send: '发送',
             realtimeInputModeHint: '实时按键流模式已开启（点击终端直接输入，快捷键保留 Enter / Ctrl / 方向键）',
@@ -403,6 +406,9 @@ function getWorkspaceCopy(language = getCurrentLanguage()) {
         selectTerminalFromSidebar: 'Select a terminal from the sidebar',
         commandPlaceholder: 'Send terminal text directly; single line auto-sends Enter.',
         commandPlaceholderRealtime: 'Realtime key stream: type here to send keys immediately.',
+        displayModeLabel: 'Display mode',
+        displayModeTerminal: 'Terminal',
+        displayModeText: 'Text',
         tabLabel: 'Tab',
         send: 'Send',
         realtimeInputModeHint: 'Realtime key stream mode is enabled (tap terminal to type; quick keys keep Enter/Ctrl/arrows)',
@@ -423,6 +429,7 @@ export default function GhoDexWorkspaceScreen() {
     const router = useRouter();
     const isFocused = useIsFocused();
     const terminalInputMode = useLocalSetting('mobileTerminalInputMode');
+    const [terminalDisplayMode, setTerminalDisplayMode] = useLocalSettingMutable('mobileTerminalDisplayMode');
     const currentLanguage = getCurrentLanguage();
     const copy = React.useMemo(() => getWorkspaceCopy(currentLanguage), [currentLanguage]);
     const insets = useSafeAreaInsets();
@@ -448,6 +455,7 @@ export default function GhoDexWorkspaceScreen() {
     const [renameTabDraft, setRenameTabDraft] = React.useState('');
     const [renameTabError, setRenameTabError] = React.useState<string | null>(null);
     const isRealtimeInputMode = terminalInputMode === 'realtime';
+    const isTextDisplayMode = terminalDisplayMode === 'text';
     const sidebarWidth = Math.min(width * 0.84, 360);
     const sidebarProgress = React.useRef(new Animated.Value(0)).current;
 
@@ -2295,6 +2303,10 @@ export default function GhoDexWorkspaceScreen() {
         router.push('/settings');
     }, [router]);
 
+    const handleChangeDisplayMode = React.useCallback((nextMode: 'terminal' | 'text') => {
+        setTerminalDisplayMode(nextMode);
+    }, [setTerminalDisplayMode]);
+
     if (!loaded) {
         return (
             <View style={styles.loadingScreen}>
@@ -2510,6 +2522,38 @@ export default function GhoDexWorkspaceScreen() {
                                         {selectedTerminal?.workingDirectory || copy.selectTerminalFromSidebar}
                                     </Text>
                                     <View style={styles.terminalToolbarActions}>
+                                        <View style={styles.displayModeSwitch}>
+                                            <Pressable
+                                                onPress={() => handleChangeDisplayMode('terminal')}
+                                                style={({ pressed }) => [
+                                                    styles.displayModeSwitchOption,
+                                                    !isTextDisplayMode ? styles.displayModeSwitchOptionActive : null,
+                                                    pressed ? styles.iconButtonPressed : null,
+                                                ]}
+                                            >
+                                                <Text style={[
+                                                    styles.displayModeSwitchText,
+                                                    !isTextDisplayMode ? styles.displayModeSwitchTextActive : null,
+                                                ]}>
+                                                    {copy.displayModeTerminal}
+                                                </Text>
+                                            </Pressable>
+                                            <Pressable
+                                                onPress={() => handleChangeDisplayMode('text')}
+                                                style={({ pressed }) => [
+                                                    styles.displayModeSwitchOption,
+                                                    isTextDisplayMode ? styles.displayModeSwitchOptionActive : null,
+                                                    pressed ? styles.iconButtonPressed : null,
+                                                ]}
+                                            >
+                                                <Text style={[
+                                                    styles.displayModeSwitchText,
+                                                    isTextDisplayMode ? styles.displayModeSwitchTextActive : null,
+                                                ]}>
+                                                    {copy.displayModeText}
+                                                </Text>
+                                            </Pressable>
+                                        </View>
                                         <LatencyBadge active={latencySummary.lastMs !== null} label={latencyLabel} />
                                         <SyncBadge
                                             live={session.liveUpdatesEnabled}
@@ -2533,6 +2577,7 @@ export default function GhoDexWorkspaceScreen() {
                                     {terminalRows.length > 0 ? (
                                         <TerminalRenderer
                                             optimisticInput={isRealtimeInputMode ? realtimeLocalEcho : ''}
+                                            renderMode={terminalDisplayMode}
                                             rows={terminalRows}
                                         />
                                     ) : (
@@ -2921,6 +2966,34 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 6,
+    },
+    displayModeSwitch: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: theme.colors.divider,
+        backgroundColor: theme.colors.surfaceHigh,
+        overflow: 'hidden',
+    },
+    displayModeSwitchOption: {
+        minWidth: 44,
+        paddingHorizontal: 8,
+        paddingVertical: 5,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    displayModeSwitchOptionActive: {
+        backgroundColor: theme.colors.button.primary.background,
+    },
+    displayModeSwitchText: {
+        color: theme.colors.textSecondary,
+        fontSize: 10,
+        fontWeight: '700',
+        letterSpacing: 0.2,
+    },
+    displayModeSwitchTextActive: {
+        color: theme.colors.button.primary.tint,
     },
     miniAction: {
         minWidth: 30,

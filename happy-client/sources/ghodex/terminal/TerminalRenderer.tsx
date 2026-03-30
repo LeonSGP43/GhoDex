@@ -7,28 +7,33 @@ import type { TerminalRenderRow } from './model';
 export function TerminalRenderer({
     rows,
     optimisticInput,
+    renderMode = 'terminal',
 }: {
     rows: TerminalRenderRow[];
     optimisticInput?: string;
+    renderMode?: 'terminal' | 'text';
 }) {
     const { theme } = useUnistyles();
     const rowCount = rows.length;
+    const textOnlyMode = renderMode === 'text';
 
     const renderItem = React.useCallback(({ item, index }: { item: TerminalRenderRow; index: number }) => (
         <View style={styles.row}>
             <Text selectable style={[styles.rowText, { color: theme.colors.terminal.stdout }]}>
-                {item.segments.map((segment, index) => (
-                    <Text
-                        key={`${index}-${segment.text.length}`}
-                        style={{
-                            color: segment.style.color ?? theme.colors.terminal.stdout,
-                            backgroundColor: segment.style.backgroundColor,
-                            fontWeight: segment.style.fontWeight,
-                        }}
-                    >
-                        {segment.text}
-                    </Text>
-                ))}
+                {textOnlyMode
+                    ? item.plainText
+                    : item.segments.map((segment, segmentIndex) => (
+                        <Text
+                            key={`${segmentIndex}-${segment.text.length}`}
+                            style={{
+                                color: segment.style.color ?? theme.colors.terminal.stdout,
+                                backgroundColor: segment.style.backgroundColor,
+                                fontWeight: segment.style.fontWeight,
+                            }}
+                        >
+                            {segment.text}
+                        </Text>
+                    ))}
                 {index === rowCount - 1 && optimisticInput ? (
                     <Text style={[styles.optimisticText, { color: theme.colors.terminal.stdout }]}>
                         {optimisticInput}
@@ -36,7 +41,7 @@ export function TerminalRenderer({
                 ) : null}
             </Text>
         </View>
-    ), [optimisticInput, rowCount, theme.colors.terminal.stdout]);
+    ), [optimisticInput, rowCount, textOnlyMode, theme.colors.terminal.stdout]);
 
     return (
         <FlatList

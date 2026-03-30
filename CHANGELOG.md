@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(happy-client): add mobile terminal/text display mode toggle on the workspace stream view
+
+- What changed: Added local setting `mobileTerminalDisplayMode` (`terminal` / `text`) with defaults and parse/update coverage in `happy-client/sources/sync/localSettings.ts` + `happy-client/sources/sync/localSettings.spec.ts`. Added settings-panel toggle item in `happy-client/sources/app/(app)/settings/index.tsx`. Updated workspace terminal panel in `happy-client/sources/app/(app)/index.tsx` to expose an in-place mode switch and pass mode into `TerminalRenderer`. Extended `happy-client/sources/ghodex/terminal/TerminalRenderer.tsx` with `renderMode` so `text` mode renders plain cleaned text (`row.plainText`) from the same live stream rows.
+- Why: Users need to keep native ANSI terminal interaction while having a second low-noise text stream view for faster reading, without adding a second polling pipeline.
+- Impact: Mobile workspace now supports one-tap switching between ANSI terminal rendering and plain-text stream rendering, both backed by the same realtime `terminalRows` pipeline.
+- Verification: `cd happy-client && yarn test sources/sync/localSettings.spec.ts sources/ghodex/terminal/model.spec.ts`; `cd happy-client && yarn typecheck`.
+- Files: `happy-client/sources/sync/localSettings.ts`, `happy-client/sources/sync/localSettings.spec.ts`, `happy-client/sources/app/(app)/settings/index.tsx`, `happy-client/sources/app/(app)/index.tsx`, `happy-client/sources/ghodex/terminal/TerminalRenderer.tsx`, `CHANGELOG.md`.
+- Decision trail: Kept protocol and transport unchanged; implemented display-mode switching strictly at the renderer/view layer so both modes share identical stream semantics and latency characteristics.
+
 ### feat(control-harness): make semantic extraction profile configurable from gateway settings
 
 - What changed: Added a new gateway setting `semanticProfile` (`generic` / `codex` / `claude_code`) with persistence, environment parsing, and settings-panel control wiring across `ControlHarnessGatewayAppSettings`, `ControlHarnessGateway.Configuration`, and `SettingsView`. Updated semantic projection to be profile-aware and added ANSI/control-sequence cleanup in logical-line extraction while preserving raw `exact_text`. Wired the same profile source into both `terminal.semantic.v2` and AI Terminal Manager semantic snapshot usage.
