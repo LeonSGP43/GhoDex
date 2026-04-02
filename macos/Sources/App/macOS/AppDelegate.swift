@@ -397,10 +397,6 @@ class AppDelegate: NSObject,
     private var remotePairingQRCodePairingCode: String?
     private var topLevelWindowCloseObserver: NSObjectProtocol?
     private var lastClosedTopLevelWindowKind: LastClosedTopLevelWindowKind?
-    private var pendingTerminateReason: String?
-    private var pendingTerminateRequestedBy: String?
-    private var pendingTerminateSignal: String?
-    private var signalTerminationRequested = false
 
     override init() {
 #if DEBUG
@@ -442,7 +438,6 @@ class AppDelegate: NSObject,
 
         // Store our start time
         applicationLaunchTime = ProcessInfo.processInfo.systemUptime
-        RuntimeDiagnosticsLogger.beginLifecycleSessionIfNeeded()
 
         // Check if secure input was enabled when we last quit.
         if UserDefaults.standard.bool(forKey: "SecureInput") != SecureInput.shared.enabled {
@@ -634,34 +629,13 @@ class AppDelegate: NSObject,
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if let pendingTerminateReason, pendingTerminateRequestedBy == "signal" {
-            var details: [String: String] = [:]
-            if let pendingTerminateSignal {
-                details["signal_name"] = pendingTerminateSignal
-            }
-            return acceptTerminate(
-                reason: pendingTerminateReason,
-                requestedBy: "signal",
-                details: details
-            )
-        }
-
         let windows = NSApplication.shared.windows
-        if windows.isEmpty {
-            return acceptTerminate(
-                reason: "no_windows",
-                requestedBy: "system",
-                details: ["window_count": "0"]
-            )
-        }
+        if windows.isEmpty { return .terminateNow }
 
         // If we've already accepted to install an update, then we don't need to
         // confirm quit. The user is already expecting the update to happen.
         if updateController.isInstalling {
-            return acceptTerminate(
-                reason: "update_install_quit",
-                requestedBy: "updater"
-            )
+            return .terminateNow
         }
 
         // This probably isn't fully safe. The isEmpty check above is aspirational, it doesn't
@@ -672,11 +646,7 @@ class AppDelegate: NSObject,
         // here because I don't want to remove it in a patch release cycle but we should
         // target removing it soon.
         if (windows.allSatisfy { !$0.isVisible }) {
-            return acceptTerminate(
-                reason: "no_visible_windows",
-                requestedBy: "system",
-                details: ["window_count": "\(windows.count)"]
-            )
+            return .terminateNow
         }
 
         // If the user is shutting down, restarting, or logging out, we don't confirm quit.
@@ -689,13 +659,7 @@ class AppDelegate: NSObject,
             if let why = event.attributeDescriptor(forKeyword: keyword) {
                 switch why.typeCodeValue {
                 case kAEShutDown, kAERestart, kAEReallyLogOut:
-                    return acceptTerminate(
-                        reason: Self.terminationReason(forAppleEventTypeCode: why.typeCodeValue),
-                        requestedBy: "system",
-                        details: [
-                            "apple_event_type_code": "\(why.typeCodeValue)",
-                        ]
-                    )
+                    return .terminateNow
 
                 default:
                     break
@@ -716,35 +680,14 @@ class AppDelegate: NSObject,
         alert.alertStyle = .warning
         switch alert.runModal() {
         case .alertFirstButtonReturn:
-            return acceptTerminate(
-                reason: "user_confirmed_quit",
-                requestedBy: "user",
-                details: ["window_count": "\(windows.count)"]
-            )
+            return .terminateNow
 
         default:
-            RuntimeDiagnosticsLogger.recordLifecycleTerminateCancelled(
-                reason: "user_cancelled_quit",
-                requestedBy: "user",
-                details: ["window_count": "\(windows.count)"]
-            )
-            clearPendingTerminateState()
             return .terminateCancel
         }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        let terminateReason = pendingTerminateReason ?? "application_will_terminate"
-        let requestedBy = pendingTerminateRequestedBy ?? "unknown"
-        var details: [String: String] = [
-            "requested_by": requestedBy,
-        ]
-        if let pendingTerminateSignal {
-            details["signal_name"] = pendingTerminateSignal
-        }
-        RuntimeDiagnosticsLogger.recordLifecycleWillTerminate(reason: terminateReason, details: details)
-        RuntimeDiagnosticsLogger.markLifecycleGracefulTerminate(reason: terminateReason, details: details)
-
         controlHarnessReadSampler.stop()
         controlHarnessService.stop()
         controlHarnessGateway.stop()
@@ -755,7 +698,6 @@ class AppDelegate: NSObject,
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
         browserControlIPCService.stop()
         GhoDexCEFShutdownGlobal()
-        clearPendingTerminateState()
     }
 
     @MainActor
@@ -877,78 +819,30 @@ class AppDelegate: NSObject,
 
     /// Setup signal handlers
     private func setupSignals() {
-        registerSignalSource(signalNumber: SIGUSR2) { [weak self] in
+        // Register a signal handler for config reloading. It appears that all
+        // of this is required. I've commented each line because its a bit unclear.
+        // Warning: signal handlers don't work when run via Xcode. They have to be
+        // run on a real app bundle.
+
+        // We need to ignore signals we register with makeSignalSource or they
+        // don't seem to handle.
+        signal(SIGUSR2, SIG_IGN)
+
+        // Make the signal source and register our event handle. We keep a weak
+        // ref to ourself so we don't create a retain cycle.
+        let sigusr2 = DispatchSource.makeSignalSource(signal: SIGUSR2, queue: .main)
+        sigusr2.setEventHandler { [weak self] in
             guard let self else { return }
             Ghostty.logger.info("reloading configuration in response to SIGUSR2")
             self.ghostty.reloadConfig()
         }
-        registerTerminateSignal(SIGTERM)
-        registerTerminateSignal(SIGINT)
-        registerTerminateSignal(SIGHUP)
-    }
 
-    private func registerTerminateSignal(_ signalNumber: Int32) {
-        registerSignalSource(signalNumber: signalNumber) { [weak self] in
-            self?.handleTerminateSignal(signalNumber)
-        }
-    }
+        // The signal source starts unactivated, so we have to resume it once
+        // we setup the event handler.
+        sigusr2.resume()
 
-    private func registerSignalSource(
-        signalNumber: Int32,
-        handler: @escaping () -> Void
-    ) {
-        signal(signalNumber, SIG_IGN)
-        let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
-        source.setEventHandler(handler: handler)
-        source.resume()
-        signals.append(source)
-    }
-
-    private func handleTerminateSignal(_ signalNumber: Int32) {
-        let signalName = Self.signalName(for: signalNumber)
-        let mappedReason = Self.terminationReason(forSignal: signalNumber)
-        RuntimeDiagnosticsLogger.recordLifecycleSignalReceived(
-            signalNumber: signalNumber,
-            signalName: signalName,
-            mappedReason: mappedReason
-        )
-
-        pendingTerminateReason = mappedReason
-        pendingTerminateRequestedBy = "signal"
-        pendingTerminateSignal = signalName
-
-        guard !signalTerminationRequested else { return }
-        signalTerminationRequested = true
-        NSApp.terminate(nil)
-    }
-
-    private func acceptTerminate(
-        reason: String,
-        requestedBy: String,
-        details: [String: String] = [:]
-    ) -> NSApplication.TerminateReply {
-        pendingTerminateReason = reason
-        pendingTerminateRequestedBy = requestedBy
-        if let signalName = details["signal_name"] {
-            pendingTerminateSignal = signalName
-        } else if requestedBy != "signal" {
-            pendingTerminateSignal = nil
-            signalTerminationRequested = false
-        }
-
-        RuntimeDiagnosticsLogger.recordLifecycleTerminateRequested(
-            reason: reason,
-            requestedBy: requestedBy,
-            details: details
-        )
-        return .terminateNow
-    }
-
-    private func clearPendingTerminateState() {
-        pendingTerminateReason = nil
-        pendingTerminateRequestedBy = nil
-        pendingTerminateSignal = nil
-        signalTerminationRequested = false
+        // We need to keep a strong reference to it so it isn't disabled.
+        signals.append(sigusr2)
     }
 
     /// Setup localized titles for menu items that are created in xib but need
@@ -1791,47 +1685,6 @@ class AppDelegate: NSObject,
         }
         let modifiers = modifierFlags.intersection(.deviceIndependentFlagsMask)
         return modifiers == [.command]
-    }
-
-    static func terminationReason(forSignal signalNumber: Int32) -> String {
-        switch signalNumber {
-        case SIGTERM:
-            return "signal_sigterm"
-        case SIGINT:
-            return "signal_sigint"
-        case SIGHUP:
-            return "signal_sighup"
-        default:
-            return "signal_\(signalNumber)"
-        }
-    }
-
-    static func signalName(for signalNumber: Int32) -> String {
-        switch signalNumber {
-        case SIGTERM:
-            return "SIGTERM"
-        case SIGINT:
-            return "SIGINT"
-        case SIGHUP:
-            return "SIGHUP"
-        case SIGUSR2:
-            return "SIGUSR2"
-        default:
-            return "SIG\(signalNumber)"
-        }
-    }
-
-    static func terminationReason(forAppleEventTypeCode typeCode: DescType) -> String {
-        switch typeCode {
-        case kAEShutDown:
-            return "system_shutdown"
-        case kAERestart:
-            return "system_restart"
-        case kAEReallyLogOut:
-            return "system_logout"
-        default:
-            return "system_apple_event_\(typeCode)"
-        }
     }
 
     private func isWorkspaceMapTopLevelActive(preferredWindow: NSWindow?) -> Bool {
