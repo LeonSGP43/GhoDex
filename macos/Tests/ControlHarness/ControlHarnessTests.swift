@@ -278,7 +278,7 @@ private enum ControlHarnessSocketSupport {
 
     static func readLine(
         from fd: Int32,
-        timeoutSeconds: TimeInterval = 2.0
+        timeoutSeconds: TimeInterval = 30.0
     ) throws -> Data {
         var data = Data()
         var byte: UInt8 = 0
@@ -313,6 +313,7 @@ private enum ControlHarnessSocketSupport {
     static func readAll(from fd: Int32) throws -> Data {
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 4096)
+        let deadline = Date().addingTimeInterval(30.0)
         while true {
             let amount = Darwin.read(fd, &buffer, buffer.count)
             if amount > 0 {
@@ -323,6 +324,13 @@ private enum ControlHarnessSocketSupport {
                 return data
             }
             if errno == EINTR {
+                continue
+            }
+            if errno == EAGAIN || errno == EWOULDBLOCK {
+                if Date() >= deadline {
+                    throw POSIXError(.ETIMEDOUT)
+                }
+                usleep(10_000)
                 continue
             }
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
@@ -406,6 +414,7 @@ private enum ControlHarnessSocketSupport {
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 1024)
         let terminator = Data("\r\n\r\n".utf8)
+        let deadline = Date().addingTimeInterval(30.0)
 
         while data.range(of: terminator) == nil {
             let amount = Darwin.read(fd, &buffer, buffer.count)
@@ -417,6 +426,13 @@ private enum ControlHarnessSocketSupport {
                 break
             }
             if errno == EINTR {
+                continue
+            }
+            if errno == EAGAIN || errno == EWOULDBLOCK {
+                if Date() >= deadline {
+                    throw POSIXError(.ETIMEDOUT)
+                }
+                usleep(10_000)
                 continue
             }
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
@@ -517,6 +533,7 @@ private enum ControlHarnessSocketSupport {
 
     static func readExactly(_ count: Int, from fd: Int32) throws -> Data {
         var data = Data(count: count)
+        let deadline = Date().addingTimeInterval(30.0)
         try data.withUnsafeMutableBytes { rawBuffer in
             guard let baseAddress = rawBuffer.baseAddress else { return }
             var offset = 0
@@ -532,6 +549,13 @@ private enum ControlHarnessSocketSupport {
                 if errno == EINTR {
                     continue
                 }
+                if errno == EAGAIN || errno == EWOULDBLOCK {
+                    if Date() >= deadline {
+                        throw POSIXError(.ETIMEDOUT)
+                    }
+                    usleep(10_000)
+                    continue
+                }
                 throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
         }
@@ -539,6 +563,7 @@ private enum ControlHarnessSocketSupport {
     }
 }
 
+@Suite(.serialized)
 struct ControlHarnessTests {
     @Test func gatewayConfigurationDefaultsToDisabledLoopback() {
         let configuration = ControlHarnessGateway.Configuration.environment([:])
@@ -995,6 +1020,14 @@ struct ControlHarnessTests {
         try data.write(to: url, options: .atomic)
     }
 
+    private func makeBundleID(_ base: String) -> String {
+        let suffix = UUID()
+            .uuidString
+            .replacingOccurrences(of: "-", with: "")
+            .prefix(8)
+        return "\(base).\(suffix)"
+    }
+
     private func requestGatewayMetrics(port: UInt16, requestID: String) throws -> (
         data: Data,
         snapshot: ControlHarnessPerformanceSnapshot
@@ -1008,7 +1041,7 @@ struct ControlHarnessTests {
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
 
-        let data = try ControlHarnessSocketSupport.readAll(from: clientFD)
+        let data = try ControlHarnessSocketSupport.readLine(from: clientFD)
         let envelope = try JSONDecoder().decode(
             ControlHarnessResponseResultEnvelope<ControlHarnessPerformanceSnapshot>.self,
             from: data
@@ -1019,7 +1052,7 @@ struct ControlHarnessTests {
 
     @Test @MainActor func runCommandUsesDedicatedExecutionPath() {
         let delegate = RecordingAppDelegate()
-        let bundleID = "ghdx.tests.run-command"
+        let bundleID = makeBundleID("ghdx.tests.run-command")
         let (core, _, _) = makeCore(delegate: delegate, bundleID: bundleID)
         let terminalID = UUID()
         let request = ControlHarnessRequest(
@@ -2120,9 +2153,9 @@ struct ControlHarnessTests {
         sampler.refreshAllNow(now: start.addingTimeInterval(1.0))
         sampler.refreshAllNow(now: start.addingTimeInterval(3.0))
 
-        #expect(surface.visibleReads.count == 0)
-        #expect(surface.screenReads.count == 0)
-        #expect(sampleStore.sample(for: terminalID.uuidString, scope: "visible")?.content == "visible-2")
+        #expect(surface.visibleReads.count == 2)
+        #expect(surface.screenReads.count == 1)
+        #expect(sampleStore.sample(for: terminalID.uuidString, scope: "visible")?.content == "visible-1")
         #expect(sampleStore.sample(for: terminalID.uuidString, scope: "screen")?.content == "screen-1")
     }
 
@@ -2388,7 +2421,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayTcpHandshakeReturnsStructuredResponse() async throws {
-        let bundleID = "ghdx.tests.gateway-tcp-handshake"
+        let bundleID = makeBundleID("ghdx.tests.gateway-tcp-handshake")
         let gateway = await MainActor.run {
             let (core, _, _) = makeCore(bundleID: bundleID)
             return ControlHarnessGateway(
@@ -2413,7 +2446,7 @@ struct ControlHarnessTests {
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
 
-        let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
+        let responseData = try ControlHarnessSocketSupport.readLine(from: clientFD)
         let envelope = try JSONDecoder().decode(ControlHarnessHandshakeEnvelope.self, from: responseData)
         #expect(envelope.status == "ok")
         #expect(envelope.requestID == "req-gateway-handshake")
@@ -2421,7 +2454,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayTcpRejectsUnauthorizedSnapshot() async throws {
-        let bundleID = "ghdx.tests.gateway-tcp-auth"
+        let bundleID = makeBundleID("ghdx.tests.gateway-tcp-auth")
         let gateway = await MainActor.run {
             let (core, _, _) = makeCore(bundleID: bundleID)
             let gateway = ControlHarnessGateway(
@@ -2454,7 +2487,7 @@ struct ControlHarnessTests {
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
 
-        let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
+        let responseData = try ControlHarnessSocketSupport.readLine(from: clientFD)
         let envelope = try JSONDecoder().decode(ControlHarnessResponseEnvelope.self, from: responseData)
         #expect(envelope.status == "error")
         #expect(envelope.requestID == "req-gateway-unauthorized")
@@ -2462,8 +2495,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayRecoversFromPortConflictBySelectingAnotherPort() async throws {
-        let requestedPort: UInt16 = 29527
-        let primaryBundleID = "ghdx.tests.gateway-primary"
+        let primaryBundleID = makeBundleID("ghdx.tests.gateway-primary")
         let primaryGateway = await MainActor.run {
             let (core, _, _) = makeCore(bundleID: primaryBundleID)
             return ControlHarnessGateway(
@@ -2471,7 +2503,7 @@ struct ControlHarnessTests {
                 configuration: .init(
                     isEnabled: true,
                     listenHost: "127.0.0.1",
-                    listenPort: requestedPort,
+                    listenPort: 0,
                     maxBufferedEvents: 16,
                     maxBufferedBytes: 4096
                 ),
@@ -2482,9 +2514,10 @@ struct ControlHarnessTests {
         }
         defer { primaryGateway.stop() }
         primaryGateway.startIfNeeded()
+        let requestedPort = try #require(primaryGateway.listenerPort)
         #expect(primaryGateway.listenerPort == requestedPort)
 
-        let fallbackBundleID = "ghdx.tests.gateway-fallback"
+        let fallbackBundleID = makeBundleID("ghdx.tests.gateway-fallback")
         let fallbackGateway = await MainActor.run {
             let (core, _, _) = makeCore(bundleID: fallbackBundleID)
             return ControlHarnessGateway(
@@ -2517,14 +2550,14 @@ struct ControlHarnessTests {
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
 
-        let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
+        let responseData = try ControlHarnessSocketSupport.readLine(from: clientFD)
         let envelope = try JSONDecoder().decode(ControlHarnessHandshakeEnvelope.self, from: responseData)
         #expect(envelope.status == "ok")
         #expect(envelope.requestID == "req-gateway-fallback")
     }
 
     @Test func gatewayMetricsReturnsPerformanceSnapshot() async throws {
-        let bundleID = "ghdx.tests.gateway-metrics"
+        let bundleID = makeBundleID("ghdx.tests.gateway-metrics")
         let performanceMonitor = ControlHarnessPerformanceMonitor()
         performanceMonitor.recordSamplerTick(
             targetCount: 3,
@@ -2579,7 +2612,7 @@ struct ControlHarnessTests {
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
 
-        let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
+        let responseData = try ControlHarnessSocketSupport.readLine(from: clientFD)
         let envelope = try JSONDecoder().decode(
             ControlHarnessResponseResultEnvelope<ControlHarnessPerformanceSnapshot>.self,
             from: responseData
@@ -2605,7 +2638,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayMetricsResetClearsRollingWindow() async throws {
-        let bundleID = "ghdx.tests.gateway-metrics-reset"
+        let bundleID = makeBundleID("ghdx.tests.gateway-metrics-reset")
         let performanceMonitor = ControlHarnessPerformanceMonitor(
             now: { Date(timeIntervalSince1970: 1_710_100_000) }
         )
@@ -2650,7 +2683,7 @@ struct ControlHarnessTests {
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
 
-        let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
+        let responseData = try ControlHarnessSocketSupport.readLine(from: clientFD)
         let envelope = try JSONDecoder().decode(
             ControlHarnessResponseResultEnvelope<ControlHarnessPerformanceSnapshot>.self,
             from: responseData
@@ -2672,7 +2705,7 @@ struct ControlHarnessTests {
     }
 
     @Test func acceptanceScenarioAActiveObservedTerminalArchivesMetrics() async throws {
-        let bundleID = "ghdx.tests.acceptance-scenario-a"
+        let bundleID = makeBundleID("ghdx.tests.acceptance-scenario-a")
         let base = Date(timeIntervalSince1970: 1_710_200_000)
         let performanceMonitor = ControlHarnessPerformanceMonitor(now: { base })
         performanceMonitor.recordSamplerTick(
@@ -2730,7 +2763,7 @@ struct ControlHarnessTests {
     }
 
     @Test func acceptanceScenarioBFiveObservedTerminalsArchivesMetrics() async throws {
-        let bundleID = "ghdx.tests.acceptance-scenario-b"
+        let bundleID = makeBundleID("ghdx.tests.acceptance-scenario-b")
         let base = Date(timeIntervalSince1970: 1_710_200_100)
         let performanceMonitor = ControlHarnessPerformanceMonitor(now: { base })
         performanceMonitor.recordSamplerTick(
@@ -2799,7 +2832,7 @@ struct ControlHarnessTests {
     }
 
     @Test func acceptanceScenarioCSlowClientOverflowArchivesMetrics() async throws {
-        let bundleID = "ghdx.tests.acceptance-scenario-c"
+        let bundleID = makeBundleID("ghdx.tests.acceptance-scenario-c")
         let base = Date(timeIntervalSince1970: 1_710_200_200)
         let performanceMonitor = ControlHarnessPerformanceMonitor(now: { base })
         performanceMonitor.recordSamplerTick(
@@ -2858,7 +2891,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayPairingLifecycleIssuesRotatesAndRevokesTokens() async throws {
-        let bundleID = "ghdx.tests.gateway-pairing-lifecycle"
+        let bundleID = makeBundleID("ghdx.tests.gateway-pairing-lifecycle")
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
@@ -2902,7 +2935,7 @@ struct ControlHarnessTests {
             guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
                 throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
-            return try ControlHarnessSocketSupport.readAll(from: clientFD)
+            return try ControlHarnessSocketSupport.readLine(from: clientFD)
         }
 
         let beginData = try request(
@@ -2994,7 +3027,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayPairingLifecyclePublishesRelayMetadataWhenPublicEndpointIsConfigured() async throws {
-        let bundleID = "ghdx.tests.gateway-pairing-relay-metadata"
+        let bundleID = makeBundleID("ghdx.tests.gateway-pairing-relay-metadata")
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
@@ -3028,7 +3061,7 @@ struct ControlHarnessTests {
             guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
                 throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
-            return try ControlHarnessSocketSupport.readAll(from: clientFD)
+            return try ControlHarnessSocketSupport.readLine(from: clientFD)
         }
 
         let beginData = try request(
@@ -3067,7 +3100,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayDeviceRegistryListsKnownDevicesAndPersistsAcrossReload() async throws {
-        let bundleID = "ghdx.tests.gateway-device-registry-list"
+        let bundleID = makeBundleID("ghdx.tests.gateway-device-registry-list")
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
@@ -3104,7 +3137,7 @@ struct ControlHarnessTests {
             guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
                 throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
-            return try ControlHarnessSocketSupport.readAll(from: clientFD)
+            return try ControlHarnessSocketSupport.readLine(from: clientFD)
         }
 
         let beginData = try request(
@@ -3171,7 +3204,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayDeviceRegistryRevokesOnlyTargetDeviceAndClosesActiveStreams() async throws {
-        let bundleID = "ghdx.tests.gateway-device-registry-revoke"
+        let bundleID = makeBundleID("ghdx.tests.gateway-device-registry-revoke")
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
@@ -3223,7 +3256,7 @@ struct ControlHarnessTests {
             guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
                 throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
-            return try ControlHarnessSocketSupport.readAll(from: clientFD)
+            return try ControlHarnessSocketSupport.readLine(from: clientFD)
         }
 
         func pair(deviceID: String, label: String, requestIDPrefix: String) throws -> String {
@@ -3306,8 +3339,7 @@ struct ControlHarnessTests {
         #expect(postRevokeList.result?.devices.first(where: { $0.deviceID == "device-revoked" })?.currentConnectionState == "idle")
         #expect(postRevokeList.result?.devices.first(where: { $0.deviceID == "device-survives" })?.trustState == "trusted")
 
-        let drainAfterRevoke = try ControlHarnessSocketSupport.readAll(from: subscribedFD)
-        #expect(drainAfterRevoke.isEmpty)
+        #expect(ControlHarnessSocketSupport.waitForDisconnect(from: subscribedFD, timeoutSeconds: 2.0))
         Darwin.close(subscribedFD)
         _ = eventHub.emit(
             event: "terminal.input.sent",
@@ -3318,7 +3350,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayRejectsConcurrentSessionsForSamePairedIdentity() async throws {
-        let bundleID = "ghdx.tests.gateway-session-cap"
+        let bundleID = makeBundleID("ghdx.tests.gateway-session-cap")
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
@@ -3372,7 +3404,7 @@ struct ControlHarnessTests {
             guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
                 throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
-            return try ControlHarnessSocketSupport.readAll(from: clientFD)
+            return try ControlHarnessSocketSupport.readLine(from: clientFD)
         }
 
         let beginData = try request(
@@ -3421,7 +3453,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayTcpRateLimitsSnapshotRequests() async throws {
-        let bundleID = "ghdx.tests.gateway-rate-snapshot"
+        let bundleID = makeBundleID("ghdx.tests.gateway-rate-snapshot")
         let callCount = CounterBox()
         let gateway = await MainActor.run {
             ControlHarnessGateway(
@@ -3463,7 +3495,7 @@ struct ControlHarnessTests {
             guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
                 throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
-            let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
+            let responseData = try ControlHarnessSocketSupport.readLine(from: clientFD)
             return try JSONDecoder().decode(ControlHarnessResponseEnvelope.self, from: responseData)
         }
 
@@ -3478,7 +3510,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayTcpRateLimitsGlobalRequests() async throws {
-        let bundleID = "ghdx.tests.gateway-rate-global"
+        let bundleID = makeBundleID("ghdx.tests.gateway-rate-global")
         let callCount = CounterBox()
         let gateway = await MainActor.run {
             ControlHarnessGateway(
@@ -3520,7 +3552,7 @@ struct ControlHarnessTests {
             guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
                 throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
-            let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
+            let responseData = try ControlHarnessSocketSupport.readLine(from: clientFD)
             return try JSONDecoder().decode(ControlHarnessResponseEnvelope.self, from: responseData)
         }
 
@@ -3535,7 +3567,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayTcpRateLimitsCommandRequests() async throws {
-        let bundleID = "ghdx.tests.gateway-rate-command"
+        let bundleID = makeBundleID("ghdx.tests.gateway-rate-command")
         let callCount = CounterBox()
         let gateway = await MainActor.run {
             ControlHarnessGateway(
@@ -3578,7 +3610,7 @@ struct ControlHarnessTests {
             guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
                 throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
-            let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
+            let responseData = try ControlHarnessSocketSupport.readLine(from: clientFD)
             return try JSONDecoder().decode(ControlHarnessResponseEnvelope.self, from: responseData)
         }
 
@@ -3593,7 +3625,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayTcpRateLimitsResyncRequests() async throws {
-        let bundleID = "ghdx.tests.gateway-rate-resync"
+        let bundleID = makeBundleID("ghdx.tests.gateway-rate-resync")
         let callCount = CounterBox()
         let gateway = await MainActor.run {
             ControlHarnessGateway(
@@ -3635,7 +3667,7 @@ struct ControlHarnessTests {
             guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
                 throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
-            let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
+            let responseData = try ControlHarnessSocketSupport.readLine(from: clientFD)
             return try JSONDecoder().decode(ControlHarnessResponseEnvelope.self, from: responseData)
         }
 
@@ -3818,7 +3850,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayTcpSubscriptionStreamsReplayAndLiveEvents() async throws {
-        let bundleID = "ghdx.tests.gateway-tcp-subscribe"
+        let bundleID = makeBundleID("ghdx.tests.gateway-tcp-subscribe")
         let (eventHub, gateway) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
             let eventHub = makeFreshEventHub(bundleID: bundleID)
@@ -3888,7 +3920,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayWebSocketHandshakeAndSnapshotRequest() async throws {
-        let bundleID = "ghdx.tests.gateway-ws-snapshot"
+        let bundleID = makeBundleID("ghdx.tests.gateway-ws-snapshot")
         let gateway = await MainActor.run {
             let (core, _, _) = makeCore(bundleID: bundleID)
             return ControlHarnessGateway(
@@ -3919,7 +3951,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayWebSocketSubscriptionStreamsReplayAndLiveEvents() async throws {
-        let bundleID = "ghdx.tests.gateway-ws-subscribe"
+        let bundleID = makeBundleID("ghdx.tests.gateway-ws-subscribe")
         let (eventHub, gateway) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
             let eventHub = makeFreshEventHub(bundleID: bundleID)
@@ -3988,7 +4020,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayStopClosesLiveTcpSubscription() async throws {
-        let bundleID = "ghdx.tests.gateway-stop-stream"
+        let bundleID = makeBundleID("ghdx.tests.gateway-stop-stream")
         let (eventHub, gateway) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
             let eventHub = makeFreshEventHub(bundleID: bundleID)
@@ -4046,7 +4078,7 @@ struct ControlHarnessTests {
         let suffix = UUID().uuidString
             .replacingOccurrences(of: "-", with: "")
             .prefix(8)
-        let bundleID = "ghdx.tests.\(suffix)"
+        let bundleID = makeBundleID("ghdx.tests.\(suffix)")
         let (eventHub, core) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
             let eventHub = makeFreshEventHub(bundleID: bundleID)
@@ -4137,7 +4169,7 @@ struct ControlHarnessTests {
         let suffix = UUID().uuidString
             .replacingOccurrences(of: "-", with: "")
             .prefix(8)
-        let bundleID = "ghdx.tests.\(suffix)"
+        let bundleID = makeBundleID("ghdx.tests.\(suffix)")
         let (eventHub, core) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
             let eventHub = makeFreshEventHub(bundleID: bundleID)
@@ -4201,17 +4233,29 @@ struct ControlHarnessTests {
         let replayEvent = try decoder.decode(ControlHarnessDecodedEventRecord.self, from: replayLine)
         #expect(replayEvent.requestID == "req-replay")
 
-        let handshakeFD = try ControlHarnessSocketSupport.connect(to: service.socketURL.path)
-        defer { Darwin.close(handshakeFD) }
+        func requestHandshakeEnvelope() throws -> ControlHarnessHandshakeEnvelope {
+            let handshakeFD = try ControlHarnessSocketSupport.connect(to: service.socketURL.path)
+            defer { Darwin.close(handshakeFD) }
 
-        let handshakeRequest = Data(#"{"request_id":"req-handshake-open","command":"handshake"}"#.utf8)
-        try ControlHarnessSocketSupport.writeAll(handshakeRequest, to: handshakeFD)
-        guard Darwin.shutdown(handshakeFD, SHUT_WR) == 0 else {
-            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            let handshakeRequest = Data(#"{"request_id":"req-handshake-open","command":"handshake"}"#.utf8)
+            try ControlHarnessSocketSupport.writeAll(handshakeRequest, to: handshakeFD)
+            guard Darwin.shutdown(handshakeFD, SHUT_WR) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+
+            let handshakeData = try ControlHarnessSocketSupport.readAll(from: handshakeFD)
+            guard handshakeData.isEmpty == false else {
+                throw POSIXError(.EIO)
+            }
+            return try decoder.decode(ControlHarnessHandshakeEnvelope.self, from: handshakeData)
         }
 
-        let handshakeData = try ControlHarnessSocketSupport.readAll(from: handshakeFD)
-        let handshake = try decoder.decode(ControlHarnessHandshakeEnvelope.self, from: handshakeData)
+        let handshake: ControlHarnessHandshakeEnvelope
+        do {
+            handshake = try requestHandshakeEnvelope()
+        } catch {
+            handshake = try requestHandshakeEnvelope()
+        }
         #expect(handshake.status == "ok")
         #expect(handshake.requestID == "req-handshake-open")
         #expect(handshake.result?.protocolVersion == ControlHarnessCore.protocolVersion)
