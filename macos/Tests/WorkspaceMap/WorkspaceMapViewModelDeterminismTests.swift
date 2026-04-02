@@ -1,6 +1,7 @@
 import XCTest
 import Foundation
 import Combine
+import CoreGraphics
 @testable import GhoDex
 
 @MainActor
@@ -57,6 +58,43 @@ final class WorkspaceMapViewModelDeterminismTests: XCTestCase {
         XCTAssertEqual(invocation, 1)
     }
 
+    func testCanvasPresentationActiveStartsPeriodicRefreshAndStopsWhenInactive() async {
+        let suiteName = "WorkspaceMapViewModelDeterminismTests.canvas-refresh.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        var invocation = 0
+        let model = WorkspaceMapViewModel(
+            projectionSource: {
+                invocation += 1
+                return WorkspaceMapSnapshot(
+                    generatedAt: Date(timeIntervalSince1970: TimeInterval(invocation)),
+                    groups: [self.makeTerminalGroup(idToken: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")]
+                )
+            },
+            commandExecutor: { _ in WorkspaceMapCommandResult(status: .executed, message: "ok") },
+            layoutStore: WorkspaceMapLayoutStore(
+                defaults: defaults,
+                storageKey: UUID().uuidString
+            )
+        )
+
+        try? await Task.sleep(nanoseconds: 260_000_000)
+        XCTAssertEqual(invocation, 0)
+
+        model.setCanvasPresentationActive(true)
+        try? await Task.sleep(nanoseconds: 520_000_000)
+        XCTAssertGreaterThanOrEqual(invocation, 2)
+
+        model.setCanvasPresentationActive(false)
+        try? await Task.sleep(nanoseconds: 120_000_000)
+        let stoppedCount = invocation
+        try? await Task.sleep(nanoseconds: 360_000_000)
+        XCTAssertEqual(invocation, stoppedCount)
+    }
+
     func testExecuteUpdatesLastCommandResultAndRefreshes() {
         var refreshCalls = 0
         let model = WorkspaceMapViewModel(
@@ -87,6 +125,238 @@ final class WorkspaceMapViewModelDeterminismTests: XCTestCase {
         XCTAssertEqual(model.lastCommandResult?.status, .executed)
         XCTAssertEqual(model.lastCommandResult?.message, "executed focusTopLevelGroup")
         XCTAssertEqual(refreshCalls, 1)
+    }
+
+    func testAutoLayoutGroupsDoesNotProduceOverlappingFrames() {
+        let suiteName = "WorkspaceMapViewModelDeterminismTests.auto-layout.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let groups: [WorkspaceMapGroupSnapshot] = [
+            makeTerminalGroup(idToken: "10000000-0000-0000-0000-000000000001"),
+            makeTerminalGroup(idToken: "10000000-0000-0000-0000-000000000002"),
+            makeTerminalGroup(idToken: "10000000-0000-0000-0000-000000000003"),
+            makeTerminalGroup(idToken: "10000000-0000-0000-0000-000000000004"),
+            makeBrowserGroup(idToken: "20000000-0000-0000-0000-000000000001"),
+            makeBrowserGroup(idToken: "20000000-0000-0000-0000-000000000002"),
+            makeBrowserGroup(idToken: "20000000-0000-0000-0000-000000000003"),
+        ]
+
+        let model = WorkspaceMapViewModel(
+            projectionSource: {
+                WorkspaceMapSnapshot(groups: groups)
+            },
+            commandExecutor: { _ in WorkspaceMapCommandResult(status: .executed, message: "ok") },
+            layoutStore: WorkspaceMapLayoutStore(
+                defaults: defaults,
+                storageKey: UUID().uuidString
+            )
+        )
+
+        model.refresh()
+        model.autoLayoutGroups()
+
+        let layoutByID = Dictionary(uniqueKeysWithValues: model.layout.groups.map { ($0.id, $0) })
+        let frames: [CGRect] = groups.compactMap { group in
+            guard let layout = layoutByID[group.id] else { return nil }
+            let baseSize = baseSize(for: group.kind)
+            return CGRect(
+                x: layout.centerX - baseSize.width / 2,
+                y: layout.centerY - baseSize.height / 2,
+                width: baseSize.width,
+                height: baseSize.height
+            )
+        }
+
+        for index in 0..<frames.count {
+            for other in (index + 1)..<frames.count {
+                XCTAssertFalse(
+                    frames[index].intersects(frames[other]),
+                    "autoLayoutGroups produced overlapping frames: index \(index) and \(other)"
+                )
+            }
+        }
+    }
+
+    func testAutoLayoutGroupsUsesMeasuredSizeHintsWithoutOverlapAndWithGap() {
+        let suiteName = "WorkspaceMapViewModelDeterminismTests.auto-layout-hints.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let groups: [WorkspaceMapGroupSnapshot] = [
+            makeTerminalGroup(idToken: "30000000-0000-0000-0000-000000000001"),
+            makeTerminalGroup(idToken: "30000000-0000-0000-0000-000000000002"),
+            makeTerminalGroup(idToken: "30000000-0000-0000-0000-000000000003"),
+            makeBrowserGroup(idToken: "40000000-0000-0000-0000-000000000001"),
+            makeBrowserGroup(idToken: "40000000-0000-0000-0000-000000000002"),
+        ]
+
+        let model = WorkspaceMapViewModel(
+            projectionSource: {
+                WorkspaceMapSnapshot(groups: groups)
+            },
+            commandExecutor: { _ in WorkspaceMapCommandResult(status: .executed, message: "ok") },
+            layoutStore: WorkspaceMapLayoutStore(
+                defaults: defaults,
+                storageKey: UUID().uuidString
+            )
+        )
+
+        model.refresh()
+
+        let hintByID: [WorkspaceMapEntityID: CGSize] = [
+            groups[0].id: CGSize(width: 1_420, height: 900),
+            groups[1].id: CGSize(width: 1_360, height: 860),
+            groups[2].id: CGSize(width: 1_480, height: 960),
+            groups[3].id: CGSize(width: 1_540, height: 1_020),
+            groups[4].id: CGSize(width: 1_500, height: 980),
+        ]
+        hintByID.forEach { groupID, size in
+            model.updateGroupBaseSizeHint(groupID, size: size)
+        }
+
+        model.autoLayoutGroups()
+
+        let layoutByID = Dictionary(uniqueKeysWithValues: model.layout.groups.map { ($0.id, $0) })
+        let frames: [CGRect] = groups.compactMap { group in
+            guard let layout = layoutByID[group.id] else { return nil }
+            let baseSize = hintByID[group.id] ?? baseSize(for: group.kind)
+            return CGRect(
+                x: layout.centerX - baseSize.width / 2,
+                y: layout.centerY - baseSize.height / 2,
+                width: baseSize.width,
+                height: baseSize.height
+            )
+        }
+
+        let minimumGap: CGFloat = 80
+        for index in 0..<frames.count {
+            for other in (index + 1)..<frames.count {
+                XCTAssertFalse(
+                    frames[index].intersects(frames[other]),
+                    "autoLayoutGroups with hints produced overlap: index \(index) and \(other)"
+                )
+
+                let (xGap, yGap) = gapBetween(frames[index], frames[other])
+                XCTAssertTrue(
+                    xGap >= minimumGap || yGap >= minimumGap,
+                    "Expected at least \(minimumGap)pt gap, got xGap=\(xGap), yGap=\(yGap) for \(index)-\(other)"
+                )
+            }
+        }
+    }
+
+    func testPlaceNewGroupsWithoutOverlapKeepsExistingLayoutStable() {
+        let suiteName = "WorkspaceMapViewModelDeterminismTests.place-new-groups.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let existingA = makeTerminalGroup(idToken: "50000000-0000-0000-0000-000000000001")
+        let existingB = makeTerminalGroup(idToken: "50000000-0000-0000-0000-000000000002")
+        let incoming = makeTerminalGroup(idToken: "50000000-0000-0000-0000-000000000003")
+        var sourceGroups: [WorkspaceMapGroupSnapshot] = [existingA, existingB]
+
+        let model = WorkspaceMapViewModel(
+            projectionSource: { WorkspaceMapSnapshot(groups: sourceGroups) },
+            commandExecutor: { _ in WorkspaceMapCommandResult(status: .executed, message: "ok") },
+            layoutStore: WorkspaceMapLayoutStore(
+                defaults: defaults,
+                storageKey: UUID().uuidString
+            )
+        )
+
+        model.refresh()
+        // Force one existing group onto the default spawn slot so the incoming
+        // group would overlap unless the non-overlap placement kicks in.
+        model.setGroupPosition(existingA.id, point: CGPoint(x: 560, y: 380))
+        model.setGroupPosition(existingB.id, point: CGPoint(x: 1620, y: 380))
+
+        let previousIDs: Set<WorkspaceMapEntityID> = [existingA.id, existingB.id]
+        sourceGroups = [existingA, existingB, incoming]
+        model.refresh()
+
+        model.placeNewGroupsWithoutOverlap(previousGroupIDs: previousIDs)
+
+        XCTAssertEqual(model.groupPosition(for: existingA.id), CGPoint(x: 560, y: 380))
+        XCTAssertEqual(model.groupPosition(for: existingB.id), CGPoint(x: 1620, y: 380))
+
+        let layoutByID = Dictionary(uniqueKeysWithValues: model.layout.groups.map { ($0.id, $0) })
+        let existingAFrame = CGRect(
+            x: (layoutByID[existingA.id]?.centerX ?? 0) - 880 / 2,
+            y: (layoutByID[existingA.id]?.centerY ?? 0) - 560 / 2,
+            width: 880,
+            height: 560
+        )
+        let existingBFrame = CGRect(
+            x: (layoutByID[existingB.id]?.centerX ?? 0) - 880 / 2,
+            y: (layoutByID[existingB.id]?.centerY ?? 0) - 560 / 2,
+            width: 880,
+            height: 560
+        )
+        let incomingFrame = CGRect(
+            x: (layoutByID[incoming.id]?.centerX ?? 0) - 880 / 2,
+            y: (layoutByID[incoming.id]?.centerY ?? 0) - 560 / 2,
+            width: 880,
+            height: 560
+        )
+
+        XCTAssertFalse(incomingFrame.intersects(existingAFrame))
+        XCTAssertFalse(incomingFrame.intersects(existingBFrame))
+    }
+
+    func testIncrementalRefreshAssignsDistinctDefaultSlotsForNewGroups() {
+        let suiteName = "WorkspaceMapViewModelDeterminismTests.incremental-default-slots.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let groupA = makeTerminalGroup(idToken: "60000000-0000-0000-0000-000000000001")
+        let groupB = makeTerminalGroup(idToken: "60000000-0000-0000-0000-000000000002")
+        var sourceGroups: [WorkspaceMapGroupSnapshot] = [groupA]
+
+        let model = WorkspaceMapViewModel(
+            projectionSource: { WorkspaceMapSnapshot(groups: sourceGroups) },
+            commandExecutor: { _ in WorkspaceMapCommandResult(status: .executed, message: "ok") },
+            layoutStore: WorkspaceMapLayoutStore(
+                defaults: defaults,
+                storageKey: UUID().uuidString
+            )
+        )
+
+        model.refresh()
+        sourceGroups = [groupA, groupB]
+        model.refresh()
+
+        let layoutByID = Dictionary(uniqueKeysWithValues: model.layout.groups.map { ($0.id, $0) })
+        guard let layoutA = layoutByID[groupA.id], let layoutB = layoutByID[groupB.id] else {
+            XCTFail("Expected both incremental groups to exist in layout")
+            return
+        }
+
+        let frameA = CGRect(
+            x: layoutA.centerX - 880 / 2,
+            y: layoutA.centerY - 560 / 2,
+            width: 880,
+            height: 560
+        )
+        let frameB = CGRect(
+            x: layoutB.centerX - 880 / 2,
+            y: layoutB.centerY - 560 / 2,
+            width: 880,
+            height: 560
+        )
+
+        XCTAssertFalse(
+            frameA.intersects(frameB),
+            "Incremental refresh must not assign overlapping default slots to newly appended groups."
+        )
     }
 
     func testRuntimePathProducesPassingPerWorkloadArtifacts() async {
@@ -242,6 +512,35 @@ final class WorkspaceMapViewModelDeterminismTests: XCTestCase {
             ),
             browser: nil
         )
+    }
+
+    private func makeBrowserGroup(idToken: String) -> WorkspaceMapGroupSnapshot {
+        WorkspaceMapGroupSnapshot(
+            id: WorkspaceMapEntityID("browser-group:\(idToken)"),
+            kind: .browser,
+            title: "Browser",
+            isFocused: false,
+            terminal: nil,
+            browser: WorkspaceMapBrowserGroupSnapshot(
+                selectedPageID: "page-\(idToken)",
+                displayedURL: "https://example.com/\(idToken)"
+            )
+        )
+    }
+
+    private func baseSize(for kind: WorkspaceMapGroupKind) -> CGSize {
+        switch kind {
+        case .terminal:
+            return CGSize(width: 880, height: 560)
+        case .browser:
+            return CGSize(width: 980, height: 680)
+        }
+    }
+
+    private func gapBetween(_ lhs: CGRect, _ rhs: CGRect) -> (CGFloat, CGFloat) {
+        let xGap = max(0, max(lhs.minX - rhs.maxX, rhs.minX - lhs.maxX))
+        let yGap = max(0, max(lhs.minY - rhs.maxY, rhs.minY - lhs.maxY))
+        return (xGap, yGap)
     }
 
     private func makeLargeASnapshot(sequence: Int) -> WorkspaceMapSnapshot {

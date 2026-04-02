@@ -117,6 +117,10 @@ final class WorkspaceMapRuntimeInteractiveMirrorView: NSView {
     private static let idleRefreshInterval: TimeInterval = 1.0 / 15.0
     private static let interactionBoostDuration: TimeInterval = 1.0
     private static let interactionBurstDelays: [TimeInterval] = [1.0 / 120.0, 1.0 / 60.0, 1.0 / 30.0]
+    // Zero expansion to eliminate visible inner gaps in canvas terminal cards.
+    private static let sourceContentRectPaddingX: CGFloat = 0
+    private static let sourceContentRectPaddingY: CGFloat = 0
+    private static let sourceRectCoverageThreshold: CGFloat = 0.97
     private static let undoSelector = #selector(WorkspaceMapRuntimeInteractiveMirrorView.undo(_:))
     private static let redoSelector = #selector(WorkspaceMapRuntimeInteractiveMirrorView.redo(_:))
 
@@ -137,7 +141,15 @@ final class WorkspaceMapRuntimeInteractiveMirrorView: NSView {
     private var interactionBoostUntil: CFAbsoluteTime = 0
     private var pendingBurstCaptureWorkItems: [DispatchWorkItem] = []
     private var lastInteractionSourcePoint: CGPoint?
+    private weak var cachedSourceContentRectOwner: NSView?
+    private var cachedSourceContentRect: CGRect?
+    var onUserInteraction: (() -> Void)?
     private(set) var isMirroringActive = false
+
+    var sourceContentSize: CGSize? {
+        guard let sourceView else { return nil }
+        return sourceContentRect(in: sourceView).size
+    }
 
     private struct SharedSurfaceCandidate {
         let view: NSView
@@ -153,7 +165,7 @@ final class WorkspaceMapRuntimeInteractiveMirrorView: NSView {
             self.sourceView = sourceView
             self.sourceLayer = sourceLayer
             self.mirrorLayer = CALayer()
-            self.mirrorLayer.contentsGravity = .resize
+            self.mirrorLayer.contentsGravity = .resizeAspect
             self.mirrorLayer.minificationFilter = .nearest
             self.mirrorLayer.magnificationFilter = .nearest
         }
@@ -169,7 +181,7 @@ final class WorkspaceMapRuntimeInteractiveMirrorView: NSView {
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
         imageView.autoresizingMask = [.width, .height]
-        imageView.imageScaling = .scaleAxesIndependently
+        imageView.imageScaling = .scaleProportionallyUpOrDown
         imageView.frame = bounds
         addSubview(imageView)
         startMirroring()
@@ -272,6 +284,25 @@ final class WorkspaceMapRuntimeInteractiveMirrorView: NSView {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if handleMapNewTabShortcutIfNeeded(event) {
+            return true
+        }
+
+        if WorkspaceMapCanvasInputPolicy.focusShortcutDirection(
+            charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+            modifierFlags: event.modifierFlags
+        ) != nil {
+            return false
+        }
+
+        if AppDelegate.isMinimizeShortcut(
+            charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+            modifierFlags: event.modifierFlags,
+            keyCode: event.keyCode
+        ) {
+            return true
+        }
+
         if dispatchKeyEvent(.keyDown, from: event) {
             return true
         }
@@ -279,6 +310,26 @@ final class WorkspaceMapRuntimeInteractiveMirrorView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
+        if handleMapNewTabShortcutIfNeeded(event) {
+            return
+        }
+
+        if WorkspaceMapCanvasInputPolicy.focusShortcutDirection(
+            charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+            modifierFlags: event.modifierFlags
+        ) != nil {
+            super.keyDown(with: event)
+            return
+        }
+
+        if AppDelegate.isMinimizeShortcut(
+            charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+            modifierFlags: event.modifierFlags,
+            keyCode: event.keyCode
+        ) {
+            return
+        }
+
         if dispatchKeyEvent(.keyDown, from: event) { return }
         super.keyDown(with: event)
     }
@@ -291,6 +342,28 @@ final class WorkspaceMapRuntimeInteractiveMirrorView: NSView {
     override func flagsChanged(with event: NSEvent) {
         if dispatchKeyEvent(.flagsChanged, from: event) { return }
         super.flagsChanged(with: event)
+    }
+
+    private func handleMapNewTabShortcutIfNeeded(_ event: NSEvent) -> Bool {
+        guard WorkspaceMapCanvasInputPolicy.isTopLevelNewTabShortcut(
+            charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+            modifierFlags: event.modifierFlags,
+            keyCode: event.keyCode
+        ) else {
+            return false
+        }
+
+        if let mapController = window?.windowController as? WorkspaceMapController {
+            _ = mapController.createTerminalTabSilently()
+            return true
+        }
+
+        guard let appDelegate = NSApp.delegate as? AppDelegate else {
+            return false
+        }
+
+        appDelegate.newTab(self)
+        return true
     }
 
     @objc
@@ -363,18 +436,18 @@ final class WorkspaceMapRuntimeInteractiveMirrorView: NSView {
             return
         }
         disableSharedSurfaceTransport()
-        let sourceBounds = sourceView.bounds.integral
-        guard sourceBounds.width > 1, sourceBounds.height > 1 else { return }
+        let sourceContentRect = sourceContentRect(in: sourceView, forceRecompute: true)
+        guard sourceContentRect.width > 1, sourceContentRect.height > 1 else { return }
         CATransaction.flush()
         activeSurfaceView?.layoutSubtreeIfNeeded()
         activeSurfaceView?.displayIfNeeded()
         sourceView.layoutSubtreeIfNeeded()
         sourceView.displayIfNeeded()
         sourceView.window?.displayIfNeeded()
-        guard let imageRep = sourceView.bitmapImageRepForCachingDisplay(in: sourceBounds) else { return }
-        imageRep.size = sourceBounds.size
-        sourceView.cacheDisplay(in: sourceBounds, to: imageRep)
-        let image = NSImage(size: sourceBounds.size)
+        guard let imageRep = sourceView.bitmapImageRepForCachingDisplay(in: sourceContentRect) else { return }
+        imageRep.size = sourceContentRect.size
+        sourceView.cacheDisplay(in: sourceContentRect, to: imageRep)
+        let image = NSImage(size: sourceContentRect.size)
         image.addRepresentation(imageRep)
         imageView.image = image
         WorkspaceMapLiveCanvasRenderPathRecorder.recordBitmapFallbackFrame()
@@ -488,8 +561,8 @@ final class WorkspaceMapRuntimeInteractiveMirrorView: NSView {
             return
         }
 
-        let sourceBounds = sourceView.bounds
-        guard sourceBounds.width > 0, sourceBounds.height > 0 else {
+        let sourceContentRect = sourceContentRect(in: sourceView)
+        guard sourceContentRect.width > 0, sourceContentRect.height > 0 else {
             sharedSurfaceLayer.frame = bounds
             return
         }
@@ -508,10 +581,10 @@ final class WorkspaceMapRuntimeInteractiveMirrorView: NSView {
             mirror.mirrorLayer.contentsScale = sourceLayer.contentsScale
 
             let surfaceRectInSource = sourceView.convert(sourceSurface.bounds, from: sourceSurface)
-            let normalizedX = (surfaceRectInSource.minX - sourceBounds.minX) / sourceBounds.width
-            let normalizedY = (surfaceRectInSource.minY - sourceBounds.minY) / sourceBounds.height
-            let normalizedWidth = surfaceRectInSource.width / sourceBounds.width
-            let normalizedHeight = surfaceRectInSource.height / sourceBounds.height
+            let normalizedX = (surfaceRectInSource.minX - sourceContentRect.minX) / sourceContentRect.width
+            let normalizedY = (surfaceRectInSource.minY - sourceContentRect.minY) / sourceContentRect.height
+            let normalizedWidth = surfaceRectInSource.width / sourceContentRect.width
+            let normalizedHeight = surfaceRectInSource.height / sourceContentRect.height
             mirror.mirrorLayer.frame = CGRect(
                 x: bounds.width * normalizedX,
                 y: bounds.height * normalizedY,
@@ -645,6 +718,9 @@ final class WorkspaceMapRuntimeInteractiveMirrorView: NSView {
         }
 
         if eventType != .mouseMoved {
+            onUserInteraction?()
+        }
+        if eventType != .mouseMoved {
             triggerInteractiveCapture()
         }
         return true
@@ -685,6 +761,7 @@ final class WorkspaceMapRuntimeInteractiveMirrorView: NSView {
             ensureSurfaceInputFocus(surfaceView)
         }
         keyboardTargetView = resolveKeyboardTarget(from: targetView, sourceView: sourceView)
+        onUserInteraction?()
         targetView.scrollWheel(with: mappedEvent)
         triggerInteractiveCapture()
         return true
@@ -712,6 +789,7 @@ final class WorkspaceMapRuntimeInteractiveMirrorView: NSView {
             ensureSurfaceInputFocus(surfaceView)
             switch eventType {
             case .keyDown:
+                onUserInteraction?()
                 surfaceView.keyDown(with: mappedEvent)
             case .keyUp:
                 surfaceView.keyUp(with: mappedEvent)
@@ -733,6 +811,7 @@ final class WorkspaceMapRuntimeInteractiveMirrorView: NSView {
 
         switch eventType {
         case .keyDown:
+            onUserInteraction?()
             keyTarget.keyDown(with: mappedEvent)
         case .keyUp:
             keyTarget.keyUp(with: mappedEvent)
@@ -916,6 +995,66 @@ final class WorkspaceMapRuntimeInteractiveMirrorView: NSView {
         pendingBurstCaptureWorkItems.removeAll()
     }
 
+    private func sourceContentRect(in sourceView: NSView, forceRecompute: Bool = false) -> CGRect {
+        let sourceBounds = sourceView.bounds.integral
+        guard sourceBounds.width > 1, sourceBounds.height > 1 else {
+            cachedSourceContentRectOwner = nil
+            cachedSourceContentRect = nil
+            return sourceBounds
+        }
+
+        if !forceRecompute,
+           cachedSourceContentRectOwner === sourceView,
+           let cachedSourceContentRect,
+           sourceBounds.contains(cachedSourceContentRect) {
+            return cachedSourceContentRect
+        }
+
+        let computed = computeSourceContentRect(in: sourceView, sourceBounds: sourceBounds)
+        cachedSourceContentRectOwner = sourceView
+        cachedSourceContentRect = computed
+        return computed
+    }
+
+    private func computeSourceContentRect(in sourceView: NSView, sourceBounds: CGRect) -> CGRect {
+        var candidateRects: [CGRect] = []
+        if let sharedSurfaceCandidatesProvider {
+            candidateRects = sharedSurfaceCandidatesProvider(sourceView).map { sourceView.convert($0.0.bounds, from: $0.0) }
+        } else {
+            candidateRects = collectSurfaceViews(in: sourceView).map { sourceView.convert($0.bounds, from: $0) }
+        }
+
+        var union = CGRect.null
+        for rect in candidateRects {
+            let clipped = rect.intersection(sourceBounds)
+            guard clipped.width > 1, clipped.height > 1 else { continue }
+            union = union.union(clipped)
+        }
+
+        guard !union.isNull else {
+            return sourceBounds
+        }
+
+        let expanded = union
+            .insetBy(dx: -Self.sourceContentRectPaddingX, dy: -Self.sourceContentRectPaddingY)
+            .intersection(sourceBounds)
+            .integral
+
+        guard expanded.width > 1, expanded.height > 1 else {
+            return sourceBounds
+        }
+
+        let sourceArea = sourceBounds.width * sourceBounds.height
+        guard sourceArea > 1 else { return sourceBounds }
+        let expandedArea = expanded.width * expanded.height
+        let coverage = expandedArea / sourceArea
+        if coverage >= Self.sourceRectCoverageThreshold {
+            return sourceBounds
+        }
+
+        return expanded
+    }
+
     private struct WorkspaceMapMappedPoints {
         let sourceViewPoint: CGPoint
         let sourceWindowPoint: CGPoint
@@ -928,7 +1067,7 @@ final class WorkspaceMapRuntimeInteractiveMirrorView: NSView {
         let localPoint = convert(event.locationInWindow, from: nil)
         let normalizedX = max(min(localPoint.x / bounds.width, 1), 0)
         let normalizedY = max(min(localPoint.y / bounds.height, 1), 0)
-        let sourceBounds = sourceView.bounds
+        let sourceBounds = sourceContentRect(in: sourceView)
         let sourcePoint = CGPoint(
             x: sourceBounds.minX + sourceBounds.width * normalizedX,
             y: sourceBounds.minY + sourceBounds.height * normalizedY

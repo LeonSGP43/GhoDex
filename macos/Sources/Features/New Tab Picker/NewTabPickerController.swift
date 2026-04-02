@@ -63,7 +63,6 @@ final class NewTabPickerController: NSWindowController {
         onCancel: (() -> Void)? = nil,
         onOpenHost: ((AITerminalHost) -> Void)? = nil,
         onOpenBrowser: (() -> Void)? = nil,
-        onOpenWorkspaceMap: (() -> Void)? = nil,
         onOpenWorkspace: ((AITerminalSavedWorkspaceTemplate) -> Void)? = nil
     ) {
         store.refresh()
@@ -77,7 +76,6 @@ final class NewTabPickerController: NSWindowController {
             onCancel: onCancel,
             onOpenHost: onOpenHost,
             onOpenBrowser: onOpenBrowser,
-            onOpenWorkspaceMap: onOpenWorkspaceMap,
             onOpenWorkspace: onOpenWorkspace
         )
         syncChrome()
@@ -109,7 +107,6 @@ final class NewTabPickerController: NSWindowController {
         onCancel: (() -> Void)? = nil,
         onOpenHost: ((AITerminalHost) -> Void)? = nil,
         onOpenBrowser: (() -> Void)? = nil,
-        onOpenWorkspaceMap: (() -> Void)? = nil,
         onOpenWorkspace: ((AITerminalSavedWorkspaceTemplate) -> Void)? = nil
     ) -> AnyView {
         AnyView(
@@ -129,7 +126,6 @@ final class NewTabPickerController: NSWindowController {
                 onCancel: onCancel,
                 onOpenHost: onOpenHost,
                 onOpenBrowser: onOpenBrowser,
-                onOpenWorkspaceMap: onOpenWorkspaceMap,
                 onOpenWorkspace: onOpenWorkspace
             )
             .id(presentationID)

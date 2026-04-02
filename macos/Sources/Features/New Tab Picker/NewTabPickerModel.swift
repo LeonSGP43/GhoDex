@@ -8,14 +8,12 @@ enum NewTabPickerMode: Hashable {
 struct NewTabPickerEntry: Identifiable, Hashable {
     enum Kind: Hashable {
         case browser
-        case workspaceMap
         case host(AITerminalHost)
         case savedWorkspace(AITerminalSavedWorkspaceTemplate)
     }
 
     enum Section: Hashable {
         case browser
-        case workspaceMap
         case local
         case favorites
         case recent
@@ -32,8 +30,6 @@ struct NewTabPickerEntry: Identifiable, Hashable {
         switch kind {
         case .browser:
             return "browser"
-        case .workspaceMap:
-            return "workspace-map"
         case .host(let host):
             return host.id
         case .savedWorkspace(let workspace):
@@ -114,13 +110,9 @@ enum NewTabPickerModel {
 
     static func withBrowserEntry(
         _ entries: [NewTabPickerEntry],
-        includeBrowserEntry: Bool,
-        includeWorkspaceMapEntry: Bool = true
+        includeBrowserEntry: Bool
     ) -> [NewTabPickerEntry] {
         var result = entries
-        if includeWorkspaceMapEntry {
-            result.insert(.init(kind: .workspaceMap, section: .workspaceMap, shortcutIndex: 1), at: 0)
-        }
         if includeBrowserEntry {
             result.insert(.init(kind: .browser, section: .browser, shortcutIndex: 1), at: 0)
         }
@@ -145,8 +137,6 @@ enum NewTabPickerModel {
             switch $0.kind {
             case .browser:
                 return matchesBrowser(query: normalizedQuery)
-            case .workspaceMap:
-                return matchesWorkspaceMap(query: normalizedQuery)
             case .host(let host):
                 return matches(host: host, query: normalizedQuery)
             case .savedWorkspace(let workspace):
@@ -159,13 +149,6 @@ enum NewTabPickerModel {
         AppLocalization.localizedText("Browser").localizedCaseInsensitiveContains(query)
             || AppLocalization
             .localizedText("Open a web page inside a GhoDex tab")
-            .localizedCaseInsensitiveContains(query)
-    }
-
-    private static func matchesWorkspaceMap(query: String) -> Bool {
-        AppLocalization.localizedText("Workspace Map").localizedCaseInsensitiveContains(query)
-            || AppLocalization
-            .localizedText("Open a projection-only overview of all top-level tabs")
             .localizedCaseInsensitiveContains(query)
     }
 

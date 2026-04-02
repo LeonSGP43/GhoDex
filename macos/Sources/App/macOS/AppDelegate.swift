@@ -51,6 +51,7 @@ class AppDelegate: NSObject,
     @IBOutlet private var menuOpenConfig: NSMenuItem?
     @IBOutlet private var menuSettingsPanel: NSMenuItem?
     private var menuTodoWorkspace: NSMenuItem?
+    private var menuWorkspaceMapMode: NSMenuItem?
     @IBOutlet private var menuReloadConfig: NSMenuItem?
     @IBOutlet private var menuSecureInput: NSMenuItem?
     @IBOutlet private var menuQuit: NSMenuItem?
@@ -396,6 +397,10 @@ class AppDelegate: NSObject,
     private var remotePairingQRCodePairingCode: String?
     private var topLevelWindowCloseObserver: NSObjectProtocol?
     private var lastClosedTopLevelWindowKind: LastClosedTopLevelWindowKind?
+    private var pendingTerminateReason: String?
+    private var pendingTerminateRequestedBy: String?
+    private var pendingTerminateSignal: String?
+    private var signalTerminationRequested = false
 
     override init() {
 #if DEBUG
@@ -437,6 +442,7 @@ class AppDelegate: NSObject,
 
         // Store our start time
         applicationLaunchTime = ProcessInfo.processInfo.systemUptime
+        RuntimeDiagnosticsLogger.beginLifecycleSessionIfNeeded()
 
         // Check if secure input was enabled when we last quit.
         if UserDefaults.standard.bool(forKey: "SecureInput") != SecureInput.shared.enabled {
@@ -628,13 +634,34 @@ class AppDelegate: NSObject,
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if let pendingTerminateReason, pendingTerminateRequestedBy == "signal" {
+            var details: [String: String] = [:]
+            if let pendingTerminateSignal {
+                details["signal_name"] = pendingTerminateSignal
+            }
+            return acceptTerminate(
+                reason: pendingTerminateReason,
+                requestedBy: "signal",
+                details: details
+            )
+        }
+
         let windows = NSApplication.shared.windows
-        if windows.isEmpty { return .terminateNow }
+        if windows.isEmpty {
+            return acceptTerminate(
+                reason: "no_windows",
+                requestedBy: "system",
+                details: ["window_count": "0"]
+            )
+        }
 
         // If we've already accepted to install an update, then we don't need to
         // confirm quit. The user is already expecting the update to happen.
         if updateController.isInstalling {
-            return .terminateNow
+            return acceptTerminate(
+                reason: "update_install_quit",
+                requestedBy: "updater"
+            )
         }
 
         // This probably isn't fully safe. The isEmpty check above is aspirational, it doesn't
@@ -645,7 +672,11 @@ class AppDelegate: NSObject,
         // here because I don't want to remove it in a patch release cycle but we should
         // target removing it soon.
         if (windows.allSatisfy { !$0.isVisible }) {
-            return .terminateNow
+            return acceptTerminate(
+                reason: "no_visible_windows",
+                requestedBy: "system",
+                details: ["window_count": "\(windows.count)"]
+            )
         }
 
         // If the user is shutting down, restarting, or logging out, we don't confirm quit.
@@ -658,7 +689,13 @@ class AppDelegate: NSObject,
             if let why = event.attributeDescriptor(forKeyword: keyword) {
                 switch why.typeCodeValue {
                 case kAEShutDown, kAERestart, kAEReallyLogOut:
-                    return .terminateNow
+                    return acceptTerminate(
+                        reason: Self.terminationReason(forAppleEventTypeCode: why.typeCodeValue),
+                        requestedBy: "system",
+                        details: [
+                            "apple_event_type_code": "\(why.typeCodeValue)",
+                        ]
+                    )
 
                 default:
                     break
@@ -679,14 +716,35 @@ class AppDelegate: NSObject,
         alert.alertStyle = .warning
         switch alert.runModal() {
         case .alertFirstButtonReturn:
-            return .terminateNow
+            return acceptTerminate(
+                reason: "user_confirmed_quit",
+                requestedBy: "user",
+                details: ["window_count": "\(windows.count)"]
+            )
 
         default:
+            RuntimeDiagnosticsLogger.recordLifecycleTerminateCancelled(
+                reason: "user_cancelled_quit",
+                requestedBy: "user",
+                details: ["window_count": "\(windows.count)"]
+            )
+            clearPendingTerminateState()
             return .terminateCancel
         }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        let terminateReason = pendingTerminateReason ?? "application_will_terminate"
+        let requestedBy = pendingTerminateRequestedBy ?? "unknown"
+        var details: [String: String] = [
+            "requested_by": requestedBy,
+        ]
+        if let pendingTerminateSignal {
+            details["signal_name"] = pendingTerminateSignal
+        }
+        RuntimeDiagnosticsLogger.recordLifecycleWillTerminate(reason: terminateReason, details: details)
+        RuntimeDiagnosticsLogger.markLifecycleGracefulTerminate(reason: terminateReason, details: details)
+
         controlHarnessReadSampler.stop()
         controlHarnessService.stop()
         controlHarnessGateway.stop()
@@ -697,6 +755,7 @@ class AppDelegate: NSObject,
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
         browserControlIPCService.stop()
         GhoDexCEFShutdownGlobal()
+        clearPendingTerminateState()
     }
 
     @MainActor
@@ -818,37 +877,87 @@ class AppDelegate: NSObject,
 
     /// Setup signal handlers
     private func setupSignals() {
-        // Register a signal handler for config reloading. It appears that all
-        // of this is required. I've commented each line because its a bit unclear.
-        // Warning: signal handlers don't work when run via Xcode. They have to be
-        // run on a real app bundle.
-
-        // We need to ignore signals we register with makeSignalSource or they
-        // don't seem to handle.
-        signal(SIGUSR2, SIG_IGN)
-
-        // Make the signal source and register our event handle. We keep a weak
-        // ref to ourself so we don't create a retain cycle.
-        let sigusr2 = DispatchSource.makeSignalSource(signal: SIGUSR2, queue: .main)
-        sigusr2.setEventHandler { [weak self] in
+        registerSignalSource(signalNumber: SIGUSR2) { [weak self] in
             guard let self else { return }
             Ghostty.logger.info("reloading configuration in response to SIGUSR2")
             self.ghostty.reloadConfig()
         }
+        registerTerminateSignal(SIGTERM)
+        registerTerminateSignal(SIGINT)
+        registerTerminateSignal(SIGHUP)
+    }
 
-        // The signal source starts unactivated, so we have to resume it once
-        // we setup the event handler.
-        sigusr2.resume()
+    private func registerTerminateSignal(_ signalNumber: Int32) {
+        registerSignalSource(signalNumber: signalNumber) { [weak self] in
+            self?.handleTerminateSignal(signalNumber)
+        }
+    }
 
-        // We need to keep a strong reference to it so it isn't disabled.
-        signals.append(sigusr2)
+    private func registerSignalSource(
+        signalNumber: Int32,
+        handler: @escaping () -> Void
+    ) {
+        signal(signalNumber, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
+        source.setEventHandler(handler: handler)
+        source.resume()
+        signals.append(source)
+    }
+
+    private func handleTerminateSignal(_ signalNumber: Int32) {
+        let signalName = Self.signalName(for: signalNumber)
+        let mappedReason = Self.terminationReason(forSignal: signalNumber)
+        RuntimeDiagnosticsLogger.recordLifecycleSignalReceived(
+            signalNumber: signalNumber,
+            signalName: signalName,
+            mappedReason: mappedReason
+        )
+
+        pendingTerminateReason = mappedReason
+        pendingTerminateRequestedBy = "signal"
+        pendingTerminateSignal = signalName
+
+        guard !signalTerminationRequested else { return }
+        signalTerminationRequested = true
+        NSApp.terminate(nil)
+    }
+
+    private func acceptTerminate(
+        reason: String,
+        requestedBy: String,
+        details: [String: String] = [:]
+    ) -> NSApplication.TerminateReply {
+        pendingTerminateReason = reason
+        pendingTerminateRequestedBy = requestedBy
+        if let signalName = details["signal_name"] {
+            pendingTerminateSignal = signalName
+        } else if requestedBy != "signal" {
+            pendingTerminateSignal = nil
+            signalTerminationRequested = false
+        }
+
+        RuntimeDiagnosticsLogger.recordLifecycleTerminateRequested(
+            reason: reason,
+            requestedBy: requestedBy,
+            details: details
+        )
+        return .terminateNow
+    }
+
+    private func clearPendingTerminateState() {
+        pendingTerminateReason = nil
+        pendingTerminateRequestedBy = nil
+        pendingTerminateSignal = nil
+        signalTerminationRequested = false
     }
 
     /// Setup localized titles for menu items that are created in xib but need
     /// to track our runtime language selection.
     private func setupMenuLocalization() {
         installTodoWorkspaceMenuItemIfNeeded()
+        installWorkspaceMapMenuItemIfNeeded()
         menuTodoWorkspace?.title = L10n.SSHConnections.todoPanelTitle
+        menuWorkspaceMapMode?.title = AppLocalization.localizedText("Workspace Map")
         menuSaveWorkspace?.title = L10n.AITerminalManager.saveWorkspaceAction
     }
 
@@ -1391,6 +1500,7 @@ class AppDelegate: NSObject,
         self.menuOpenConfig?.setImageIfDesired(systemSymbolName: "gear")
         self.menuSettingsPanel?.setImageIfDesired(systemSymbolName: "slider.horizontal.3")
         self.menuTodoWorkspace?.setImageIfDesired(systemSymbolName: "checklist")
+        self.menuWorkspaceMapMode?.setImageIfDesired(systemSymbolName: "map")
         self.menuReloadConfig?.setImageIfDesired(systemSymbolName: "arrow.trianglehead.2.clockwise.rotate.90")
         self.menuSecureInput?.setImageIfDesired(systemSymbolName: "lock.display")
         self.menuNewWindow?.setImageIfDesired(systemSymbolName: "macwindow.badge.plus")
@@ -1537,6 +1647,31 @@ class AppDelegate: NSObject,
         menuTodoWorkspace = item
     }
 
+    private func installWorkspaceMapMenuItemIfNeeded() {
+        guard menuWorkspaceMapMode == nil,
+              let fileMenu = menuNewTab?.menu ?? menuSaveWorkspace?.menu else { return }
+
+        let item = NSMenuItem(
+            title: AppLocalization.localizedText("Workspace Map"),
+            action: #selector(toggleWorkspaceMapMode(_:)),
+            keyEquivalent: "m"
+        )
+        item.target = self
+        item.keyEquivalentModifierMask = [.command, .option]
+
+        let insertionIndex: Int
+        if let newPaneItem = fileMenu.items.first(where: { $0.action == #selector(newPaneTab(_:)) }) {
+            insertionIndex = fileMenu.index(of: newPaneItem) + 1
+        } else if let saveWorkspaceItem = menuSaveWorkspace, fileMenu.index(of: saveWorkspaceItem) >= 0 {
+            insertionIndex = fileMenu.index(of: saveWorkspaceItem)
+        } else {
+            insertionIndex = min(4, fileMenu.items.count)
+        }
+
+        fileMenu.insertItem(item, at: max(insertionIndex, 0))
+        menuWorkspaceMapMode = item
+    }
+
     // MARK: Notifications and Events
 
     /// This handles events from the NSEvent.addLocalEventMonitor. We use this so we can get
@@ -1552,6 +1687,24 @@ class AppDelegate: NSObject,
     }
 
     private func localEventKeyDown(_ event: NSEvent) -> NSEvent? {
+        if Self.isWorkspaceMapModeShortcut(
+            charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+            modifierFlags: event.modifierFlags,
+            keyCode: event.keyCode
+        ) {
+            toggleWorkspaceMapMode(nil)
+            return nil
+        }
+
+        if Self.isMinimizeShortcut(
+            charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+            modifierFlags: event.modifierFlags,
+            keyCode: event.keyCode
+        ),
+        isWorkspaceMapTopLevelActive(preferredWindow: NSApp.keyWindow) {
+            return nil
+        }
+
         // If the tab overview is visible and escape is pressed, close it.
         // This can't POSSIBLY be right and is probably a FirstResponder problem
         // that we should handle elsewhere in our program. But this works and it
@@ -1609,6 +1762,90 @@ class AppDelegate: NSObject,
         }
 
         return event
+    }
+
+    static func isWorkspaceMapModeShortcut(
+        charactersIgnoringModifiers: String?,
+        modifierFlags: NSEvent.ModifierFlags,
+        keyCode: UInt16? = nil
+    ) -> Bool {
+        let keyMatchesCharacter = charactersIgnoringModifiers?.lowercased() == "m"
+        let keyMatchesCode = keyCode == 46
+        guard keyMatchesCharacter || keyMatchesCode else {
+            return false
+        }
+
+        let modifiers = modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command, .option]
+    }
+
+    static func isMinimizeShortcut(
+        charactersIgnoringModifiers: String?,
+        modifierFlags: NSEvent.ModifierFlags,
+        keyCode: UInt16? = nil
+    ) -> Bool {
+        let keyMatchesCharacter = charactersIgnoringModifiers?.lowercased() == "m"
+        let keyMatchesCode = keyCode == 46
+        guard keyMatchesCharacter || keyMatchesCode else {
+            return false
+        }
+        let modifiers = modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command]
+    }
+
+    static func terminationReason(forSignal signalNumber: Int32) -> String {
+        switch signalNumber {
+        case SIGTERM:
+            return "signal_sigterm"
+        case SIGINT:
+            return "signal_sigint"
+        case SIGHUP:
+            return "signal_sighup"
+        default:
+            return "signal_\(signalNumber)"
+        }
+    }
+
+    static func signalName(for signalNumber: Int32) -> String {
+        switch signalNumber {
+        case SIGTERM:
+            return "SIGTERM"
+        case SIGINT:
+            return "SIGINT"
+        case SIGHUP:
+            return "SIGHUP"
+        case SIGUSR2:
+            return "SIGUSR2"
+        default:
+            return "SIG\(signalNumber)"
+        }
+    }
+
+    static func terminationReason(forAppleEventTypeCode typeCode: DescType) -> String {
+        switch typeCode {
+        case kAEShutDown:
+            return "system_shutdown"
+        case kAERestart:
+            return "system_restart"
+        case kAEReallyLogOut:
+            return "system_logout"
+        default:
+            return "system_apple_event_\(typeCode)"
+        }
+    }
+
+    private func isWorkspaceMapTopLevelActive(preferredWindow: NSWindow?) -> Bool {
+        let candidateWindows: [NSWindow?] = [
+            preferredWindow,
+            NSApp.keyWindow,
+            NSApp.mainWindow
+        ]
+
+        for candidateWindow in candidateWindows where selectedTopLevelTabController(for: candidateWindow) is WorkspaceMapController {
+            return true
+        }
+
+        return false
     }
 
     @objc private func windowDidBecomeKey(_ notification: Notification) {
@@ -1747,11 +1984,17 @@ class AppDelegate: NSObject,
     @MainActor @objc private func ghosttyNewTab(_ notification: Notification) {
         guard let surfaceView = notification.object as? Ghostty.SurfaceView else { return }
         guard let window = surfaceView.window else { return }
+        let topLevelWindow = selectedTopLevelWindow(for: window) ?? window
+
+        if let workspaceMapController = workspaceMapControllerForNewTab(preferredWindow: topLevelWindow) {
+            _ = workspaceMapController.createTerminalTabSilently()
+            return
+        }
 
         // Keep keyboard-triggered new-tab actions aligned with the picker flow
         // used by the menu and tab-bar affordances in the sidebar workspace UI.
         guard window.windowController is TerminalController else { return }
-        showNewTabPicker(from: selectedTopLevelWindow(for: window) ?? window)
+        showNewTabPicker(from: topLevelWindow)
     }
 
     @MainActor @objc private func ghosttyNewPaneTab(_ notification: Notification) {
@@ -2326,7 +2569,16 @@ class AppDelegate: NSObject,
     }
 
     @IBAction func newTab(_ sender: Any?) {
-        showNewTabPicker(from: TerminalController.preferredParent?.window ?? NSApp.keyWindow)
+        let preferredWindow = preferredTopLevelWindow(for: sender)
+            ?? TerminalController.preferredParent?.window
+            ?? NSApp.keyWindow
+
+        if let workspaceMapController = workspaceMapControllerForNewTab(preferredWindow: preferredWindow) {
+            _ = workspaceMapController.createTerminalTabSilently()
+            return
+        }
+
+        showNewTabPicker(from: preferredWindow)
     }
 
     @IBAction func newBrowserTab(_ sender: Any?) {
@@ -2337,6 +2589,30 @@ class AppDelegate: NSObject,
 
     @IBAction func newPaneTab(_ sender: Any?) {
         activeTerminalController()?.newPaneTab(sender)
+    }
+
+    @IBAction func toggleWorkspaceMapMode(_ sender: Any?) {
+        let preferredWindow = preferredTopLevelWindow(for: sender)
+        let activeWorkspaceMapController = selectedTopLevelTabController(for: preferredWindow) as? WorkspaceMapController
+        let existingController = activeWorkspaceMapController == nil
+            ? existingWorkspaceMapController(preferred: preferredWindow)
+            : nil
+
+        switch Self.resolveWorkspaceMapModeToggleAction(
+            isCurrentWorkspaceMapActive: activeWorkspaceMapController != nil,
+            hasExistingWorkspaceMap: existingController != nil
+        ) {
+        case .closeActive:
+            activeWorkspaceMapController?.closeTabImmediately(registerRedo: true)
+        case .focusExisting:
+            guard let existingController else { return }
+            focusWorkspaceMapController(existingController)
+        case .openNew:
+            let parentWindow = preferredWindow
+                ?? selectedTopLevelWindow(for: NSApp.keyWindow)
+                ?? selectedTopLevelWindow(for: TerminalController.preferredParent?.window)
+            _ = WorkspaceMapController.newTab(ghostty, from: parentWindow)
+        }
     }
 
     @IBAction func closeTab(_ sender: Any?) {
@@ -2518,17 +2794,16 @@ class AppDelegate: NSObject,
 
     @MainActor
     func showNewTabPicker(from window: NSWindow?) {
+        if let workspaceMapController = workspaceMapControllerForNewTab(preferredWindow: window) {
+            _ = workspaceMapController.createTerminalTabSilently()
+            return
+        }
+
         let browserAction = { [weak self] in
             guard let self else { return }
             let parentWindow = self.selectedTopLevelWindow(for: window)
                 ?? self.selectedTopLevelWindow(for: NSApp.keyWindow)
             _ = BrowserTabController.newTab(self.ghostty, from: parentWindow)
-        }
-        let workspaceMapAction = { [weak self] in
-            guard let self else { return }
-            let parentWindow = self.selectedTopLevelWindow(for: window)
-                ?? self.selectedTopLevelWindow(for: NSApp.keyWindow)
-            _ = WorkspaceMapController.newTab(self.ghostty, from: parentWindow)
         }
 
         if let window {
@@ -2536,8 +2811,7 @@ class AppDelegate: NSObject,
                 relativeTo: window,
                 mode: .topLevel,
                 includeBrowserEntry: true,
-                onOpenBrowser: browserAction,
-                onOpenWorkspaceMap: workspaceMapAction
+                onOpenBrowser: browserAction
             )
             return
         }
@@ -2546,8 +2820,7 @@ class AppDelegate: NSObject,
             relativeTo: nil,
             mode: .topLevel,
             includeBrowserEntry: true,
-            onOpenBrowser: browserAction,
-            onOpenWorkspaceMap: workspaceMapAction
+            onOpenBrowser: browserAction
         )
     }
 
@@ -2701,6 +2974,36 @@ class AppDelegate: NSObject,
         window?.tabGroup?.selectedWindow ?? window
     }
 
+    private func existingWorkspaceMapController(preferred window: NSWindow?) -> WorkspaceMapController? {
+        if let workspaceMapController = selectedTopLevelTabController(for: window) as? WorkspaceMapController {
+            return workspaceMapController
+        }
+
+        if let groupController = window?.tabGroup?.windows.compactMap({ $0.windowController as? WorkspaceMapController }).first {
+            return groupController
+        }
+
+        if let keyController = selectedTopLevelTabController(for: NSApp.keyWindow) as? WorkspaceMapController {
+            return keyController
+        }
+
+        if let mainController = selectedTopLevelTabController(for: NSApp.mainWindow) as? WorkspaceMapController {
+            return mainController
+        }
+
+        return WorkspaceMapController.all.first
+    }
+
+    private func focusWorkspaceMapController(_ controller: WorkspaceMapController) {
+        guard let window = controller.window else { return }
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
+        controller.showWindow(nil)
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     private func topLevelWindow(from sender: Any?) -> NSWindow? {
         if let window = sender as? NSWindow {
             return selectedTopLevelWindow(for: window)
@@ -2741,6 +3044,22 @@ class AppDelegate: NSObject,
         }
 
         return selectedTopLevelWindow(for: TerminalController.preferredParent?.window)
+    }
+
+    private func workspaceMapControllerForNewTab(preferredWindow: NSWindow?) -> WorkspaceMapController? {
+        if let mapController = selectedTopLevelTabController(for: preferredWindow) as? WorkspaceMapController {
+            return mapController
+        }
+
+        if let mapController = selectedTopLevelTabController(for: selectedTopLevelWindow(for: NSApp.keyWindow)) as? WorkspaceMapController {
+            return mapController
+        }
+
+        if let mapController = selectedTopLevelTabController(for: selectedTopLevelWindow(for: NSApp.mainWindow)) as? WorkspaceMapController {
+            return mapController
+        }
+
+        return nil
     }
 
     private enum SplitActionContext {
@@ -2985,6 +3304,10 @@ extension AppDelegate: NSMenuItemValidation {
         case #selector(saveWorkspace(_:)):
             return saveWorkspaceController(for: item) != nil
 
+        case #selector(toggleWorkspaceMapMode(_:)):
+            item.state = activeTopLevelTabController(preferred: nil) is WorkspaceMapController ? .on : .off
+            return true
+
         case #selector(undo(_:)):
             if undoManager.canUndo {
                 item.title = L10n.App.undo(undoManager.undoActionName)
@@ -3008,6 +3331,27 @@ extension AppDelegate: NSMenuItemValidation {
 }
 
 extension AppDelegate {
+    enum WorkspaceMapModeToggleAction: Equatable {
+        case closeActive
+        case focusExisting
+        case openNew
+    }
+
+    static func resolveWorkspaceMapModeToggleAction(
+        isCurrentWorkspaceMapActive: Bool,
+        hasExistingWorkspaceMap: Bool
+    ) -> WorkspaceMapModeToggleAction {
+        if isCurrentWorkspaceMapActive {
+            return .closeActive
+        }
+
+        if hasExistingWorkspaceMap {
+            return .focusExisting
+        }
+
+        return .openNew
+    }
+
     private static let browserSettingsStartMarker = "# >>> GhoDex browser settings >>>"
     private static let browserSettingsEndMarker = "# <<< GhoDex browser settings <<<"
     private static let iconSettingsStartMarker = "# >>> GhoDex app icon settings >>>"

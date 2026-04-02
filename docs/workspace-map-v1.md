@@ -2,7 +2,10 @@
 
 ## Purpose
 
-Workspace Map is a top-level tab mode that projects all top-level terminal and browser groups onto one canvas. The canvas is a read-mostly control surface: runtime controllers remain the source of truth, and canvas actions are restricted to an explicit v1 command allowlist.
+Workspace Map is a top-level tab mode that projects all top-level terminal and browser groups onto one canvas. The canvas is a read-mostly control surface: runtime controllers remain the source of truth, and v1 keeps two explicit control planes:
+
+- command-gateway control (explicit v1 command allowlist),
+- terminal live-input passthrough inside leased mirror views (non-owning input forwarding only).
 
 In v1, "infinite canvas" means the viewport pans and zooms over an unbounded logical coordinate space. Group cards are positioned by persisted logical coordinates instead of by a fixed backing frame.
 
@@ -16,7 +19,8 @@ Rendering policy (v1 safety boundary):
 
 - Terminal groups are presented as non-owning mirrored surfaces in canvas mode.
 - Browser groups remain non-destructive summary/live-control nodes until a dedicated browser host abstraction is introduced.
-- Rendering paths must not mutate runtime `NSWindow`/`NSView` ownership outside the explicit command gateway.
+- Rendering paths must not mutate runtime `NSWindow`/`NSView` ownership.
+- Terminal mirror passthrough may forward keyboard/mouse input to runtime responders, but must not transfer view/window ownership.
 
 Deferred v2 scope:
 
@@ -50,6 +54,11 @@ Operator implication:
 ## Command Policy
 
 The v1 command contract is implemented in [WorkspaceMapCommandHandler.swift](/Users/leongong/Desktop/LeonProjects/GhoDex/macos/Sources/Features/Workspace%20Map/WorkspaceMapCommandHandler.swift) and enforced by [WorkspaceMapContractsTests.swift](/Users/leongong/Desktop/LeonProjects/GhoDex/macos/Tests/WorkspaceMap/WorkspaceMapContractsTests.swift).
+
+Scope note:
+
+- The command allowlist governs explicit canvas command actions routed through the command gateway.
+- Terminal live-input passthrough in leased mirror views is a separate rendering/input path and is intentionally outside the command enum allowlist.
 
 Allowed in v1:
 

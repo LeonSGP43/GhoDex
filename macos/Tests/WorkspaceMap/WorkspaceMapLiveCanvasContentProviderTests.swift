@@ -287,6 +287,71 @@ final class WorkspaceMapLiveCanvasContentProviderTests: XCTestCase {
         XCTAssertEqual(metrics.sharedTransportHitRate, 1)
     }
 
+    func testMirrorBitmapFallbackUsesAspectScaling() throws {
+        let sourceView = NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 420))
+        let mirror = WorkspaceMapRuntimeInteractiveMirrorView(sourceView: sourceView)
+        defer { mirror.stopMirroring() }
+
+        let imageView = try XCTUnwrap(firstImageView(in: mirror))
+        XCTAssertEqual(imageView.imageScaling, .scaleProportionallyUpOrDown)
+    }
+
+    func testMirrorSharedSurfaceUsesAspectGravity() throws {
+        let sourceView = NSView(frame: NSRect(x: 0, y: 0, width: 720, height: 480))
+        sourceView.wantsLayer = true
+        sourceView.layer = CALayer()
+        let candidate = NSView(frame: sourceView.bounds)
+        candidate.wantsLayer = true
+        candidate.layer = CALayer()
+        sourceView.addSubview(candidate)
+        let candidateLayer = try XCTUnwrap(candidate.layer)
+
+        let mirror = WorkspaceMapRuntimeInteractiveMirrorView(
+            sourceView: sourceView,
+            sharedSurfaceCandidatesProvider: { _ in
+                [(candidate, candidateLayer)]
+            }
+        )
+        defer { mirror.stopMirroring() }
+
+        let mirrorLayer = try XCTUnwrap(firstNearestFilteredLayer(in: mirror.layer))
+        XCTAssertEqual(mirrorLayer.contentsGravity, .resizeAspect)
+    }
+
+    func testMirrorSourceContentSizeFallsBackToFullSourceBoundsWithoutSurfaceCandidates() {
+        let sourceView = NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 420))
+        let mirror = WorkspaceMapRuntimeInteractiveMirrorView(sourceView: sourceView)
+        defer { mirror.stopMirroring() }
+
+        XCTAssertEqual(mirror.sourceContentSize, sourceView.bounds.size)
+    }
+
+    func testMirrorSourceContentSizeUsesExpandedCandidateBoundsWhenAvailable() throws {
+        let sourceView = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        sourceView.wantsLayer = true
+        sourceView.layer = CALayer()
+
+        let candidate = NSView(frame: NSRect(x: 120, y: 90, width: 420, height: 260))
+        candidate.wantsLayer = true
+        candidate.layer = CALayer()
+        sourceView.addSubview(candidate)
+        let candidateLayer = try XCTUnwrap(candidate.layer)
+
+        let mirror = WorkspaceMapRuntimeInteractiveMirrorView(
+            sourceView: sourceView,
+            sharedSurfaceCandidatesProvider: { _ in
+                [(candidate, candidateLayer)]
+            }
+        )
+        defer { mirror.stopMirroring() }
+
+        let sourceContentSize = try XCTUnwrap(mirror.sourceContentSize)
+        XCTAssertLessThan(sourceContentSize.width, sourceView.bounds.width)
+        XCTAssertLessThan(sourceContentSize.height, sourceView.bounds.height)
+        XCTAssertGreaterThan(sourceContentSize.width, candidate.bounds.width)
+        XCTAssertGreaterThan(sourceContentSize.height, candidate.bounds.height)
+    }
+
     private func makeTerminalGroup() -> WorkspaceMapGroupSnapshot {
         WorkspaceMapGroupSnapshot(
             id: WorkspaceMapEntityID("terminal-group:11111111-1111-1111-1111-111111111111"),
@@ -316,6 +381,31 @@ final class WorkspaceMapLiveCanvasContentProviderTests: XCTestCase {
                 displayedURL: "https://example.com"
             )
         )
+    }
+
+    private func firstImageView(in root: NSView) -> NSImageView? {
+        if let imageView = root as? NSImageView {
+            return imageView
+        }
+        for child in root.subviews {
+            if let found = firstImageView(in: child) {
+                return found
+            }
+        }
+        return nil
+    }
+
+    private func firstNearestFilteredLayer(in root: CALayer?) -> CALayer? {
+        guard let root else { return nil }
+        if root.minificationFilter == .nearest && root.magnificationFilter == .nearest {
+            return root
+        }
+        for child in root.sublayers ?? [] {
+            if let found = firstNearestFilteredLayer(in: child) {
+                return found
+            }
+        }
+        return nil
     }
 
     private func makeMouseEvent(

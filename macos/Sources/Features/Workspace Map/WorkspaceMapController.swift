@@ -5,6 +5,9 @@ import GhoDexKit
 
 @MainActor
 final class WorkspaceMapViewModel: ObservableObject {
+    private static let canvasFocusedRefreshInterval: TimeInterval = 0.2
+    private static let canvasBackgroundRefreshInterval: TimeInterval = 0.25
+
     @Published private(set) var snapshot = WorkspaceMapSnapshot(groups: [])
     @Published private(set) var layout: WorkspaceMapLayoutSnapshot
     @Published private(set) var performance = WorkspaceMapPerformanceSnapshot.empty
@@ -24,7 +27,11 @@ final class WorkspaceMapViewModel: ObservableObject {
     private var refreshTask: Task<Void, Never>?
     private var latestRefreshGeneration: UInt64 = 0
     private var latestAppliedCaptureSequence: UInt64?
+    private var activeRefreshTimer: Timer?
+    private var activeRefreshTimerInterval: TimeInterval?
+    private var isCanvasWindowKey = true
     private var layoutPersistScheduled = false
+    private var groupBaseSizeHints: [WorkspaceMapEntityID: CGSize] = [:]
     private var performanceRecorder = WorkspaceMapPerformanceRecorder()
     private var workloadClassifier = WorkspaceMapWorkloadClassifier()
 
@@ -48,6 +55,7 @@ final class WorkspaceMapViewModel: ObservableObject {
 
     deinit {
         refreshTask?.cancel()
+        activeRefreshTimer?.invalidate()
     }
 
     init(
@@ -241,6 +249,67 @@ final class WorkspaceMapViewModel: ObservableObject {
     func setCanvasPresentationActive(_ isActive: Bool) {
         guard isCanvasPresentationActive != isActive else { return }
         isCanvasPresentationActive = isActive
+        if isActive {
+            startActiveRefreshTicker()
+            scheduleRefresh()
+        } else {
+            stopActiveRefreshTicker()
+        }
+    }
+
+    func setCanvasWindowKeyState(_ isKey: Bool) {
+        guard isCanvasWindowKey != isKey else { return }
+        isCanvasWindowKey = isKey
+        guard isCanvasPresentationActive else { return }
+        if isKey {
+            scheduleRefresh()
+        }
+    }
+
+    @objc
+    private func handleActiveRefreshTimer(_ timer: Timer) {
+        guard timer === activeRefreshTimer else { return }
+        guard isCanvasPresentationActive else {
+            stopActiveRefreshTicker()
+            return
+        }
+        let expectedInterval = preferredActiveRefreshInterval()
+        if let currentInterval = activeRefreshTimerInterval,
+           abs(expectedInterval - currentInterval) > 0.001 {
+            activeRefreshTimerInterval = expectedInterval
+            scheduleActiveRefreshTimer()
+        }
+        scheduleRefresh()
+    }
+
+    private func startActiveRefreshTicker() {
+        guard activeRefreshTimer == nil else { return }
+        activeRefreshTimerInterval = preferredActiveRefreshInterval()
+        scheduleActiveRefreshTimer()
+    }
+
+    private func stopActiveRefreshTicker() {
+        activeRefreshTimer?.invalidate()
+        activeRefreshTimer = nil
+        activeRefreshTimerInterval = nil
+    }
+
+    private func preferredActiveRefreshInterval() -> TimeInterval {
+        isCanvasWindowKey ? Self.canvasFocusedRefreshInterval : Self.canvasBackgroundRefreshInterval
+    }
+
+    private func scheduleActiveRefreshTimer() {
+        activeRefreshTimer?.invalidate()
+        let interval = activeRefreshTimerInterval ?? preferredActiveRefreshInterval()
+        let timer = Timer.scheduledTimer(
+            timeInterval: interval,
+            target: self,
+            selector: #selector(handleActiveRefreshTimer(_:)),
+            userInfo: nil,
+            repeats: true
+        )
+        activeRefreshTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     func groupPosition(for groupID: WorkspaceMapEntityID) -> CGPoint {
@@ -267,22 +336,28 @@ final class WorkspaceMapViewModel: ObservableObject {
         }
     }
 
+    func updateGroupBaseSizeHint(_ groupID: WorkspaceMapEntityID, size: CGSize) {
+        let normalized = CGSize(
+            width: max(size.width, 520),
+            height: max(size.height, 320)
+        )
+        if let existing = groupBaseSizeHints[groupID],
+           abs(existing.width - normalized.width) < 0.5,
+           abs(existing.height - normalized.height) < 0.5 {
+            return
+        }
+        groupBaseSizeHints[groupID] = normalized
+    }
+
     func autoLayoutGroups() {
         let groups = snapshot.groups
         guard !groups.isEmpty else { return }
 
-        var terminalIndex = 0
-        var browserIndex = 0
+        let arrangedCenters = Self.buildNonOverlappingCenters(for: groups, sizeHintByID: groupBaseSizeHints)
         mutateLayout { layout in
             layout.groups = groups.map { group in
                 let existing = layout.groups.first(where: { $0.id == group.id })
-                let index = group.kind == .terminal ? terminalIndex : browserIndex
-                if group.kind == .terminal {
-                    terminalIndex += 1
-                } else {
-                    browserIndex += 1
-                }
-                let defaultPoint = Self.defaultGroupPosition(kind: group.kind, index: index)
+                let defaultPoint = arrangedCenters[group.id] ?? Self.defaultGroupPosition(kind: group.kind, index: 0)
                 return WorkspaceMapGroupLayoutSnapshot(
                     id: group.id,
                     centerX: defaultPoint.x,
@@ -293,14 +368,89 @@ final class WorkspaceMapViewModel: ObservableObject {
         }
     }
 
+    func placeNewGroupsWithoutOverlap(
+        previousGroupIDs: Set<WorkspaceMapEntityID>,
+        viewportCenter: CGPoint? = nil
+    ) {
+        let groups = snapshot.groups
+        guard !groups.isEmpty else { return }
+
+        let newGroups = groups.filter { !previousGroupIDs.contains($0.id) }
+        guard !newGroups.isEmpty else { return }
+
+        let groupsByID = Dictionary(uniqueKeysWithValues: groups.map { ($0.id, $0) })
+        let activeIDs = Set(groups.map(\.id))
+
+        mutateLayout { layout in
+            layout.groups.removeAll { !activeIDs.contains($0.id) }
+
+            var occupiedFrames: [CGRect] = []
+            for groupLayout in layout.groups where previousGroupIDs.contains(groupLayout.id) {
+                guard let group = groupsByID[groupLayout.id] else { continue }
+                let size = Self.groupBaseSize(for: group, sizeHintByID: groupBaseSizeHints)
+                occupiedFrames.append(
+                    Self.collisionFrame(
+                        center: CGPoint(x: groupLayout.centerX, y: groupLayout.centerY),
+                        size: size
+                    )
+                )
+            }
+
+            for group in newGroups {
+                if !layout.groups.contains(where: { $0.id == group.id }) {
+                    let fallbackCenter = viewportCenter ?? Self.defaultGroupPosition(kind: group.kind, index: layout.groups.count)
+                    layout.groups.append(
+                        WorkspaceMapGroupLayoutSnapshot(
+                            id: group.id,
+                            centerX: fallbackCenter.x,
+                            centerY: fallbackCenter.y,
+                            isCollapsed: false
+                        )
+                    )
+                }
+
+                guard let index = layout.groups.firstIndex(where: { $0.id == group.id }) else { continue }
+                let size = Self.groupBaseSize(for: group, sizeHintByID: groupBaseSizeHints)
+                let candidatePreferredCenter = CGPoint(
+                    x: viewportCenter?.x ?? CGFloat(layout.groups[index].centerX),
+                    y: viewportCenter?.y ?? CGFloat(layout.groups[index].centerY)
+                )
+                let resolvedCenter = Self.resolveNonOverlappingCenter(
+                    preferredCenter: candidatePreferredCenter,
+                    size: size,
+                    occupiedFrames: occupiedFrames
+                )
+                layout.groups[index].centerX = resolvedCenter.x
+                layout.groups[index].centerY = resolvedCenter.y
+                occupiedFrames.append(Self.collisionFrame(center: resolvedCenter, size: size))
+            }
+        }
+    }
+
     private func reconcileLayout(with groups: [WorkspaceMapGroupSnapshot]) {
-        var terminalIndex = 0
-        var browserIndex = 0
+        let activeIDs = Set(groups.map(\.id))
+        if groupBaseSizeHints.keys.contains(where: { !activeIDs.contains($0) }) {
+            groupBaseSizeHints = groupBaseSizeHints.filter { activeIDs.contains($0.key) }
+        }
 
         mutateLayout(persist: false) { layout in
             let oldByID = Dictionary(uniqueKeysWithValues: layout.groups.map { ($0.id, $0) })
+            var terminalIndex = groups.reduce(into: 0) { partial, group in
+                if group.kind == .terminal, oldByID[group.id] != nil {
+                    partial += 1
+                }
+            }
+            var browserIndex = groups.reduce(into: 0) { partial, group in
+                if group.kind == .browser, oldByID[group.id] != nil {
+                    partial += 1
+                }
+            }
+            var occupiedFrames: [CGRect] = []
             let merged: [WorkspaceMapGroupLayoutSnapshot] = groups.map { group in
                 if let existing = oldByID[group.id] {
+                    let existingCenter = CGPoint(x: existing.centerX, y: existing.centerY)
+                    let existingSize = Self.groupBaseSize(for: group, sizeHintByID: groupBaseSizeHints)
+                    occupiedFrames.append(Self.collisionFrame(center: existingCenter, size: existingSize))
                     return existing
                 }
 
@@ -312,10 +462,17 @@ final class WorkspaceMapViewModel: ObservableObject {
                 }
 
                 let defaultPoint = Self.defaultGroupPosition(kind: group.kind, index: index)
+                let baseSize = Self.groupBaseSize(for: group, sizeHintByID: groupBaseSizeHints)
+                let resolvedPoint = Self.resolveNonOverlappingCenter(
+                    preferredCenter: defaultPoint,
+                    size: baseSize,
+                    occupiedFrames: occupiedFrames
+                )
+                occupiedFrames.append(Self.collisionFrame(center: resolvedPoint, size: baseSize))
                 return WorkspaceMapGroupLayoutSnapshot(
                     id: group.id,
-                    centerX: defaultPoint.x,
-                    centerY: defaultPoint.y,
+                    centerX: resolvedPoint.x,
+                    centerY: resolvedPoint.y,
                     isCollapsed: false
                 )
             }
@@ -363,13 +520,158 @@ final class WorkspaceMapViewModel: ObservableObject {
         performance = performanceRecorder.snapshot()
     }
 
+    private static func buildNonOverlappingCenters(
+        for groups: [WorkspaceMapGroupSnapshot],
+        sizeHintByID: [WorkspaceMapEntityID: CGSize]
+    ) -> [WorkspaceMapEntityID: CGPoint] {
+        var centers: [WorkspaceMapEntityID: CGPoint] = [:]
+        let terminalGroups = groups.filter { $0.kind == .terminal }
+        let browserGroups = groups.filter { $0.kind == .browser }
+
+        var nextStartX: CGFloat = 120
+        nextStartX = placeGroupsInColumns(
+            terminalGroups,
+            startX: nextStartX,
+            sizeHintByID: sizeHintByID,
+            into: &centers
+        )
+
+        if !terminalGroups.isEmpty, !browserGroups.isEmpty {
+            nextStartX += 260
+        }
+
+        _ = placeGroupsInColumns(
+            browserGroups,
+            startX: nextStartX,
+            sizeHintByID: sizeHintByID,
+            into: &centers
+        )
+
+        return centers
+    }
+
+    private static func placeGroupsInColumns(
+        _ groups: [WorkspaceMapGroupSnapshot],
+        startX: CGFloat,
+        sizeHintByID: [WorkspaceMapEntityID: CGSize],
+        into centers: inout [WorkspaceMapEntityID: CGPoint]
+    ) -> CGFloat {
+        let startY: CGFloat = 96
+        let verticalGap: CGFloat = 120
+        let horizontalGap: CGFloat = 160
+        let maxColumnHeight: CGFloat = 2400
+
+        var cursorX = startX
+        var cursorY = startY
+        var currentColumnWidth: CGFloat = 0
+        var rightmostEdge: CGFloat = startX
+
+        for group in groups {
+            let size = groupBaseSize(for: group, sizeHintByID: sizeHintByID)
+
+            if cursorY > startY, cursorY + size.height > maxColumnHeight {
+                cursorX += currentColumnWidth + horizontalGap
+                cursorY = startY
+                currentColumnWidth = 0
+            }
+
+            let center = CGPoint(
+                x: cursorX + size.width / 2,
+                y: cursorY + size.height / 2
+            )
+            centers[group.id] = center
+
+            cursorY += size.height + verticalGap
+            currentColumnWidth = max(currentColumnWidth, size.width)
+            rightmostEdge = max(rightmostEdge, center.x + size.width / 2)
+        }
+
+        return rightmostEdge + horizontalGap
+    }
+
+    private static func groupBaseSize(
+        for group: WorkspaceMapGroupSnapshot,
+        sizeHintByID: [WorkspaceMapEntityID: CGSize]
+    ) -> CGSize {
+        if let hint = sizeHintByID[group.id] {
+            return CGSize(
+                width: max(hint.width, 520),
+                height: max(hint.height, 320)
+            )
+        }
+        return groupBaseSize(for: group.kind)
+    }
+
+    private static func groupBaseSize(for kind: WorkspaceMapGroupKind) -> CGSize {
+        switch kind {
+        case .terminal:
+            return CGSize(width: 880, height: 560)
+        case .browser:
+            return CGSize(width: 980, height: 680)
+        }
+    }
+
+    private static func collisionFrame(center: CGPoint, size: CGSize) -> CGRect {
+        let gap: CGFloat = 80
+        return CGRect(
+            x: center.x - size.width / 2 - gap / 2,
+            y: center.y - size.height / 2 - gap / 2,
+            width: size.width + gap,
+            height: size.height + gap
+        )
+    }
+
+    private static func resolveNonOverlappingCenter(
+        preferredCenter: CGPoint,
+        size: CGSize,
+        occupiedFrames: [CGRect]
+    ) -> CGPoint {
+        let stepX = max(size.width * 0.55, 360)
+        let stepY = max(size.height * 0.55, 280)
+
+        func isAvailable(_ center: CGPoint) -> Bool {
+            let frame = collisionFrame(center: center, size: size)
+            return occupiedFrames.allSatisfy { !$0.intersects(frame) }
+        }
+
+        if isAvailable(preferredCenter) {
+            return preferredCenter
+        }
+
+        for ring in 1...24 {
+            for dx in -ring...ring {
+                for dy in -ring...ring {
+                    if abs(dx) != ring && abs(dy) != ring {
+                        continue
+                    }
+                    let candidate = CGPoint(
+                        x: preferredCenter.x + CGFloat(dx) * stepX,
+                        y: preferredCenter.y + CGFloat(dy) * stepY
+                    )
+                    if isAvailable(candidate) {
+                        return candidate
+                    }
+                }
+            }
+        }
+
+        var fallback = preferredCenter
+        while !isAvailable(fallback) {
+            fallback.x += stepX
+            fallback.y += stepY * 0.3
+        }
+        return fallback
+    }
+
     private static func defaultGroupPosition(kind: WorkspaceMapGroupKind, index: Int) -> CGPoint {
-        let columns = 3
+        let columns = 2
         let col = index % columns
         let row = index / columns
-        let originX = kind == .terminal ? 260.0 : 1320.0
-        let x = originX + Double(col) * 360
-        let y = 180.0 + Double(row) * 260
+        let originX = kind == .terminal ? 560.0 : 2920.0
+        let columnStride = kind == .terminal ? 1060.0 : 1160.0
+        let rowStride = kind == .terminal ? 700.0 : 820.0
+        let x = originX + Double(col) * columnStride
+        let y = 380.0 + Double(row) * rowStride
         return CGPoint(x: x, y: y)
     }
 }
@@ -379,12 +681,34 @@ struct WorkspaceMapView: View {
     let contentProvider: WorkspaceMapLiveCanvasContentProvider
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topTrailing) {
             WorkspaceMapLiveCanvasView(model: model, contentProvider: contentProvider)
             if model.snapshot.groups.isEmpty {
                 Text(AppLocalization.localizedText("No top-level tabs available."))
                     .foregroundStyle(.secondary)
             }
+            HStack(spacing: 10) {
+                Button {
+                    model.scheduleRefresh()
+                } label: {
+                    Label(AppLocalization.localizedText("Refresh"), systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .help(AppLocalization.localizedText("Refresh Map"))
+
+                Button {
+                    model.autoLayoutGroups()
+                } label: {
+                    Label(AppLocalization.localizedText("Arrange"), systemImage: "square.grid.3x2")
+                }
+                .buttonStyle(.bordered)
+                .help(AppLocalization.localizedText("Arrange Groups"))
+            }
+            .controlSize(.small)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.regularMaterial, in: Capsule(style: .continuous))
+            .padding(12)
         }
         .onAppear {
             model.scheduleRefresh()
@@ -474,187 +798,14 @@ private struct WorkspaceMapWorkloadClassifier {
     }
 }
 
-private struct WorkspaceMapCanvasBackground: View {
-    var body: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .topLeading) {
-                LinearGradient(
-                    colors: [
-                        Color(nsColor: .windowBackgroundColor),
-                        Color(nsColor: .underPageBackgroundColor).opacity(0.85),
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-
-                Path { path in
-                    let step: CGFloat = 52
-                    let width = geometry.size.width
-                    let height = geometry.size.height
-
-                    var x: CGFloat = 0
-                    while x <= width {
-                        path.move(to: CGPoint(x: x, y: 0))
-                        path.addLine(to: CGPoint(x: x, y: height))
-                        x += step
-                    }
-
-                    var y: CGFloat = 0
-                    while y <= height {
-                        path.move(to: CGPoint(x: 0, y: y))
-                        path.addLine(to: CGPoint(x: width, y: y))
-                        y += step
-                    }
-                }
-                .stroke(Color.secondary.opacity(0.08), lineWidth: 1)
-            }
-        }
-    }
-}
-
-private struct WorkspaceMapGroupCard: View {
-    let group: WorkspaceMapGroupSnapshot
-    let isCollapsed: Bool
-    let onToggleCollapse: () -> Void
-    let onFocus: () -> Void
-    let onRename: () -> Void
-    let onClose: () -> Void
-    let onJumpToPaneTab: (WorkspaceMapEntityID) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text(group.title)
-                    .font(.headline)
-                    .lineLimit(1)
-
-                Spacer(minLength: 4)
-
-                Text(group.kind.rawValue.capitalized)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Button(isCollapsed ? AppLocalization.localizedText("Expand") : AppLocalization.localizedText("Collapse")) {
-                    onToggleCollapse()
-                }
-                .buttonStyle(.plain)
-                .font(.caption)
-            }
-
-            if !isCollapsed {
-                if let terminal = group.terminal {
-                    Text("splits \(terminal.splitCount) | panes \(terminal.paneCount) | tabs \(terminal.tabCount)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    if let activePaneTab = terminal.nodes.first(where: { $0.kind == .paneTab && $0.isActive }) {
-                        Button(AppLocalization.localizedText("Jump Active Tab")) {
-                            onJumpToPaneTab(activePaneTab.id)
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
-
-                    WorkspaceMapHierarchyMiniView(terminal: terminal)
-                }
-
-                if let browser = group.browser {
-                    Text(browser.displayedURL)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-            }
-
-            HStack(spacing: 8) {
-                Button(AppLocalization.localizedText("Focus")) {
-                    onFocus()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-
-                Button(AppLocalization.localizedText("Rename")) {
-                    onRename()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-
-                Button(AppLocalization.localizedText("Close")) {
-                    onClose()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-        }
-        .padding(12)
-        .frame(width: 320, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(group.isFocused ? Color.accentColor.opacity(0.12) : Color(nsColor: .controlBackgroundColor).opacity(0.92))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(group.isFocused ? Color.accentColor.opacity(0.6) : Color.secondary.opacity(0.18), lineWidth: 1)
-        )
-        .shadow(color: Color.black.opacity(0.08), radius: 4, y: 1)
-    }
-}
-
-private struct WorkspaceMapHierarchyMiniView: View {
-    let terminal: WorkspaceMapTerminalGroupSnapshot
-
-    var body: some View {
-        let lines = makeLines(maxDepth: 3, maxLines: 14)
-        if lines.isEmpty {
-            EmptyView()
-        } else {
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                    Text(line)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
-        }
-    }
-
-    private func makeLines(maxDepth: Int, maxLines: Int) -> [String] {
-        guard let rootID = terminal.rootNodeID else { return [] }
-        let nodeByID = Dictionary(uniqueKeysWithValues: terminal.nodes.map { ($0.id, $0) })
-        var lines: [String] = []
-
-        func visit(_ nodeID: WorkspaceMapEntityID, depth: Int) {
-            guard lines.count < maxLines else { return }
-            guard depth <= maxDepth else { return }
-            guard let node = nodeByID[nodeID] else { return }
-
-            let indent = String(repeating: "  ", count: depth)
-            let marker = node.isActive ? "*" : "-"
-            let descriptor: String
-            switch node.kind {
-            case .split:
-                let direction = node.splitDirection?.rawValue ?? "?"
-                let ratio = node.splitRatio.map { String(format: "%.2f", $0) } ?? "-"
-                descriptor = "split \(direction) \(ratio)"
-            case .pane:
-                descriptor = "pane"
-            case .paneTab:
-                descriptor = "tab \(node.title)"
-            }
-            lines.append("\(indent)\(marker) \(descriptor)")
-
-            for childID in node.childIDs {
-                visit(childID, depth: depth + 1)
-            }
-        }
-
-        visit(rootID, depth: 0)
-        return lines
-    }
-}
-
 final class WorkspaceMapController: NSWindowController, NSWindowDelegate, TopLevelTabController {
+    private struct PendingNewGroupPlacement {
+        let previousGroupIDs: Set<WorkspaceMapEntityID>
+        var remainingRefreshes: Int
+    }
+
+    private static let pendingPlacementRefreshBudget = 30
+
     static var all: [WorkspaceMapController] {
         NSApplication.shared.windows.compactMap { $0.windowController as? WorkspaceMapController }
     }
@@ -664,6 +815,7 @@ final class WorkspaceMapController: NSWindowController, NSWindowDelegate, TopLev
     private let liveCanvasContentProvider: WorkspaceMapLiveCanvasContentProvider = WorkspaceMapRuntimeLiveCanvasContentProvider()
     private var windowLifecycleCancellables: Set<AnyCancellable> = []
     private var windowContentConfigured = false
+    private var pendingNewGroupPlacements: [PendingNewGroupPlacement] = []
 
     var titleOverride: String? {
         didSet {
@@ -700,6 +852,7 @@ final class WorkspaceMapController: NSWindowController, NSWindowDelegate, TopLev
         configureWindowIfNeeded()
         super.showWindow(sender)
         viewModel.setCanvasPresentationActive(true)
+        viewModel.setCanvasWindowKeyState(window?.isKeyWindow ?? true)
         viewModel.scheduleRefresh()
         applyWindowTitle()
     }
@@ -730,13 +883,166 @@ final class WorkspaceMapController: NSWindowController, NSWindowDelegate, TopLev
         window?.close()
     }
 
+    @IBAction func newTab(_ sender: Any?) {
+        _ = createTerminalTabSilently()
+    }
+
+    override func newWindowForTab(_ sender: Any?) {
+        _ = createTerminalTabSilently()
+    }
+
+    @discardableResult
+    func createTerminalTabSilently() -> TerminalController? {
+        guard let mapWindow = window else { return nil }
+        let previousGroupIDs = Set(viewModel.snapshot.groups.map(\.id))
+        enqueuePendingNewGroupPlacement(previousGroupIDs: previousGroupIDs)
+
+        let preferredTerminalParent = mapWindow.tabGroup?.windows.first {
+            guard $0 !== mapWindow else { return false }
+            return $0.windowController is TerminalController
+        }
+
+        let createdController: TerminalController
+        if let preferredTerminalParent,
+           let controller = TerminalController.newTab(ghostty, from: preferredTerminalParent, withBaseConfig: nil) {
+            createdController = controller
+        } else {
+            createdController = TerminalController.newWindow(
+                ghostty,
+                withBaseConfig: nil,
+                withParent: mapWindow
+            )
+        }
+
+        DispatchQueue.main.async { [weak self, weak mapWindow, weak createdController] in
+            guard let self, let mapWindow else { return }
+
+            if let createdWindow = createdController?.window,
+               createdWindow !== mapWindow,
+               createdWindow.tabbingMode != .disallowed,
+               !mapWindow.styleMask.contains(.fullScreen) {
+                let isAlreadyInMapTabGroup = mapWindow.tabGroup?.windows.contains(where: { $0 === createdWindow }) ?? false
+                if !isAlreadyInMapTabGroup {
+                    createdWindow.tabGroup?.removeWindow(createdWindow)
+                    mapWindow.addTabbedWindowSafely(createdWindow, ordered: .above)
+                }
+            }
+
+            self.showWindow(nil)
+            mapWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            self.viewModel.scheduleRefresh()
+            self.processPendingNewGroupPlacementsIfNeeded()
+        }
+
+        return createdController
+    }
+
+    private func enqueuePendingNewGroupPlacement(previousGroupIDs: Set<WorkspaceMapEntityID>) {
+        guard !pendingNewGroupPlacements.contains(where: { $0.previousGroupIDs == previousGroupIDs }) else {
+            return
+        }
+        pendingNewGroupPlacements.append(
+            PendingNewGroupPlacement(
+                previousGroupIDs: previousGroupIDs,
+                remainingRefreshes: Self.pendingPlacementRefreshBudget
+            )
+        )
+    }
+
+    private func processPendingNewGroupPlacementsIfNeeded() {
+        guard !pendingNewGroupPlacements.isEmpty else { return }
+        guard let mapWindow = window else {
+            pendingNewGroupPlacements.removeAll()
+            return
+        }
+
+        let activeGroupIDs = Set(viewModel.snapshot.groups.map(\.id))
+        var retained: [PendingNewGroupPlacement] = []
+
+        for var pending in pendingNewGroupPlacements {
+            let newGroupIDs = activeGroupIDs.subtracting(pending.previousGroupIDs)
+            if newGroupIDs.isEmpty {
+                pending.remainingRefreshes -= 1
+                if pending.remainingRefreshes > 0 {
+                    retained.append(pending)
+                }
+                continue
+            }
+
+            placeAndCenterNewGroups(
+                previousGroupIDs: pending.previousGroupIDs,
+                in: mapWindow
+            )
+        }
+
+        pendingNewGroupPlacements = retained
+    }
+
+    private func placeAndCenterNewGroups(
+        previousGroupIDs: Set<WorkspaceMapEntityID>,
+        in mapWindow: NSWindow
+    ) {
+        let viewportCenter = currentViewportLogicalCenter(in: mapWindow)
+        viewModel.placeNewGroupsWithoutOverlap(
+            previousGroupIDs: previousGroupIDs,
+            viewportCenter: viewportCenter
+        )
+
+        let newGroupID = viewModel.snapshot.groups
+            .map(\.id)
+            .last(where: { !previousGroupIDs.contains($0) })
+        guard let newGroupID else { return }
+        centerViewport(on: newGroupID, in: mapWindow)
+    }
+
+    private func currentViewportLogicalCenter(in mapWindow: NSWindow) -> CGPoint? {
+        guard let contentBounds = mapWindow.contentView?.bounds,
+              contentBounds.width > 1,
+              contentBounds.height > 1 else {
+            return nil
+        }
+        let zoom = max(viewModel.zoomScale, 0.001)
+        let offset = viewModel.viewportOffset
+        return CGPoint(
+            x: (contentBounds.midX - offset.width) / zoom,
+            y: (contentBounds.midY - offset.height) / zoom
+        )
+    }
+
+    private func centerViewport(on groupID: WorkspaceMapEntityID, in mapWindow: NSWindow) {
+        guard let contentBounds = mapWindow.contentView?.bounds,
+              contentBounds.width > 1,
+              contentBounds.height > 1 else {
+            return
+        }
+        let zoom = max(viewModel.zoomScale, 0.001)
+        let center = viewModel.groupPosition(for: groupID)
+        viewModel.setViewportOffset(
+            CGSize(
+                width: contentBounds.midX - center.x * zoom,
+                height: contentBounds.midY - center.y * zoom
+            )
+        )
+    }
+
     func windowDidBecomeKey(_ notification: Notification) {
         viewModel.setCanvasPresentationActive(true)
+        viewModel.setCanvasWindowKeyState(true)
         viewModel.scheduleRefresh()
     }
 
     func windowDidResignKey(_ notification: Notification) {
+        viewModel.setCanvasWindowKeyState(false)
+    }
+
+    func windowDidMiniaturize(_ notification: Notification) {
         viewModel.setCanvasPresentationActive(false)
+    }
+
+    func windowDidDeminiaturize(_ notification: Notification) {
+        viewModel.setCanvasPresentationActive(true)
+        viewModel.scheduleRefresh()
     }
 
     static func newWindow(
@@ -816,11 +1122,13 @@ final class WorkspaceMapController: NSWindowController, NSWindowDelegate, TopLev
     private func setupWindowLifecycleRefresh() {
         windowLifecycleCancellables.removeAll()
 
-        NotificationCenter.default.publisher(for: NSWindow.willCloseNotification, object: nil)
+        NotificationCenter.default.publisher(for: NSWindow.willCloseNotification, object: window)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 self?.viewModel.setCanvasPresentationActive(false)
+                self?.viewModel.setCanvasWindowKeyState(false)
                 self?.viewModel.scheduleRefresh()
+                self?.pendingNewGroupPlacements.removeAll()
             }
             .store(in: &windowLifecycleCancellables)
 
@@ -828,6 +1136,13 @@ final class WorkspaceMapController: NSWindowController, NSWindowDelegate, TopLev
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 self?.viewModel.scheduleRefresh()
+            }
+            .store(in: &windowLifecycleCancellables)
+
+        viewModel.$snapshot
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.processPendingNewGroupPlacementsIfNeeded()
             }
             .store(in: &windowLifecycleCancellables)
     }
