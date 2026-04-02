@@ -380,7 +380,16 @@ struct WorkspaceMapView: View {
 
     var body: some View {
         ZStack {
-            WorkspaceMapLiveCanvasView(model: model, contentProvider: contentProvider)
+            WorkspaceMapCanvasBackground()
+                .ignoresSafeArea()
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    ForEach(model.snapshot.groups, id: \.id) { group in
+                        WorkspaceMapFallbackGroupRow(model: model, group: group)
+                    }
+                }
+                .padding(16)
+            }
             if model.snapshot.groups.isEmpty {
                 Text(AppLocalization.localizedText("No top-level tabs available."))
                     .foregroundStyle(.secondary)
@@ -389,6 +398,67 @@ struct WorkspaceMapView: View {
         .onAppear {
             model.scheduleRefresh()
         }
+    }
+}
+
+private struct WorkspaceMapFallbackGroupRow: View {
+    @ObservedObject var model: WorkspaceMapViewModel
+    let group: WorkspaceMapGroupSnapshot
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(group.title)
+                    .font(.headline)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Text(group.kind.rawValue.capitalized)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let terminal = group.terminal {
+                Text("splits \(terminal.splitCount) | panes \(terminal.paneCount) | tabs \(terminal.tabCount)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if let browser = group.browser {
+                Text(browser.displayedURL)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            HStack(spacing: 8) {
+                Button(AppLocalization.localizedText("Focus")) {
+                    _ = model.execute(.focusTopLevelGroup, targetID: group.id)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Button(AppLocalization.localizedText("Close")) {
+                    _ = model.execute(.closeTopLevelGroup, targetID: group.id)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                if let activePaneTabID = group.terminal?.nodes.first(where: { $0.kind == .paneTab && $0.isActive })?.id {
+                    Button(AppLocalization.localizedText("Jump Active Tab")) {
+                        _ = model.execute(.jumpToTerminalPaneTab, targetID: activePaneTabID)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(group.isFocused ? Color.accentColor.opacity(0.12) : Color(nsColor: .controlBackgroundColor).opacity(0.92))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(group.isFocused ? Color.accentColor.opacity(0.6) : Color.secondary.opacity(0.18), lineWidth: 1)
+        )
     }
 }
 
