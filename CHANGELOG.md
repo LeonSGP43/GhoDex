@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(pagelist): normalize viewport after layout changes
+
+- What changed: Centralized `PageList` viewport repair in `normalizeViewportAfterLayoutChange()` so layout-mutating paths now clear stale pin-offset cache, reclassify `.pin` to `.top` or `.active` when boundaries overlap, and collapse invalid pins that no longer have enough remaining rows. Updated `resize()`, `resizeWithoutReflow()`, `grow()` prune handling, and `fixupViewport()` to use the shared normalization path. Added `docs/pagelist-viewport-normalization-fix.md` and expanded regression coverage for non-reflow resize and prune-on-grow cases.
+- Why: `ViewportPinInsufficientRows` could panic after row-count mutations left `self.viewport` as an illegal `.pin`, especially when `total_rows` shrank or the active region moved and scattered fixups missed the path.
+- Impact: `PageList` now normalizes viewport state consistently after row/viewport-boundary changes, preventing the `remaining_rows < self.rows` crash while preserving expected `.top` versus `.active` behavior.
+- Verification: `zig build test -Dtest-filter='PageList resize (no reflow) more rows contains viewport'`; `zig build test -Dtest-filter='PageList resize (no reflow) more rows promotes pin viewport to active'`; `zig build test -Dtest-filter='PageList grow prune normalizes viewport pinned to pruned page'`; `zig build test -Dtest-filter='prune'`; `zig build test -Dtest-filter='PageList'`
+- Files: `src/terminal/PageList.zig`, `docs/pagelist-viewport-normalization-fix.md`, `CHANGELOG.md`
+- Decision trail: Fix the invalid viewport state at the `PageList` layout-normalization layer instead of weakening the integrity assertion, so every row-count mutation path shares one repair contract.
+
 ### fix(macos): stop forcing terminal text refresh on every control-harness sampler tick
 
 - What changed: Updated `ControlHarnessReadSampler.captureFreshSample` to stop forcing `refresh: true` reads for both `visible` and `screen` scopes. Sampler reads now use cached surface content (`refresh: false`), allowing the existing `CachedValue` expiry path in `SurfaceView_AppKit` to decide when a fresh terminal dump is required.
