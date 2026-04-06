@@ -95,6 +95,7 @@ final class ControlHarnessSampleStore {
         samples[.init(terminalID: terminalID, scope: scope)]
     }
 
+    // swiftlint:disable:next function_parameter_count
     func store(
         terminalID: String,
         scope: String,

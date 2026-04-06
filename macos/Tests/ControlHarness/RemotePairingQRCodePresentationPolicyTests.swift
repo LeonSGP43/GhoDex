@@ -1,6 +1,7 @@
 import Testing
 @testable import GhoDex
 
+// swiftlint:disable:next type_name
 struct RemotePairingQRCodePresentationPolicyTests {
     @Test func manualRequestsKeepBlockingErrorFeedback() {
         #expect(

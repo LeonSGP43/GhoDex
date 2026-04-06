@@ -3,6 +3,7 @@ import AppKit
 @testable import GhoDex
 
 @MainActor
+// swiftlint:disable:next type_name
 final class WorkspaceMapLiveCanvasContentProviderTests: XCTestCase {
     func testAcquireLeaseUsesInteractiveMirrorWithoutMutatingSourceWindowOwnership() {
         let sourceWindow = NSWindow(

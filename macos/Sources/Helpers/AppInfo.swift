@@ -4,3 +4,8 @@ import Foundation
 func isRunningInXcode() -> Bool {
     ProcessInfo.processInfo.environment["__XCODE_BUILT_PRODUCTS_DIR_PATHS"] != nil
 }
+
+/// True when the app is being hosted by XCTest.
+func isRunningTests() -> Bool {
+    ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+}

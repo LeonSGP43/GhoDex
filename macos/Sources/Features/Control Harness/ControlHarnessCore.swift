@@ -2824,13 +2824,20 @@ final class ControlHarnessCore {
         )
     }
 
+    private struct TerminalReadResolution {
+        let content: String
+        let consistency: String
+        let cacheAgeMs: Int
+        let capturedAt: Date
+    }
+
     private func resolveTerminalRead(
         terminalUUID: UUID,
         terminalID: String,
         scope: String,
         surface: any ControlHarnessReadableSurface,
         forceFresh: Bool
-    ) throws -> (content: String, consistency: String, cacheAgeMs: Int, capturedAt: Date) {
+    ) throws -> TerminalReadResolution {
         let currentTime = now()
         let activityClass = samplingActivityResolver(terminalUUID)
             ?? sampleStore.sample(for: terminalID, scope: scope)?.activityClass
@@ -2839,7 +2846,7 @@ final class ControlHarnessCore {
         if !forceFresh,
            let sample = sampleStore.sample(for: terminalID, scope: scope),
            sampleStore.isFresh(sample, activityClass: activityClass, now: currentTime) {
-            return (
+            return TerminalReadResolution(
                 content: sample.content,
                 consistency: sample.consistency,
                 cacheAgeMs: sample.cacheAgeMs,
@@ -2867,7 +2874,7 @@ final class ControlHarnessCore {
             activityClass: activityClass,
             forcedFresh: true
         )
-        return (
+        return TerminalReadResolution(
             content: sample.content,
             consistency: sample.consistency,
             cacheAgeMs: sample.cacheAgeMs,

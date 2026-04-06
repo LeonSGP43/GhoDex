@@ -6,6 +6,94 @@ private let browserProfileConfigKey = "ghodex-browser-profile-path"
 private let browserRuntimeConfigKey = "ghodex-browser-runtime-path"
 private let browserRemoteDebugPortConfigKey = "ghodex-browser-remote-debug-port"
 
+private enum XCTestRuntimeLogFilter {
+    private static var buffer = Data()
+    private static var passthroughHandle: FileHandle?
+    private static var readHandle: FileHandle?
+    private static var suppressingMenuNoiseBlock = false
+    private static let newline = UInt8(ascii: "\n")
+
+    static func installIfNeeded() {
+        guard isRunningTests(), passthroughHandle == nil else {
+            return
+        }
+
+        let pipe = Pipe()
+        let duplicatedStderr = dup(STDERR_FILENO)
+        guard duplicatedStderr >= 0 else {
+            return
+        }
+
+        guard dup2(pipe.fileHandleForWriting.fileDescriptor, STDERR_FILENO) >= 0 else {
+            close(duplicatedStderr)
+            return
+        }
+
+        passthroughHandle = FileHandle(fileDescriptor: duplicatedStderr, closeOnDealloc: true)
+        readHandle = pipe.fileHandleForReading
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else {
+                handle.readabilityHandler = nil
+                flushBufferedLine()
+                return
+            }
+
+            buffer.append(data)
+            flushBufferedLines()
+        }
+    }
+
+    private static func flushBufferedLines() {
+        while let newlineIndex = buffer.firstIndex(of: newline) {
+            let lineData = buffer.prefix(upTo: newlineIndex)
+            buffer.removeSubrange(...newlineIndex)
+            handleLine(Data(lineData))
+        }
+    }
+
+    private static func flushBufferedLine() {
+        guard !buffer.isEmpty else {
+            return
+        }
+
+        let pending = buffer
+        buffer.removeAll(keepingCapacity: false)
+        handleLine(pending)
+    }
+
+    private static func handleLine(_ data: Data) {
+        let line = String(bytes: data, encoding: .utf8) ?? ""
+
+        if shouldSuppress(line) {
+            return
+        }
+
+        guard let passthroughHandle else {
+            return
+        }
+
+        passthroughHandle.write(data)
+        passthroughHandle.write(Data([newline]))
+    }
+
+    private static func shouldSuppress(_ line: String) -> Bool {
+        if suppressingMenuNoiseBlock {
+            if line.hasPrefix("    ") || line.isEmpty {
+                return true
+            }
+            suppressingMenuNoiseBlock = false
+        }
+
+        if line.contains("[Menu] Internal inconsistency in menus - menu") {
+            suppressingMenuNoiseBlock = true
+            return true
+        }
+
+        return false
+    }
+}
+
 private func validatedBrowserDirectorySetting(_ value: String?) -> String? {
     guard let value, !value.isEmpty else { return nil }
 
@@ -107,6 +195,7 @@ private func seedBrowserCEFDefaultsFromConfigFile() {
 }
 
 seedBrowserCEFDefaultsFromConfigFile()
+XCTestRuntimeLogFilter.installIfNeeded()
 
 let cefExitCode = GhoDexCEFExecuteProcessIfNeeded()
 if cefExitCode >= 0 {

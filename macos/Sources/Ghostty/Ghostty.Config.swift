@@ -862,6 +862,7 @@ extension Ghostty {
             Int(uint(for: "ghodex-heartbeat-max-concurrent-tasks", default: 4))
         }
 
+        // swiftlint:disable:next identifier_name
         var ghodexHeartbeatAllowExternalInboxMutations: Bool {
             bool(for: "ghodex-heartbeat-allow-external-inbox-mutations", default: false)
         }

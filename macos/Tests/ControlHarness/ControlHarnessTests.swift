@@ -2265,7 +2265,7 @@ struct ControlHarnessTests {
 
         let marker = try JSONSerialization.jsonObject(with: drain.payloads[0]) as? [String: Any]
         #expect(marker?["event"] as? String == "overflow")
-        #expect(String(decoding: drain.payloads[1], as: UTF8.self) == "evt-4")
+        #expect(String(bytes: drain.payloads[1], encoding: .utf8) == "evt-4")
     }
 
     @Test @MainActor func gatewayAttachSubscriptionBuffersAckReplayAndLiveEvents() throws {
@@ -5742,6 +5742,7 @@ struct ControlHarnessTests {
         let configurationURL = makeRuntimeConfigurationURL(bundleID)
         let workspaceID = UUID()
         let bootstrapSessionID = UUID()
+        // swiftlint:disable:next large_tuple
         let (delegate, service, cacheRoot, supportRoot) = await MainActor.run { () -> (RecordingAppDelegate, ControlHarnessService, URL, URL) in
             let delegate = RecordingAppDelegate(configurationURL: configurationURL)
             delegate.aiTerminalManagerStore.saveAgentRuntimeSettings(.init(

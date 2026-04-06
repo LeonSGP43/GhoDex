@@ -37,6 +37,7 @@ class AppDelegate: NSObject,
                     UNUserNotificationCenterDelegate,
                     GhosttyAppDelegate {
     private static let skipInitialTerminalWindowEnvKey = "GHODEX_SKIP_INITIAL_TERMINAL_WINDOW"
+    private static let isRunningUnderTests = isRunningTests()
     // The application logger. We should probably move this at some point to a dedicated
     // class/struct but for now it lives here! 🤷‍♂️
     static let logger = Logger(
@@ -470,8 +471,10 @@ class AppDelegate: NSObject,
         // Register our service provider. This must happen after everything is initialized.
         NSApp.servicesProvider = ServiceProvider()
 
-        // This registers the Ghostty => Services menu to exist.
-        NSApp.servicesMenu = menuServices
+        if !Self.isRunningUnderTests {
+            // This registers the Ghostty => Services menu to exist.
+            NSApp.servicesMenu = menuServices
+        }
 
         // Setup a local event monitor for app-level keyboard shortcuts. See
         // localEventHandler for more info why.
@@ -1342,7 +1345,11 @@ class AppDelegate: NSObject,
         func serialized() throws -> String {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
-            return String(decoding: try encoder.encode(self), as: UTF8.self)
+            let data = try encoder.encode(self)
+            guard let serialized = String(data: data, encoding: .utf8) else {
+                throw CocoaError(.fileWriteInapplicableStringEncoding)
+            }
+            return serialized
         }
     }
 
@@ -1678,6 +1685,7 @@ class AppDelegate: NSObject,
     }
 
     private func syncDockBadge() {
+        guard !Self.isRunningUnderTests else { return }
         let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { settings in
             switch settings.authorizationStatus {
@@ -1717,6 +1725,7 @@ class AppDelegate: NSObject,
     }
 
     private func notifyForBell(on surfaceView: Ghostty.SurfaceView) {
+        guard !Self.isRunningUnderTests else { return }
         let center = UNUserNotificationCenter.current()
         let showNotification = {
             DispatchQueue.main.async {
@@ -1837,8 +1846,12 @@ class AppDelegate: NSObject,
             // updateController.updater.checkForUpdatesInBackground()
         }
 
-        // Config could change keybindings, so update everything that depends on that
-        syncMenuShortcuts(config)
+        // Config could change keybindings, so update everything that depends on that.
+        // XCTest launches the full app without a stable interactive main-menu tree, which
+        // otherwise produces AppKit menu-consistency noise during targeted test runs.
+        if !Self.isRunningUnderTests {
+            syncMenuShortcuts(config)
+        }
         TerminalController.all.forEach { $0.relabelTabs() }
 
         // Update our badge since config can change what we show.
@@ -2643,6 +2656,7 @@ class AppDelegate: NSObject,
     }
 
     @MainActor
+    // swiftlint:disable:next function_parameter_count
     private func showSplitPicker(
         relativeTo window: NSWindow?,
         title: String,

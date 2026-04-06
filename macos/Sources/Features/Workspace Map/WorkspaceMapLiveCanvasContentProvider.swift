@@ -59,6 +59,7 @@ enum WorkspaceMapLiveCanvasRenderPathRecorder {
 }
 
 @MainActor
+// swiftlint:disable:next type_name
 final class WorkspaceMapRuntimeLiveCanvasContentProvider: WorkspaceMapLiveCanvasContentProvider {
     typealias SourceViewResolver = @MainActor (WorkspaceMapEntityID) -> NSView?
     typealias MirrorViewFactory = @MainActor (NSView) -> WorkspaceMapRuntimeInteractiveMirrorView

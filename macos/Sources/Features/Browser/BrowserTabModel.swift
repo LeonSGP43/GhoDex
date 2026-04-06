@@ -517,6 +517,7 @@ struct BrowserControlEvent: Identifiable, Hashable, Codable {
         )
     }
 
+    // swiftlint:disable function_parameter_count
     static func download(
         target: BrowserControlTarget,
         phase: String,
@@ -666,6 +667,7 @@ struct BrowserControlEvent: Identifiable, Hashable, Codable {
         }
         return BrowserControlEvent(target: target, kind: .certificateWarning, payload: payload)
     }
+    // swiftlint:enable function_parameter_count
 }
 
 typealias BrowserControlCompletion = (BrowserControlResponse) -> Void

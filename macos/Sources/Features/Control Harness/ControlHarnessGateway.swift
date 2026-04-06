@@ -3,6 +3,7 @@ import CryptoKit
 import Foundation
 import OSLog
 
+// swiftlint:disable:next type_name
 private struct ControlHarnessGatewayRegisteredDevicePayload: Encodable {
     let deviceID: String
     let displayLabel: String
@@ -23,6 +24,7 @@ private struct ControlHarnessGatewayRegisteredDevicePayload: Encodable {
     }
 }
 
+// swiftlint:disable:next type_name
 private struct ControlHarnessGatewayRegisteredDeviceListPayload: Encodable {
     let devices: [ControlHarnessGatewayRegisteredDevicePayload]
 }
@@ -434,8 +436,8 @@ final class ControlHarnessGateway {
                             to: clientFD
                         )
                         recordRequestIfNeeded()
-                    }
-                ) {
+                    },
+                    operation: {
                     let reply = handleGatewayCommand(request).map(ControlHarnessServiceReply.single)
                         ?? callRequestHandler(request)
                     switch reply {
@@ -455,7 +457,8 @@ final class ControlHarnessGateway {
                             sessionIdentity: sessionIdentity
                         )
                     }
-                }
+                    }
+                )
             }
         } catch {
             logger.error("failed to process control harness gateway client: \(error.localizedDescription, privacy: .public)")
@@ -516,17 +519,17 @@ final class ControlHarnessGateway {
             try withSessionReservation(
                 request: request,
                 peerDescription: peerDescription,
-                    sessionIdentity: sessionIdentity,
-                    responseWriter: { response in
-                        try Self.writeAll(
-                            try encodeWebSocketResponse(response, transportSharedSecret: transportSharedSecret),
-                            to: clientFD
-                        )
-                        recordRequestIfNeeded()
-                    }
-                ) {
-                let reply = handleGatewayCommand(request).map(ControlHarnessServiceReply.single)
-                    ?? callRequestHandler(request)
+                sessionIdentity: sessionIdentity,
+                responseWriter: { response in
+                    try Self.writeAll(
+                        try encodeWebSocketResponse(response, transportSharedSecret: transportSharedSecret),
+                        to: clientFD
+                    )
+                    recordRequestIfNeeded()
+                },
+                operation: {
+                    let reply = handleGatewayCommand(request).map(ControlHarnessServiceReply.single)
+                        ?? callRequestHandler(request)
                     switch reply {
                     case .single(let response):
                         try Self.writeAll(
@@ -545,6 +548,7 @@ final class ControlHarnessGateway {
                         )
                     }
                 }
+            )
         }
     }
 
@@ -1545,8 +1549,7 @@ final class ControlHarnessGateway {
         guard count >= 3 else {
             return false
         }
-        let prefix = String(decoding: buffer.prefix(count), as: UTF8.self)
-        return prefix.hasPrefix("GET ")
+        return String(bytes: buffer.prefix(count), encoding: .utf8)?.hasPrefix("GET ") == true
     }
 
     private static func readHTTPHeaders(from fd: Int32) throws -> (headers: Data, remainder: Data) {

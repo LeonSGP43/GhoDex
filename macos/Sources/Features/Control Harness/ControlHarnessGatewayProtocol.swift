@@ -1,5 +1,6 @@
 import Foundation
 
+// swiftlint:disable:next type_name
 enum ControlHarnessGatewaySessionEnqueueResult: Equatable {
     case buffered
     case overflowed
