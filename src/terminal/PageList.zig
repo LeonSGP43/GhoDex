@@ -991,15 +991,7 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
         },
     }
 
-    // Various resize operations can change our total row count such
-    // that our viewport pin is now in the active area and has insufficient
-    // space. We need to check for this case and fix it up.
-    switch (self.viewport) {
-        .pin => if (self.pinIsActive(self.viewport_pin.*)) {
-            self.viewport = .active;
-        },
-        .active, .top => {},
-    }
+    self.normalizeViewportAfterLayoutChange();
 }
 
 /// Resize the pagelist with reflow by adding or removing columns.
@@ -2120,15 +2112,6 @@ fn resizeWithoutReflow(self: *PageList, opts: Resize) Allocator.Error!void {
                     assert(count < rows);
                     for (count..rows) |_| _ = try self.grow();
                 }
-
-                // Make sure that the viewport pin isn't below the active
-                // area, since that will lead to all sorts of problems.
-                switch (self.viewport) {
-                    .pin => if (self.pinIsActive(self.viewport_pin.*)) {
-                        self.viewport = .active;
-                    },
-                    .active, .top => {},
-                }
             },
         }
 
@@ -2137,6 +2120,8 @@ fn resizeWithoutReflow(self: *PageList, opts: Resize) Allocator.Error!void {
             assert(self.totalRows() >= self.rows);
         }
     }
+
+    if (!opts.reflow) self.normalizeViewportAfterLayoutChange();
 }
 
 fn resizeWithoutReflowGrowCols(
@@ -2975,6 +2960,59 @@ pub fn scrollbar(self: *PageList) Scrollbar {
     };
 }
 
+fn viewportPinActualRowOffset(self: *const PageList) ?usize {
+    var offset: usize = 0;
+    var node = self.pages.last;
+    while (node) |n| : (node = n.prev) {
+        offset += n.data.size.rows;
+        if (n == self.viewport_pin.node) {
+            assert(n.data.size.rows > self.viewport_pin.y);
+            offset -= self.viewport_pin.y;
+            return self.total_rows - offset;
+        }
+    }
+
+    return null;
+}
+
+/// Normalize viewport state after layout changes that may move the active
+/// boundary or remove rows from scrollback.
+fn normalizeViewportAfterLayoutChange(self: *PageList) void {
+    self.viewport_pin_row_offset = null;
+
+    switch (self.viewport) {
+        .active => {},
+
+        // Active and top can overlap; prefer active in that case so the
+        // viewport continues following the live area.
+        .top => if (self.pinIsActive(.{ .node = self.pages.first.? })) {
+            self.viewport = .active;
+        },
+
+        .pin => {
+            const p = self.viewport_pin.*;
+            if (self.pinIsActive(p)) {
+                self.viewport = .active;
+                return;
+            }
+
+            if (self.pinIsTop(p)) {
+                self.viewport = .top;
+                return;
+            }
+
+            const actual_offset = self.viewportPinActualRowOffset() orelse {
+                self.viewport = .active;
+                return;
+            };
+
+            if (self.total_rows - actual_offset < self.rows) {
+                self.viewport = .active;
+            }
+        },
+    }
+}
+
 /// Returns the offset of the current viewport from the top of the
 /// screen.
 ///
@@ -2995,24 +3033,7 @@ fn viewportRowOffset(self: *PageList) usize {
             // Return cached value if available
             if (self.viewport_pin_row_offset) |cached| break :pin cached;
 
-            // Traverse from the end and count rows until we reach the
-            // viewport pin. We count backwards because most of the time
-            // a user is scrolling near the active area.
-            const top_offset: usize = offset: {
-                var offset: usize = 0;
-                var node = self.pages.last;
-                while (node) |n| : (node = n.prev) {
-                    offset += n.data.size.rows;
-                    if (n == self.viewport_pin.node) {
-                        assert(n.data.size.rows > self.viewport_pin.y);
-                        offset -= self.viewport_pin.y;
-                        break :offset self.total_rows - offset;
-                    }
-                }
-
-                // Invalid pins are not possible.
-                unreachable;
-            };
+            const top_offset = self.viewportPinActualRowOffset() orelse unreachable;
 
             // The offset is from the bottom and our cached value and this
             // function returns from the top, so we need to invert it.
@@ -3056,6 +3077,8 @@ fn fixupViewport(
             self.viewport = .active;
         },
     }
+
+    self.normalizeViewportAfterLayoutChange();
 }
 
 /// Returns the actual max size. This may be greater than the explicit
@@ -3079,6 +3102,7 @@ pub fn maxSize(self: *const PageList) usize {
 pub fn grow(self: *PageList) Allocator.Error!?*List.Node {
     defer self.assertIntegrity();
 
+    var pruned = false;
     const last = self.pages.last.?;
     if (last.data.capacity.rows > last.data.size.rows) {
         // Fast path: we have capacity in the last page.
@@ -3124,22 +3148,14 @@ pub fn grow(self: *PageList) Allocator.Error!?*List.Node {
             self.total_rows += first.data.size.rows;
             break :prune;
         }
+        pruned = true;
 
-        // If we have a pin viewport cache then we need to update it.
-        if (self.viewport == .pin) viewport: {
-            if (self.viewport_pin_row_offset) |*v| {
-                // If our offset is less than the number of rows in the
-                // pruned page, then we are now at the top.
-                if (v.* < first.data.size.rows) {
-                    self.viewport = .top;
-                    break :viewport;
-                }
-
-                // Otherwise, our viewport pin is below what we pruned
-                // so we just decrement our offset.
-                v.* -= first.data.size.rows;
-            }
+        // Clamp the viewport before we potentially destroy or reuse the
+        // pruned page. A pinned viewport on that page cannot remain valid.
+        if (self.viewport == .pin and self.viewport_pin.node == first) {
+            self.viewport = .top;
         }
+        self.viewport_pin_row_offset = null;
 
         // Update any tracked pins that point to this page to point to the
         // new first page to the top-left, and mark them as garbage.
@@ -3182,6 +3198,7 @@ pub fn grow(self: *PageList) Allocator.Error!?*List.Node {
         // we're reusing an existing page so nothing has changed.
 
         first.data.assertIntegrity();
+        self.normalizeViewportAfterLayoutChange();
         return first;
     }
 
@@ -3198,6 +3215,7 @@ pub fn grow(self: *PageList) Allocator.Error!?*List.Node {
 
     // Record the increased row count
     self.total_rows += 1;
+    if (pruned) self.normalizeViewportAfterLayoutChange();
 
     return next_node;
 }
@@ -7045,6 +7063,38 @@ test "PageList grow prune scrollback with viewport pin not in pruned page" {
     try testing.expectEqual(expected_offset, scrollbar_after.offset);
 }
 
+test "PageList grow prune normalizes viewport pinned to pruned page" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var s = try init(alloc, 80, 24, std_size);
+    defer s.deinit();
+
+    const page1_node = s.pages.last.?;
+    const page1 = page1_node.data;
+    for (0..page1.capacity.rows - page1.size.rows) |_| {
+        try testing.expect(try s.grow() == null);
+    }
+
+    const page2_node = (try s.grow()).?;
+    const page2 = page2_node.data;
+    for (0..page2.capacity.rows - page2.size.rows) |_| {
+        try testing.expect(try s.grow() == null);
+    }
+
+    const pin_y: size.CellCountInt = @intCast(page1.capacity.rows / 2);
+    s.scroll(.{ .pin = s.pin(.{ .screen = .{ .y = pin_y } }).? });
+    try testing.expectEqual(Viewport.pin, s.viewport);
+    try testing.expectEqual(page1_node, s.viewport_pin.node);
+    try testing.expect(s.viewport_pin_row_offset == null);
+
+    const new = (try s.grow()).?;
+    try testing.expectEqual(new, s.pages.last.?);
+    try testing.expectEqual(page2_node, s.pages.first.?);
+    try testing.expectEqual(Viewport.top, s.viewport);
+    try testing.expect(s.getBottomRight(.viewport) != null);
+}
+
 test "PageList eraseRows invalidates viewport offset cache" {
     const testing = std.testing;
     const alloc = testing.allocator;
@@ -10320,9 +10370,32 @@ test "PageList resize (no reflow) more rows contains viewport" {
     try testing.expectEqual(@as(usize, 7), s.rows);
     try testing.expectEqual(@as(usize, 7), s.totalRows());
 
-    // Question: maybe the viewport should actually be in the active
-    // here and not pinned to the top.
-    try testing.expectEqual(Viewport.top, s.viewport);
+    // Top and active overlap here, so the viewport should normalize
+    // back to active.
+    try testing.expectEqual(Viewport.active, s.viewport);
+}
+
+test "PageList resize (no reflow) more rows promotes pin viewport to active" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var s = try init(alloc, 5, 5, null);
+    defer s.deinit();
+
+    try s.growRows(5);
+    try testing.expectEqual(@as(usize, 10), s.totalRows());
+
+    const pin_y: size.CellCountInt = @intCast(s.totalRows() - s.rows - 1);
+    s.scroll(.{ .pin = s.pin(.{ .screen = .{ .y = pin_y } }).? });
+    try testing.expectEqual(Viewport.pin, s.viewport);
+    try testing.expect(s.viewport_pin_row_offset == null);
+    try testing.expect(s.getBottomRight(.viewport) != null);
+
+    try s.resize(.{ .rows = 7, .reflow = false });
+    try testing.expectEqual(@as(usize, 7), s.rows);
+    try testing.expectEqual(@as(usize, 10), s.totalRows());
+    try testing.expectEqual(Viewport.active, s.viewport);
+    try testing.expect(s.getBottomRight(.viewport) != null);
 }
 
 test "PageList resize (no reflow) less cols" {
