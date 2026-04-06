@@ -3772,6 +3772,9 @@ term: []const u8 = "xterm-ghostty",
 @"ghodex-workspace": RepeatableString = .{},
 @"ghodex-saved-workspace-template": RepeatableString = .{},
 @"ghodex-heartbeat-task": RepeatableString = .{},
+@"ghodex-agent-runtime-session": RepeatableString = .{},
+@"ghodex-agent-runtime-task": RepeatableString = .{},
+@"ghodex-agent-runtime-schedule": RepeatableString = .{},
 @"ghodex-learning-log": RepeatableString = .{},
 
 /// GhoDex-managed todo settings persisted in the main config file.
@@ -3812,6 +3815,12 @@ term: []const u8 = "xterm-ghostty",
 @"ghodex-heartbeat-enabled": bool = true,
 @"ghodex-heartbeat-interval-seconds": f64 = 5,
 @"ghodex-heartbeat-max-concurrent-tasks": u8 = 4,
+@"ghodex-heartbeat-allow-external-inbox-mutations": bool = false,
+
+/// GhoDex-managed agent runtime settings persisted in the main config file.
+@"ghodex-agent-runtime-enabled": bool = true,
+@"ghodex-agent-runtime-default-lease-seconds": f64 = 30,
+@"ghodex-agent-runtime-stale-task-policy": ?[:0]const u8 = null,
 
 /// This is set by the CLI parser for deinit.
 _arena: ?ArenaAllocator = null,

@@ -410,21 +410,25 @@ struct AITerminalHeartbeatQueueSettings: Codable, Hashable, Sendable {
     var enabled: Bool
     var heartbeatIntervalSeconds: Double
     var maxConcurrentTasks: Int
+    var allowExternalInboxMutations: Bool
 
     init(
         enabled: Bool = true,
         heartbeatIntervalSeconds: Double = 5,
-        maxConcurrentTasks: Int = 4
+        maxConcurrentTasks: Int = 4,
+        allowExternalInboxMutations: Bool = false
     ) {
         self.enabled = enabled
         self.heartbeatIntervalSeconds = heartbeatIntervalSeconds
         self.maxConcurrentTasks = maxConcurrentTasks
+        self.allowExternalInboxMutations = allowExternalInboxMutations
     }
 
     enum CodingKeys: String, CodingKey {
         case enabled
         case heartbeatIntervalSeconds
         case maxConcurrentTasks
+        case allowExternalInboxMutations
     }
 
     init(from decoder: Decoder) throws {
@@ -432,6 +436,7 @@ struct AITerminalHeartbeatQueueSettings: Codable, Hashable, Sendable {
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         heartbeatIntervalSeconds = try container.decodeIfPresent(Double.self, forKey: .heartbeatIntervalSeconds) ?? 5
         maxConcurrentTasks = try container.decodeIfPresent(Int.self, forKey: .maxConcurrentTasks) ?? 4
+        allowExternalInboxMutations = try container.decodeIfPresent(Bool.self, forKey: .allowExternalInboxMutations) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -439,6 +444,7 @@ struct AITerminalHeartbeatQueueSettings: Codable, Hashable, Sendable {
         try container.encode(enabled, forKey: .enabled)
         try container.encode(heartbeatIntervalSeconds, forKey: .heartbeatIntervalSeconds)
         try container.encode(maxConcurrentTasks, forKey: .maxConcurrentTasks)
+        try container.encode(allowExternalInboxMutations, forKey: .allowExternalInboxMutations)
     }
 }
 
@@ -1015,12 +1021,16 @@ struct AITerminalManagerConfiguration: Codable, Sendable {
     var savedWorkspaceTemplates: [AITerminalSavedWorkspaceTemplate]
     var heartbeatQueueSettings: AITerminalHeartbeatQueueSettings
     var heartbeatTasks: [AITerminalHeartbeatTask]
+    var agentRuntimeSettings: AgentRuntimeSettings
+    var agentRuntimeSessions: [AgentRuntimeSession]
+    var agentRuntimeTasks: [AgentRuntimeTask]
+    var agentRuntimeSchedules: [AgentRuntimeSchedule]
     var todoSettings: AITerminalTodoSettings
     var learningSettings: AITerminalLearningSettings
     var learningLogs: [AITerminalLearningLogEntry]
 
     init(
-        schemaVersion: Int = 7,
+        schemaVersion: Int = 9,
         savedHosts: [AITerminalHost] = [],
         importedHostOverrides: [AITerminalHost] = [],
         favoriteHostIDs: [String] = [],
@@ -1029,6 +1039,10 @@ struct AITerminalManagerConfiguration: Codable, Sendable {
         savedWorkspaceTemplates: [AITerminalSavedWorkspaceTemplate] = [],
         heartbeatQueueSettings: AITerminalHeartbeatQueueSettings = .init(),
         heartbeatTasks: [AITerminalHeartbeatTask] = [],
+        agentRuntimeSettings: AgentRuntimeSettings = .init(),
+        agentRuntimeSessions: [AgentRuntimeSession] = [],
+        agentRuntimeTasks: [AgentRuntimeTask] = [],
+        agentRuntimeSchedules: [AgentRuntimeSchedule] = [],
         todoSettings: AITerminalTodoSettings = .init(),
         learningSettings: AITerminalLearningSettings = .init(),
         learningLogs: [AITerminalLearningLogEntry] = []
@@ -1042,6 +1056,10 @@ struct AITerminalManagerConfiguration: Codable, Sendable {
         self.savedWorkspaceTemplates = savedWorkspaceTemplates
         self.heartbeatQueueSettings = heartbeatQueueSettings
         self.heartbeatTasks = heartbeatTasks
+        self.agentRuntimeSettings = agentRuntimeSettings
+        self.agentRuntimeSessions = agentRuntimeSessions
+        self.agentRuntimeTasks = agentRuntimeTasks
+        self.agentRuntimeSchedules = agentRuntimeSchedules
         self.todoSettings = todoSettings
         self.learningSettings = learningSettings
         self.learningLogs = learningLogs
@@ -1057,6 +1075,10 @@ struct AITerminalManagerConfiguration: Codable, Sendable {
         case savedWorkspaceTemplates
         case heartbeatQueueSettings
         case heartbeatTasks
+        case agentRuntimeSettings
+        case agentRuntimeSessions
+        case agentRuntimeTasks
+        case agentRuntimeSchedules
         case todoSettings
         case learningSettings
         case learningLogs
@@ -1076,6 +1098,10 @@ struct AITerminalManagerConfiguration: Codable, Sendable {
         savedWorkspaceTemplates = try container.decodeIfPresent([AITerminalSavedWorkspaceTemplate].self, forKey: .savedWorkspaceTemplates) ?? []
         heartbeatQueueSettings = try container.decodeIfPresent(AITerminalHeartbeatQueueSettings.self, forKey: .heartbeatQueueSettings) ?? .init()
         heartbeatTasks = try container.decodeIfPresent([AITerminalHeartbeatTask].self, forKey: .heartbeatTasks) ?? []
+        agentRuntimeSettings = try container.decodeIfPresent(AgentRuntimeSettings.self, forKey: .agentRuntimeSettings) ?? .init()
+        agentRuntimeSessions = try container.decodeIfPresent([AgentRuntimeSession].self, forKey: .agentRuntimeSessions) ?? []
+        agentRuntimeTasks = try container.decodeIfPresent([AgentRuntimeTask].self, forKey: .agentRuntimeTasks) ?? []
+        agentRuntimeSchedules = try container.decodeIfPresent([AgentRuntimeSchedule].self, forKey: .agentRuntimeSchedules) ?? []
         todoSettings = try container.decodeIfPresent(AITerminalTodoSettings.self, forKey: .todoSettings) ?? .init()
         learningSettings = try container.decodeIfPresent(AITerminalLearningSettings.self, forKey: .learningSettings) ?? .init()
         learningLogs = try container.decodeIfPresent([AITerminalLearningLogEntry].self, forKey: .learningLogs) ?? []
@@ -1092,6 +1118,10 @@ struct AITerminalManagerConfiguration: Codable, Sendable {
         try container.encode(savedWorkspaceTemplates, forKey: .savedWorkspaceTemplates)
         try container.encode(heartbeatQueueSettings, forKey: .heartbeatQueueSettings)
         try container.encode(heartbeatTasks, forKey: .heartbeatTasks)
+        try container.encode(agentRuntimeSettings, forKey: .agentRuntimeSettings)
+        try container.encode(agentRuntimeSessions, forKey: .agentRuntimeSessions)
+        try container.encode(agentRuntimeTasks, forKey: .agentRuntimeTasks)
+        try container.encode(agentRuntimeSchedules, forKey: .agentRuntimeSchedules)
         try container.encode(todoSettings, forKey: .todoSettings)
         try container.encode(learningSettings, forKey: .learningSettings)
         try container.encode(learningLogs, forKey: .learningLogs)

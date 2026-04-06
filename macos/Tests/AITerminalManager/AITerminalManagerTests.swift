@@ -85,6 +85,7 @@ struct AITerminalManagerTests {
         #expect(configuration.heartbeatQueueSettings.enabled)
         #expect(configuration.heartbeatQueueSettings.heartbeatIntervalSeconds == 5)
         #expect(configuration.heartbeatQueueSettings.maxConcurrentTasks == 4)
+        #expect(configuration.heartbeatQueueSettings.allowExternalInboxMutations == false)
         #expect(configuration.heartbeatTasks.isEmpty)
     }
 
@@ -105,6 +106,11 @@ struct AITerminalManagerTests {
         #expect(configuration.learningSettings.fastModel == AITerminalLearningSettings.defaultFastModel)
         #expect(configuration.learningSettings.promptTemplate == AITerminalLearningSettings.defaultPromptTemplate)
         #expect(configuration.learningLogs.isEmpty)
+        #expect(configuration.agentRuntimeSettings.enabled)
+        #expect(configuration.agentRuntimeSettings.defaultLeaseDurationSeconds == 30)
+        #expect(configuration.agentRuntimeSettings.staleTaskPolicy == .requeueClaimedWork)
+        #expect(configuration.agentRuntimeSessions.isEmpty)
+        #expect(configuration.agentRuntimeTasks.isEmpty)
     }
 
     @Test func decodesLegacyLearningKeysIntoCommandTemplate() throws {
@@ -422,6 +428,52 @@ struct AITerminalManagerTests {
         #expect(store.heartbeatQueueTasks.isEmpty)
     }
 
+    @Test @MainActor func storeBlocksExternalHeartbeatInboxMutationsByDefault() async throws {
+        let baseDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        let configURL = baseDirectory.appendingPathComponent("config.ghodex")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: configURL
+        )
+        store.saveHeartbeatQueueSettings(.init(
+            enabled: true,
+            heartbeatIntervalSeconds: 0.5,
+            maxConcurrentTasks: 1,
+            allowExternalInboxMutations: false
+        ))
+
+        let inboxURL = URL(fileURLWithPath: store.heartbeatInboxDirectoryPath, isDirectory: true)
+        let payload: [String: Any] = [
+            "action": "enqueue",
+            "command": "echo blocked",
+            "type": "exec",
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+        let requestURL = inboxURL.appendingPathComponent("blocked-request.json")
+        try data.write(to: requestURL, options: .atomic)
+
+        let timeout = Date().addingTimeInterval(3)
+        var blockedFiles: [URL] = []
+        while Date() < timeout {
+            blockedFiles = try FileManager.default.contentsOfDirectory(
+                at: inboxURL,
+                includingPropertiesForKeys: nil
+            ).filter { $0.pathExtension.lowercased() == "blocked" }
+            if !blockedFiles.isEmpty {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+
+        #expect(store.heartbeatQueueTasks.isEmpty)
+        #expect(store.heartbeatQueuedCount == 0)
+        #expect(store.heartbeatDoneCount == 0)
+        #expect(blockedFiles.count == 1)
+    }
+
     @Test @MainActor func storeRunsDueHeartbeatTasksWithBoundedConcurrencyUnderLoad() async {
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
@@ -448,7 +500,7 @@ struct AITerminalManagerTests {
             #expect(id != nil)
         }
 
-        let timeout = Date().addingTimeInterval(20)
+        let timeout = Date().addingTimeInterval(max(Double(taskCount) * taskSleepSeconds * 3, 30))
         var peakRunningCount = 0
 
         while Date() < timeout {
@@ -456,7 +508,7 @@ struct AITerminalManagerTests {
             if store.heartbeatDoneCount == taskCount {
                 break
             }
-            try? await Task.sleep(nanoseconds: 20_000_000)
+            try? await Task.sleep(nanoseconds: 100_000_000)
         }
 
         #expect(
@@ -782,7 +834,8 @@ struct AITerminalManagerTests {
         storeA.saveHeartbeatQueueSettings(.init(
             enabled: true,
             heartbeatIntervalSeconds: 7,
-            maxConcurrentTasks: 3
+            maxConcurrentTasks: 3,
+            allowExternalInboxMutations: true
         ))
 
         let storeB = AITerminalManagerStore(
@@ -798,6 +851,7 @@ struct AITerminalManagerTests {
         #expect(storeB.configuration.heartbeatQueueSettings.enabled)
         #expect(storeB.configuration.heartbeatQueueSettings.heartbeatIntervalSeconds == 7)
         #expect(storeB.configuration.heartbeatQueueSettings.maxConcurrentTasks == 3)
+        #expect(storeB.configuration.heartbeatQueueSettings.allowExternalInboxMutations)
     }
 
     @Test @MainActor func storeRefreshReloadsTodoSettingsFromManagedConfigBlock() throws {
@@ -838,6 +892,889 @@ struct AITerminalManagerTests {
         #expect(store.todoSettings.sidebarEdge == .trailing)
         #expect(store.todoSettings.workspaceOverlayVisible == false)
         #expect(store.todoSettings.workspaceOverlayCorner == .bottomTrailing)
+    }
+
+    @Test @MainActor func storePersistsAgentRuntimeStateIntoManagedGhoDexConfigBlock() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+        try "font-size = 14\n".write(to: tempURL, atomically: true, encoding: .utf8)
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        store.saveAgentRuntimeSettings(.init(
+            enabled: true,
+            defaultLeaseDurationSeconds: 42,
+            staleTaskPolicy: .pauseClaimedWork
+        ))
+        let session = try store.registerAgentRuntimeSession(
+            clientKind: .codexTab,
+            tabID: UUID(),
+            terminalID: UUID(),
+            hostWorkspaceID: UUID(),
+            capabilities: ["terminal"]
+        )
+        let task = try store.enqueueAgentRuntimeTask(
+            kind: .terminalCommand,
+            priority: 2,
+            capabilityRequirements: ["terminal"],
+            payload: .init(command: "pwd")
+        )
+        let schedule = try store.enqueueAgentRuntimeSchedule(
+            taskKind: .terminalCommand,
+            priority: 4,
+            capabilityRequirements: ["terminal"],
+            payload: .init(command: "echo scheduled"),
+            startAt: Date().addingTimeInterval(60),
+            recurrence: .init(mode: .once)
+        )
+
+        let text = try String(contentsOf: tempURL, encoding: .utf8)
+        #expect(text.contains("ghodex-agent-runtime-enabled = true"))
+        #expect(text.contains("ghodex-agent-runtime-default-lease-seconds = 42"))
+        #expect(text.contains("ghodex-agent-runtime-stale-task-policy = "))
+        #expect(text.contains("ghodex-agent-runtime-session = "))
+        #expect(text.contains("ghodex-agent-runtime-task = "))
+        #expect(text.contains("ghodex-agent-runtime-schedule = "))
+
+        let reloaded = try AITerminalManagerStore.loadConfiguration(at: tempURL)
+        #expect(reloaded.agentRuntimeSettings.defaultLeaseDurationSeconds == 42)
+        #expect(reloaded.agentRuntimeSettings.staleTaskPolicy == .pauseClaimedWork)
+        #expect(reloaded.agentRuntimeSessions.contains(where: { $0.id == session.id }))
+        #expect(reloaded.agentRuntimeTasks.contains(where: { $0.id == task.id }))
+        #expect(reloaded.agentRuntimeSchedules.contains(where: { $0.id == schedule.id }))
+    }
+
+    @Test @MainActor func storeAutoAddsCanonicalExecutorCapabilitiesForBrowserAndVisionWork() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        let browserTask = try store.enqueueAgentRuntimeTask(
+            kind: .browserNavigation,
+            capabilityRequirements: ["browser", "task-runtime"],
+            payload: .init(metadata: ["url": "https://example.com"])
+        )
+        let visionSchedule = try store.enqueueAgentRuntimeSchedule(
+            taskKind: .visionAutomation,
+            capabilityRequirements: ["vision", "task-claim"],
+            payload: .init(metadata: ["instruction": "click submit"]),
+            startAt: Date().addingTimeInterval(60),
+            recurrence: .init(mode: .once)
+        )
+
+        #expect(browserTask.capabilityRequirements == [
+            AgentRuntimeCapability.runtimeExecutorBrowser.rawValue,
+            AgentRuntimeCapability.runtimeTaskManage.rawValue,
+        ])
+        #expect(visionSchedule.capabilityRequirements == [
+            AgentRuntimeCapability.runtimeExecutorVision.rawValue,
+            AgentRuntimeCapability.runtimeTaskClaim.rawValue,
+        ])
+
+        let persistedTask = try #require(store.agentRuntimeTasks.first(where: { $0.id == browserTask.id }))
+        let persistedSchedule = try #require(store.agentRuntimeSchedules.first(where: { $0.id == visionSchedule.id }))
+        #expect(persistedTask.capabilityRequirements == browserTask.capabilityRequirements)
+        #expect(persistedSchedule.capabilityRequirements == visionSchedule.capabilityRequirements)
+    }
+
+    @Test @MainActor func storeMaterializesOneShotAgentRuntimeScheduleIntoQueuedTask() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let schedule = try store.enqueueAgentRuntimeSchedule(
+            taskKind: .terminalCommand,
+            priority: 3,
+            capabilityRequirements: ["terminal"],
+            payload: .init(command: "echo once"),
+            startAt: now.addingTimeInterval(-1),
+            recurrence: .init(mode: .once),
+            maxRetryCount: 2,
+            now: now
+        )
+
+        let persistedSchedule = try #require(store.agentRuntimeSchedules.first(where: { $0.id == schedule.id }))
+        let task = try #require(store.agentRuntimeTasks.first(where: {
+            $0.payload.metadata["ghodex_schedule_id"] == schedule.id.uuidString.lowercased()
+        }))
+
+        #expect(persistedSchedule.state == .completed)
+        #expect(persistedSchedule.nextRunAt == nil)
+        #expect(task.state == .queued)
+        #expect(task.priority == 3)
+        #expect(task.maxRetryCount == 2)
+        #expect(task.payload.command == "echo once")
+    }
+
+    @Test @MainActor func storeKeepsFutureAgentRuntimeSchedulePendingUntilDue() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let futureStart = now.addingTimeInterval(300)
+        let schedule = try store.enqueueAgentRuntimeSchedule(
+            taskKind: .terminalCommand,
+            capabilityRequirements: ["terminal"],
+            payload: .init(command: "echo future"),
+            startAt: futureStart,
+            recurrence: .init(mode: .once),
+            now: now
+        )
+
+        #expect(store.agentRuntimeTasks.isEmpty)
+        let persistedSchedule = store.agentRuntimeSchedules.first(where: { $0.id == schedule.id })
+        #expect(persistedSchedule?.state == .active)
+        #expect(persistedSchedule?.lastTaskID == nil)
+        #expect(persistedSchedule?.nextRunAt == futureStart)
+    }
+
+    @Test @MainActor func storeMaterializesIntervalAgentRuntimeScheduleWithoutDuplicatingActiveWork() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        let start = Date(timeIntervalSince1970: 1_700_000_100)
+        let schedule = try store.enqueueAgentRuntimeSchedule(
+            taskKind: .terminalCommand,
+            capabilityRequirements: ["terminal"],
+            payload: .init(command: "echo interval"),
+            startAt: start,
+            recurrence: .init(mode: .interval, intervalSeconds: 10),
+            now: start
+        )
+
+        let firstTask = try #require(store.agentRuntimeTasks.first(where: {
+            $0.payload.metadata["ghodex_schedule_id"] == schedule.id.uuidString.lowercased()
+        }))
+        let firstSnapshot = try #require(store.agentRuntimeSchedules.first(where: { $0.id == schedule.id }))
+        #expect(firstSnapshot.state == .active)
+        #expect(firstSnapshot.nextRunAt == start.addingTimeInterval(10))
+
+        store.refresh()
+        #expect(store.agentRuntimeTasks.filter {
+            $0.payload.metadata["ghodex_schedule_id"] == schedule.id.uuidString.lowercased()
+        }.count == 1)
+
+        _ = try store.cancelAgentRuntimeTask(
+            taskID: firstTask.id,
+            reason: "done",
+            force: true,
+            now: start.addingTimeInterval(5)
+        )
+
+        _ = try store.updateAgentRuntimeSchedule(
+            scheduleID: schedule.id,
+            startAt: start.addingTimeInterval(-20),
+            recurrence: .init(mode: .interval, intervalSeconds: 10),
+            now: start.addingTimeInterval(20)
+        )
+
+        let materializedTasks = store.agentRuntimeTasks.filter {
+            $0.payload.metadata["ghodex_schedule_id"] == schedule.id.uuidString.lowercased()
+        }
+        #expect(materializedTasks.count == 2)
+        let updatedSchedule = try #require(store.agentRuntimeSchedules.first(where: { $0.id == schedule.id }))
+        #expect(updatedSchedule.state == .active)
+        #expect(updatedSchedule.nextRunAt != nil)
+    }
+
+    @Test @MainActor func storeResumesIntervalAgentRuntimeScheduleAfterRestart() async throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let start = Date().addingTimeInterval(0.3)
+        let storeA = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+        let schedule = try storeA.enqueueAgentRuntimeSchedule(
+            taskKind: .terminalCommand,
+            capabilityRequirements: ["terminal"],
+            payload: .init(command: "echo restart-loop"),
+            startAt: start,
+            recurrence: .init(mode: .interval, intervalSeconds: 1),
+            now: Date()
+        )
+        #expect(storeA.agentRuntimeTasks.isEmpty)
+
+        let storeB = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+        #expect(storeB.agentRuntimeSchedules.contains(where: { $0.id == schedule.id }))
+        #expect(storeB.agentRuntimeTasks.isEmpty)
+
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        storeB.refresh()
+
+        let firstTask = try #require(storeB.agentRuntimeTasks.first(where: {
+            $0.payload.metadata["ghodex_schedule_id"] == schedule.id.uuidString.lowercased()
+        }))
+        let firstSnapshot = try #require(storeB.agentRuntimeSchedules.first(where: { $0.id == schedule.id }))
+        #expect(firstSnapshot.lastTaskID == firstTask.id)
+
+        _ = try storeB.cancelAgentRuntimeTask(
+            taskID: firstTask.id,
+            reason: "advance-loop",
+            force: true
+        )
+
+        try? await Task.sleep(nanoseconds: 1_100_000_000)
+        storeB.refresh()
+
+        let materializedTasks = storeB.agentRuntimeTasks.filter {
+            $0.payload.metadata["ghodex_schedule_id"] == schedule.id.uuidString.lowercased()
+        }
+        #expect(materializedTasks.count == 2)
+        let resumedSchedule = try #require(storeB.agentRuntimeSchedules.first(where: { $0.id == schedule.id }))
+        #expect(resumedSchedule.state == .active)
+        #expect(resumedSchedule.lastTaskID != firstTask.id)
+        #expect(resumedSchedule.nextRunAt != nil)
+    }
+
+    @Test @MainActor func storeAllowsMultipleRuntimeSessionsForSameWorkspaceAcrossDifferentTabs() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        let workspaceID = UUID()
+        let first = try store.registerAgentRuntimeSession(
+            clientKind: .codexTab,
+            tabID: UUID(),
+            terminalID: UUID(),
+            hostWorkspaceID: workspaceID,
+            capabilities: ["terminal"]
+        )
+        let second = try store.registerAgentRuntimeSession(
+            clientKind: .codexTab,
+            tabID: UUID(),
+            terminalID: UUID(),
+            hostWorkspaceID: workspaceID,
+            capabilities: ["terminal"]
+        )
+
+        let firstSession = try #require(store.agentRuntimeSessions.first(where: { $0.id == first.id }))
+        let secondSession = try #require(store.agentRuntimeSessions.first(where: { $0.id == second.id }))
+        #expect(firstSession.state == .active)
+        #expect(secondSession.state == .active)
+        #expect(firstSession.lastError == nil)
+        #expect(secondSession.lastError == nil)
+    }
+
+    @Test @MainActor func storeSupersedesWorkspaceOnlyRuntimeSessionsWhenNoTabOrTerminalIdentityExists() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        let workspaceID = UUID()
+        let first = try store.registerAgentRuntimeSession(
+            clientKind: .codexTab,
+            hostWorkspaceID: workspaceID,
+            capabilities: ["terminal"]
+        )
+        let second = try store.registerAgentRuntimeSession(
+            clientKind: .codexTab,
+            hostWorkspaceID: workspaceID,
+            capabilities: ["terminal"]
+        )
+
+        let firstSession = try #require(store.agentRuntimeSessions.first(where: { $0.id == first.id }))
+        let secondSession = try #require(store.agentRuntimeSessions.first(where: { $0.id == second.id }))
+        #expect(firstSession.state == .expired)
+        #expect(firstSession.lastError == "superseded_by_new_registration")
+        #expect(secondSession.state == .active)
+    }
+
+    @Test @MainActor func storeCanClaimRuntimeTasksForSpecificKindsOnly() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        let now = Date(timeIntervalSince1970: 1_710_000_100)
+        let session = try store.registerAgentRuntimeSession(
+            clientKind: .hostExecutor,
+            capabilities: [AgentRuntimeCapability.runtimeExecutorBrowser.rawValue],
+            now: now
+        )
+        let hostWorkflow = try store.enqueueAgentRuntimeTask(
+            kind: .hostWorkflow,
+            payload: .init(text: "noop"),
+            now: now
+        )
+        let browserTask = try store.enqueueAgentRuntimeTask(
+            kind: .browserNavigation,
+            payload: .init(metadata: ["url": "https://example.com"]),
+            now: now
+        )
+
+        let claimedTask = try #require(try store.claimNextAgentRuntimeTask(
+            sessionID: session.id,
+            allowedKinds: [.browserNavigation, .browserInteraction],
+            now: now
+        ))
+
+        #expect(claimedTask.id == browserTask.id)
+        #expect(store.agentRuntimeTasks.first(where: { $0.id == hostWorkflow.id })?.state == .queued)
+    }
+
+    @Test @MainActor func storeRejectsRuntimeMutationsWhenRuntimeIsDisabled() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        let session = try store.registerAgentRuntimeSession(
+            clientKind: .codexTab,
+            terminalID: UUID(),
+            hostWorkspaceID: UUID(),
+            capabilities: ["terminal"]
+        )
+        let task = try store.enqueueAgentRuntimeTask(
+            kind: .terminalCommand,
+            capabilityRequirements: ["terminal"],
+            payload: .init(command: "pwd")
+        )
+        let claimedTask = try #require(try store.claimNextAgentRuntimeTask(sessionID: session.id))
+        #expect(claimedTask.id == task.id)
+
+        store.saveAgentRuntimeSettings(.init(
+            enabled: false,
+            defaultLeaseDurationSeconds: 30,
+            staleTaskPolicy: .requeueClaimedWork
+        ))
+
+        do {
+            _ = try store.enqueueAgentRuntimeTask(
+                kind: .terminalCommand,
+                capabilityRequirements: ["terminal"],
+                payload: .init(command: "echo blocked")
+            )
+            Issue.record("Expected enqueueAgentRuntimeTask to reject while runtime is disabled")
+        } catch let error as AgentRuntimeStoreError {
+            #expect(error == .runtimeDisabled)
+        }
+
+        do {
+            _ = try store.enqueueAgentRuntimeSchedule(
+                taskKind: .terminalCommand,
+                capabilityRequirements: ["terminal"],
+                payload: .init(command: "echo blocked schedule")
+            )
+            Issue.record("Expected enqueueAgentRuntimeSchedule to reject while runtime is disabled")
+        } catch let error as AgentRuntimeStoreError {
+            #expect(error == .runtimeDisabled)
+        }
+
+        do {
+            _ = try store.updateAgentRuntimeTask(
+                sessionID: session.id,
+                taskID: claimedTask.id,
+                state: .running
+            )
+            Issue.record("Expected updateAgentRuntimeTask to reject while runtime is disabled")
+        } catch let error as AgentRuntimeStoreError {
+            #expect(error == .runtimeDisabled)
+        }
+    }
+
+    @Test @MainActor func heartbeatTickDoesNotExpireSessionsWhenRuntimeDisabled() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+        store.saveAgentRuntimeSettings(.init(
+            enabled: true,
+            defaultLeaseDurationSeconds: 30,
+            staleTaskPolicy: .requeueClaimedWork
+        ))
+        store.saveHeartbeatQueueSettings(.init(
+            enabled: true,
+            heartbeatIntervalSeconds: 0.5,
+            maxConcurrentTasks: 1,
+            allowExternalInboxMutations: false
+        ))
+
+        let registeredAt = Date(timeIntervalSince1970: 1_710_000_000)
+        let session = try store.registerAgentRuntimeSession(
+            clientKind: .codexTab,
+            terminalID: UUID(),
+            hostWorkspaceID: UUID(),
+            capabilities: ["terminal"],
+            leaseDurationSeconds: 5,
+            now: registeredAt
+        )
+        let task = try store.enqueueAgentRuntimeTask(
+            kind: .terminalCommand,
+            capabilityRequirements: ["terminal"],
+            payload: .init(command: "pwd"),
+            now: registeredAt
+        )
+        let claimedTask = try #require(try store.claimNextAgentRuntimeTask(
+            sessionID: session.id,
+            now: registeredAt
+        ))
+        #expect(claimedTask.id == task.id)
+
+        store.saveAgentRuntimeSettings(.init(
+            enabled: false,
+            defaultLeaseDurationSeconds: 30,
+            staleTaskPolicy: .requeueClaimedWork
+        ))
+
+        store.processHeartbeatTick(now: registeredAt.addingTimeInterval(10))
+
+        let persistedSession = try #require(store.agentRuntimeSessions.first(where: { $0.id == session.id }))
+        let persistedTask = try #require(store.agentRuntimeTasks.first(where: { $0.id == task.id }))
+        #expect(persistedSession.state == .active)
+        #expect(persistedSession.currentTaskID == task.id)
+        #expect(persistedTask.state == .claimed)
+        #expect(persistedTask.sessionID == session.id)
+    }
+
+    @Test @MainActor func storeRuntimeSnapshotProjectsLeaseExpiryWithoutPersistingMutation() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+        store.saveAgentRuntimeSettings(.init(
+            enabled: true,
+            defaultLeaseDurationSeconds: 30,
+            staleTaskPolicy: .requeueClaimedWork
+        ))
+
+        let registeredAt = Date(timeIntervalSince1970: 1_710_000_000)
+        let session = try store.registerAgentRuntimeSession(
+            clientKind: .codexTab,
+            terminalID: UUID(),
+            hostWorkspaceID: UUID(),
+            capabilities: ["terminal"],
+            leaseDurationSeconds: 5,
+            now: registeredAt
+        )
+        let task = try store.enqueueAgentRuntimeTask(
+            kind: .terminalCommand,
+            capabilityRequirements: ["terminal"],
+            payload: .init(command: "pwd"),
+            now: registeredAt
+        )
+        let claimedTask = try #require(try store.claimNextAgentRuntimeTask(
+            sessionID: session.id,
+            now: registeredAt
+        ))
+        #expect(claimedTask.id == task.id)
+
+        let snapshot = store.agentRuntimeSnapshot(now: registeredAt.addingTimeInterval(10))
+        let snapshotSession = try #require(snapshot.sessions.first(where: { $0.id == session.id }))
+        let snapshotTask = try #require(snapshot.tasks.first(where: { $0.id == task.id }))
+
+        #expect(snapshotSession.state == .expired)
+        #expect(snapshotSession.currentTaskID == nil)
+        #expect(snapshotTask.state == .queued)
+        #expect(snapshotTask.sessionID == nil)
+        #expect(snapshotTask.claimedAt == nil)
+        #expect(snapshotTask.errorSummary == "lease_expired")
+
+        let persistedSession = try #require(store.agentRuntimeSessions.first(where: { $0.id == session.id }))
+        let persistedTask = try #require(store.agentRuntimeTasks.first(where: { $0.id == task.id }))
+        #expect(persistedSession.state == .active)
+        #expect(persistedSession.currentTaskID == task.id)
+        #expect(persistedTask.state == .claimed)
+        #expect(persistedTask.sessionID == session.id)
+    }
+
+    @Test @MainActor func storeExpiresLeasedSessionAndRequeuesClaimedTask() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        store.saveAgentRuntimeSettings(.init(
+            enabled: true,
+            defaultLeaseDurationSeconds: 30,
+            staleTaskPolicy: .requeueClaimedWork
+        ))
+        let startedAt = Date()
+        let session = try store.registerAgentRuntimeSession(
+            clientKind: .codexTab,
+            terminalID: UUID(),
+            hostWorkspaceID: UUID(),
+            capabilities: ["terminal"],
+            leaseDurationSeconds: 5,
+            now: startedAt
+        )
+        let task = try store.enqueueAgentRuntimeTask(
+            kind: .terminalCommand,
+            capabilityRequirements: ["terminal"],
+            payload: .init(command: "pwd"),
+            now: startedAt
+        )
+        let claimed = try store.claimNextAgentRuntimeTask(
+            sessionID: session.id,
+            now: startedAt
+        )
+
+        #expect(claimed?.id == task.id)
+
+        let expiredIDs = store.expireStaleAgentRuntimeSessions(
+            now: startedAt.addingTimeInterval(6)
+        )
+
+        #expect(expiredIDs == [session.id])
+        #expect(store.agentRuntimeSessions.first?.state == .expired)
+        #expect(store.agentRuntimeTasks.first?.state == .queued)
+        #expect(store.agentRuntimeTasks.first?.sessionID == nil)
+    }
+
+    @Test @MainActor func storeExpiresLeasedSessionAndPausesClaimedTaskWhenPolicyRequiresPause() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        store.saveAgentRuntimeSettings(.init(
+            enabled: true,
+            defaultLeaseDurationSeconds: 30,
+            staleTaskPolicy: .pauseClaimedWork
+        ))
+        let startedAt = Date()
+        let session = try store.registerAgentRuntimeSession(
+            clientKind: .codexTab,
+            terminalID: UUID(),
+            hostWorkspaceID: UUID(),
+            capabilities: ["terminal"],
+            leaseDurationSeconds: 5,
+            now: startedAt
+        )
+        _ = try store.enqueueAgentRuntimeTask(
+            kind: .terminalCommand,
+            capabilityRequirements: ["terminal"],
+            payload: .init(command: "pwd"),
+            now: startedAt
+        )
+        let claimed = try #require(try store.claimNextAgentRuntimeTask(
+            sessionID: session.id,
+            now: startedAt
+        ))
+
+        let expiredIDs = store.expireStaleAgentRuntimeSessions(
+            now: startedAt.addingTimeInterval(6)
+        )
+
+        #expect(expiredIDs == [session.id])
+        #expect(store.agentRuntimeSessions.first?.state == .expired)
+        #expect(store.agentRuntimeSessions.first?.currentTaskID == nil)
+        #expect(store.agentRuntimeTasks.first?.id == claimed.id)
+        #expect(store.agentRuntimeTasks.first?.state == .paused)
+        #expect(store.agentRuntimeTasks.first?.sessionID == session.id)
+        #expect(store.agentRuntimeTasks.first?.errorSummary == "lease_expired")
+    }
+
+    @Test @MainActor func storeRefreshExpiresWaitingApprovalTaskOnStartup() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+        let startedAt = Date().addingTimeInterval(-60)
+
+        let writer = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+        writer.saveAgentRuntimeSettings(.init(
+            enabled: true,
+            defaultLeaseDurationSeconds: 30,
+            staleTaskPolicy: .requeueClaimedWork
+        ))
+        let session = try writer.registerAgentRuntimeSession(
+            clientKind: .codexTab,
+            terminalID: UUID(),
+            hostWorkspaceID: UUID(),
+            capabilities: ["terminal"],
+            leaseDurationSeconds: 5,
+            now: startedAt
+        )
+        _ = try writer.enqueueAgentRuntimeTask(
+            kind: .terminalCommand,
+            capabilityRequirements: ["terminal"],
+            payload: .init(command: "pwd"),
+            now: startedAt
+        )
+        let claimed = try #require(try writer.claimNextAgentRuntimeTask(
+            sessionID: session.id,
+            now: startedAt
+        ))
+        _ = try writer.updateAgentRuntimeTask(
+            sessionID: session.id,
+            taskID: claimed.id,
+            state: .waitingApproval,
+            now: startedAt.addingTimeInterval(1)
+        )
+
+        let reloaded = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        #expect(reloaded.agentRuntimeSessions.first?.id == session.id)
+        #expect(reloaded.agentRuntimeSessions.first?.state == .expired)
+        #expect(reloaded.agentRuntimeSessions.first?.currentTaskID == nil)
+        #expect(reloaded.agentRuntimeTasks.first?.id == claimed.id)
+        #expect(reloaded.agentRuntimeTasks.first?.state == .paused)
+        #expect(reloaded.agentRuntimeTasks.first?.errorSummary == "lease_expired")
+    }
+
+    @Test @MainActor func storeRejectsWrongOwnerAgentRuntimeTaskUpdate() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        let owner = try store.registerAgentRuntimeSession(
+            clientKind: .codexTab,
+            terminalID: UUID(),
+            hostWorkspaceID: UUID(),
+            capabilities: ["terminal"]
+        )
+        let outsider = try store.registerAgentRuntimeSession(
+            clientKind: .codexTab,
+            terminalID: UUID(),
+            hostWorkspaceID: UUID(),
+            capabilities: ["terminal"]
+        )
+        _ = try store.enqueueAgentRuntimeTask(
+            kind: .terminalCommand,
+            capabilityRequirements: ["terminal"],
+            payload: .init(command: "pwd")
+        )
+        let claimed = try #require(try store.claimNextAgentRuntimeTask(sessionID: owner.id))
+
+        do {
+            _ = try store.updateAgentRuntimeTask(
+                sessionID: outsider.id,
+                taskID: claimed.id,
+                state: .running
+            )
+            Issue.record("Expected wrong-owner update to fail")
+        } catch let error as AgentRuntimeStoreError {
+            #expect(error == .taskOwnershipMismatch(taskID: claimed.id, sessionID: outsider.id))
+        }
+    }
+
+    @Test @MainActor func storeRequeuesAgentRuntimeTaskAndClearsSessionBinding() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        let session = try store.registerAgentRuntimeSession(
+            clientKind: .codexTab,
+            terminalID: UUID(),
+            hostWorkspaceID: UUID(),
+            capabilities: ["terminal"]
+        )
+        let task = try store.enqueueAgentRuntimeTask(
+            kind: .terminalCommand,
+            capabilityRequirements: ["terminal"],
+            payload: .init(command: "pwd")
+        )
+        let claimed = try #require(try store.claimNextAgentRuntimeTask(sessionID: session.id))
+        #expect(claimed.id == task.id)
+
+        let requeued = try store.updateAgentRuntimeTask(
+            sessionID: session.id,
+            taskID: claimed.id,
+            state: .queued
+        )
+
+        #expect(requeued.state == .queued)
+        #expect(requeued.sessionID == nil)
+        #expect(requeued.claimedAt == nil)
+        #expect(store.agentRuntimeSessions.first?.currentTaskID == nil)
+        #expect(store.agentRuntimeSessions.first?.state == .active)
+
+        let reclaimed = try store.claimNextAgentRuntimeTask(sessionID: session.id)
+        #expect(reclaimed?.id == task.id)
+    }
+
+    @Test @MainActor func storeReleaseRecoversActiveAgentRuntimeTask() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        store.saveAgentRuntimeSettings(.init(
+            enabled: true,
+            defaultLeaseDurationSeconds: 30,
+            staleTaskPolicy: .requeueClaimedWork
+        ))
+        let session = try store.registerAgentRuntimeSession(
+            clientKind: .codexTab,
+            terminalID: UUID(),
+            hostWorkspaceID: UUID(),
+            capabilities: ["terminal"]
+        )
+        let task = try store.enqueueAgentRuntimeTask(
+            kind: .terminalCommand,
+            capabilityRequirements: ["terminal"],
+            payload: .init(command: "pwd")
+        )
+        let claimed = try #require(try store.claimNextAgentRuntimeTask(sessionID: session.id))
+        #expect(claimed.id == task.id)
+
+        let released = try store.releaseAgentRuntimeSession(
+            session.id,
+            reason: "operator_stop"
+        )
+
+        #expect(released.state == .released)
+        #expect(released.currentTaskID == nil)
+        #expect(store.agentRuntimeTasks.first?.state == .queued)
+        #expect(store.agentRuntimeTasks.first?.sessionID == nil)
+        #expect(store.agentRuntimeTasks.first?.claimedAt == nil)
+        #expect(store.agentRuntimeTasks.first?.errorSummary == "lease_expired")
+    }
+
+    @Test @MainActor func projectedManagedStatePrefersRuntimeSessionStateOverLegacyRegistration() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+        let terminalID = UUID()
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        store.setManagedState(.manual, for: terminalID)
+        _ = try store.registerAgentRuntimeSession(
+            clientKind: .codexTab,
+            terminalID: terminalID,
+            hostWorkspaceID: UUID(),
+            capabilities: ["terminal"]
+        )
+
+        #expect(store.projectedManagedState(for: terminalID) == .managedActive)
+    }
+
+    @Test @MainActor func projectedSessionTaskSummaryUsesRuntimeTaskProjection() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+        let terminalID = UUID()
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        let session = try store.registerAgentRuntimeSession(
+            clientKind: .codexTab,
+            terminalID: terminalID,
+            hostWorkspaceID: UUID(),
+            capabilities: ["terminal"]
+        )
+        _ = try store.enqueueAgentRuntimeTask(
+            kind: .terminalCommand,
+            capabilityRequirements: ["terminal"],
+            payload: .init(command: "pwd")
+        )
+        let claimed = try #require(try store.claimNextAgentRuntimeTask(sessionID: session.id))
+        let waitingApproval = try store.updateAgentRuntimeTask(
+            sessionID: session.id,
+            taskID: claimed.id,
+            state: .waitingApproval
+        )
+
+        let summary = store.projectedSessionTaskSummary(for: terminalID)
+        #expect(store.projectedManagedState(for: terminalID) == .managedWaitingApproval)
+        #expect(summary.taskID == waitingApproval.id)
+        #expect(summary.taskState == .waitingApproval)
+        #expect(summary.taskTitle == "pwd")
+    }
+
+    @Test @MainActor func projectedManagedStateDefaultsToManualWithoutRuntimeProjection() {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+        let terminalID = UUID()
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        #expect(store.projectedManagedState(for: terminalID) == .manual)
+        #expect(store.projectedSessionTaskSummary(for: terminalID).taskID == nil)
     }
 
     @Test @MainActor func storeUsesConfigDirectoryForHeartbeatInbox() {
@@ -887,6 +1824,7 @@ struct AITerminalManagerTests {
             .appendingPathComponent(".codex/skills/terminal-learning-notes/scripts/run_learn_capture.sh")
         let expectedKnowledgeURL = URL(fileURLWithPath: result.chatWorkspacePath, isDirectory: true)
             .appendingPathComponent("knowledges/inbox.md")
+        let generatedScript = try String(contentsOf: expectedScriptURL, encoding: .utf8)
 
         #expect(result.createdFileCount > 0)
         #expect(FileManager.default.fileExists(atPath: expectedSkillURL.path))
@@ -894,6 +1832,11 @@ struct AITerminalManagerTests {
         #expect(FileManager.default.fileExists(atPath: expectedKnowledgeURL.path))
         #expect(store.learningSettings.defaultProjectPath == result.learnWorkspacePath)
         #expect(store.learningSettings.notesRelativePath == AITerminalLearningSettings.defaultNotesRelativePath)
+        #expect(generatedScript.contains("agent.runtime.session.register"))
+        #expect(generatedScript.contains("agent.runtime.session.heartbeat"))
+        #expect(generatedScript.contains("agent.runtime.session.release"))
+        #expect(generatedScript.contains("GHODEX_AGENT_RUNTIME_SOCKET"))
+        #expect(generatedScript.contains("GHODEX_AGENT_RUNTIME_CLIENT_ID"))
     }
 
     @Test @MainActor func storeInitializesTodoWorkspaceAndMutatesDailyFiles() throws {
@@ -1286,6 +2229,17 @@ struct AITerminalManagerTests {
         )
         try """
         #!/usr/bin/env bash
+        set -euo pipefail
+        read_selection() {
+          if [[ -n "${SELECTION:-}" ]]; then
+            printf '%s' "$SELECTION"
+            return
+          fi
+          return 1
+        }
+        selection="$(read_selection "$@" || true)"
+        LEARN_WORKSPACE="${LEARN_WORKSPACE:-$PWD}"
+        PROJECT_PATH="${PROJECT_PATH:-${TAB_WORKING_DIRECTORY:-$LEARN_WORKSPACE}}"
         LEARN_EXEC_COMMAND_TEMPLATE="${LEARN_EXEC_COMMAND_TEMPLATE:-/Users/leongong/.local/bin/codex1m exec -c 'mcp_servers.gemini.enabled=false' -c 'mcp_servers.grok-research.enabled=false' -c 'mcp_servers.opus-planning.enabled=false' -C \"$LEARN_WORKSPACE\" \"$PROMPT\"}"
         """.write(to: legacyScriptURL, atomically: true, encoding: .utf8)
 
@@ -1301,6 +2255,9 @@ struct AITerminalManagerTests {
         let migratedScript = try String(contentsOf: legacyScriptURL, encoding: .utf8)
         #expect(migratedScript.contains("codex1m exec --skip-git-repo-check"))
         #expect(!migratedScript.contains("codex1m exec -c"))
+        #expect(migratedScript.contains("agent.runtime.session.register"))
+        #expect(migratedScript.contains("agent.runtime.session.heartbeat"))
+        #expect(migratedScript.contains("agent.runtime.session.release"))
     }
 
     @Test @MainActor func storeAppendsAndClearsLearningLogs() throws {
@@ -1606,7 +2563,60 @@ struct AITerminalManagerTests {
         let decoded = try JSONDecoder().decode(AITerminalManagerConfiguration.self, from: data)
 
         #expect(decoded.savedWorkspaceTemplates == [workspace])
-        #expect(decoded.schemaVersion == 7)
+        #expect(decoded.schemaVersion == 9)
+    }
+
+    @Test func configurationRoundTripsAgentRuntimeState() throws {
+        let sessionID = UUID()
+        let taskID = UUID()
+        let configuration = AITerminalManagerConfiguration(
+            agentRuntimeSettings: .init(
+                enabled: true,
+                defaultLeaseDurationSeconds: 45,
+                staleTaskPolicy: .pauseClaimedWork
+            ),
+            agentRuntimeSessions: [
+                .init(
+                    id: sessionID,
+                    clientKind: .codexTab,
+                    tabID: UUID(),
+                    terminalID: UUID(),
+                    hostWorkspaceID: UUID(),
+                    state: .active,
+                    capabilities: ["terminal", "task-runtime"],
+                    createdAt: .now,
+                    updatedAt: .now,
+                    lastHeartbeatAt: .now,
+                    leaseDurationSeconds: 45,
+                    leaseExpiresAt: Date().addingTimeInterval(45),
+                    currentTaskID: taskID
+                ),
+            ],
+            agentRuntimeTasks: [
+                .init(
+                    id: taskID,
+                    kind: .terminalCommand,
+                    state: .claimed,
+                    priority: 10,
+                    sessionID: sessionID,
+                    capabilityRequirements: ["terminal"],
+                    payload: .init(command: "pwd"),
+                    createdAt: .now,
+                    scheduledAt: .now,
+                    claimedAt: .now
+                ),
+            ]
+        )
+
+        let data = try JSONEncoder().encode(configuration)
+        let decoded = try JSONDecoder().decode(AITerminalManagerConfiguration.self, from: data)
+
+        #expect(decoded.agentRuntimeSettings.defaultLeaseDurationSeconds == 45)
+        #expect(decoded.agentRuntimeSettings.staleTaskPolicy == .pauseClaimedWork)
+        #expect(decoded.agentRuntimeSessions.count == 1)
+        #expect(decoded.agentRuntimeSessions.first?.id == sessionID)
+        #expect(decoded.agentRuntimeTasks.count == 1)
+        #expect(decoded.agentRuntimeTasks.first?.id == taskID)
     }
 
     @Test @MainActor func storeLoadsSavedWorkspaceTemplatesFromGhoDexConfigWithoutDiagnostics() throws {
@@ -2328,7 +3338,8 @@ struct AITerminalManagerBenchmarkTests {
             store.saveHeartbeatQueueSettings(.init(
                 enabled: true,
                 heartbeatIntervalSeconds: intervalSeconds,
-                maxConcurrentTasks: maxConcurrent
+                maxConcurrentTasks: maxConcurrent,
+                allowExternalInboxMutations: true
             ))
 
             for _ in 0..<taskCount {
@@ -2410,7 +3421,8 @@ struct AITerminalManagerBenchmarkTests {
             store.saveHeartbeatQueueSettings(.init(
                 enabled: true,
                 heartbeatIntervalSeconds: intervalSeconds,
-                maxConcurrentTasks: maxConcurrent
+                maxConcurrentTasks: maxConcurrent,
+                allowExternalInboxMutations: true
             ))
 
             let inboxURL = URL(fileURLWithPath: store.heartbeatInboxDirectoryPath, isDirectory: true)

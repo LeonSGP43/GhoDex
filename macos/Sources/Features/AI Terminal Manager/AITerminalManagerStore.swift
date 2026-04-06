@@ -137,6 +137,19 @@ final class AITerminalManagerStore: ObservableObject {
         var scope: ManagedSkillWorkspaceScope
     }
 
+    struct ProjectedSessionTaskSummary: Equatable, Sendable {
+        var taskID: UUID?
+        var taskTitle: String?
+        var taskState: AITerminalTaskState?
+    }
+
+    struct AgentRuntimeSnapshotState: Equatable, Sendable {
+        var settings: AgentRuntimeSettings
+        var sessions: [AgentRuntimeSession]
+        var tasks: [AgentRuntimeTask]
+        var schedules: [AgentRuntimeSchedule]
+    }
+
     @Published private(set) var configuration: AITerminalManagerConfiguration
     @Published private(set) var importedSSHHosts: [AITerminalHost] = []
     @Published private(set) var remoteSessions: [AITerminalRemoteSessionSummary] = []
@@ -156,6 +169,7 @@ final class AITerminalManagerStore: ObservableObject {
     private let appDelegateProvider: () -> AppDelegate?
     private let configurationURL: URL
     private let heartbeatInboxDirectoryURL: URL
+    private let agentRuntimeEventsURL: URL
     private let sshConfigHostLoader: () -> [AITerminalHost]
     private let credentialStore: SSHConnectionCredentialStore
     private let todoDocumentPersistence = TodoDocumentPersistenceCoordinator()
@@ -169,6 +183,8 @@ final class AITerminalManagerStore: ObservableObject {
     private var sshPasswordAutomationIdlePollCount = 0
     private var heartbeatTimer: Timer?
     private var heartbeatSchedulerTimer: Timer?
+    private var agentRuntimeRecoveryTimer: Timer?
+    private var agentRuntimeSchedulerTimer: Timer?
     private var ghosttyConfigObserver: NSObjectProtocol?
     private var splitSurfaceObserver: NSObjectProtocol?
     nonisolated private static let maxLearningLogEntries = 200
@@ -189,6 +205,8 @@ final class AITerminalManagerStore: ObservableObject {
     nonisolated private static let legacyConfigurationFilename = "ai-terminal-manager.json"
     nonisolated private static let managedConfigStartMarker = "# >>> GhoDex managed settings >>>"
     nonisolated private static let managedConfigEndMarker = "# <<< GhoDex managed settings <<<"
+    nonisolated private static let agentRuntimeScheduleIDMetadataKey = "ghodex_schedule_id"
+    nonisolated private static let agentRuntimeScheduleFireAtMetadataKey = "ghodex_schedule_fire_at"
     nonisolated private static let managedSkillRepositorySpecs: [ManagedSkillRepositorySpec] = [
         .init(
             id: "gho_chat_skill_daily-qa-copilot",
@@ -248,10 +266,15 @@ final class AITerminalManagerStore: ObservableObject {
         self.heartbeatInboxDirectoryURL = self.configurationURL
             .deletingLastPathComponent()
             .appendingPathComponent("ai-task-queue-inbox", isDirectory: true)
+        self.agentRuntimeEventsURL = self.configurationURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("agent-runtime-events.jsonl", isDirectory: false)
         self.sshConfigHostLoader = sshConfigHostLoader
         self.credentialStore = credentialStore
         self.configuration = (try? Self.loadConfiguration(at: self.configurationURL)) ?? .empty
-        installGhosttyConfigObserver()
+        if Self.shouldObserveGlobalGhosttyConfig(for: self.configurationURL) {
+            installGhosttyConfigObserver()
+        }
         installSplitSurfaceObserver()
         refresh()
         migrateLegacyConfigurationIfNeeded()
@@ -270,6 +293,10 @@ final class AITerminalManagerStore: ObservableObject {
         heartbeatTimer = nil
         heartbeatSchedulerTimer?.invalidate()
         heartbeatSchedulerTimer = nil
+        agentRuntimeRecoveryTimer?.invalidate()
+        agentRuntimeRecoveryTimer = nil
+        agentRuntimeSchedulerTimer?.invalidate()
+        agentRuntimeSchedulerTimer = nil
     }
 
     var availableHosts: [AITerminalHost] {
@@ -402,6 +429,99 @@ final class AITerminalManagerStore: ObservableObject {
 
     var heartbeatInboxDirectoryPath: String {
         heartbeatInboxDirectoryURL.standardizedFileURL.path
+    }
+
+    var agentRuntimeSettings: AgentRuntimeSettings {
+        configuration.agentRuntimeSettings
+    }
+
+    var agentRuntimeSessions: [AgentRuntimeSession] {
+        Self.sortedAgentRuntimeSessions(configuration.agentRuntimeSessions)
+    }
+
+    var agentRuntimeTasks: [AgentRuntimeTask] {
+        Self.sortedAgentRuntimeTasks(configuration.agentRuntimeTasks)
+    }
+
+    var agentRuntimeSchedules: [AgentRuntimeSchedule] {
+        Self.sortedAgentRuntimeSchedules(configuration.agentRuntimeSchedules)
+    }
+
+    func agentRuntimeSnapshot(now: Date = .now) -> AgentRuntimeSnapshotState {
+        var projectedSessions = configuration.agentRuntimeSessions
+        var projectedTasks = configuration.agentRuntimeTasks
+
+        for index in projectedSessions.indices {
+            guard projectedSessions[index].isLeaseExpired(at: now) else { continue }
+
+            projectedSessions[index].state = .expired
+            projectedSessions[index].updatedAt = now
+            projectedSessions[index].lastError = "lease_expired"
+            if let taskID = projectedSessions[index].currentTaskID {
+                projectAgentRuntimeTaskRecoveryAfterLeaseExpiry(
+                    taskID: taskID,
+                    now: now,
+                    tasks: &projectedTasks,
+                    settings: configuration.agentRuntimeSettings
+                )
+                projectedSessions[index].currentTaskID = nil
+            }
+        }
+
+        return .init(
+            settings: configuration.agentRuntimeSettings,
+            sessions: Self.sortedAgentRuntimeSessions(projectedSessions),
+            tasks: Self.sortedAgentRuntimeTasks(projectedTasks),
+            schedules: Self.sortedAgentRuntimeSchedules(configuration.agentRuntimeSchedules)
+        )
+    }
+
+    private static func sortedAgentRuntimeSessions(
+        _ sessions: [AgentRuntimeSession]
+    ) -> [AgentRuntimeSession] {
+        sessions.sorted { lhs, rhs in
+            if lhs.updatedAt != rhs.updatedAt {
+                return lhs.updatedAt > rhs.updatedAt
+            }
+            return lhs.id.uuidString < rhs.id.uuidString
+        }
+    }
+
+    private static func sortedAgentRuntimeTasks(
+        _ tasks: [AgentRuntimeTask]
+    ) -> [AgentRuntimeTask] {
+        tasks.sorted { lhs, rhs in
+            if lhs.priority != rhs.priority {
+                return lhs.priority > rhs.priority
+            }
+            if lhs.scheduledAt != rhs.scheduledAt {
+                return lhs.scheduledAt < rhs.scheduledAt
+            }
+            if lhs.createdAt != rhs.createdAt {
+                return lhs.createdAt < rhs.createdAt
+            }
+            return lhs.id.uuidString < rhs.id.uuidString
+        }
+    }
+
+    private static func sortedAgentRuntimeSchedules(
+        _ schedules: [AgentRuntimeSchedule]
+    ) -> [AgentRuntimeSchedule] {
+        schedules.sorted { lhs, rhs in
+            switch (lhs.nextRunAt, rhs.nextRunAt) {
+            case let (lhsNext?, rhsNext?) where lhsNext != rhsNext:
+                return lhsNext < rhsNext
+            case (nil, _?):
+                return false
+            case (_?, nil):
+                return true
+            default:
+                if lhs.createdAt != rhs.createdAt {
+                    return lhs.createdAt < rhs.createdAt
+                }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+        }
     }
 
     var heartbeatQueuedCount: Int {
@@ -697,7 +817,8 @@ final class AITerminalManagerStore: ObservableObject {
         configuration.heartbeatQueueSettings = .init(
             enabled: settings.enabled,
             heartbeatIntervalSeconds: interval,
-            maxConcurrentTasks: maxConcurrentTasks
+            maxConcurrentTasks: maxConcurrentTasks,
+            allowExternalInboxMutations: settings.allowExternalInboxMutations
         )
         pruneHeartbeatTasks()
         persistConfiguration()
@@ -766,6 +887,524 @@ final class AITerminalManagerStore: ObservableObject {
         syncHeartbeatRuntime()
     }
 
+    func saveAgentRuntimeSettings(_ settings: AgentRuntimeSettings) {
+        configuration.agentRuntimeSettings = settings.sanitized()
+        persistConfiguration()
+        syncAgentRuntimeRecovery()
+        syncAgentRuntimeSchedules()
+    }
+
+    @discardableResult
+    func enqueueAgentRuntimeSchedule(
+        taskKind: AgentRuntimeTaskKind,
+        priority: Int = 0,
+        capabilityRequirements: [String] = [],
+        payload: AgentRuntimeTaskPayload = .init(),
+        startAt: Date? = nil,
+        recurrence: AgentRuntimeScheduleRecurrence = .init(),
+        maxRetryCount: Int = 0,
+        now: Date = .now
+    ) throws -> AgentRuntimeSchedule {
+        try ensureAgentRuntimeEnabled()
+        let schedule = AgentRuntimeSchedule(
+            taskKind: taskKind,
+            priority: priority,
+            capabilityRequirements: taskKind.defaultCapabilityRequirements + capabilityRequirements,
+            payload: payload,
+            startAt: startAt ?? now,
+            recurrence: recurrence,
+            createdAt: now,
+            updatedAt: now,
+            maxRetryCount: maxRetryCount
+        )
+        configuration.agentRuntimeSchedules.append(schedule)
+        persistConfiguration()
+        syncAgentRuntimeSchedules(now: now)
+        let persistedSchedule = configuration.agentRuntimeSchedules.first(where: { $0.id == schedule.id }) ?? schedule
+        appendAgentRuntimeEvent(
+            "schedule_enqueued",
+            details: [
+                "schedule_id": schedule.id.uuidString.lowercased(),
+                "task_kind": taskKind.rawValue,
+                "recurrence_mode": schedule.recurrence.mode.rawValue,
+            ]
+        )
+        return persistedSchedule
+    }
+
+    @discardableResult
+    func updateAgentRuntimeSchedule(
+        scheduleID: UUID,
+        state: AgentRuntimeScheduleState? = nil,
+        startAt: Date? = nil,
+        recurrence: AgentRuntimeScheduleRecurrence? = nil,
+        now: Date = .now
+    ) throws -> AgentRuntimeSchedule {
+        try ensureAgentRuntimeEnabled()
+        guard let index = configuration.agentRuntimeSchedules.firstIndex(where: { $0.id == scheduleID }) else {
+            throw AgentRuntimeStoreError.scheduleNotFound(scheduleID)
+        }
+
+        if let state {
+            let currentState = configuration.agentRuntimeSchedules[index].state
+            guard currentState.canTransition(to: state) else {
+                throw AgentRuntimeStoreError.invalidScheduleTransition(from: currentState, to: state)
+            }
+            configuration.agentRuntimeSchedules[index].state = state
+            if state == .cancelled {
+                configuration.agentRuntimeSchedules[index].nextRunAt = nil
+            } else if state == .active, configuration.agentRuntimeSchedules[index].nextRunAt == nil {
+                configuration.agentRuntimeSchedules[index].nextRunAt = startAt ?? configuration.agentRuntimeSchedules[index].startAt
+            }
+        }
+
+        if let startAt {
+            configuration.agentRuntimeSchedules[index].startAt = startAt
+            if configuration.agentRuntimeSchedules[index].state.isRunnable {
+                configuration.agentRuntimeSchedules[index].nextRunAt = startAt
+            }
+        }
+
+        if let recurrence {
+            configuration.agentRuntimeSchedules[index].recurrence = recurrence.sanitized()
+        }
+
+        configuration.agentRuntimeSchedules[index].updatedAt = now
+        persistConfiguration()
+        syncAgentRuntimeSchedules(now: now)
+        let schedule = configuration.agentRuntimeSchedules.first(where: { $0.id == scheduleID })
+            ?? configuration.agentRuntimeSchedules[index]
+        appendAgentRuntimeEvent(
+            "schedule_updated",
+            details: [
+                "schedule_id": schedule.id.uuidString.lowercased(),
+                "state": schedule.state.rawValue,
+            ]
+        )
+        return schedule
+    }
+
+    @discardableResult
+    func cancelAgentRuntimeSchedule(
+        scheduleID: UUID,
+        now: Date = .now
+    ) throws -> AgentRuntimeSchedule {
+        try updateAgentRuntimeSchedule(
+            scheduleID: scheduleID,
+            state: .cancelled,
+            now: now
+        )
+    }
+
+    @discardableResult
+    func enqueueAgentRuntimeTask(
+        kind: AgentRuntimeTaskKind,
+        priority: Int = 0,
+        capabilityRequirements: [String] = [],
+        payload: AgentRuntimeTaskPayload = .init(),
+        scheduledAt: Date? = nil,
+        maxRetryCount: Int = 0,
+        now: Date = .now
+    ) throws -> AgentRuntimeTask {
+        try ensureAgentRuntimeEnabled()
+        let task = AgentRuntimeTask(
+            kind: kind,
+            priority: priority,
+            capabilityRequirements: kind.defaultCapabilityRequirements + capabilityRequirements,
+            payload: payload,
+            createdAt: now,
+            scheduledAt: scheduledAt ?? now,
+            maxRetryCount: maxRetryCount
+        )
+        configuration.agentRuntimeTasks.append(task)
+        persistConfiguration()
+        appendAgentRuntimeEvent(
+            "task_enqueued",
+            taskID: task.id,
+            details: [
+                "kind": kind.rawValue,
+                "priority": "\(priority)",
+            ]
+        )
+        return task
+    }
+
+    @discardableResult
+    func registerAgentRuntimeSession(
+        clientKind: AgentRuntimeClientKind,
+        tabID: UUID? = nil,
+        terminalID: UUID? = nil,
+        hostWorkspaceID: UUID? = nil,
+        capabilities: [String] = [],
+        existingSessionID: UUID? = nil,
+        leaseDurationSeconds: Double? = nil,
+        now: Date = .now
+    ) throws -> AgentRuntimeSession {
+        try ensureAgentRuntimeEnabled()
+        _ = expireStaleAgentRuntimeSessions(now: now)
+
+        let settings = configuration.agentRuntimeSettings.sanitized()
+        if let existingSessionID,
+           let index = configuration.agentRuntimeSessions.firstIndex(where: { $0.id == existingSessionID }) {
+            configuration.agentRuntimeSessions[index].clientKind = clientKind
+            configuration.agentRuntimeSessions[index].tabID = tabID
+            configuration.agentRuntimeSessions[index].terminalID = terminalID
+            configuration.agentRuntimeSessions[index].hostWorkspaceID = hostWorkspaceID
+            configuration.agentRuntimeSessions[index].capabilities = AgentRuntimeSession.normalizeCapabilities(capabilities)
+            configuration.agentRuntimeSessions[index].renewLease(
+                at: now,
+                defaults: settings,
+                requestedLeaseDurationSeconds: leaseDurationSeconds
+            )
+            let session = configuration.agentRuntimeSessions[index]
+            persistConfiguration()
+            appendAgentRuntimeEvent("session_registered", sessionID: session.id, details: [
+                "mode": "reattach",
+                "client_kind": clientKind.rawValue,
+            ])
+            return session
+        }
+
+        expireOverlappingAgentRuntimeSessions(
+            clientKind: clientKind,
+            tabID: tabID,
+            terminalID: terminalID,
+            hostWorkspaceID: hostWorkspaceID,
+            now: now
+        )
+
+        var session = AgentRuntimeSession(
+            clientKind: clientKind,
+            tabID: tabID,
+            terminalID: terminalID,
+            hostWorkspaceID: hostWorkspaceID,
+            capabilities: capabilities,
+            createdAt: now,
+            updatedAt: now,
+            leaseDurationSeconds: leaseDurationSeconds ?? settings.defaultLeaseDurationSeconds
+        )
+        session.renewLease(
+            at: now,
+            defaults: settings,
+            requestedLeaseDurationSeconds: leaseDurationSeconds
+        )
+        configuration.agentRuntimeSessions.append(session)
+        persistConfiguration()
+        appendAgentRuntimeEvent("session_registered", sessionID: session.id, details: [
+            "mode": "new",
+            "client_kind": clientKind.rawValue,
+        ])
+        return session
+    }
+
+    @discardableResult
+    func heartbeatAgentRuntimeSession(
+        _ sessionID: UUID,
+        leaseDurationSeconds: Double? = nil,
+        now: Date = .now
+    ) throws -> AgentRuntimeSession {
+        try ensureAgentRuntimeEnabled()
+        _ = expireStaleAgentRuntimeSessions(now: now)
+        let index = try activeAgentRuntimeSessionIndex(sessionID: sessionID, now: now)
+        configuration.agentRuntimeSessions[index].renewLease(
+            at: now,
+            defaults: configuration.agentRuntimeSettings,
+            requestedLeaseDurationSeconds: leaseDurationSeconds
+        )
+        let session = configuration.agentRuntimeSessions[index]
+        persistConfiguration()
+        appendAgentRuntimeEvent("session_heartbeat", sessionID: session.id)
+        return session
+    }
+
+    @discardableResult
+    func releaseAgentRuntimeSession(
+        _ sessionID: UUID,
+        reason: String? = nil,
+        now: Date = .now
+    ) throws -> AgentRuntimeSession {
+        try ensureAgentRuntimeEnabled()
+        let index = try agentRuntimeSessionIndex(sessionID: sessionID)
+        if let taskID = configuration.agentRuntimeSessions[index].currentTaskID {
+            recoverAgentRuntimeTaskAfterLeaseExpiry(taskID: taskID, now: now)
+        }
+        configuration.agentRuntimeSessions[index].state = .released
+        configuration.agentRuntimeSessions[index].updatedAt = now
+        configuration.agentRuntimeSessions[index].leaseExpiresAt = now
+        configuration.agentRuntimeSessions[index].lastError = reason
+        configuration.agentRuntimeSessions[index].currentTaskID = nil
+        let session = configuration.agentRuntimeSessions[index]
+        persistConfiguration()
+        appendAgentRuntimeEvent("session_released", sessionID: session.id, details: [
+            "reason": reason ?? "",
+        ])
+        return session
+    }
+
+    @discardableResult
+    func expireStaleAgentRuntimeSessions(now: Date = .now) -> [UUID] {
+        var expiredIDs: [UUID] = []
+
+        for index in configuration.agentRuntimeSessions.indices {
+            guard configuration.agentRuntimeSessions[index].isLeaseExpired(at: now) else { continue }
+            configuration.agentRuntimeSessions[index].state = .expired
+            configuration.agentRuntimeSessions[index].updatedAt = now
+            configuration.agentRuntimeSessions[index].lastError = "lease_expired"
+            if let taskID = configuration.agentRuntimeSessions[index].currentTaskID {
+                recoverAgentRuntimeTaskAfterLeaseExpiry(taskID: taskID, now: now)
+                configuration.agentRuntimeSessions[index].currentTaskID = nil
+            }
+            expiredIDs.append(configuration.agentRuntimeSessions[index].id)
+            appendAgentRuntimeEvent(
+                "session_expired",
+                sessionID: configuration.agentRuntimeSessions[index].id
+            )
+        }
+
+        if !expiredIDs.isEmpty {
+            persistConfiguration()
+        }
+        return expiredIDs
+    }
+
+    @discardableResult
+    func claimNextAgentRuntimeTask(
+        sessionID: UUID,
+        allowedKinds: Set<AgentRuntimeTaskKind>? = nil,
+        now: Date = .now
+    ) throws -> AgentRuntimeTask? {
+        try ensureAgentRuntimeEnabled()
+        _ = expireStaleAgentRuntimeSessions(now: now)
+        let sessionIndex = try activeAgentRuntimeSessionIndex(sessionID: sessionID, now: now)
+        if let currentTaskID = configuration.agentRuntimeSessions[sessionIndex].currentTaskID,
+           let currentTask = configuration.agentRuntimeTasks.first(where: { $0.id == currentTaskID }),
+           !currentTask.state.isFinished {
+            throw AgentRuntimeStoreError.sessionAlreadyHasActiveTask(sessionID)
+        }
+
+        let capabilities = Set(configuration.agentRuntimeSessions[sessionIndex].capabilities)
+        guard let taskIndex = configuration.agentRuntimeTasks.indices
+            .filter({
+                let task = configuration.agentRuntimeTasks[$0]
+                guard task.isClaimable(by: capabilities, now: now) else {
+                    return false
+                }
+                guard let allowedKinds else {
+                    return true
+                }
+                return allowedKinds.contains(task.kind)
+            })
+            .sorted(by: { lhs, rhs in
+                let lhsTask = configuration.agentRuntimeTasks[lhs]
+                let rhsTask = configuration.agentRuntimeTasks[rhs]
+                if lhsTask.priority != rhsTask.priority {
+                    return lhsTask.priority > rhsTask.priority
+                }
+                if lhsTask.scheduledAt != rhsTask.scheduledAt {
+                    return lhsTask.scheduledAt < rhsTask.scheduledAt
+                }
+                if lhsTask.createdAt != rhsTask.createdAt {
+                    return lhsTask.createdAt < rhsTask.createdAt
+                }
+                return lhsTask.id.uuidString < rhsTask.id.uuidString
+            })
+            .first else {
+            return nil
+        }
+
+        configuration.agentRuntimeTasks[taskIndex].state = .claimed
+        configuration.agentRuntimeTasks[taskIndex].sessionID = sessionID
+        configuration.agentRuntimeTasks[taskIndex].claimedAt = now
+        configuration.agentRuntimeTasks[taskIndex].finishedAt = nil
+        configuration.agentRuntimeTasks[taskIndex].errorSummary = nil
+        configuration.agentRuntimeSessions[sessionIndex].currentTaskID = configuration.agentRuntimeTasks[taskIndex].id
+        configuration.agentRuntimeSessions[sessionIndex].updatedAt = now
+        let task = configuration.agentRuntimeTasks[taskIndex]
+        persistConfiguration()
+        appendAgentRuntimeEvent("task_claimed", sessionID: sessionID, taskID: task.id)
+        return task
+    }
+
+    @discardableResult
+    func updateAgentRuntimeTask(
+        sessionID: UUID,
+        taskID: UUID,
+        state: AgentRuntimeTaskState,
+        errorSummary: String? = nil,
+        now: Date = .now
+    ) throws -> AgentRuntimeTask {
+        try ensureAgentRuntimeEnabled()
+        let sessionIndex = try activeAgentRuntimeSessionIndex(sessionID: sessionID, now: now)
+        guard let taskIndex = configuration.agentRuntimeTasks.firstIndex(where: { $0.id == taskID }) else {
+            throw AgentRuntimeStoreError.taskNotFound(taskID)
+        }
+        guard configuration.agentRuntimeTasks[taskIndex].sessionID == sessionID else {
+            throw AgentRuntimeStoreError.taskOwnershipMismatch(taskID: taskID, sessionID: sessionID)
+        }
+        guard configuration.agentRuntimeTasks[taskIndex].state.canTransition(to: state) else {
+            throw AgentRuntimeStoreError.invalidTaskTransition(
+                from: configuration.agentRuntimeTasks[taskIndex].state,
+                to: state
+            )
+        }
+
+        configuration.agentRuntimeTasks[taskIndex].state = state
+        configuration.agentRuntimeTasks[taskIndex].errorSummary = errorSummary
+        if state == .running && configuration.agentRuntimeTasks[taskIndex].claimedAt == nil {
+            configuration.agentRuntimeTasks[taskIndex].claimedAt = now
+        }
+        if state == .queued {
+            configuration.agentRuntimeTasks[taskIndex].sessionID = nil
+            configuration.agentRuntimeTasks[taskIndex].claimedAt = nil
+            configuration.agentRuntimeTasks[taskIndex].finishedAt = nil
+            configuration.agentRuntimeSessions[sessionIndex].currentTaskID = nil
+            if configuration.agentRuntimeSessions[sessionIndex].state.isLeaseManaged {
+                configuration.agentRuntimeSessions[sessionIndex].state = .active
+            }
+        } else if state.isFinished {
+            configuration.agentRuntimeTasks[taskIndex].finishedAt = now
+            configuration.agentRuntimeSessions[sessionIndex].currentTaskID = nil
+            if configuration.agentRuntimeSessions[sessionIndex].state.isLeaseManaged {
+                configuration.agentRuntimeSessions[sessionIndex].state = .active
+            }
+        } else {
+            configuration.agentRuntimeTasks[taskIndex].finishedAt = nil
+            configuration.agentRuntimeSessions[sessionIndex].currentTaskID = taskID
+            switch state {
+            case .waitingApproval:
+                configuration.agentRuntimeSessions[sessionIndex].state = .waitingApproval
+            case .paused:
+                configuration.agentRuntimeSessions[sessionIndex].state = .paused
+            case .queued, .claimed, .running:
+                configuration.agentRuntimeSessions[sessionIndex].state = .active
+            case .completed, .failed, .cancelled:
+                break
+            }
+        }
+        if state != .queued {
+            configuration.agentRuntimeTasks[taskIndex].sessionID = sessionID
+        }
+        configuration.agentRuntimeSessions[sessionIndex].updatedAt = now
+        let task = configuration.agentRuntimeTasks[taskIndex]
+        persistConfiguration()
+        if state.isFinished || state == .queued {
+            syncAgentRuntimeSchedules(now: now)
+        }
+        appendAgentRuntimeEvent(
+            "task_updated",
+            sessionID: sessionID,
+            taskID: taskID,
+            details: [
+                "state": state.rawValue,
+            ]
+        )
+        return task
+    }
+
+    @discardableResult
+    func approveAgentRuntimeTask(
+        sessionID: UUID,
+        taskID: UUID,
+        now: Date = .now
+    ) throws -> AgentRuntimeTask {
+        try ensureAgentRuntimeEnabled()
+        let sessionIndex = try activeAgentRuntimeSessionIndex(sessionID: sessionID, now: now)
+        guard let taskIndex = configuration.agentRuntimeTasks.firstIndex(where: { $0.id == taskID }) else {
+            throw AgentRuntimeStoreError.taskNotFound(taskID)
+        }
+        guard configuration.agentRuntimeTasks[taskIndex].sessionID == sessionID else {
+            throw AgentRuntimeStoreError.taskOwnershipMismatch(taskID: taskID, sessionID: sessionID)
+        }
+        guard configuration.agentRuntimeTasks[taskIndex].state == .waitingApproval else {
+            throw AgentRuntimeStoreError.invalidTaskTransition(
+                from: configuration.agentRuntimeTasks[taskIndex].state,
+                to: .running
+            )
+        }
+
+        configuration.agentRuntimeTasks[taskIndex].state = .running
+        configuration.agentRuntimeTasks[taskIndex].finishedAt = nil
+        configuration.agentRuntimeTasks[taskIndex].errorSummary = nil
+        if configuration.agentRuntimeTasks[taskIndex].claimedAt == nil {
+            configuration.agentRuntimeTasks[taskIndex].claimedAt = now
+        }
+        configuration.agentRuntimeSessions[sessionIndex].currentTaskID = taskID
+        configuration.agentRuntimeSessions[sessionIndex].state = .active
+        configuration.agentRuntimeSessions[sessionIndex].updatedAt = now
+        let task = configuration.agentRuntimeTasks[taskIndex]
+        persistConfiguration()
+        appendAgentRuntimeEvent(
+            "task_approved",
+            sessionID: sessionID,
+            taskID: taskID
+        )
+        return task
+    }
+
+    @discardableResult
+    func cancelAgentRuntimeTask(
+        taskID: UUID,
+        sessionID: UUID? = nil,
+        reason: String? = nil,
+        force: Bool = false,
+        now: Date = .now
+    ) throws -> AgentRuntimeTask {
+        try ensureAgentRuntimeEnabled()
+        guard let taskIndex = configuration.agentRuntimeTasks.firstIndex(where: { $0.id == taskID }) else {
+            throw AgentRuntimeStoreError.taskNotFound(taskID)
+        }
+
+        let ownerSessionID = configuration.agentRuntimeTasks[taskIndex].sessionID
+        if let ownerSessionID {
+            if force {
+                if let sessionIndex = configuration.agentRuntimeSessions.firstIndex(where: { $0.id == ownerSessionID }) {
+                    configuration.agentRuntimeSessions[sessionIndex].currentTaskID = nil
+                    configuration.agentRuntimeSessions[sessionIndex].updatedAt = now
+                    if configuration.agentRuntimeSessions[sessionIndex].state.isLeaseManaged {
+                        configuration.agentRuntimeSessions[sessionIndex].state = .active
+                    }
+                }
+            } else {
+                guard let sessionID else {
+                    throw AgentRuntimeStoreError.taskOwnershipMismatch(taskID: taskID, sessionID: ownerSessionID)
+                }
+                let sessionIndex = try activeAgentRuntimeSessionIndex(sessionID: sessionID, now: now)
+                guard ownerSessionID == sessionID else {
+                    throw AgentRuntimeStoreError.taskOwnershipMismatch(taskID: taskID, sessionID: sessionID)
+                }
+                configuration.agentRuntimeSessions[sessionIndex].currentTaskID = nil
+                configuration.agentRuntimeSessions[sessionIndex].updatedAt = now
+                if configuration.agentRuntimeSessions[sessionIndex].state.isLeaseManaged {
+                    configuration.agentRuntimeSessions[sessionIndex].state = .active
+                }
+            }
+        } else if !force, let sessionID {
+            _ = try activeAgentRuntimeSessionIndex(sessionID: sessionID, now: now)
+        }
+
+        let currentState = configuration.agentRuntimeTasks[taskIndex].state
+        guard currentState.canTransition(to: .cancelled) else {
+            throw AgentRuntimeStoreError.invalidTaskTransition(from: currentState, to: .cancelled)
+        }
+
+        configuration.agentRuntimeTasks[taskIndex].state = .cancelled
+        configuration.agentRuntimeTasks[taskIndex].finishedAt = now
+        configuration.agentRuntimeTasks[taskIndex].errorSummary = reason
+        let task = configuration.agentRuntimeTasks[taskIndex]
+        persistConfiguration()
+        syncAgentRuntimeSchedules(now: now)
+        appendAgentRuntimeEvent(
+            "task_cancelled",
+            sessionID: sessionID ?? ownerSessionID,
+            taskID: taskID,
+            details: [
+                "reason": reason ?? "",
+                "force": force ? "true" : "false",
+            ]
+        )
+        return task
+    }
+
     private func pruneHeartbeatTasks(now: Date = .now) {
         let beforeCount = configuration.heartbeatTasks.count
         configuration.heartbeatTasks = Self.prunedHeartbeatTasks(configuration.heartbeatTasks, now: now)
@@ -809,6 +1448,8 @@ final class AITerminalManagerStore: ObservableObject {
         reconcileImportedState()
         rebuildSessions()
         syncHeartbeatRuntime()
+        syncAgentRuntimeRecovery()
+        syncAgentRuntimeSchedules()
     }
 
     func reloadImportedSSHHosts() {
@@ -2301,6 +2942,7 @@ final class AITerminalManagerStore: ObservableObject {
         try ensureCodexExecSkipGitRepoCheck(in: learnEnvURL)
         try ensureCodexExecSkipGitRepoCheck(in: learnSkillURL)
         try ensureCodexExecSkipGitRepoCheck(in: learnCaptureScriptURL)
+        try migrateLegacyLearnCaptureScriptIfNeeded(at: learnCaptureScriptURL)
 
         try ensureExecutable(at: learnCaptureScriptURL)
         try ensureExecutable(at: learnSimpleScriptURL)
@@ -2354,6 +2996,20 @@ final class AITerminalManagerStore: ObservableObject {
         guard updated != content else { return }
 
         try updated.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private static func migrateLegacyLearnCaptureScriptIfNeeded(at url: URL) throws {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+
+        let content = try String(contentsOf: url, encoding: .utf8)
+        guard !content.contains("agent.runtime.session.register") else { return }
+
+        let looksGenerated = content.contains("selection=\"$(read_selection \"$@\" || true)\"")
+            && content.contains("PROJECT_PATH=\"${PROJECT_PATH:-${TAB_WORKING_DIRECTORY:-$LEARN_WORKSPACE}}\"")
+            && content.contains("LEARN_EXEC_COMMAND_TEMPLATE=\"${LEARN_EXEC_COMMAND_TEMPLATE:-")
+        guard looksGenerated else { return }
+
+        try learnCaptureScriptTemplate.write(to: url, atomically: true, encoding: .utf8)
     }
 
     private static func injectSkipGitRepoCheck(in text: String) -> String {
@@ -2502,6 +3158,59 @@ final class AITerminalManagerStore: ObservableObject {
       printf '%s' "$value"
     }
 
+    runtime_is_bootstrap_enabled() {
+      [[ -n "${GHODEX_AGENT_RUNTIME_SOCKET:-${GHODEX_CONTROL_SOCKET:-}}" ]] || return 1
+      [[ "${GHODEX_AGENT_RUNTIME_SESSION_KIND:-}" == "codex_tab" ]] || return 1
+      command -v python3 >/dev/null 2>&1 || return 1
+      return 0
+    }
+
+    runtime_heartbeat_interval_seconds() {
+      python3 -c $'import os\nraw_value = os.environ.get("GHODEX_AGENT_RUNTIME_DEFAULT_HEARTBEAT_SECONDS", "").strip()\ntry:\n    lease_seconds = float(raw_value) if raw_value else 30.0\nexcept ValueError:\n    lease_seconds = 30.0\ninterval = max(5.0, min(lease_seconds / 2.0, 30.0))\nrounded = round(interval)\nif abs(interval - rounded) < 1e-9:\n    print(int(rounded))\nelse:\n    print(f"{interval:.3f}".rstrip("0").rstrip("."))'
+    }
+
+    runtime_request() {
+      local action="$1"
+      local reason="${2:-}"
+      RUNTIME_ACTION="$action" \
+      RUNTIME_REASON="$reason" \
+      RUNTIME_SOCKET="${GHODEX_AGENT_RUNTIME_SOCKET:-${GHODEX_CONTROL_SOCKET:-}}" \
+      RUNTIME_CLIENT_ID="${GHODEX_AGENT_RUNTIME_CLIENT_ID:-}" \
+      RUNTIME_SESSION_ID="${runtime_session_id:-}" \
+      RUNTIME_WORKSPACE_ID="${GHODEX_AGENT_RUNTIME_WORKSPACE_ID:-}" \
+      RUNTIME_CAPABILITIES="${GHODEX_AGENT_RUNTIME_CAPABILITIES:-}" \
+      RUNTIME_LEASE_DURATION_SECONDS="${GHODEX_AGENT_RUNTIME_DEFAULT_HEARTBEAT_SECONDS:-}" \
+      python3 -c $'import json\nimport os\nimport socket\nimport sys\nimport uuid\ndef trim(value):\n    return "" if value is None else str(value).strip()\naction = trim(os.environ.get("RUNTIME_ACTION"))\ncommands = {"register": "agent.runtime.session.register", "heartbeat": "agent.runtime.session.heartbeat", "release": "agent.runtime.session.release"}\nif action not in commands:\n    print(f"unsupported runtime action: {action}", file=sys.stderr)\n    sys.exit(2)\nsocket_path = trim(os.environ.get("RUNTIME_SOCKET"))\nif not socket_path:\n    print("runtime socket path is missing", file=sys.stderr)\n    sys.exit(2)\nclient_id = trim(os.environ.get("RUNTIME_CLIENT_ID")) or str(uuid.uuid4()).lower()\nrequest = {"request_id": f"runtime_{action}_{client_id}", "command": commands[action], "client": "codex-learn-bootstrap"}\nlease_raw = trim(os.environ.get("RUNTIME_LEASE_DURATION_SECONDS"))\nsession_id = trim(os.environ.get("RUNTIME_SESSION_ID"))\nworkspace_id = trim(os.environ.get("RUNTIME_WORKSPACE_ID"))\nreason = trim(os.environ.get("RUNTIME_REASON"))\ncapabilities = [item.strip() for item in trim(os.environ.get("RUNTIME_CAPABILITIES")).split(",") if item.strip()]\nif action == "register":\n    if client_id:\n        request["session_id"] = client_id\n    if workspace_id:\n        request["workspace_id"] = workspace_id\n    if capabilities:\n        request["capabilities"] = capabilities\n    if lease_raw:\n        try:\n            request["lease_duration_seconds"] = float(lease_raw)\n        except ValueError:\n            pass\nelif action in {"heartbeat", "release"}:\n    if not session_id:\n        print("runtime session id is missing", file=sys.stderr)\n        sys.exit(2)\n    request["session_id"] = session_id\n    if action == "heartbeat" and lease_raw:\n        try:\n            request["lease_duration_seconds"] = float(lease_raw)\n        except ValueError:\n            pass\n    if action == "release" and reason:\n        request["reason"] = reason\npayload = json.dumps(request, separators=(",", ":")).encode("utf-8")\nclient = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\ntry:\n    client.connect(socket_path)\n    client.sendall(payload)\n    try:\n        client.shutdown(socket.SHUT_WR)\n    except OSError:\n        pass\n    chunks = []\n    while True:\n        data = client.recv(65536)\n        if not data:\n            break\n        chunks.append(data)\nfinally:\n    client.close()\nresponse_bytes = b"".join(chunks)\nresponse = json.loads(response_bytes.decode("utf-8") if response_bytes else "{}")\nif response.get("status") != "ok":\n    message = response.get("error_message") or response.get("error_code") or "runtime_request_failed"\n    print(message, file=sys.stderr)\n    sys.exit(1)\nif action == "register":\n    session = response.get("result", {}).get("session", {})\n    registered_session_id = trim(session.get("id"))\n    if not registered_session_id:\n        print("runtime register returned an empty session id", file=sys.stderr)\n        sys.exit(1)\n    print(registered_session_id)'
+    }
+
+    runtime_start_heartbeat() {
+      local interval="$1"
+      (
+        while true; do
+          sleep "$interval"
+          runtime_request heartbeat >/dev/null || break
+        done
+      ) &
+      runtime_heartbeat_pid=$!
+    }
+
+    runtime_stop_heartbeat() {
+      if [[ -n "${runtime_heartbeat_pid:-}" ]]; then
+        kill "${runtime_heartbeat_pid}" >/dev/null 2>&1 || true
+        wait "${runtime_heartbeat_pid}" >/dev/null 2>&1 || true
+        runtime_heartbeat_pid=""
+      fi
+    }
+
+    runtime_cleanup() {
+      local exit_code="${1:-0}"
+      runtime_stop_heartbeat
+      if [[ -n "${runtime_session_id:-}" ]]; then
+        runtime_request release "codex_exec_exit_${exit_code}" >/dev/null 2>&1 || true
+        runtime_session_id=""
+      fi
+    }
+
     selection="$(read_selection "$@" || true)"
     if [[ -z "${selection//[$' \t\n\r']/}" ]]; then
       echo "No selection text provided." >&2
@@ -2510,6 +3219,9 @@ final class AITerminalManagerStore: ObservableObject {
 
     LEARN_WORKSPACE="${LEARN_WORKSPACE:-$WORKSPACE_DIR}"
     PROJECT_PATH="${PROJECT_PATH:-${TAB_WORKING_DIRECTORY:-$LEARN_WORKSPACE}}"
+    runtime_session_id=""
+    runtime_heartbeat_pid=""
+    trap 'runtime_cleanup $?' EXIT
 
     ARCHIVE_DIR="${LEARN_WORKSPACE}/.codex/learning-archive"
     ARCHIVE_FILE="${ARCHIVE_DIR}/raw-selections.jsonl"
@@ -2526,6 +3238,16 @@ final class AITerminalManagerStore: ObservableObject {
     $selection}"
 
     LEARN_EXEC_COMMAND_TEMPLATE="${LEARN_EXEC_COMMAND_TEMPLATE:-/Users/leongong/.local/bin/codex1m exec --skip-git-repo-check -c 'mcp_servers.gemini.enabled=false' -c 'mcp_servers.grok-research.enabled=false' -c 'mcp_servers.opus-planning.enabled=false' -C \"$LEARN_WORKSPACE\" \"$PROMPT\"}"
+
+    if runtime_is_bootstrap_enabled; then
+      if runtime_session_id="$(runtime_request register)"; then
+        runtime_interval="$(runtime_heartbeat_interval_seconds)"
+        runtime_start_heartbeat "${runtime_interval:-15}"
+      else
+        echo "Warning: failed to register GhoDex runtime session; continuing without runtime heartbeat." >&2
+        runtime_session_id=""
+      fi
+    fi
 
     set +e
     command_output="$(
@@ -2591,6 +3313,72 @@ final class AITerminalManagerStore: ObservableObject {
         registration.managedState = state
         registrations[sessionID] = registration
         rebuildSessions()
+    }
+
+    func agentRuntimeSession(forTerminalID terminalID: UUID) -> AgentRuntimeSession? {
+        configuration.agentRuntimeSessions
+            .filter { $0.terminalID == terminalID }
+            .sorted { lhs, rhs in
+                let lhsPriority = agentRuntimeSessionProjectionPriority(lhs)
+                let rhsPriority = agentRuntimeSessionProjectionPriority(rhs)
+                if lhsPriority != rhsPriority {
+                    return lhsPriority < rhsPriority
+                }
+                if lhs.updatedAt != rhs.updatedAt {
+                    return lhs.updatedAt > rhs.updatedAt
+                }
+                return lhs.createdAt > rhs.createdAt
+            }
+            .first
+    }
+
+    func agentRuntimeTask(forTerminalID terminalID: UUID) -> AgentRuntimeTask? {
+        guard let session = agentRuntimeSession(forTerminalID: terminalID),
+              let currentTaskID = session.currentTaskID else {
+            return nil
+        }
+        return configuration.agentRuntimeTasks.first(where: { $0.id == currentTaskID })
+    }
+
+    func projectedManagedState(for terminalID: UUID) -> AITerminalManagedState {
+        if let runtimeTask = agentRuntimeTask(forTerminalID: terminalID) {
+            return compatibilityManagedState(for: runtimeTask.state)
+        }
+
+        if let runtimeSession = agentRuntimeSession(forTerminalID: terminalID) {
+            switch runtimeSession.state {
+            case .booting, .active:
+                return .managedActive
+            case .waitingApproval:
+                return .managedWaitingApproval
+            case .paused:
+                return .managedPaused
+            case .expired, .failed:
+                return .managedFailed
+            case .released:
+                break
+            }
+        }
+
+        return registrations[terminalID]?.managedState ?? .manual
+    }
+
+    func projectedSessionTaskSummary(for terminalID: UUID) -> ProjectedSessionTaskSummary {
+        if let runtimeTask = agentRuntimeTask(forTerminalID: terminalID) {
+            let legacyTask = task(for: terminalID)
+            return .init(
+                taskID: runtimeTask.id,
+                taskTitle: legacyTask?.title ?? projectedTaskTitle(for: runtimeTask),
+                taskState: compatibilityTaskState(for: runtimeTask.state)
+            )
+        }
+
+        let legacyTask = task(for: terminalID)
+        return .init(
+            taskID: legacyTask?.id,
+            taskTitle: legacyTask?.title,
+            taskState: legacyTask?.state
+        )
     }
 
     func task(for sessionID: UUID) -> AITerminalTaskRecord? {
@@ -2888,7 +3676,7 @@ final class AITerminalManagerStore: ObservableObject {
             .flatMap { controller in
                 controller.allSurfaces.map { surface in
                     let registration = registrations[surface.id]
-                    let task = task(for: surface.id)
+                    let projectedTask = projectedSessionTaskSummary(for: surface.id)
                     let hostLabel = registration
                         .flatMap { $0.hostID }
                         .flatMap { hostLookup[$0]?.name }
@@ -2908,10 +3696,10 @@ final class AITerminalManagerStore: ObservableObject {
                         workingDirectory: surface.pwd,
                         isFocused: surface.focused,
                         hostLabel: hostLabel,
-                        managedState: registration?.managedState ?? .manual,
-                        taskID: task?.id,
-                        taskTitle: task?.title,
-                        taskState: task?.state
+                        managedState: projectedManagedState(for: surface.id),
+                        taskID: projectedTask.taskID,
+                        taskTitle: projectedTask.taskTitle,
+                        taskState: projectedTask.taskState
                     )
                 }
             }
@@ -2957,6 +3745,63 @@ final class AITerminalManagerStore: ObservableObject {
         if pendingSSHPasswordAutomations.isEmpty {
             stopSSHPasswordAutomationTimer()
         }
+    }
+
+    private func agentRuntimeSessionProjectionPriority(_ session: AgentRuntimeSession) -> Int {
+        switch session.state {
+        case .booting, .active, .waitingApproval, .paused:
+            return 0
+        case .failed, .expired:
+            return 1
+        case .released:
+            return 2
+        }
+    }
+
+    private func compatibilityManagedState(for runtimeState: AgentRuntimeTaskState) -> AITerminalManagedState {
+        switch runtimeState {
+        case .queued, .claimed, .running:
+            return .managedActive
+        case .waitingApproval:
+            return .managedWaitingApproval
+        case .paused:
+            return .managedPaused
+        case .completed:
+            return .managedCompleted
+        case .failed, .cancelled:
+            return .managedFailed
+        }
+    }
+
+    private func compatibilityTaskState(for runtimeState: AgentRuntimeTaskState) -> AITerminalTaskState {
+        switch runtimeState {
+        case .queued:
+            return .queued
+        case .claimed, .running:
+            return .active
+        case .waitingApproval:
+            return .waitingApproval
+        case .paused:
+            return .paused
+        case .completed:
+            return .completed
+        case .failed, .cancelled:
+            return .failed
+        }
+    }
+
+    private func projectedTaskTitle(for task: AgentRuntimeTask) -> String? {
+        if let command = task.payload.command?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !command.isEmpty {
+            return command
+        }
+
+        if let text = task.payload.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !text.isEmpty {
+            return text
+        }
+
+        return task.kind.rawValue
     }
 
     private func registerRemoteSession(
@@ -3329,8 +4174,169 @@ final class AITerminalManagerStore: ObservableObject {
             return
         }
 
+        // Process pending inbox mutations immediately so config changes do not
+        // wait for the next timer tick to quarantine or enqueue work.
+        importHeartbeatTasksFromInbox()
         scheduleNextHeartbeatExecution()
         runDueHeartbeatTasksIfNeeded()
+    }
+
+    private func syncAgentRuntimeRecovery() {
+        agentRuntimeRecoveryTimer?.invalidate()
+        agentRuntimeRecoveryTimer = nil
+
+        guard configuration.agentRuntimeSettings.enabled else { return }
+
+        _ = expireStaleAgentRuntimeSessions(now: .now)
+        let interval = min(
+            max(configuration.agentRuntimeSettings.sanitized().defaultLeaseDurationSeconds / 2, 1),
+            5
+        )
+        let timer = Timer(
+            timeInterval: interval,
+            repeats: true
+        ) { [weak self] _ in
+            guard let self else { return }
+            _ = self.expireStaleAgentRuntimeSessions(now: .now)
+        }
+        timer.tolerance = min(max(interval * 0.2, 0.1), 1)
+        RunLoop.main.add(timer, forMode: .common)
+        agentRuntimeRecoveryTimer = timer
+    }
+
+    private func syncAgentRuntimeSchedules(now: Date = .now) {
+        agentRuntimeSchedulerTimer?.invalidate()
+        agentRuntimeSchedulerTimer = nil
+
+        guard configuration.agentRuntimeSettings.enabled else { return }
+
+        _ = materializeDueAgentRuntimeSchedules(now: now)
+        scheduleNextAgentRuntimeMaterialization(now: now)
+    }
+
+    private func scheduleNextAgentRuntimeMaterialization(now: Date = .now) {
+        agentRuntimeSchedulerTimer?.invalidate()
+        agentRuntimeSchedulerTimer = nil
+
+        guard configuration.agentRuntimeSettings.enabled else { return }
+        guard let nextDate = configuration.agentRuntimeSchedules
+            .compactMap({ nextAgentRuntimeScheduleEvaluationDate(for: $0, now: now) })
+            .min()
+        else {
+            return
+        }
+
+        let delay = max(0, nextDate.timeIntervalSince(now))
+        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            self.syncAgentRuntimeSchedules()
+        }
+        timer.tolerance = min(max(delay * 0.1, 0.05), 1)
+        RunLoop.main.add(timer, forMode: .common)
+        agentRuntimeSchedulerTimer = timer
+    }
+
+    @discardableResult
+    private func materializeDueAgentRuntimeSchedules(now: Date = .now) -> [AgentRuntimeTask] {
+        guard configuration.agentRuntimeSettings.enabled else { return [] }
+
+        let dueIndices = configuration.agentRuntimeSchedules.indices
+            .filter { index in
+                let schedule = configuration.agentRuntimeSchedules[index]
+                guard schedule.isDue(at: now) else { return false }
+                return !isAgentRuntimeScheduleBlockedByActiveTask(schedule)
+            }
+            .sorted { lhs, rhs in
+                let lhsSchedule = configuration.agentRuntimeSchedules[lhs]
+                let rhsSchedule = configuration.agentRuntimeSchedules[rhs]
+                let lhsNext = lhsSchedule.nextRunAt ?? lhsSchedule.startAt
+                let rhsNext = rhsSchedule.nextRunAt ?? rhsSchedule.startAt
+                if lhsNext != rhsNext {
+                    return lhsNext < rhsNext
+                }
+                if lhsSchedule.priority != rhsSchedule.priority {
+                    return lhsSchedule.priority > rhsSchedule.priority
+                }
+                if lhsSchedule.createdAt != rhsSchedule.createdAt {
+                    return lhsSchedule.createdAt < rhsSchedule.createdAt
+                }
+                return lhsSchedule.id.uuidString < rhsSchedule.id.uuidString
+            }
+
+        guard !dueIndices.isEmpty else { return [] }
+
+        var materializedTasks: [AgentRuntimeTask] = []
+        var events: [(scheduleID: UUID, taskID: UUID, nextRunAt: String)] = []
+
+        for index in dueIndices {
+            let schedule = configuration.agentRuntimeSchedules[index]
+            let fireAt = schedule.nextRunAt ?? schedule.startAt
+            var metadata = schedule.payload.metadata
+            metadata[Self.agentRuntimeScheduleIDMetadataKey] = schedule.id.uuidString.lowercased()
+            metadata[Self.agentRuntimeScheduleFireAtMetadataKey] = Self.iso8601(fireAt)
+
+            let task = AgentRuntimeTask(
+                kind: schedule.taskKind,
+                priority: schedule.priority,
+                capabilityRequirements: schedule.capabilityRequirements,
+                payload: .init(
+                    command: schedule.payload.command,
+                    text: schedule.payload.text,
+                    metadata: metadata
+                ),
+                createdAt: now,
+                scheduledAt: fireAt,
+                maxRetryCount: schedule.maxRetryCount
+            )
+            configuration.agentRuntimeTasks.append(task)
+            configuration.agentRuntimeSchedules[index].markMaterialized(
+                fireAt: fireAt,
+                materializedAt: now,
+                taskID: task.id
+            )
+            materializedTasks.append(task)
+            events.append((
+                scheduleID: schedule.id,
+                taskID: task.id,
+                nextRunAt: configuration.agentRuntimeSchedules[index].nextRunAt.map(Self.iso8601) ?? ""
+            ))
+        }
+
+        persistConfiguration()
+        for event in events {
+            appendAgentRuntimeEvent(
+                "schedule_materialized",
+                taskID: event.taskID,
+                details: [
+                    "schedule_id": event.scheduleID.uuidString.lowercased(),
+                    "next_run_at": event.nextRunAt,
+                ]
+            )
+        }
+        return materializedTasks
+    }
+
+    private func nextAgentRuntimeScheduleEvaluationDate(
+        for schedule: AgentRuntimeSchedule,
+        now: Date
+    ) -> Date? {
+        guard schedule.state.isRunnable else { return nil }
+        guard let nextRunAt = schedule.nextRunAt else { return nil }
+        if nextRunAt > now {
+            return nextRunAt
+        }
+        if isAgentRuntimeScheduleBlockedByActiveTask(schedule) {
+            return now.addingTimeInterval(1)
+        }
+        return nextRunAt
+    }
+
+    private func isAgentRuntimeScheduleBlockedByActiveTask(_ schedule: AgentRuntimeSchedule) -> Bool {
+        guard let lastTaskID = schedule.lastTaskID,
+              let task = configuration.agentRuntimeTasks.first(where: { $0.id == lastTaskID }) else {
+            return false
+        }
+        return !task.state.isFinished
     }
 
     private func ensureHeartbeatInboxDirectory() {
@@ -3362,15 +4368,22 @@ final class AITerminalManagerStore: ObservableObject {
             repeats: true
         ) { [weak self] _ in
             guard let self else { return }
-            self.heartbeatLastBeatAt = .now
-            self.importHeartbeatTasksFromInbox()
-            if self.configuration.heartbeatQueueSettings.enabled {
-                self.runDueHeartbeatTasksIfNeeded()
-            }
+            self.processHeartbeatTick(now: .now)
         }
         timer.tolerance = min(max(interval * 0.1, 0.05), 1)
         RunLoop.main.add(timer, forMode: .common)
         heartbeatTimer = timer
+    }
+
+    func processHeartbeatTick(now: Date = .now) {
+        heartbeatLastBeatAt = now
+        importHeartbeatTasksFromInbox()
+        if configuration.agentRuntimeSettings.enabled {
+            _ = expireStaleAgentRuntimeSessions(now: now)
+        }
+        if configuration.heartbeatQueueSettings.enabled {
+            runDueHeartbeatTasksIfNeeded()
+        }
     }
 
     private func stopHeartbeatExecutionTimers() {
@@ -3532,6 +4545,11 @@ final class AITerminalManagerStore: ObservableObject {
 
         guard !fileURLs.isEmpty else { return }
 
+        guard configuration.heartbeatQueueSettings.allowExternalInboxMutations else {
+            quarantineHeartbeatInboxRequests(fileURLs)
+            return
+        }
+
         let decoder = JSONDecoder()
         for url in fileURLs {
             do {
@@ -3542,6 +4560,27 @@ final class AITerminalManagerStore: ObservableObject {
             } catch {
                 let failedURL = url.deletingPathExtension().appendingPathExtension("failed")
                 try? FileManager.default.moveItem(at: url, to: failedURL)
+            }
+        }
+    }
+
+    private func quarantineHeartbeatInboxRequests(_ fileURLs: [URL]) {
+        for url in fileURLs {
+            let blockedURL = url.deletingPathExtension().appendingPathExtension("blocked")
+            do {
+                if FileManager.default.fileExists(atPath: blockedURL.path) {
+                    try FileManager.default.removeItem(at: blockedURL)
+                }
+                try FileManager.default.moveItem(at: url, to: blockedURL)
+            } catch {
+                RuntimeDiagnosticsLogger.log(
+                    component: "ai_manager.heartbeat_tasks",
+                    event: "blocked_inbox_request",
+                    details: [
+                        "path": url.path,
+                        "error": error.localizedDescription,
+                    ]
+                )
             }
         }
     }
@@ -3628,8 +4667,13 @@ final class AITerminalManagerStore: ObservableObject {
         return directory.appendingPathComponent("config.ghodex", isDirectory: false)
     }
 
+    nonisolated private static func shouldObserveGlobalGhosttyConfig(for configurationURL: URL) -> Bool {
+        configurationURL.standardizedFileURL == defaultConfigurationURL().standardizedFileURL
+    }
+
     nonisolated static func loadConfiguration(at url: URL) throws -> AITerminalManagerConfiguration {
         let fileManager = FileManager.default
+        var managedText: String?
         if fileManager.fileExists(atPath: url.path) {
             let data = try Data(contentsOf: url)
             if let text = String(data: data, encoding: .utf8),
@@ -3638,10 +4682,25 @@ final class AITerminalManagerStore: ObservableObject {
                 let configuration = try JSONDecoder().decode(AITerminalManagerConfiguration.self, from: data)
                 return sanitizeConfiguration(configuration)
             }
+            managedText = String(data: data, encoding: .utf8)
         }
 
         let config = Ghostty.Config(at: url.path(percentEncoded: false))
-        return sanitizeConfiguration(configuration(from: config))
+        var configuration = configuration(from: config)
+        if let override = managedBooleanValue(
+            for: "ghodex-heartbeat-allow-external-inbox-mutations",
+            in: managedText
+        ) {
+            configuration.heartbeatQueueSettings.allowExternalInboxMutations = override
+        }
+        if let override = decodeManagedPayloads(
+            AgentRuntimeSchedule.self,
+            for: "ghodex-agent-runtime-schedule",
+            in: managedText
+        ) {
+            configuration.agentRuntimeSchedules = override
+        }
+        return sanitizeConfiguration(configuration)
     }
 
     nonisolated private static func saveConfiguration(_ configuration: AITerminalManagerConfiguration, to url: URL) throws {
@@ -3762,6 +4821,16 @@ final class AITerminalManagerStore: ObservableObject {
             Self.maxHeartbeatMaxConcurrentTasks
         )
         next.heartbeatTasks = prunedHeartbeatTasks(next.heartbeatTasks)
+        next.agentRuntimeSettings = next.agentRuntimeSettings.sanitized()
+        next.agentRuntimeSchedules = next.agentRuntimeSchedules.map { schedule in
+            var updated = schedule
+            updated.recurrence = updated.recurrence.sanitized()
+            updated.maxRetryCount = max(0, updated.maxRetryCount)
+            if updated.nextRunAt == nil, updated.state.isRunnable {
+                updated.nextRunAt = updated.startAt
+            }
+            return updated
+        }
         next.todoSettings = .init(
             enabled: next.todoSettings.enabled,
             workspaceRootPath: next.todoSettings.workspaceRootPath.isEmpty
@@ -3811,6 +4880,12 @@ final class AITerminalManagerStore: ObservableObject {
     nonisolated static func textPayload(for input: String) -> String? {
         guard !input.isEmpty else { return nil }
         return input
+    }
+
+    nonisolated private static func iso8601(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
     }
 
     private func installGhosttyConfigObserver() {
@@ -3868,11 +4943,15 @@ final class AITerminalManagerStore: ObservableObject {
     }
 
     private func applyGhosttyConfig(_ ghosttyConfig: Ghostty.Config) {
-        applyConfiguration(Self.configuration(from: ghosttyConfig))
+        let reloadedConfiguration = (try? Self.loadConfiguration(at: configurationURL))
+            ?? Self.configuration(from: ghosttyConfig)
+        applyConfiguration(reloadedConfiguration)
         importedSSHHosts = sshConfigHostLoader()
         reconcileImportedState()
         rebuildSessions()
         syncHeartbeatRuntime()
+        syncAgentRuntimeRecovery()
+        syncAgentRuntimeSchedules()
     }
 
     private func migrateLegacyConfigurationIfNeeded() {
@@ -3891,6 +4970,7 @@ final class AITerminalManagerStore: ObservableObject {
         applyConfiguration(reconciled)
         rebuildSessions()
         syncHeartbeatRuntime()
+        syncAgentRuntimeSchedules()
         persistConfiguration()
     }
 
@@ -3912,9 +4992,20 @@ final class AITerminalManagerStore: ObservableObject {
             heartbeatQueueSettings: .init(
                 enabled: config.ghodexHeartbeatEnabled,
                 heartbeatIntervalSeconds: config.ghodexHeartbeatIntervalSeconds,
-                maxConcurrentTasks: config.ghodexHeartbeatMaxConcurrentTasks
+                maxConcurrentTasks: config.ghodexHeartbeatMaxConcurrentTasks,
+                allowExternalInboxMutations: config.ghodexHeartbeatAllowExternalInboxMutations
             ),
             heartbeatTasks: decodePayloads(AITerminalHeartbeatTask.self, from: config.ghodexHeartbeatTasks),
+            agentRuntimeSettings: .init(
+                enabled: config.ghodexAgentRuntimeEnabled,
+                defaultLeaseDurationSeconds: config.ghodexAgentRuntimeDefaultLeaseSeconds,
+                staleTaskPolicy: AgentRuntimeStaleTaskPolicy(
+                    rawValue: decodedStringValue(config.ghodexAgentRuntimeStaleTaskPolicy) ?? ""
+                ) ?? .requeueClaimedWork
+            ),
+            agentRuntimeSessions: decodePayloads(AgentRuntimeSession.self, from: config.ghodexAgentRuntimeSessions),
+            agentRuntimeTasks: decodePayloads(AgentRuntimeTask.self, from: config.ghodexAgentRuntimeTasks),
+            agentRuntimeSchedules: decodePayloads(AgentRuntimeSchedule.self, from: config.ghodexAgentRuntimeSchedules),
             todoSettings: .init(
                 enabled: config.ghodexTodoEnabled,
                 workspaceRootPath: decodedStringValue(config.ghodexTodoWorkspaceRootPath) ?? AITerminalTodoSettings.defaultWorkspaceRootPath,
@@ -3972,6 +5063,9 @@ final class AITerminalManagerStore: ObservableObject {
         appendPayloadLines("ghodex-workspace", values: configuration.workspaces, to: &lines)
         appendPayloadLines("ghodex-saved-workspace-template", values: configuration.savedWorkspaceTemplates, to: &lines)
         appendPayloadLines("ghodex-heartbeat-task", values: configuration.heartbeatTasks, to: &lines)
+        appendPayloadLines("ghodex-agent-runtime-session", values: configuration.agentRuntimeSessions, to: &lines)
+        appendPayloadLines("ghodex-agent-runtime-task", values: configuration.agentRuntimeTasks, to: &lines)
+        appendPayloadLines("ghodex-agent-runtime-schedule", values: configuration.agentRuntimeSchedules, to: &lines)
         appendPayloadLines("ghodex-learning-log", values: configuration.learningLogs, to: &lines)
 
         lines.append("ghodex-todo-enabled = \(configuration.todoSettings.enabled ? "true" : "false")")
@@ -3991,8 +5085,172 @@ final class AITerminalManagerStore: ObservableObject {
         lines.append("ghodex-heartbeat-enabled = \(configuration.heartbeatQueueSettings.enabled ? "true" : "false")")
         lines.append("ghodex-heartbeat-interval-seconds = \(formatDouble(configuration.heartbeatQueueSettings.heartbeatIntervalSeconds))")
         lines.append("ghodex-heartbeat-max-concurrent-tasks = \(configuration.heartbeatQueueSettings.maxConcurrentTasks)")
+        lines.append("ghodex-heartbeat-allow-external-inbox-mutations = \(configuration.heartbeatQueueSettings.allowExternalInboxMutations ? "true" : "false")")
+        lines.append("ghodex-agent-runtime-enabled = \(configuration.agentRuntimeSettings.enabled ? "true" : "false")")
+        lines.append("ghodex-agent-runtime-default-lease-seconds = \(formatDouble(configuration.agentRuntimeSettings.defaultLeaseDurationSeconds))")
+        lines.append("ghodex-agent-runtime-stale-task-policy = \(configStringLiteral(encodeStringValue(configuration.agentRuntimeSettings.staleTaskPolicy.rawValue)))")
 
         return lines
+    }
+
+    private func ensureAgentRuntimeEnabled() throws {
+        guard configuration.agentRuntimeSettings.enabled else {
+            throw AgentRuntimeStoreError.runtimeDisabled
+        }
+    }
+
+    private func agentRuntimeSessionIndex(sessionID: UUID) throws -> Int {
+        guard let index = configuration.agentRuntimeSessions.firstIndex(where: { $0.id == sessionID }) else {
+            throw AgentRuntimeStoreError.sessionNotFound(sessionID)
+        }
+        return index
+    }
+
+    private func activeAgentRuntimeSessionIndex(sessionID: UUID, now: Date) throws -> Int {
+        let index = try agentRuntimeSessionIndex(sessionID: sessionID)
+        if configuration.agentRuntimeSessions[index].isLeaseExpired(at: now) {
+            throw AgentRuntimeStoreError.sessionExpired(sessionID)
+        }
+        switch configuration.agentRuntimeSessions[index].state {
+        case .expired, .released, .failed:
+            throw AgentRuntimeStoreError.sessionExpired(sessionID)
+        case .booting, .active, .waitingApproval, .paused:
+            return index
+        }
+    }
+
+    private func expireOverlappingAgentRuntimeSessions(
+        clientKind: AgentRuntimeClientKind,
+        tabID: UUID?,
+        terminalID: UUID?,
+        hostWorkspaceID: UUID?,
+        now: Date
+    ) {
+        for index in configuration.agentRuntimeSessions.indices {
+            let session = configuration.agentRuntimeSessions[index]
+            guard session.clientKind == clientKind else { continue }
+            let matches = (tabID != nil && session.tabID == tabID)
+                || (terminalID != nil && session.terminalID == terminalID)
+                || (
+                    tabID == nil
+                        && terminalID == nil
+                        && session.tabID == nil
+                        && session.terminalID == nil
+                        && hostWorkspaceID != nil
+                        && session.hostWorkspaceID == hostWorkspaceID
+                )
+            guard matches else { continue }
+            guard session.state.isLeaseManaged else { continue }
+
+            configuration.agentRuntimeSessions[index].state = .expired
+            configuration.agentRuntimeSessions[index].updatedAt = now
+            configuration.agentRuntimeSessions[index].leaseExpiresAt = now
+            configuration.agentRuntimeSessions[index].lastError = "superseded_by_new_registration"
+            if let taskID = configuration.agentRuntimeSessions[index].currentTaskID {
+                recoverAgentRuntimeTaskAfterLeaseExpiry(taskID: taskID, now: now)
+                configuration.agentRuntimeSessions[index].currentTaskID = nil
+            }
+        }
+    }
+
+    private func recoverAgentRuntimeTaskAfterLeaseExpiry(taskID: UUID, now: Date) {
+        guard let taskIndex = configuration.agentRuntimeTasks.firstIndex(where: { $0.id == taskID }) else { return }
+
+        switch configuration.agentRuntimeTasks[taskIndex].state {
+        case .claimed, .running, .paused:
+            switch configuration.agentRuntimeSettings.staleTaskPolicy {
+            case .requeueClaimedWork:
+                configuration.agentRuntimeTasks[taskIndex].state = .queued
+                configuration.agentRuntimeTasks[taskIndex].sessionID = nil
+                configuration.agentRuntimeTasks[taskIndex].claimedAt = nil
+            case .pauseClaimedWork:
+                configuration.agentRuntimeTasks[taskIndex].state = .paused
+            }
+            configuration.agentRuntimeTasks[taskIndex].finishedAt = nil
+            configuration.agentRuntimeTasks[taskIndex].errorSummary = "lease_expired"
+        case .waitingApproval:
+            configuration.agentRuntimeTasks[taskIndex].state = .paused
+            configuration.agentRuntimeTasks[taskIndex].errorSummary = "lease_expired"
+        case .queued, .completed, .failed, .cancelled:
+            break
+        }
+    }
+
+    private func projectAgentRuntimeTaskRecoveryAfterLeaseExpiry(
+        taskID: UUID,
+        now: Date,
+        tasks: inout [AgentRuntimeTask],
+        settings: AgentRuntimeSettings
+    ) {
+        guard let taskIndex = tasks.firstIndex(where: { $0.id == taskID }) else { return }
+
+        switch tasks[taskIndex].state {
+        case .claimed, .running, .paused:
+            switch settings.staleTaskPolicy {
+            case .requeueClaimedWork:
+                tasks[taskIndex].state = .queued
+                tasks[taskIndex].sessionID = nil
+                tasks[taskIndex].claimedAt = nil
+            case .pauseClaimedWork:
+                tasks[taskIndex].state = .paused
+            }
+            tasks[taskIndex].finishedAt = nil
+            tasks[taskIndex].errorSummary = "lease_expired"
+        case .waitingApproval:
+            tasks[taskIndex].state = .paused
+            tasks[taskIndex].errorSummary = "lease_expired"
+        case .queued, .completed, .failed, .cancelled:
+            break
+        }
+    }
+
+    private func appendAgentRuntimeEvent(
+        _ event: String,
+        sessionID: UUID? = nil,
+        taskID: UUID? = nil,
+        details: [String: String] = [:]
+    ) {
+        struct AgentRuntimeEventRecord: Encodable {
+            let timestamp: String
+            let event: String
+            let sessionID: String?
+            let taskID: String?
+            let details: [String: String]
+        }
+
+        let fileManager = FileManager.default
+        do {
+            try fileManager.createDirectory(
+                at: agentRuntimeEventsURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let record = AgentRuntimeEventRecord(
+                timestamp: ISO8601DateFormatter().string(from: Date()),
+                event: event,
+                sessionID: sessionID?.uuidString.lowercased(),
+                taskID: taskID?.uuidString.lowercased(),
+                details: details
+            )
+            var line = try JSONEncoder().encode(record)
+            line.append(0x0A)
+            if fileManager.fileExists(atPath: agentRuntimeEventsURL.path) {
+                let handle = try FileHandle(forWritingTo: agentRuntimeEventsURL)
+                try handle.seekToEnd()
+                try handle.write(contentsOf: line)
+                try handle.close()
+            } else {
+                try line.write(to: agentRuntimeEventsURL, options: .atomic)
+            }
+        } catch {
+            RuntimeDiagnosticsLogger.log(
+                component: "agent_runtime",
+                event: "event_log_failure",
+                details: [
+                    "log_path": agentRuntimeEventsURL.path,
+                    "error": error.localizedDescription,
+                ]
+            )
+        }
     }
 
     nonisolated private static func appendPayloadLines<T: Encodable>(
@@ -4474,6 +5732,89 @@ final class AITerminalManagerStore: ObservableObject {
         }
 
         return result.joined(separator: "\n")
+    }
+
+    nonisolated private static func managedBooleanValue(for key: String, in text: String?) -> Bool? {
+        guard let rawValue = managedValue(for: key, in: text) else { return nil }
+        switch rawValue.lowercased() {
+        case "true":
+            return true
+        case "false":
+            return false
+        default:
+            return nil
+        }
+    }
+
+    nonisolated private static func managedValue(for key: String, in text: String?) -> String? {
+        guard let text else { return nil }
+        let prefix = "\(key) ="
+        var isInsideManagedBlock = false
+        var lastValue: String?
+
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed == managedConfigStartMarker {
+                isInsideManagedBlock = true
+                continue
+            }
+            if trimmed == managedConfigEndMarker {
+                isInsideManagedBlock = false
+                continue
+            }
+
+            guard isInsideManagedBlock || trimmed.hasPrefix("ghodex-") else { continue }
+            guard trimmed.hasPrefix(prefix) else { continue }
+            lastValue = String(trimmed.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+        }
+
+        return lastValue
+    }
+
+    nonisolated private static func managedValues(for key: String, in text: String?) -> [String]? {
+        guard let text else { return nil }
+        let prefix = "\(key) ="
+        var isInsideManagedBlock = false
+        var values: [String] = []
+
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed == managedConfigStartMarker {
+                isInsideManagedBlock = true
+                continue
+            }
+            if trimmed == managedConfigEndMarker {
+                isInsideManagedBlock = false
+                continue
+            }
+
+            guard isInsideManagedBlock || trimmed.hasPrefix("ghodex-") else { continue }
+            guard trimmed.hasPrefix(prefix) else { continue }
+            let rawValue = String(trimmed.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+            values.append(decodedConfigStringLiteral(rawValue))
+        }
+
+        return values.isEmpty ? nil : values
+    }
+
+    nonisolated private static func decodeManagedPayloads<T: Decodable>(
+        _ type: T.Type,
+        for key: String,
+        in text: String?
+    ) -> [T]? {
+        guard let values = managedValues(for: key, in: text) else { return nil }
+        return decodePayloads(T.self, from: values)
+    }
+
+    nonisolated private static func decodedConfigStringLiteral(_ value: String) -> String {
+        guard value.first == "\"", value.last == "\"" else { return value }
+        let data = Data("[\(value)]".utf8)
+        guard
+              let decoded = try? JSONSerialization.jsonObject(with: data) as? [String],
+              let first = decoded.first else {
+            return value
+        }
+        return first
     }
 
     nonisolated private static func hasManagedConfigEntries(at url: URL) -> Bool {

@@ -64,10 +64,14 @@ private struct ControlHarnessHandshakeEnvelope: Decodable {
 
 private struct ControlHarnessHandshakePayload: Decodable {
     let protocolVersion: String
+    let socketPath: String?
+    let commands: [String]
     let lastSequence: Int64
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol_version"
+        case socketPath = "socket_path"
+        case commands
         case lastSequence = "last_sequence"
     }
 }
@@ -210,6 +214,29 @@ private struct ControlHarnessDeviceRegistryPayload: Decodable, Equatable {
 
 private struct ControlHarnessDeviceRegistryListPayload: Decodable {
     let devices: [ControlHarnessDeviceRegistryPayload]
+}
+
+private struct ControlAgentRuntimeSnapshotPayload: Decodable {
+    let settings: AgentRuntimeSettings
+    let sessions: [AgentRuntimeSession]
+    let tasks: [AgentRuntimeTask]
+    let schedules: [AgentRuntimeSchedule]
+}
+
+private struct ControlAgentRuntimeSessionPayload: Decodable {
+    let session: AgentRuntimeSession
+}
+
+private struct ControlAgentRuntimeTaskClaimPayload: Decodable {
+    let task: AgentRuntimeTask?
+}
+
+private struct ControlAgentRuntimeTaskPayload: Decodable {
+    let task: AgentRuntimeTask
+}
+
+private struct ControlAgentRuntimeSchedulePayload: Decodable {
+    let schedule: AgentRuntimeSchedule
 }
 
 private enum ControlHarnessSocketSupport {
@@ -708,12 +735,30 @@ struct ControlHarnessTests {
 
     @MainActor
     private final class RecordingAppDelegate: AppDelegate {
+        private let isolatedConfigurationURL: URL
         var unavailableTerminals: Set<UUID> = []
         var managedStates: [UUID: AITerminalManagedState] = [:]
         var sentInputs: [(terminalID: UUID, text: String)] = []
         var executedCommands: [(terminalID: UUID, command: String)] = []
         var closedTerminals: [UUID] = []
         var readableSurfaces: [UUID: any ControlHarnessReadableSurface] = [:]
+        private lazy var recordingStore = AITerminalManagerStore(
+            appDelegateProvider: { [weak self] in self },
+            configurationURL: isolatedConfigurationURL
+        )
+
+        init(configurationURL: URL? = nil) {
+            self.isolatedConfigurationURL = configurationURL
+                ?? FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathExtension("ghodex")
+            super.init()
+        }
+
+        @MainActor
+        override var aiTerminalManagerStore: AITerminalManagerStore {
+            recordingStore
+        }
 
         @MainActor
         override func controlHarnessReadableSurface(for terminalID: UUID) -> (any ControlHarnessReadableSurface)? {
@@ -1026,6 +1071,12 @@ struct ControlHarnessTests {
             .replacingOccurrences(of: "-", with: "")
             .prefix(8)
         return "\(base).\(suffix)"
+    }
+
+    private func makeRuntimeConfigurationURL(_ bundleID: String) -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent(bundleID.replacingOccurrences(of: ".", with: "-"))
+            .appendingPathExtension("ghodex")
     }
 
     private func requestGatewayMetrics(port: UInt16, requestID: String) throws -> (
@@ -3774,6 +3825,53 @@ struct ControlHarnessTests {
         }
     }
 
+    @Test func gatewayPolicyBlocksWaitingApprovalTerminalMutation() async throws {
+        let terminalID = UUID()
+        let delegate = await MainActor.run {
+            let delegate = RecordingAppDelegate()
+            delegate.managedStates[terminalID] = .managedWaitingApproval
+            return delegate
+        }
+
+        let decision = await MainActor.run {
+            delegate.controlHarnessGatewayAccessDecision(ControlHarnessRequest(
+                requestID: "req-waiting-approval-block",
+                protocolVersion: nil,
+                authToken: nil,
+                command: "run-command",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: terminalID.uuidString,
+                scope: nil,
+                text: nil,
+                commandText: "pwd",
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: nil,
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil
+            ))
+        }
+
+        switch decision {
+        case .allow:
+            Issue.record("waiting approval terminals should block remote mutation")
+        case .deny(let errorCode, let errorMessage):
+            #expect(errorCode == "approval_required")
+            #expect(errorMessage.contains("approval"))
+        }
+    }
+
     @Test func gatewayPolicyAllowsRemoteTabRename() async throws {
         let delegate = await MainActor.run {
             RecordingAppDelegate()
@@ -3847,6 +3945,1897 @@ struct ControlHarnessTests {
             readAfterWriteID: nil
         )
         #expect(request.commandKind == .mutation)
+    }
+
+    @Test func runtimeCommandsExposeExpectedSupportAndKinds() {
+        #expect(ControlHarnessCore.supportedCommands.contains("agent.runtime.snapshot"))
+        #expect(ControlHarnessCore.supportedCommands.contains("agent.runtime.session.register"))
+        #expect(ControlHarnessCore.supportedCommands.contains("agent.runtime.session.heartbeat"))
+        #expect(ControlHarnessCore.supportedCommands.contains("agent.runtime.session.release"))
+        #expect(ControlHarnessCore.supportedCommands.contains("agent.runtime.task.enqueue"))
+        #expect(ControlHarnessCore.supportedCommands.contains("agent.runtime.task.claim"))
+        #expect(ControlHarnessCore.supportedCommands.contains("agent.runtime.task.claim_next"))
+        #expect(ControlHarnessCore.supportedCommands.contains("agent.runtime.task.update"))
+        #expect(ControlHarnessCore.supportedCommands.contains("agent.runtime.task.cancel"))
+        #expect(ControlHarnessCore.supportedCommands.contains("agent.runtime.schedule.enqueue"))
+        #expect(ControlHarnessCore.supportedCommands.contains("agent.runtime.schedule.update"))
+        #expect(ControlHarnessCore.supportedCommands.contains("agent.runtime.schedule.cancel"))
+
+        let snapshot = ControlHarnessRequest(
+            requestID: "req-runtime-snapshot-kind",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.snapshot",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil
+        )
+        let register = ControlHarnessRequest(
+            requestID: "req-runtime-register-kind",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.session.register",
+            tabID: UUID().uuidString,
+            parentTabID: nil,
+            terminalID: UUID().uuidString,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            workspaceID: UUID().uuidString,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            capabilities: ["terminal"]
+        )
+        let enqueue = ControlHarnessRequest(
+            requestID: "req-runtime-enqueue-kind",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.task.enqueue",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: "pwd",
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            taskKind: AgentRuntimeTaskKind.terminalCommand.rawValue
+        )
+        let schedule = ControlHarnessRequest(
+            requestID: "req-runtime-schedule-kind",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.schedule.enqueue",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: "echo schedule",
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            taskKind: AgentRuntimeTaskKind.terminalCommand.rawValue,
+            recurrenceMode: AgentRuntimeScheduleRecurrence.Mode.once.rawValue
+        )
+
+        #expect(snapshot.commandKind == .query)
+        #expect(register.commandKind == .mutation)
+        #expect(enqueue.commandKind == .mutation)
+        #expect(schedule.commandKind == .mutation)
+    }
+
+    @Test @MainActor func runtimeCommandsRegisterClaimUpdateAndSnapshot() throws {
+        let bundleID = makeBundleID("ghdx.tests.agent-runtime-roundtrip")
+        let delegate = RecordingAppDelegate(configurationURL: makeRuntimeConfigurationURL(bundleID))
+        let terminalID = UUID()
+        let workspaceID = UUID()
+        delegate.aiTerminalManagerStore.saveAgentRuntimeSettings(.init(
+            enabled: true,
+            defaultLeaseDurationSeconds: 30,
+            staleTaskPolicy: .requeueClaimedWork
+        ))
+        let (core, _, _) = makeCore(
+            delegate: delegate,
+            bundleID: bundleID
+        )
+
+        let registerResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-register",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.session.register",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: terminalID.uuidString,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            workspaceID: workspaceID.uuidString,
+            client: nil,
+            idempotencyKey: "runtime-register",
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            capabilities: ["terminal"],
+            leaseDurationSeconds: 15
+        ), socketPath: "/tmp/control.sock")
+        let registerEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeSessionPayload>.self,
+            from: try JSONEncoder().encode(registerResponse)
+        )
+        let session = try #require(registerEnvelope.result?.session)
+        #expect(registerEnvelope.status == "ok")
+        #expect(session.terminalID == terminalID)
+        #expect(session.hostWorkspaceID == workspaceID)
+        #expect(session.capabilities == [AgentRuntimeCapability.runtimeExecutorTerminal.rawValue])
+        #expect(session.state == .active)
+
+        let enqueueResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-enqueue",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.task.enqueue",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: "pwd",
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: "runtime-enqueue",
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            capabilities: ["terminal"],
+            taskKind: AgentRuntimeTaskKind.terminalCommand.rawValue,
+            priority: 2
+        ), socketPath: "/tmp/control.sock")
+        let enqueueEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeTaskPayload>.self,
+            from: try JSONEncoder().encode(enqueueResponse)
+        )
+        let enqueuedTask = try #require(enqueueEnvelope.result?.task)
+        #expect(enqueueEnvelope.status == "ok")
+        #expect(enqueuedTask.state == .queued)
+        #expect(enqueuedTask.payload.command == "pwd")
+
+        let claimResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-claim",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.task.claim_next",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: "runtime-claim",
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            sessionID: session.id.uuidString
+        ), socketPath: "/tmp/control.sock")
+        let claimEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeTaskClaimPayload>.self,
+            from: try JSONEncoder().encode(claimResponse)
+        )
+        let claimedTask = try #require(claimEnvelope.result?.task)
+        #expect(claimEnvelope.status == "ok")
+        #expect(claimedTask.id == enqueuedTask.id)
+        #expect(claimedTask.state == .claimed)
+        #expect(claimedTask.sessionID == session.id)
+
+        let updateResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-update",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.task.update",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: "runtime-update",
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            sessionID: session.id.uuidString,
+            taskID: claimedTask.id.uuidString,
+            taskState: AgentRuntimeTaskState.running.rawValue
+        ), socketPath: "/tmp/control.sock")
+        let updateEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeTaskPayload>.self,
+            from: try JSONEncoder().encode(updateResponse)
+        )
+        let updatedTask = try #require(updateEnvelope.result?.task)
+        #expect(updateEnvelope.status == "ok")
+        #expect(updatedTask.id == claimedTask.id)
+        #expect(updatedTask.state == .running)
+
+        let cancelResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-cancel",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.task.cancel",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: "runtime-cancel",
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            sessionID: session.id.uuidString,
+            taskID: claimedTask.id.uuidString,
+            reason: "test_cancelled"
+        ), socketPath: "/tmp/control.sock")
+        let cancelEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeTaskPayload>.self,
+            from: try JSONEncoder().encode(cancelResponse)
+        )
+        let cancelledTask = try #require(cancelEnvelope.result?.task)
+        #expect(cancelEnvelope.status == "ok")
+        #expect(cancelledTask.id == claimedTask.id)
+        #expect(cancelledTask.state == .cancelled)
+        #expect(cancelledTask.errorSummary == "test_cancelled")
+
+        let snapshotResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-snapshot",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.snapshot",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil
+        ), socketPath: "/tmp/control.sock")
+        let snapshotEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeSnapshotPayload>.self,
+            from: try JSONEncoder().encode(snapshotResponse)
+        )
+        let snapshot = try #require(snapshotEnvelope.result)
+        #expect(snapshotEnvelope.status == "ok")
+        #expect(snapshot.settings.enabled)
+        #expect(snapshot.sessions.contains(where: { $0.id == session.id && $0.terminalID == terminalID }))
+        #expect(snapshot.tasks.contains(where: { $0.id == cancelledTask.id && $0.state == .cancelled }))
+        #expect(snapshot.schedules.isEmpty)
+    }
+
+    @Test @MainActor func runtimeClaimNextCanFilterTaskKindsForExecutorSpecificPolling() throws {
+        let bundleID = makeBundleID("ghdx.tests.agent-runtime-claim-kind-filter")
+        let delegate = RecordingAppDelegate(configurationURL: makeRuntimeConfigurationURL(bundleID))
+        delegate.aiTerminalManagerStore.saveAgentRuntimeSettings(.init(
+            enabled: true,
+            defaultLeaseDurationSeconds: 30,
+            staleTaskPolicy: .requeueClaimedWork
+        ))
+        let (core, _, _) = makeCore(
+            delegate: delegate,
+            bundleID: bundleID
+        )
+
+        let registerResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-kind-filter-register",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.session.register",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: UUID().uuidString,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            workspaceID: UUID().uuidString,
+            client: nil,
+            idempotencyKey: "runtime-kind-filter-register",
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            capabilities: ["terminal", "browser"]
+        ), socketPath: "/tmp/control.sock")
+        let registerEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeSessionPayload>.self,
+            from: try JSONEncoder().encode(registerResponse)
+        )
+        let session = try #require(registerEnvelope.result?.session)
+
+        let browserEnqueueResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-kind-filter-enqueue-browser",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.task.enqueue",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: "runtime-kind-filter-enqueue-browser",
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            taskKind: AgentRuntimeTaskKind.browserNavigation.rawValue,
+            priority: 10,
+            metadata: ["url": "https://example.com"]
+        ), socketPath: "/tmp/control.sock")
+        let browserEnqueueEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeTaskPayload>.self,
+            from: try JSONEncoder().encode(browserEnqueueResponse)
+        )
+        let browserTask = try #require(browserEnqueueEnvelope.result?.task)
+
+        let terminalEnqueueResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-kind-filter-enqueue-terminal",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.task.enqueue",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: "pwd",
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: "runtime-kind-filter-enqueue-terminal",
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            taskKind: AgentRuntimeTaskKind.terminalCommand.rawValue,
+            priority: 1
+        ), socketPath: "/tmp/control.sock")
+        let terminalEnqueueEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeTaskPayload>.self,
+            from: try JSONEncoder().encode(terminalEnqueueResponse)
+        )
+        let terminalTask = try #require(terminalEnqueueEnvelope.result?.task)
+
+        let claimResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-kind-filter-claim",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.task.claim_next",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: "runtime-kind-filter-claim",
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            sessionID: session.id.uuidString,
+            taskKinds: [
+                AgentRuntimeTaskKind.terminalCommand.rawValue,
+                AgentRuntimeTaskKind.terminalText.rawValue,
+            ]
+        ), socketPath: "/tmp/control.sock")
+        let claimEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeTaskClaimPayload>.self,
+            from: try JSONEncoder().encode(claimResponse)
+        )
+        let claimedTask = try #require(claimEnvelope.result?.task)
+
+        #expect(claimEnvelope.status == "ok")
+        #expect(claimedTask.id == terminalTask.id)
+        #expect(claimedTask.kind == .terminalCommand)
+        #expect(delegate.aiTerminalManagerStore.agentRuntimeTasks.first(where: { $0.id == browserTask.id })?.state == .queued)
+    }
+
+    @Test @MainActor func runtimeApprovalRequiresExplicitApproveCommand() throws {
+        #expect(ControlHarnessCore.supportedCommands.contains("agent.runtime.task.approve"))
+
+        let bundleID = makeBundleID("ghdx.tests.agent-runtime-approval")
+        let delegate = RecordingAppDelegate(configurationURL: makeRuntimeConfigurationURL(bundleID))
+        delegate.aiTerminalManagerStore.saveAgentRuntimeSettings(.init(
+            enabled: true,
+            defaultLeaseDurationSeconds: 30,
+            staleTaskPolicy: .requeueClaimedWork
+        ))
+        let (core, _, _) = makeCore(
+            delegate: delegate,
+            bundleID: bundleID
+        )
+
+        let registerResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-approval-register",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.session.register",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: UUID().uuidString,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            workspaceID: UUID().uuidString,
+            client: nil,
+            idempotencyKey: "runtime-approval-register",
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            capabilities: ["terminal"]
+        ), socketPath: "/tmp/control.sock")
+        let registerEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeSessionPayload>.self,
+            from: try JSONEncoder().encode(registerResponse)
+        )
+        let session = try #require(registerEnvelope.result?.session)
+
+        let enqueueResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-approval-enqueue",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.task.enqueue",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: "pwd",
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: "runtime-approval-enqueue",
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            capabilities: ["terminal"],
+            taskKind: AgentRuntimeTaskKind.terminalCommand.rawValue
+        ), socketPath: "/tmp/control.sock")
+        let enqueueEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeTaskPayload>.self,
+            from: try JSONEncoder().encode(enqueueResponse)
+        )
+        let task = try #require(enqueueEnvelope.result?.task)
+
+        _ = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-approval-claim",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.task.claim_next",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: "runtime-approval-claim",
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            sessionID: session.id.uuidString
+        ), socketPath: "/tmp/control.sock")
+
+        _ = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-approval-waiting",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.task.update",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: "runtime-approval-waiting",
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            sessionID: session.id.uuidString,
+            taskID: task.id.uuidString,
+            taskState: AgentRuntimeTaskState.waitingApproval.rawValue
+        ), socketPath: "/tmp/control.sock")
+
+        let invalidResumeResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-approval-invalid-resume",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.task.update",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: "runtime-approval-invalid-resume",
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            sessionID: session.id.uuidString,
+            taskID: task.id.uuidString,
+            taskState: AgentRuntimeTaskState.running.rawValue
+        ), socketPath: "/tmp/control.sock")
+
+        #expect(invalidResumeResponse.status == "error")
+        #expect(invalidResumeResponse.errorCode == "runtime_task_transition_rejected")
+
+        let approveResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-approval-approve",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.task.approve",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: "runtime-approval-approve",
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            sessionID: session.id.uuidString,
+            taskID: task.id.uuidString
+        ), socketPath: "/tmp/control.sock")
+        let approveEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeTaskPayload>.self,
+            from: try JSONEncoder().encode(approveResponse)
+        )
+        let approvedTask = try #require(approveEnvelope.result?.task)
+        #expect(approveEnvelope.status == "ok")
+        #expect(approvedTask.state == .running)
+    }
+
+    @Test @MainActor func runtimeScheduleCommandsMaterializeAndRoundTripThroughSnapshot() throws {
+        let bundleID = makeBundleID("ghdx.tests.agent-runtime-schedule")
+        let delegate = RecordingAppDelegate(configurationURL: makeRuntimeConfigurationURL(bundleID))
+        delegate.aiTerminalManagerStore.saveAgentRuntimeSettings(.init(
+            enabled: true,
+            defaultLeaseDurationSeconds: 30,
+            staleTaskPolicy: .requeueClaimedWork
+        ))
+        let (core, _, _) = makeCore(
+            delegate: delegate,
+            bundleID: bundleID
+        )
+
+        let enqueueResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-schedule-enqueue",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.schedule.enqueue",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: "echo schedule",
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: "runtime-schedule-enqueue",
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            capabilities: ["terminal"],
+            taskKind: AgentRuntimeTaskKind.terminalCommand.rawValue,
+            recurrenceMode: AgentRuntimeScheduleRecurrence.Mode.interval.rawValue,
+            intervalSeconds: 60,
+            scheduledAt: ControlHarnessCore.iso8601(Date().addingTimeInterval(-1))
+        ), socketPath: "/tmp/control.sock")
+        let enqueueEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeSchedulePayload>.self,
+            from: try JSONEncoder().encode(enqueueResponse)
+        )
+        let schedule = try #require(enqueueEnvelope.result?.schedule)
+        #expect(enqueueEnvelope.status == "ok")
+        #expect(schedule.recurrence.mode == .interval)
+        #expect(schedule.lastTaskID != nil)
+
+        let snapshotResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-schedule-snapshot",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.snapshot",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil
+        ), socketPath: "/tmp/control.sock")
+        let snapshotEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeSnapshotPayload>.self,
+            from: try JSONEncoder().encode(snapshotResponse)
+        )
+        let snapshot = try #require(snapshotEnvelope.result)
+        let persistedSchedule = try #require(snapshot.schedules.first(where: { $0.id == schedule.id }))
+        #expect(snapshot.tasks.contains(where: {
+            $0.payload.metadata["ghodex_schedule_id"] == schedule.id.uuidString.lowercased()
+        }))
+        #expect(persistedSchedule.lastTaskID != nil)
+
+        let pauseResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-schedule-update",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.schedule.update",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: "runtime-schedule-update",
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            scheduleID: schedule.id.uuidString,
+            scheduleState: AgentRuntimeScheduleState.paused.rawValue
+        ), socketPath: "/tmp/control.sock")
+        let pauseEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeSchedulePayload>.self,
+            from: try JSONEncoder().encode(pauseResponse)
+        )
+        let pausedSchedule = try #require(pauseEnvelope.result?.schedule)
+        #expect(pausedSchedule.state == .paused)
+
+        let cancelResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-schedule-cancel",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.schedule.cancel",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: "runtime-schedule-cancel",
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            scheduleID: schedule.id.uuidString
+        ), socketPath: "/tmp/control.sock")
+        let cancelEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeSchedulePayload>.self,
+            from: try JSONEncoder().encode(cancelResponse)
+        )
+        let cancelledSchedule = try #require(cancelEnvelope.result?.schedule)
+        #expect(cancelledSchedule.state == .cancelled)
+    }
+
+    @Test @MainActor func runtimeRegisterKeepsSeparateTerminalSessionsWithinSameWorkspace() throws {
+        let bundleID = makeBundleID("ghdx.tests.agent-runtime-multi-tab")
+        let delegate = RecordingAppDelegate(configurationURL: makeRuntimeConfigurationURL(bundleID))
+        let (core, _, _) = makeCore(
+            delegate: delegate,
+            bundleID: bundleID
+        )
+
+        let workspaceID = UUID().uuidString
+        let firstResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-multi-tab-first",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.session.register",
+            tabID: UUID().uuidString,
+            parentTabID: nil,
+            terminalID: UUID().uuidString,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            workspaceID: workspaceID,
+            client: nil,
+            idempotencyKey: "runtime-multi-tab-first",
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            capabilities: ["terminal"]
+        ), socketPath: "/tmp/control.sock")
+        let firstEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeSessionPayload>.self,
+            from: try JSONEncoder().encode(firstResponse)
+        )
+        let firstSession = try #require(firstEnvelope.result?.session)
+
+        let secondResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-multi-tab-second",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.session.register",
+            tabID: UUID().uuidString,
+            parentTabID: nil,
+            terminalID: UUID().uuidString,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            workspaceID: workspaceID,
+            client: nil,
+            idempotencyKey: "runtime-multi-tab-second",
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            capabilities: ["terminal"]
+        ), socketPath: "/tmp/control.sock")
+        let secondEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeSessionPayload>.self,
+            from: try JSONEncoder().encode(secondResponse)
+        )
+        let secondSession = try #require(secondEnvelope.result?.session)
+
+        let snapshotResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-multi-tab-snapshot",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.snapshot",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil
+        ), socketPath: "/tmp/control.sock")
+        let snapshotEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeSnapshotPayload>.self,
+            from: try JSONEncoder().encode(snapshotResponse)
+        )
+        let snapshot = try #require(snapshotEnvelope.result)
+
+        #expect(snapshot.sessions.contains(where: { $0.id == firstSession.id && $0.state == .active }))
+        #expect(snapshot.sessions.contains(where: { $0.id == secondSession.id && $0.state == .active }))
+    }
+
+    @Test @MainActor func runtimeScheduleUpdateRejectsIntervalWithoutIntervalSeconds() throws {
+        let bundleID = makeBundleID("ghdx.tests.agent-runtime-schedule-update-invalid")
+        let delegate = RecordingAppDelegate(configurationURL: makeRuntimeConfigurationURL(bundleID))
+        let (core, _, _) = makeCore(
+            delegate: delegate,
+            bundleID: bundleID
+        )
+
+        let response = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-schedule-update-invalid",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.schedule.update",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            scheduleID: UUID().uuidString,
+            recurrenceMode: AgentRuntimeScheduleRecurrence.Mode.interval.rawValue
+        ), socketPath: "/tmp/control.sock")
+        let envelope = try JSONDecoder().decode(
+            ControlHarnessResponseEnvelope.self,
+            from: try JSONEncoder().encode(response)
+        )
+
+        #expect(envelope.status == "error")
+        #expect(envelope.errorCode == ControlHarnessCoreError.invalidArgument("").code)
+        #expect(envelope.errorMessage == "interval recurrence requires interval_seconds")
+    }
+
+    @Test @MainActor func runtimeScheduleEnqueueRejectsMissingTaskPayload() throws {
+        let bundleID = makeBundleID("ghdx.tests.agent-runtime-schedule-payload-invalid")
+        let delegate = RecordingAppDelegate(configurationURL: makeRuntimeConfigurationURL(bundleID))
+        let (core, _, _) = makeCore(
+            delegate: delegate,
+            bundleID: bundleID
+        )
+
+        let response = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-schedule-payload-invalid",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.schedule.enqueue",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            taskKind: AgentRuntimeTaskKind.terminalCommand.rawValue,
+            recurrenceMode: AgentRuntimeScheduleRecurrence.Mode.once.rawValue,
+            scheduledAt: ControlHarnessCore.iso8601(Date())
+        ), socketPath: "/tmp/control.sock")
+        let envelope = try JSONDecoder().decode(
+            ControlHarnessResponseEnvelope.self,
+            from: try JSONEncoder().encode(response)
+        )
+
+        #expect(envelope.status == "error")
+        #expect(envelope.errorCode == ControlHarnessCoreError.invalidArgument("").code)
+        #expect(envelope.errorMessage == "terminal_command requires non-empty command_text")
+    }
+
+    @Test @MainActor func runtimeEnqueueBrowserTaskAddsDefaultExecutorCapability() throws {
+        let bundleID = makeBundleID("ghdx.tests.agent-runtime-browser-capabilities")
+        let delegate = RecordingAppDelegate(configurationURL: makeRuntimeConfigurationURL(bundleID))
+        delegate.aiTerminalManagerStore.saveAgentRuntimeSettings(.init(
+            enabled: true,
+            defaultLeaseDurationSeconds: 30,
+            staleTaskPolicy: .requeueClaimedWork
+        ))
+        let (core, _, _) = makeCore(
+            delegate: delegate,
+            bundleID: bundleID
+        )
+
+        let response = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-browser-capabilities",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.task.enqueue",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            capabilities: ["browser", "task-runtime"],
+            taskKind: AgentRuntimeTaskKind.browserNavigation.rawValue,
+            metadata: ["url": "https://example.com"]
+        ), socketPath: "/tmp/control.sock")
+        let envelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeTaskPayload>.self,
+            from: try JSONEncoder().encode(response)
+        )
+        let task = try #require(envelope.result?.task)
+
+        #expect(envelope.status == "ok")
+        #expect(task.kind == .browserNavigation)
+        #expect(task.capabilityRequirements == [
+            AgentRuntimeCapability.runtimeExecutorBrowser.rawValue,
+            AgentRuntimeCapability.runtimeTaskManage.rawValue,
+        ])
+        #expect(task.payload.metadata["url"] == "https://example.com")
+    }
+
+    @Test @MainActor func runtimeEnqueueBrowserNavigationRejectsMissingTextOrURL() throws {
+        let bundleID = makeBundleID("ghdx.tests.agent-runtime-browser-payload-invalid")
+        let delegate = RecordingAppDelegate(configurationURL: makeRuntimeConfigurationURL(bundleID))
+        let (core, _, _) = makeCore(
+            delegate: delegate,
+            bundleID: bundleID
+        )
+
+        let response = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-browser-payload-invalid",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.task.enqueue",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            taskKind: AgentRuntimeTaskKind.browserNavigation.rawValue
+        ), socketPath: "/tmp/control.sock")
+        let envelope = try JSONDecoder().decode(
+            ControlHarnessResponseEnvelope.self,
+            from: try JSONEncoder().encode(response)
+        )
+
+        #expect(envelope.status == "error")
+        #expect(envelope.errorCode == ControlHarnessCoreError.invalidArgument("").code)
+        #expect(envelope.errorMessage == "browser_navigation requires text or metadata.url")
+    }
+
+    @Test @MainActor func runtimeEnqueueVisionAutomationRejectsMissingTextOrInstruction() throws {
+        let bundleID = makeBundleID("ghdx.tests.agent-runtime-vision-payload-invalid")
+        let delegate = RecordingAppDelegate(configurationURL: makeRuntimeConfigurationURL(bundleID))
+        let (core, _, _) = makeCore(
+            delegate: delegate,
+            bundleID: bundleID
+        )
+
+        let response = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-vision-payload-invalid",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.task.enqueue",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            taskKind: AgentRuntimeTaskKind.visionAutomation.rawValue
+        ), socketPath: "/tmp/control.sock")
+        let envelope = try JSONDecoder().decode(
+            ControlHarnessResponseEnvelope.self,
+            from: try JSONEncoder().encode(response)
+        )
+
+        #expect(envelope.status == "error")
+        #expect(envelope.errorCode == ControlHarnessCoreError.invalidArgument("").code)
+        #expect(envelope.errorMessage == "vision_automation requires text or metadata.instruction")
+    }
+
+    @Test @MainActor func runtimeMutationCommandsRejectWhenRuntimeIsDisabled() throws {
+        let bundleID = makeBundleID("ghdx.tests.agent-runtime-disabled")
+        let delegate = RecordingAppDelegate(configurationURL: makeRuntimeConfigurationURL(bundleID))
+        delegate.aiTerminalManagerStore.saveAgentRuntimeSettings(.init(
+            enabled: false,
+            defaultLeaseDurationSeconds: 30,
+            staleTaskPolicy: .requeueClaimedWork
+        ))
+        let (core, _, _) = makeCore(
+            delegate: delegate,
+            bundleID: bundleID
+        )
+
+        let enqueueResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-disabled-enqueue",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.task.enqueue",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: "pwd",
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            capabilities: ["terminal"],
+            taskKind: AgentRuntimeTaskKind.terminalCommand.rawValue
+        ), socketPath: "/tmp/control.sock")
+        #expect(enqueueResponse.status == "error")
+        #expect(enqueueResponse.errorCode == ControlHarnessCoreError.runtimeDisabled.code)
+
+        let releaseResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-disabled-release",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.session.release",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            sessionID: UUID().uuidString
+        ), socketPath: "/tmp/control.sock")
+        #expect(releaseResponse.status == "error")
+        #expect(releaseResponse.errorCode == ControlHarnessCoreError.runtimeDisabled.code)
+
+        let registerResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-disabled-register",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.session.register",
+            tabID: UUID().uuidString,
+            parentTabID: nil,
+            terminalID: UUID().uuidString,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            workspaceID: UUID().uuidString,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            capabilities: ["terminal"]
+        ), socketPath: "/tmp/control.sock")
+        #expect(registerResponse.status == "error")
+        #expect(registerResponse.errorCode == ControlHarnessCoreError.runtimeDisabled.code)
+
+        let heartbeatResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-disabled-heartbeat",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.session.heartbeat",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            sessionID: UUID().uuidString
+        ), socketPath: "/tmp/control.sock")
+        #expect(heartbeatResponse.status == "error")
+        #expect(heartbeatResponse.errorCode == ControlHarnessCoreError.runtimeDisabled.code)
+
+        let claimResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-disabled-claim",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.task.claim_next",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            sessionID: UUID().uuidString
+        ), socketPath: "/tmp/control.sock")
+        #expect(claimResponse.status == "error")
+        #expect(claimResponse.errorCode == ControlHarnessCoreError.runtimeDisabled.code)
+
+        let updateResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-disabled-update",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.task.update",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            sessionID: UUID().uuidString,
+            taskID: UUID().uuidString,
+            taskState: AgentRuntimeTaskState.running.rawValue
+        ), socketPath: "/tmp/control.sock")
+        #expect(updateResponse.status == "error")
+        #expect(updateResponse.errorCode == ControlHarnessCoreError.runtimeDisabled.code)
+
+        let approveResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-disabled-approve",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.task.approve",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            sessionID: UUID().uuidString,
+            taskID: UUID().uuidString
+        ), socketPath: "/tmp/control.sock")
+        #expect(approveResponse.status == "error")
+        #expect(approveResponse.errorCode == ControlHarnessCoreError.runtimeDisabled.code)
+
+        let cancelTaskResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-disabled-task-cancel",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.task.cancel",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: true,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            taskID: UUID().uuidString
+        ), socketPath: "/tmp/control.sock")
+        #expect(cancelTaskResponse.status == "error")
+        #expect(cancelTaskResponse.errorCode == ControlHarnessCoreError.runtimeDisabled.code)
+
+        let enqueueScheduleResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-disabled-schedule-enqueue",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.schedule.enqueue",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: "pwd",
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            capabilities: ["terminal"],
+            taskKind: AgentRuntimeTaskKind.terminalCommand.rawValue,
+            recurrenceMode: AgentRuntimeScheduleRecurrence.Mode.once.rawValue,
+            scheduledAt: ControlHarnessCore.iso8601(Date())
+        ), socketPath: "/tmp/control.sock")
+        #expect(enqueueScheduleResponse.status == "error")
+        #expect(enqueueScheduleResponse.errorCode == ControlHarnessCoreError.runtimeDisabled.code)
+
+        let updateScheduleResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-disabled-schedule-update",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.schedule.update",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            scheduleID: UUID().uuidString,
+            scheduleState: AgentRuntimeScheduleState.paused.rawValue
+        ), socketPath: "/tmp/control.sock")
+        #expect(updateScheduleResponse.status == "error")
+        #expect(updateScheduleResponse.errorCode == ControlHarnessCoreError.runtimeDisabled.code)
+
+        let cancelScheduleResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-disabled-schedule-cancel",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.schedule.cancel",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            scheduleID: UUID().uuidString
+        ), socketPath: "/tmp/control.sock")
+        #expect(cancelScheduleResponse.status == "error")
+        #expect(cancelScheduleResponse.errorCode == ControlHarnessCoreError.runtimeDisabled.code)
+    }
+
+    @Test @MainActor func runtimeSnapshotProjectsExpiryWithoutPersistingMutation() throws {
+        let bundleID = makeBundleID("ghdx.tests.agent-runtime-snapshot-readonly")
+        let delegate = RecordingAppDelegate(configurationURL: makeRuntimeConfigurationURL(bundleID))
+        delegate.aiTerminalManagerStore.saveAgentRuntimeSettings(.init(
+            enabled: true,
+            defaultLeaseDurationSeconds: 30,
+            staleTaskPolicy: .requeueClaimedWork
+        ))
+
+        let registeredAt = Date(timeIntervalSince1970: 1_710_000_100)
+        let session = try delegate.aiTerminalManagerStore.registerAgentRuntimeSession(
+            clientKind: .codexTab,
+            terminalID: UUID(),
+            hostWorkspaceID: UUID(),
+            capabilities: ["terminal"],
+            leaseDurationSeconds: 5,
+            now: registeredAt
+        )
+        let task = try delegate.aiTerminalManagerStore.enqueueAgentRuntimeTask(
+            kind: .terminalCommand,
+            capabilityRequirements: ["terminal"],
+            payload: .init(command: "pwd"),
+            now: registeredAt
+        )
+        _ = try delegate.aiTerminalManagerStore.claimNextAgentRuntimeTask(
+            sessionID: session.id,
+            now: registeredAt
+        )
+
+        let (core, _, _) = makeCore(
+            delegate: delegate,
+            bundleID: bundleID,
+            now: { registeredAt.addingTimeInterval(10) }
+        )
+
+        let snapshotResponse = core.handle(ControlHarnessRequest(
+            requestID: "req-runtime-readonly-snapshot",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "agent.runtime.snapshot",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil
+        ), socketPath: "/tmp/control.sock")
+        let snapshotEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeSnapshotPayload>.self,
+            from: try JSONEncoder().encode(snapshotResponse)
+        )
+        let snapshot = try #require(snapshotEnvelope.result)
+        let snapshotSession = try #require(snapshot.sessions.first(where: { $0.id == session.id }))
+        let snapshotTask = try #require(snapshot.tasks.first(where: { $0.id == task.id }))
+
+        #expect(snapshotEnvelope.status == "ok")
+        #expect(snapshotSession.state == .expired)
+        #expect(snapshotSession.currentTaskID == nil)
+        #expect(snapshotTask.state == .queued)
+        #expect(snapshotTask.sessionID == nil)
+        #expect(snapshotTask.errorSummary == "lease_expired")
+
+        let persistedSession = try #require(
+            delegate.aiTerminalManagerStore.agentRuntimeSessions.first(where: { $0.id == session.id })
+        )
+        let persistedTask = try #require(
+            delegate.aiTerminalManagerStore.agentRuntimeTasks.first(where: { $0.id == task.id })
+        )
+        #expect(persistedSession.state == .active)
+        #expect(persistedSession.currentTaskID == task.id)
+        #expect(persistedTask.state == .claimed)
+        #expect(persistedTask.sessionID == session.id)
+    }
+
+    @Test func runtimeHandshakeAdvertisesCommandsOverControlHarnessSocket() async throws {
+        let bundleID = makeBundleID("ghdx.tests.runtime-handshake-socket")
+        let configurationURL = makeRuntimeConfigurationURL(bundleID)
+        let (service, cacheRoot, supportRoot) = await MainActor.run { () -> (ControlHarnessService, URL, URL) in
+            let delegate = RecordingAppDelegate(configurationURL: configurationURL)
+            let (core, _, _) = makeCore(delegate: delegate, bundleID: bundleID)
+            let service = ControlHarnessService(
+                bundleID: bundleID,
+                requestHandler: { request, socketPath in
+                    .single(core.handle(request, socketPath: socketPath))
+                }
+            )
+            let cacheRoot = service.socketURL.deletingLastPathComponent().deletingLastPathComponent()
+            let supportRoot = ControlHarnessAuditLogger.baseDirectory(bundleID: bundleID)
+                .deletingLastPathComponent()
+            return (service, cacheRoot, supportRoot)
+        }
+
+        defer {
+            service.stop()
+            try? FileManager.default.removeItem(at: cacheRoot)
+            try? FileManager.default.removeItem(at: supportRoot)
+            try? FileManager.default.removeItem(at: configurationURL)
+        }
+
+        service.startIfNeeded()
+
+        let clientFD = try ControlHarnessSocketSupport.connect(to: service.socketURL.path)
+        defer { Darwin.close(clientFD) }
+
+        let request = Data(#"{"request_id":"req-runtime-handshake","command":"handshake"}"#.utf8)
+        try ControlHarnessSocketSupport.writeAll(request, to: clientFD)
+        guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+
+        let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
+        let envelope = try JSONDecoder().decode(ControlHarnessHandshakeEnvelope.self, from: responseData)
+        let handshake = try #require(envelope.result)
+
+        #expect(envelope.status == "ok")
+        #expect(handshake.commands.contains("agent.runtime.snapshot"))
+        #expect(handshake.commands.contains("agent.runtime.session.register"))
+        #expect(handshake.commands.contains("agent.runtime.session.heartbeat"))
+        #expect(handshake.commands.contains("agent.runtime.session.release"))
+    }
+
+    @Test func runtimeSessionLifecycleWorksOverControlHarnessSocket() async throws {
+        let bundleID = makeBundleID("ghdx.tests.runtime-session-socket")
+        let configurationURL = makeRuntimeConfigurationURL(bundleID)
+        let workspaceID = UUID()
+        let bootstrapSessionID = UUID()
+        let (delegate, service, cacheRoot, supportRoot) = await MainActor.run { () -> (RecordingAppDelegate, ControlHarnessService, URL, URL) in
+            let delegate = RecordingAppDelegate(configurationURL: configurationURL)
+            delegate.aiTerminalManagerStore.saveAgentRuntimeSettings(.init(
+                enabled: true,
+                defaultLeaseDurationSeconds: 30,
+                staleTaskPolicy: .requeueClaimedWork
+            ))
+            let (core, _, _) = makeCore(delegate: delegate, bundleID: bundleID)
+            let service = ControlHarnessService(
+                bundleID: bundleID,
+                requestHandler: { request, socketPath in
+                    .single(core.handle(request, socketPath: socketPath))
+                }
+            )
+            let cacheRoot = service.socketURL.deletingLastPathComponent().deletingLastPathComponent()
+            let supportRoot = ControlHarnessAuditLogger.baseDirectory(bundleID: bundleID)
+                .deletingLastPathComponent()
+            return (delegate, service, cacheRoot, supportRoot)
+        }
+
+        defer {
+            service.stop()
+            try? FileManager.default.removeItem(at: cacheRoot)
+            try? FileManager.default.removeItem(at: supportRoot)
+            try? FileManager.default.removeItem(at: configurationURL)
+        }
+
+        func send(_ payload: String) throws -> Data {
+            let clientFD = try ControlHarnessSocketSupport.connect(to: service.socketURL.path)
+            defer { Darwin.close(clientFD) }
+
+            try ControlHarnessSocketSupport.writeAll(Data(payload.utf8), to: clientFD)
+            guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            return try ControlHarnessSocketSupport.readAll(from: clientFD)
+        }
+
+        service.startIfNeeded()
+
+        let registerData = try send(#"{"request_id":"req-runtime-register","command":"agent.runtime.session.register","session_id":"\#(bootstrapSessionID.uuidString.lowercased())","workspace_id":"\#(workspaceID.uuidString.lowercased())","capabilities":["runtime.executor.terminal","runtime.task.manage"],"lease_duration_seconds":30}"#)
+        let registerEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeSessionPayload>.self,
+            from: registerData
+        )
+        let registeredSession = try #require(registerEnvelope.result?.session)
+
+        #expect(registerEnvelope.status == "ok")
+        #expect(registeredSession.hostWorkspaceID == workspaceID)
+        #expect(registeredSession.state == .active)
+        #expect(registeredSession.capabilities == ["runtime.executor.terminal", "runtime.task.manage"])
+
+        let heartbeatData = try send(#"{"request_id":"req-runtime-heartbeat","command":"agent.runtime.session.heartbeat","session_id":"\#(registeredSession.id.uuidString.lowercased())","lease_duration_seconds":45}"#)
+        let heartbeatEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeSessionPayload>.self,
+            from: heartbeatData
+        )
+        let heartbeatSession = try #require(heartbeatEnvelope.result?.session)
+
+        #expect(heartbeatEnvelope.status == "ok")
+        #expect(heartbeatSession.id == registeredSession.id)
+        #expect(heartbeatSession.leaseDurationSeconds == 45)
+        #expect(heartbeatSession.lastHeartbeatAt != nil)
+
+        let releaseData = try send(#"{"request_id":"req-runtime-release","command":"agent.runtime.session.release","session_id":"\#(registeredSession.id.uuidString.lowercased())","reason":"socket_test_done"}"#)
+        let releaseEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeSessionPayload>.self,
+            from: releaseData
+        )
+        let releasedSession = try #require(releaseEnvelope.result?.session)
+
+        #expect(releaseEnvelope.status == "ok")
+        #expect(releasedSession.id == registeredSession.id)
+        #expect(releasedSession.state == .released)
+        #expect(releasedSession.lastError == "socket_test_done")
+
+        let snapshotData = try send(#"{"request_id":"req-runtime-snapshot","command":"agent.runtime.snapshot"}"#)
+        let snapshotEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlAgentRuntimeSnapshotPayload>.self,
+            from: snapshotData
+        )
+        let snapshot = try #require(snapshotEnvelope.result)
+        let persistedSession = try #require(snapshot.sessions.first(where: { $0.id == registeredSession.id }))
+
+        #expect(snapshotEnvelope.status == "ok")
+        #expect(persistedSession.state == .released)
+        #expect(persistedSession.hostWorkspaceID == workspaceID)
+
+        let storedSessionState = await MainActor.run {
+            delegate.aiTerminalManagerStore.agentRuntimeSessions
+                .first(where: { $0.id == registeredSession.id })?
+                .state
+        }
+        #expect(storedSessionState == .released)
     }
 
     @Test func gatewayTcpSubscriptionStreamsReplayAndLiveEvents() async throws {

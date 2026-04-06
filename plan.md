@@ -1,291 +1,543 @@
-# GhoDex Workspace Map Canvas Development Plan
+# GhoDex Agent Runtime V1 Spec Plan
 
-## 1) Target State
+## 0. Status
 
-- Introduce a new top-level tab mode: `Workspace Map`.
-- Render all top-level tabs (terminal + browser) as independent groups on one infinite canvas.
-- Preserve existing runtime ownership in controllers/models; map is projection and safe control surface only.
-- Keep current mental model intact: top-level tabs + in-group pane tabs, with clear hierarchy visibility.
+- Worktree: `feat/agent-runtime-v1`
+- Document role: this file is the execution spec, not a brainstorming note.
+- Goal: turn GhoDex into a host-owned Agent Runtime that can be driven by one or more Codex tabs without making any tab the source of truth.
+- Current implementation state in this worktree:
+  - runtime models and persistence are implemented
+  - runtime-first projection is implemented
+  - Control Harness runtime command surface is implemented
+  - managed Codex bootstrap environment contract and socket attach lifecycle are implemented
+  - browser / vision task kinds and canonical executor capabilities are implemented on the shared runtime contract
+  - approval, stale recovery, and release/expiry cleanup are implemented
+  - schedule / loop layer is implemented above runtime tasks
+  - legacy external heartbeat inbox mutation is blocked by default
+  - JSONL runtime event log is implemented
+- Latest clean verification evidence:
+  - prerequisite: `zig build -Demit-macos-app=false`
+  - `xcodebuild test -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' -only-testing:GhosttyTests/AITerminalManagerTests -only-testing:GhosttyTests/ControlHarnessTests -only-testing:GhosttyTests/ControlHarnessHostEnvironmentTests -only-testing:GhosttyTests/AgentRuntimeContractsTests`
+  - result: `** TEST SUCCEEDED **`
+  - xcresult: `/Users/leongong/Library/Developer/Xcode/DerivedData/GhoDex-cppxzhjxylyexzayrocpyqoxmalc/Logs/Test/Test-GhoDex-2026.04.06_16-41-34-+0800.xcresult`
+- This document now serves both as the locked spec and the completion/acceptance ledger for the implemented V1 scope.
 
-## 2) Hard Architecture Contract
+## 1. Final Architecture Decision
 
-### 2.1 One-Way Data and Mutation Rules
+### 1.1 System Shape
 
-- Data flow: `Runtime -> RuntimeAdapter -> ProjectionService -> Immutable Snapshot/ViewModel -> Canvas Renderer`.
-- Mutation flow: `Canvas Renderer/UI -> CommandGateway -> Runtime`.
-- Forbidden: renderer directly importing runtime mutation APIs.
-- Forbidden: snapshot/layout storing runtime object references (`NSView`, controller instances, bridges).
-- Forbidden (v1): split-tree structural edits from canvas (`editSplitTree` must stay blocked).
+- `GhoDex host process` owns runtime truth.
+- `Codex tab` is a runtime client, not a runtime owner.
+- `Control Harness` is the transport and policy boundary.
+- `Terminal / Browser / Vision` are execution planes under runtime dispatch.
 
-### 2.2 Layer Ownership and Extension Seams (Best-Practice Baseline)
+### 1.2 Explicit Rejection
 
-| Layer | Primary Files | Owns | Allowed Dependencies | Forbidden Dependencies |
-| --- | --- | --- | --- | --- |
-| Runtime Adapter | `WorkspaceMapRuntimeAdapter.swift` | Runtime read extraction into DTO/value input | Runtime controllers + Projection input types | SwiftUI view concerns, mutation gateway |
-| Projection | `WorkspaceMapProjectionService.swift`, `WorkspaceMapContracts.swift` | Deterministic immutable graph snapshot | Adapter input/value contracts | Runtime mutation paths, UI rendering state |
-| Command Gateway | `WorkspaceMapCommandHandler.swift` | Allowlist validation + runtime command routing | Runtime mutation APIs, contract request/result types | Renderer state internals, projection internals |
-| Canvas/ViewModel | `WorkspaceMapController.swift` | Pan/zoom/group state presentation and user actions | Snapshot/view model + command gateway + layout store | Direct runtime mutation |
-| Layout Persistence | `WorkspaceMapLayoutStore.swift` | Map-only position/viewport/zoom/collapsed schema | File persistence + layout contracts | Runtime restore payload schema |
-| Performance | `WorkspaceMapPerformance.swift` | Latency/publish/action metrics and budgets | Controller hooks + debug logging | Runtime mutation and business logic |
-| Test Boundary | `macos/Tests/WorkspaceMap/*` | Determinism/boundary/command/perf regression coverage | Test fixtures and public APIs | Private runtime internals via reflection |
+The following design is rejected and must not be implemented:
 
-### 2.3 Boundary Enforcement (Release-Blocking)
+- a single Codex tab as the authoritative controller
+- tab memory as the only task state
+- direct tab-to-AppKit private control for runtime lifecycle
+- separate shadow state machines for runtime and UI management state
 
-- [x] Runtime reference leakage negative test exists (`WorkspaceMapProjectionBoundaryTests`).
-- [x] Gateway allowlist and blocked-command policy tests exist (`WorkspaceMapContractsTests`, `WorkspaceMapCommandGatewayTests`).
-- [x] Snapshot semantic equality gate exists (`WorkspaceMapContractsTests`) to avoid timestamp-only churn.
-- [x] Add static dependency guard script (import boundary check for Workspace Map module).
-- [x] Add CI fail-closed step for boundary guard script.
+### 1.3 Required Runtime Principle
 
-## 3) Performance and Scalability SLOs (Release-Blocking)
+All durable agent semantics must be host-owned:
 
-### 3.1 Reproducible Workloads
+- sessions
+- leases
+- task queue
+- ownership
+- approval waits
+- stale recovery
+- audit trail
 
-- `Large-A`: 20 top-level groups (12 terminal + 8 browser), 120 panes, 360 pane-tabs.
-- `Large-B`: burst refresh mode with 200 focus/switch events in 10 seconds.
-- `Large-C`: command burst with 10 concurrent rename/focus/close operations in 5 seconds.
+## 2. V1 Scope
 
-### 3.2 Numeric Thresholds (Must Be Met Per Workload)
+### 2.1 In Scope
 
-| Metric | Large-A | Large-B | Large-C |
-| --- | --- | --- | --- |
-| Snapshot build p95 | <= 25 ms | <= 20 ms | <= 20 ms |
-| Snapshot build p99 | <= 40 ms | <= 35 ms | <= 35 ms |
-| Publish cadence | <= 12 updates/sec | <= 20 updates/sec | <= 15 updates/sec |
-| Main-thread spike markers (>32 ms) | <= 2 per run | <= 5 per run | <= 3 per run |
-| Command action p95 | <= 50 ms | <= 55 ms | <= 45 ms |
-| Command failure rate (allowlisted commands) | 0% | 0% | 0% |
+- terminal-focused runtime lifecycle
+- multiple Codex tabs as runtime clients
+- runtime-backed managed state projection
+- runtime command family in existing Control Harness
+- managed Codex bootstrap environment
+- stale session recovery
+- deterministic task ownership
+- runtime event logging
 
-### 3.3 Fail-Closed Rules
+### 2.2 Explicitly Out Of Scope For Release Gate
 
-- Missing metric artifact for any required workload => automatic gate failure.
-- Any threshold breach without mitigation task + owner + due milestone => automatic gate failure.
-- Metrics must be collected from deterministic test/benchmark entrypoints, not manual observation only.
+- browser-native scheduling orchestration as a release blocker
+- visual click executor as a release blocker
+- distributed remote runtime cluster
+- autonomous prompt-side state ownership
+- agent marketplace or multi-user policy system
 
-## 4) Detailed Work Breakdown (Task Checklist)
+Browser and vision seams must remain integrable, but V1 release acceptance is terminal-first.
 
-### WS0. Contracts and ID Model
+## 3. Hard Invariants
 
-- [x] WS0-T1 Define schema version contract (`WorkspaceMapGraphSchemaVersion`).
-- [x] WS0-T2 Define stable entity ID model (`WorkspaceMapEntityID`) for terminal/browser/split/pane/pane-tab.
-- [x] WS0-T3 Define v1 command enums + request/result contracts.
-- [x] WS0-T4 Add semantic snapshot equality that ignores `generatedAt`.
-- Acceptance:
-  - All contracts are value types (`Codable`, `Hashable`, `Sendable` where applicable).
-  - ID parse/build paths are deterministic and test-covered.
+These are mandatory and non-negotiable.
 
-### WS1. Entry Integration (Mode Toggle Only)
+### 3.1 Single Source Of Truth
 
-- [x] WS1-T1 Expose `Workspace Map` only as a mode switch entrypoint (menu/shortcut/settings), not as a new-tab type.
-- [x] WS1-T2 Ensure top-level and pane-child New Tab Picker flows never surface a workspace-map creation entry.
-- [x] WS1-T3 Keep picker filtering/search free from workspace-map synthetic entries.
-- [x] WS1-T4 Wire toggle behavior through `AppDelegate` open/focus/close mode semantics.
-- Acceptance:
-  - `NewTabPickerWorkspaceMapTests` and `AppDelegateWorkspaceMapModeTests` pass.
+- `AgentRuntimeSession` and `AgentRuntimeTask` are the only durable truth for runtime lifecycle.
+- `AITerminalTaskRecord`, `taskBindings`, and `managedState` may exist temporarily only as compatibility projection or legacy fallback.
+- No new feature may be built on top of legacy task truth.
 
-### WS2. Runtime Adapter and Projection Foundation
+### 3.2 Runtime Ownership
 
-- [x] WS2-T1 Introduce runtime adapter DTO path (`WorkspaceMapRuntimeAdapter`).
-- [x] WS2-T2 Keep projection pure (side-effect free on immutable input).
-- [x] WS2-T3 Project terminal + browser groups into a single snapshot.
-- [x] WS2-T4 Add deterministic ordering by kind and stable ID.
-- Acceptance:
-  - Same input + same clock => byte-identical snapshot JSON.
-  - Snapshot generation has no runtime mutation side effects.
+- runtime is global to the GhoDex host instance
+- every Codex tab attaches as a client
+- no tab can become runtime owner
 
-### WS3. Terminal Tree Projection (Split/Pane/Pane-Tab)
+### 3.3 Command Boundary
 
-- [x] WS3-T1 Recursively project split tree with direction/ratio metadata.
-- [x] WS3-T2 Emit parent-child linkage for split/pane/pane-tab nodes.
-- [x] WS3-T3 Include root node pointer and focused-state markers.
-- [x] WS3-T4 Keep split path IDs deterministic across stable topology.
-- Acceptance:
-  - Fixture tests validate hierarchy shape, counts, and link consistency.
+- Codex must interact with runtime only through Control Harness commands
+- no direct Swift/AppKit runtime mutation from Codex integration glue
+- no Codex tab may mutate runtime or queue state by writing heartbeat inbox files directly
 
-### WS4. Command Gateway (Policy-First Runtime Control)
+### 3.4 Recovery Safety
 
-- [x] WS4-T1 Implement explicit allowlist enforcement in command handler.
-- [x] WS4-T2 Support v1 commands: focus/rename/close/jump.
-- [x] WS4-T3 Hard-block split edit command (`editSplitTree`).
-- [x] WS4-T4 Route all runtime operations through injected gateway dependencies.
-- Acceptance:
-  - Blocked commands return deterministic policy rejection.
-  - Gateway tests verify routing and target validation behavior.
+- missing heartbeat must always lead to deterministic expiry handling
+- active claimed work must always be requeued or paused according to policy
+- ambiguity must fail closed
 
-### WS5. Canvas Rendering Mode (Infinite Canvas v1)
+### 3.5 Projection Rule
 
-- [x] WS5-T1 Replace list mode with pan/zoom canvas renderer.
-- [x] WS5-T2 Render top-level groups as independent movable units.
-- [x] WS5-T3 Add expand/collapse controls and depth minimap view.
-- [x] WS5-T4 Bind focus/rename/close actions to command gateway.
-- Acceptance:
-  - Map opens as top-level tab and displays logical grouping on one canvas.
-  - No view-layer direct runtime mutation path exists.
+- UI-facing `managedState`, badges, sampler activity, and session task summary are projections
+- projection must prefer runtime truth
+- legacy values may only be used as fallback where runtime has no matching data
 
-### WS6. Layout Persistence (Map-Only Schema)
+## 4. Runtime Spec
 
-- [x] WS6-T1 Persist group coordinates, viewport offset, zoom level, collapsed state.
-- [x] WS6-T2 Keep layout schema version independent from runtime restore schema.
-- [x] WS6-T3 Implement resilient restore for missing/deleted IDs.
-- [x] WS6-T4 Keep runtime state immutable during layout restore.
-- Acceptance:
-  - Restart restores map layout and ignores missing IDs without crash/corruption.
+### 4.1 Session Model
 
-### WS7. Instrumentation and Budget Hooks
+`AgentRuntimeSession` must continue to represent:
 
-- [x] WS7-T1 Add snapshot latency metrics (p50/p95/p99 aggregates).
-- [x] WS7-T2 Add publish cadence and command action latency metrics.
-- [x] WS7-T3 Add coalescing hooks to protect UI from event storms.
-- [x] WS7-T4 Add benchmark/perf regression entrypoints for Large workloads.
-- [x] WS7-T5 Wire per-workload numeric threshold evaluation output (`PASS/FAIL`) into artifacts.
-- Acceptance:
-  - Metrics are logged and machine-readable for gate evaluation.
-  - Threshold evaluation is explicit per workload and fail-closed.
+- `id`
+- `clientKind`
+- `tabID`
+- `terminalID`
+- `hostWorkspaceID`
+- `state`
+- `capabilities`
+- `createdAt`
+- `updatedAt`
+- `lastHeartbeatAt`
+- `leaseDurationSeconds`
+- `leaseExpiresAt`
+- `currentTaskID`
+- `lastError`
 
-### WS8. Test Matrix and Regression Harness
+### 4.2 Task Model
 
-- [x] WS8-T1 Contracts/policy tests (`WorkspaceMapContractsTests`).
-- [x] WS8-T2 Picker integration tests (`NewTabPickerWorkspaceMapTests`).
-- [x] WS8-T3 Projection fixture determinism tests (`WorkspaceMapProjectionFixtureTests`).
-- [x] WS8-T4 Projection boundary tests (`WorkspaceMapProjectionBoundaryTests`).
-- [x] WS8-T5 Command gateway tests (`WorkspaceMapCommandGatewayTests`).
-- [x] WS8-T6 ViewModel determinism/coalescing tests (`WorkspaceMapViewModelDeterminismTests`).
-- [x] WS8-T7 Performance regression tests (`WorkspaceMapPerformanceRegressionTests`).
-- Acceptance:
-  - All seven test classes pass in `build-for-testing + xctest` chain.
-  - Boundary and determinism tests fail closed on policy regressions.
+`AgentRuntimeTask` must continue to represent:
 
-### WS9. Documentation and Operator Readiness
+- `id`
+- `kind`
+- `state`
+- `priority`
+- `sessionID`
+- `capabilityRequirements`
+- `payload`
+- `createdAt`
+- `scheduledAt`
+- `claimedAt`
+- `finishedAt`
+- `retryCount`
+- `maxRetryCount`
+- `errorSummary`
 
-- [x] WS9-T1 Document stable ID semantics and split identity lifecycle.
-- [x] WS9-T2 Document v1 allowlist, blocked commands, and rationale.
-- [x] WS9-T3 Document runtime-vs-layout schema separation and migration policy.
-- [x] WS9-T4 Add operator runbook for latency/publish cadence troubleshooting.
-- Acceptance:
-  - Docs match actual implementation and include deferred v2 scope explicitly.
+### 4.3 Task Ordering
 
-### WS10. Static Boundary Automation (Best-Practice Completion)
+Claim order must remain:
 
-- [x] WS10-T1 Add workspace-map boundary check script (import/path rules).
-- [x] WS10-T2 Add CI hook to run boundary script + Workspace Map test matrix.
-- [x] WS10-T3 Add pull-request checklist item requiring boundary evidence artifacts.
-- Acceptance:
-  - Boundary violations fail CI before merge.
-  - Dependency direction drift is blocked automatically.
+1. higher `priority`
+2. earlier `scheduledAt`
+3. earlier `createdAt`
+4. UUID tie-break
 
-## 5) Opus Acceptance Gates (Required)
+This ordering is already in code and must not change without an explicit spec update.
 
-Opus must produce `PASS/FAIL` for each gate with file-level evidence:
+### 4.4 Compatibility Projection Rules
 
-- Gate A: Architecture correctness.
-  - One-way data and mutation rules are enforced.
-  - Snapshot/layout are runtime-reference free.
-  - Layer ownership boundaries are respected.
-- Gate B: Performance readiness.
-  - Metrics exist and map to numeric workload thresholds.
-  - Coalescing/publish behavior is verifiable.
-- Gate C: Extensibility and maintainability.
-  - Schema/version evolution path is explicit.
-  - Command policy supports safe v1 + clean v2 expansion.
-  - Boundary automation plan is concrete and enforceable.
-- Gate D: Requirement fit.
-  - Top-level tabs are visualized as canvas groups.
-  - Existing top-level + pane-tab behavior remains consistent.
+Compatibility mapping from runtime to legacy UI/task states:
 
-Pass criteria:
+- `booting` / `active` session -> `managed_active`
+- `waiting_approval` session -> `managed_waiting_approval`
+- `paused` session -> `managed_paused`
+- `expired` / `failed` session -> `managed_failed`
+- `released` session -> fall back to compatibility registration state or `manual`
 
-- Hard release gate requires WS5/WS6/WS7/WS8 = complete with evidence.
-- No unresolved high-severity architecture/safety findings.
-- Any medium/low gaps must map to explicit WS task IDs with owners and acceptance checks.
+Task compatibility mapping:
 
-## 6) Evidence Artifact Schema (Mandatory Per WS Item)
+- `claimed` / `running` -> legacy `active`
+- `waiting_approval` -> legacy `waiting_approval`
+- `paused` -> legacy `paused`
+- `completed` -> legacy `completed`
+- `failed` / `cancelled` -> legacy `failed`
+- `queued` must not appear as the active projected current task for a claimed session
 
-Each completed task must include:
+## 5. Multi-Tab Client Spec
 
-- `ws_id`: workstream ID (`WS0`..`WS10`).
-- `task_id`: task ID (`WSx-Ty`).
-- `timestamp`: ISO-8601 timestamp.
-- `command`: exact command or test invocation.
-- `result`: `PASS` or `FAIL`.
-- `metrics`: key-value metrics (include thresholds and measured values when relevant).
-- `artifact`: log/test/xcresult/file path.
-- `verdict`: brief conclusion and next action if failed.
+### 5.1 Client Model
 
-## 7) Current Verification Snapshot (2026-03-29)
+Multiple Codex tabs must be supported concurrently.
 
-- `xcodebuild build-for-testing` (macOS arm64, code-sign disabled): PASS.
-- `xcodebuild build` (macOS arm64, code-sign disabled): PASS.
-- `bash scripts/ci/check_workspace_map_boundaries.sh`: PASS.
-- `bash scripts/ci/run_workspace_map_test_matrix.sh`: PASS.
-- Workspace Map class tests (direct `xctest`): PASS.
-  - `NewTabPickerWorkspaceMapTests`
-  - `WorkspaceMapContractsTests`
-  - `WorkspaceMapProjectionFixtureTests`
-  - `WorkspaceMapProjectionBoundaryTests`
-  - `WorkspaceMapCommandGatewayTests`
-  - `WorkspaceMapViewModelDeterminismTests`
-  - `WorkspaceMapPerformanceRegressionTests`
-  - `WorkspaceMapPerformancePolicyTests`
-- Runtime workload artifact integration:
-  - `WorkspaceMapViewModelDeterminismTests.testRuntimePathProducesPassingPerWorkloadArtifacts`: PASS.
-- Known environment limitation:
-  - `xcodebuild test -only-testing:GhosttyTests/NewTabPickerWorkspaceMapTests` still hangs in host bootstrapping path in this environment; direct `xctest` remains the stable verification path.
+Each tab is a runtime client with:
 
-## 8) Remaining Release Blockers
+- session identity
+- capabilities
+- lease heartbeat
+- optional claimed task
 
-- None. WS0..WS10 are complete and the final Opus strict acceptance rerun passed.
+### 5.2 Roles
 
-## 9) Opus Strict Acceptance History (2026-03-29)
+V1 capability model must support at least:
 
-- Verdict: `FAIL` (release gate not met yet).
-- Confirmed implemented-now:
-  - top-level terminal/browser groups rendered in one canvas mode;
-  - one-way `runtime -> snapshot -> canvas` flow and command allowlist path are in place;
-  - current Workspace Map test matrix passes via `build-for-testing + xctest`.
-- Mandatory blockers from Opus:
-  - `WS7-T5` must emit per-workload threshold `PASS/FAIL` artifacts and align code-side budgets with plan thresholds.
-  - `WS9-T1..T4` must complete docs/runbook delivery.
-  - `WS10-T1..T3` must add static boundary guard and CI fail-closed enforcement.
-  - Product wording mismatch must be resolved: either implement truly unbounded canvas or explicitly redefine requirement as large bounded canvas.
-- Engineering warning from Opus:
-  - main-actor heavy projection path may hitch at larger scale; split runtime capture (main) vs projection compute (background) in next increment.
+- `runtime.observe`
+- `runtime.task.claim`
+- `runtime.task.manage`
+- `runtime.executor.terminal`
+- `runtime.executor.browser`
+- `runtime.executor.vision`
+- `runtime.admin`
 
-## 10) Closure Added After Opus Fail
+Initial implementation may still map these onto coarse `observe` / `mutate` transport scopes, but the runtime-level capability names must be fixed in the contract now.
 
-- Runtime workload tagging is now wired in `WorkspaceMapViewModel` classification path.
-- Canvas rendering no longer depends on a fixed backing frame; viewport operates over logical coordinates.
-- Docs added in `docs/workspace-map-v1.md`.
-- CI automation added:
-  - `scripts/ci/check_workspace_map_boundaries.sh`
-  - `scripts/ci/run_workspace_map_test_matrix.sh`
-  - `.github/workflows/test.yml`
-  - `.github/PULL_REQUEST_TEMPLATE.md`
+### 5.3 Ownership Rules
 
-## 11) Final Opus Strict Acceptance Result (2026-03-29)
+- only the owning session may update its claimed task
+- a session with an unfinished current task may not claim another
+- stale session ownership must be cleared by host recovery only
 
-- Verdict: `PASS`.
-- Gate A Architecture correctness: `PASS`.
-- Gate B Performance readiness: `PASS`.
-- Gate C Extensibility and maintainability: `PASS`.
-- Gate D Requirement fit: `PASS`.
-- No blocking findings remain.
-  - `.github/workflows/test.yml`
-  - `.github/PULL_REQUEST_TEMPLATE.md`
+## 6. Control Harness Runtime Contract
 
-## 12) Post-PASS Hardening Follow-up (2026-03-30)
+V1 must extend the existing socket and command surface. No second runtime socket is allowed for V1 unless there is a blocking technical reason.
 
-- [x] WS5-H1 Replace live-canvas runtime ownership mutation path with non-owning mirrored lease provider.
-  - `WorkspaceMapRuntimeLiveCanvasContentProvider` now resolves source views read-only and returns mirror surfaces.
-  - No `sourceWindow.contentView = ...` ownership reassignment remains in Workspace Map provider path.
-- [x] WS8-H1 Add lease safety and policy tests for live content provider.
-  - Added `WorkspaceMapLiveCanvasContentProviderTests` covering:
-    - acquire/release without source window mutation,
-    - release idempotency,
-    - browser-group hard reject before resolver use,
-    - terminal-unavailable path.
-- [x] WS8-H2 Extend Workspace Map matrix to include newly added canvas interaction/provider tests.
-  - `WorkspaceMapCanvasInputPolicyTests`
-  - `WorkspaceMapLiveCanvasViewVisibilityTests`
-  - `WorkspaceMapLiveCanvasContentProviderTests`
-- [x] WS11-H1 Re-run strict Opus acceptance for Req4/Req6 closure and archive PASS/FAIL evidence.
-  - `opus_workspace_map_acceptance` verdict: `PASS` (Req4=`PASS`, Req6=`PASS`), reviewed on 2026-03-30.
+### 6.1 Required Commands
+
+- `agent.runtime.snapshot`
+- `agent.runtime.session.register`
+- `agent.runtime.session.heartbeat`
+- `agent.runtime.session.release`
+- `agent.runtime.task.enqueue`
+- `agent.runtime.task.claim_next`
+- `agent.runtime.task.update`
+- `agent.runtime.task.approve`
+- `agent.runtime.task.cancel`
+- `agent.runtime.schedule.enqueue`
+- `agent.runtime.schedule.update`
+- `agent.runtime.schedule.cancel`
+
+### 6.2 Request Requirements
+
+Every runtime mutation command must support:
+
+- `request_id`
+- `protocol_version`
+- idempotency behavior consistent with existing harness mutation rules
+- deterministic error codes
+
+### 6.3 Error Requirements
+
+V1 runtime commands must expose deterministic failures for:
+
+- runtime disabled
+- session not found
+- session expired
+- task not found
+- task owner mismatch
+- invalid task transition
+- schedule not found
+- invalid schedule transition
+- invalid argument
+
+### 6.4 Handshake Requirement
+
+`handshake` must advertise runtime commands once implemented.
+
+Acceptance rule:
+
+- if a runtime command ships, it must appear in handshake command discovery
+
+## 7. Managed Codex Bootstrap Spec
+
+Managed Codex launch must provide host-discoverable bootstrap data through environment variables, and the launched bootstrap script must use that contract to self-register, heartbeat, and release over the existing Control Harness socket.
+
+### 7.1 Required Bootstrap Keys
+
+- `GHODEX_CONTROL_SOCKET`
+- `GHODEX_AGENT_RUNTIME_SOCKET`
+- `GHODEX_AGENT_RUNTIME_SESSION_KIND`
+- `GHODEX_AGENT_RUNTIME_CLIENT_ID`
+- `GHODEX_AGENT_RUNTIME_WORKSPACE_ID`
+- `GHODEX_AGENT_RUNTIME_CAPABILITIES`
+- `GHODEX_AGENT_RUNTIME_DEFAULT_HEARTBEAT_SECONDS`
+
+### 7.2 Rules
+
+- Codex integration must not require manual socket discovery
+- Codex integration must not require manual prompt copy-paste of runtime identifiers
+- managed bootstrap is host responsibility, not prompt responsibility
+- `GHODEX_AGENT_RUNTIME_SOCKET` must resolve to the same socket path as `GHODEX_CONTROL_SOCKET` in V1
+- `GHODEX_AGENT_RUNTIME_SESSION_KIND` must be host-issued and fixed to `codex_tab` for V1 managed launches
+- `GHODEX_AGENT_RUNTIME_CLIENT_ID` must be host-issued per launch and non-empty
+- `GHODEX_AGENT_RUNTIME_CAPABILITIES` must be deterministic host-issued CSV, not prompt text
+- `GHODEX_AGENT_RUNTIME_WORKSPACE_ID` is optional and may only be present when the host knows workspace identity
+- managed bootstrap must register its runtime session before entering the long-running `codex1m exec` path
+- managed bootstrap must emit runtime heartbeats on the same socket while the managed Codex process remains alive
+- managed bootstrap must release the runtime session on shell exit and must not leave a best-effort orphan behind when the wrapper exits cleanly
+
+## 8. UI / Compatibility Spec
+
+### 8.1 Required Projection Targets
+
+The following reads must become runtime-first:
+
+- AI Terminal Manager session list
+- session `managedState`
+- current task badge
+- AppDelegate remote control policy
+- Control Harness sampling activity
+
+### 8.2 Allowed Transitional State
+
+During migration, legacy task data may remain writable internally, but:
+
+- runtime-first projection must drive visible state
+- no new UI or access rule may read legacy task truth directly if runtime data exists
+
+## 9. Delivery Order
+
+## P0. Spec Lock
+
+### Deliverables
+
+- this plan file updated and accepted as the working spec
+
+### Acceptance
+
+- architecture boundary is unambiguous
+- release scope is unambiguous
+- invariants are explicit
+- every phase below has concrete acceptance and tests
+
+### Tests
+
+- none
+
+## P1. Runtime-First Projection Integration
+
+Status: implemented and verified in this worktree.
+
+### Deliverables
+
+- add runtime projection helpers in AI Terminal Manager store
+- make session summaries runtime-first
+- make AppDelegate managed-state checks runtime-first
+- keep legacy fallback only where runtime data is absent
+
+### Acceptance
+
+- if runtime session/task exists for a terminal, session summary reflects runtime state first
+- remote-control gating uses projected runtime managed state
+- sampler activity uses projected runtime managed state
+- no visible session row prefers legacy task state over runtime task state when runtime data exists
+
+### Tests
+
+- `AITerminalManagerTests`
+- add projection tests for runtime session state
+- add projection tests for runtime task compatibility state
+- add fallback test for legacy-only session state
+
+## P2. Runtime Command Surface
+
+Status: implemented and verified in this worktree.
+
+### Deliverables
+
+- add runtime commands to Control Harness
+- add request decoding fields needed by runtime commands
+- add runtime error mapping
+- advertise commands in handshake
+
+### Acceptance
+
+- register / heartbeat / release / enqueue / claim / update / cancel work through Control Harness
+- approve and schedule commands work through Control Harness
+- handshake exposes the commands
+- runtime commands obey query vs mutation behavior
+- `agent.runtime.snapshot` is a strict read-only projection and must not persist expiry/recovery side effects
+- wrong-owner and invalid-transition failures are deterministic
+
+### Tests
+
+- `ControlHarnessTests`
+- handshake command discovery tests
+- runtime command happy-path tests
+- invalid argument tests
+- runtime disabled matrix tests
+- read-only snapshot projection tests
+- heartbeat tick disabled-runtime regression test
+- stale / wrong-owner / invalid-transition tests
+
+## P3. Managed Codex Bootstrap
+
+Status: implemented and verified in this worktree.
+
+### Deliverables
+
+- inject runtime bootstrap environment for managed Codex launches
+- make the managed Codex wrapper self-register over the existing Control Harness socket
+- make the managed Codex wrapper maintain heartbeats while `codex1m exec` is active
+- make the managed Codex wrapper release the runtime session on exit
+- document bootstrap keys in code comments and plan
+
+### Acceptance
+
+- managed Codex tab can discover runtime socket and self-register without manual edits
+- managed Codex bootstrap attaches to runtime on the existing harness socket before handing off to `codex1m exec`
+- managed Codex bootstrap sends periodic `agent.runtime.session.heartbeat` requests while the session is alive
+- managed Codex bootstrap sends `agent.runtime.session.release` on orderly shell exit
+- bootstrap metadata is stable enough for skill wrapper integration
+- non-managed terminals must not retain stale `GHODEX_AGENT_RUNTIME_*` keys
+- bootstrap values are host-issued and deterministic for the launch role
+
+### Tests
+
+- environment injection tests where practical
+- smoke verification via launch configuration unit coverage
+- `ControlHarnessHostEnvironmentTests`
+
+## P4. Approval And Recovery Hardening
+
+Status: implemented and verified in this worktree.
+
+### Deliverables
+
+- waiting-approval flow fully runtime-owned
+- stale recovery visibly updates session/task projection
+- release / expiry behavior closes ownership cleanly
+
+### Acceptance
+
+- approval wait blocks remote mutation correctly
+- missing heartbeat triggers policy-defined recovery
+- no orphan claimed task remains after expiry
+
+### Tests
+
+- `AITerminalManagerTests`
+- lease expiry recovery tests
+- approval state projection tests
+
+## P5. Schedule / Loop Layer
+
+Status: implemented and verified in this worktree.
+
+### Deliverables
+
+- add `Schedule` model above `Task`
+- generate task instances from schedule rules
+- support future run and loop semantics without overloading base task truth
+
+### Acceptance
+
+- scheduled work produces normal runtime tasks
+- loop behavior is recoverable after restart
+- runtime task model is not overloaded with recurrence-only fields
+
+### Tests
+
+- schedule generation tests
+- future task due-time tests
+- loop resume / recovery tests
+
+## 10. Global Acceptance Gates
+
+The feature is not considered complete unless all of the following are true:
+
+- there is only one durable runtime truth
+- runtime commands exist on the existing harness path
+- Codex runtime mutation does not depend on heartbeat inbox file writes
+- session summaries are runtime-first
+- AppDelegate access control is runtime-first
+- stale recovery is deterministic
+- multiple Codex tabs are architecturally supported by contract, even if UI polish is minimal
+- tests cover both compatibility and runtime-specific behavior
+
+## 11. External Review Notes Locked Into This Spec
+
+The following review outcomes are now part of the execution contract:
+
+- heartbeat queue is dispatch plumbing, not runtime truth
+- Control Harness remains the only supported runtime mutation boundary for Codex tabs
+- bootstrap environment is a formal host-issued contract, not informal prompt glue
+- restart handling must never leave running work in ambiguous state
+
+## 12. Definition Of Done
+
+Done means:
+
+- code implements the phase deliverables
+- acceptance rules in that phase pass
+- named tests exist and pass
+- no new shadow task truth was introduced
+- plan file remains aligned with shipped behavior
+
+Not done means any of:
+
+- runtime exists only in store APIs but not in control surface
+- UI still reads legacy state first
+- managed Codex still depends on manual prompt glue for runtime discovery
+- multi-tab support is claimed without ownership rules
+- schedule/loop behavior is added directly to task truth without a schedule layer
+
+## 13. Blocking Verification Command
+
+No phase may be called complete unless this targeted suite passes with `** TEST SUCCEEDED **`:
+
+```bash
+xcodebuild test \
+  -project macos/GhoDex.xcodeproj \
+  -scheme GhoDex \
+  -destination 'platform=macOS' \
+  -parallel-testing-enabled NO \
+  CODE_SIGNING_ALLOWED=NO \
+  CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGN_IDENTITY='' \
+  -only-testing:GhosttyTests/AITerminalManagerTests \
+  -only-testing:GhosttyTests/ControlHarnessTests \
+  -only-testing:GhosttyTests/ControlHarnessHostEnvironmentTests \
+  -only-testing:GhosttyTests/AgentRuntimeContractsTests
+```
+
+Latest recorded pass:
+
+- date: `2026-04-06`
+- prerequisite: `zig build -Demit-macos-app=false` was rerun first because this worktree changes `src/config/Config.zig`, and the follow-up serial `xcodebuild test` no longer emitted the stale `ghodex-heartbeat-allow-external-inbox-mutations: unknown field` parser error.
+- xcresult: `/Users/leongong/Library/Developer/Xcode/DerivedData/GhoDex-cppxzhjxylyexzayrocpyqoxmalc/Logs/Test/Test-GhoDex-2026.04.06_16-41-34-+0800.xcresult`
+- note: the same suite under Xcode parallel test execution produced inconsistent stdout duplication during this rollout, so the authoritative gate evidence remains the serial run above.
+
+## 14. Current Implementation Target
+
+The original P1 -> P5 implementation target for this worktree is complete, including the managed Codex runtime attach path over the existing harness socket.
+
+The next execution target is no longer core runtime construction; it is productization and executor expansion on top of the finished contract:
+
+1. keep all Codex-side runtime mutations on the Control Harness path only as browser / vision executors are added
+2. expand browser / vision executors on top of the same runtime task and schedule contract without introducing a second source of truth
+3. surface shared queue and schedule controls so multiple Codex tabs remain peer clients of one host-owned runtime
+4. preserve multi-tab semantics so additional Codex tabs never become owners of separate queues
+
+Items 1 and 2 are now implemented at the contract layer in this worktree:
+
+- `browser_navigation`, `browser_interaction`, and `vision_automation` are first-class runtime task kinds
+- terminal / browser / vision executor requirements are canonicalized into one capability namespace
+- managed Codex bootstrap now advertises terminal, browser, and vision executor capabilities on the existing harness-backed runtime path
+- Control Harness payload validation now enforces browser / vision request minimums on the same runtime socket contract
+
+The remaining work is no longer contract definition; it is executor productization and shared queue UX on top of the finished runtime boundary.

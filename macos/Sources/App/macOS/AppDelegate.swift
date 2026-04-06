@@ -185,6 +185,7 @@ class AppDelegate: NSObject,
     }
 
     @MainActor private var _aiTerminalManagerStore: AITerminalManagerStore?
+    @MainActor private var _agentRuntimeExecutionCoordinator: AgentRuntimeExecutionCoordinator?
     @MainActor private var markdownDocumentControllers: [UUID: MarkdownDocumentController] = [:]
 
     @MainActor var aiTerminalManagerStore: AITerminalManagerStore {
@@ -201,6 +202,16 @@ class AppDelegate: NSObject,
 
     @MainActor var existingAITerminalManagerStore: AITerminalManagerStore? {
         _aiTerminalManagerStore
+    }
+
+    @MainActor var agentRuntimeExecutionCoordinator: AgentRuntimeExecutionCoordinator {
+        if let coordinator = _agentRuntimeExecutionCoordinator {
+            return coordinator
+        }
+
+        let coordinator = AgentRuntimeExecutionCoordinator(store: aiTerminalManagerStore)
+        _agentRuntimeExecutionCoordinator = coordinator
+        return coordinator
     }
 
     @Published private(set) var controlHarnessGatewaySettings = ControlHarnessGatewayAppSettings.load()
@@ -246,15 +257,17 @@ class AppDelegate: NSObject,
             controlSocketPath: controlHarnessService.socketURL.path,
             processID: ProcessInfo.processInfo.processIdentifier,
             bundleID: Bundle.main.bundleIdentifier,
-            executablePath: Bundle.main.executableURL?.path ?? ProcessInfo.processInfo.arguments.first
+            executablePath: Bundle.main.executableURL?.path ?? ProcessInfo.processInfo.arguments.first,
+            runtimeDefaultHeartbeatSeconds: aiTerminalManagerStore
+                .agentRuntimeSettings
+                .sanitized()
+                .defaultLeaseDurationSeconds
         )
     }
 
     @MainActor
     func controlHarnessManagedState(for terminalID: UUID) -> AITerminalManagedState? {
-        aiTerminalManagerStore.sessions
-            .first(where: { $0.id == terminalID })?
-            .managedState
+        aiTerminalManagerStore.projectedManagedState(for: terminalID)
     }
 
     @MainActor
@@ -588,6 +601,7 @@ class AppDelegate: NSObject,
         }
 
         browserControlIPCService.start()
+        agentRuntimeExecutionCoordinator.start()
     }
 
     func applicationDidHide(_ notification: Notification) {
@@ -690,6 +704,7 @@ class AppDelegate: NSObject,
         controlHarnessReadSampler.stop()
         controlHarnessService.stop()
         controlHarnessGateway.stop()
+        _agentRuntimeExecutionCoordinator?.stop()
 
         // We have no notifications we want to persist after death,
         // so remove them all now. In the future we may want to be
@@ -2188,15 +2203,11 @@ class AppDelegate: NSObject,
 
     @MainActor
     func controlHarnessSamplingTargets() -> [ControlHarnessSamplerTarget] {
-        let managedStates = Dictionary(uniqueKeysWithValues: aiTerminalManagerStore.sessions.map {
-            ($0.id, $0.managedState)
-        })
-
         return TerminalController.all.flatMap { controller in
             controller.allSurfaces.map { surface in
                 let isFocused = controller.focusedSurface?.id == surface.id
                 let isVisible = controller.visibleSurfaces.contains(where: { $0.id == surface.id })
-                let managedState = managedStates[surface.id] ?? .manual
+                let managedState = aiTerminalManagerStore.projectedManagedState(for: surface.id)
                 return ControlHarnessSamplerTarget(
                     terminalID: surface.id.uuidString,
                     surface: surface,

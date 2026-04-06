@@ -983,9 +983,26 @@ final class ControlHarnessGateway {
 
     private func requiredScope(for request: ControlHarnessRequest) -> ControlHarnessAuthScope? {
         switch request.command {
-        case "snapshot", "read-terminal", "events.subscribe":
+        case "snapshot", "agent.runtime.snapshot", "read-terminal", "events.subscribe":
             return .observe
-        case "new-tab", "close-tab", "rename-tab", "send-text", "run-command", "close-terminal":
+        case "new-tab",
+            "close-tab",
+            "rename-tab",
+            "agent.runtime.session.register",
+            "agent.runtime.session.heartbeat",
+            "agent.runtime.session.release",
+            "agent.runtime.task.enqueue",
+            "agent.runtime.task.claim",
+            "agent.runtime.task.claim_next",
+            "agent.runtime.task.update",
+            "agent.runtime.task.approve",
+            "agent.runtime.task.cancel",
+            "agent.runtime.schedule.enqueue",
+            "agent.runtime.schedule.update",
+            "agent.runtime.schedule.cancel",
+            "send-text",
+            "run-command",
+            "close-terminal":
             return .mutate
         default:
             return nil

@@ -730,6 +730,23 @@ struct ControlHarnessRequest: Codable {
     let readAfterWriteID: String?
     let pairingCode: String?
     let requestedScopes: [String]?
+    let sessionID: String?
+    let taskID: String?
+    let scheduleID: String?
+    let capabilities: [String]?
+    let leaseDurationSeconds: Double?
+    let taskKind: String?
+    let taskKinds: [String]?
+    let recurrenceMode: String?
+    let intervalSeconds: Double?
+    let priority: Int?
+    let scheduledAt: String?
+    let maxRetryCount: Int?
+    let metadata: [String: String]?
+    let taskState: String?
+    let scheduleState: String?
+    let errorSummary: String?
+    let reason: String?
 
     enum CodingKeys: String, CodingKey {
         case requestID = "request_id"
@@ -769,6 +786,23 @@ struct ControlHarnessRequest: Codable {
         case readAfterWriteID = "read_after_write_id"
         case pairingCode = "pairing_code"
         case requestedScopes = "requested_scopes"
+        case sessionID = "session_id"
+        case taskID = "task_id"
+        case scheduleID = "schedule_id"
+        case capabilities
+        case leaseDurationSeconds = "lease_duration_seconds"
+        case taskKind = "task_kind"
+        case taskKinds = "task_kinds"
+        case recurrenceMode = "recurrence_mode"
+        case intervalSeconds = "interval_seconds"
+        case priority
+        case scheduledAt = "scheduled_at"
+        case maxRetryCount = "max_retry_count"
+        case metadata
+        case taskState = "task_state"
+        case scheduleState = "schedule_state"
+        case errorSummary = "error_summary"
+        case reason
     }
 
     init(
@@ -808,7 +842,24 @@ struct ControlHarnessRequest: Codable {
         cursor: String?,
         readAfterWriteID: String?,
         pairingCode: String? = nil,
-        requestedScopes: [String]? = nil
+        requestedScopes: [String]? = nil,
+        sessionID: String? = nil,
+        taskID: String? = nil,
+        scheduleID: String? = nil,
+        capabilities: [String]? = nil,
+        leaseDurationSeconds: Double? = nil,
+        taskKind: String? = nil,
+        taskKinds: [String]? = nil,
+        recurrenceMode: String? = nil,
+        intervalSeconds: Double? = nil,
+        priority: Int? = nil,
+        scheduledAt: String? = nil,
+        maxRetryCount: Int? = nil,
+        metadata: [String: String]? = nil,
+        taskState: String? = nil,
+        scheduleState: String? = nil,
+        errorSummary: String? = nil,
+        reason: String? = nil
     ) {
         self.requestID = requestID
         self.protocolVersion = protocolVersion
@@ -847,6 +898,23 @@ struct ControlHarnessRequest: Codable {
         self.readAfterWriteID = readAfterWriteID
         self.pairingCode = pairingCode
         self.requestedScopes = requestedScopes
+        self.sessionID = sessionID
+        self.taskID = taskID
+        self.scheduleID = scheduleID
+        self.capabilities = capabilities
+        self.leaseDurationSeconds = leaseDurationSeconds
+        self.taskKind = taskKind
+        self.taskKinds = taskKinds
+        self.recurrenceMode = recurrenceMode
+        self.intervalSeconds = intervalSeconds
+        self.priority = priority
+        self.scheduledAt = scheduledAt
+        self.maxRetryCount = maxRetryCount
+        self.metadata = metadata
+        self.taskState = taskState
+        self.scheduleState = scheduleState
+        self.errorSummary = errorSummary
+        self.reason = reason
     }
 }
 
@@ -1226,6 +1294,22 @@ private struct ControlHarnessMutationFingerprint: Encodable {
     let workspaceID: String?
     let includeCompleted: Bool?
     let expectedGeneration: Int?
+    let sessionID: String?
+    let taskID: String?
+    let scheduleID: String?
+    let capabilities: [String]?
+    let leaseDurationSeconds: Double?
+    let taskKind: String?
+    let recurrenceMode: String?
+    let intervalSeconds: Double?
+    let priority: Int?
+    let scheduledAt: String?
+    let maxRetryCount: Int?
+    let metadata: [String: String]?
+    let taskState: String?
+    let scheduleState: String?
+    let errorSummary: String?
+    let reason: String?
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol_version"
@@ -1247,7 +1331,46 @@ private struct ControlHarnessMutationFingerprint: Encodable {
         case workspaceID = "workspace_id"
         case includeCompleted = "include_completed"
         case expectedGeneration = "expected_generation"
+        case sessionID = "session_id"
+        case taskID = "task_id"
+        case scheduleID = "schedule_id"
+        case capabilities
+        case leaseDurationSeconds = "lease_duration_seconds"
+        case taskKind = "task_kind"
+        case recurrenceMode = "recurrence_mode"
+        case intervalSeconds = "interval_seconds"
+        case priority
+        case scheduledAt = "scheduled_at"
+        case maxRetryCount = "max_retry_count"
+        case metadata
+        case taskState = "task_state"
+        case scheduleState = "schedule_state"
+        case errorSummary = "error_summary"
+        case reason
     }
+}
+
+private struct ControlAgentRuntimeSnapshotResult: Encodable {
+    let settings: AgentRuntimeSettings
+    let sessions: [AgentRuntimeSession]
+    let tasks: [AgentRuntimeTask]
+    let schedules: [AgentRuntimeSchedule]
+}
+
+private struct ControlAgentRuntimeSessionResult: Encodable {
+    let session: AgentRuntimeSession
+}
+
+private struct ControlAgentRuntimeTaskClaimResult: Encodable {
+    let task: AgentRuntimeTask?
+}
+
+private struct ControlAgentRuntimeTaskResult: Encodable {
+    let task: AgentRuntimeTask
+}
+
+private struct ControlAgentRuntimeScheduleResult: Encodable {
+    let schedule: AgentRuntimeSchedule
 }
 
 private struct ControlAuditRecord: Encodable {
@@ -1342,6 +1465,19 @@ final class ControlHarnessCore {
     static let supportedCommands = [
         "handshake",
         "snapshot",
+        "agent.runtime.snapshot",
+        "agent.runtime.session.register",
+        "agent.runtime.session.heartbeat",
+        "agent.runtime.session.release",
+        "agent.runtime.task.enqueue",
+        "agent.runtime.task.claim",
+        "agent.runtime.task.claim_next",
+        "agent.runtime.task.update",
+        "agent.runtime.task.approve",
+        "agent.runtime.task.cancel",
+        "agent.runtime.schedule.enqueue",
+        "agent.runtime.schedule.update",
+        "agent.runtime.schedule.cancel",
         "new-tab",
         "close-tab",
         "rename-tab",
@@ -1712,6 +1848,175 @@ final class ControlHarnessCore {
                 throw ControlHarnessCoreError.invalidArgument("workspace_id must be a UUID when provided")
             }
 
+        case "agent.runtime.snapshot":
+            break
+
+        case "agent.runtime.session.register":
+            if let sessionID = request.sessionID?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !sessionID.isEmpty,
+               UUID(uuidString: sessionID) == nil {
+                throw ControlHarnessCoreError.invalidArgument("session_id must be a UUID when provided")
+            }
+            if let tabID = request.tabID?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !tabID.isEmpty,
+               UUID(uuidString: tabID) == nil {
+                throw ControlHarnessCoreError.invalidArgument("tab_id must be a UUID when provided")
+            }
+            if let terminalID = request.terminalID?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !terminalID.isEmpty,
+               UUID(uuidString: terminalID) == nil {
+                throw ControlHarnessCoreError.invalidArgument("terminal_id must be a UUID when provided")
+            }
+            if let workspaceID = request.workspaceID?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !workspaceID.isEmpty,
+               UUID(uuidString: workspaceID) == nil {
+                throw ControlHarnessCoreError.invalidArgument("workspace_id must be a UUID when provided")
+            }
+            if let leaseDurationSeconds = request.leaseDurationSeconds,
+               leaseDurationSeconds <= 0 {
+                throw ControlHarnessCoreError.invalidArgument("lease_duration_seconds must be > 0")
+            }
+
+        case "agent.runtime.session.heartbeat", "agent.runtime.session.release", "agent.runtime.task.claim", "agent.runtime.task.claim_next":
+            guard let sessionID = request.sessionID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !sessionID.isEmpty,
+                  UUID(uuidString: sessionID) != nil else {
+                throw ControlHarnessCoreError.invalidArgument("Valid session_id is required")
+            }
+            if let leaseDurationSeconds = request.leaseDurationSeconds,
+               leaseDurationSeconds <= 0 {
+                throw ControlHarnessCoreError.invalidArgument("lease_duration_seconds must be > 0")
+            }
+
+        case "agent.runtime.task.enqueue":
+            guard let taskKind = request.taskKind?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !taskKind.isEmpty,
+                  AgentRuntimeTaskKind(rawValue: taskKind) != nil else {
+                throw ControlHarnessCoreError.invalidArgument("Valid task_kind is required")
+            }
+            if let scheduledAt = request.scheduledAt?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !scheduledAt.isEmpty,
+               Self.parseISO8601Date(scheduledAt) == nil {
+                throw ControlHarnessCoreError.invalidArgument("scheduled_at must be ISO-8601")
+            }
+            if let maxRetryCount = request.maxRetryCount,
+               maxRetryCount < 0 {
+                throw ControlHarnessCoreError.invalidArgument("max_retry_count must be >= 0")
+            }
+            try validateAgentRuntimeTaskPayload(taskKind: taskKind, request: request)
+
+        case "agent.runtime.task.update":
+            guard let sessionID = request.sessionID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !sessionID.isEmpty,
+                  UUID(uuidString: sessionID) != nil else {
+                throw ControlHarnessCoreError.invalidArgument("Valid session_id is required")
+            }
+            guard let taskID = request.taskID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !taskID.isEmpty,
+                  UUID(uuidString: taskID) != nil else {
+                throw ControlHarnessCoreError.invalidArgument("Valid task_id is required")
+            }
+            guard let taskState = request.taskState?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !taskState.isEmpty,
+                  AgentRuntimeTaskState(rawValue: taskState) != nil else {
+                throw ControlHarnessCoreError.invalidArgument("Valid task_state is required")
+            }
+
+        case "agent.runtime.task.approve":
+            guard let sessionID = request.sessionID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !sessionID.isEmpty,
+                  UUID(uuidString: sessionID) != nil else {
+                throw ControlHarnessCoreError.invalidArgument("Valid session_id is required")
+            }
+            guard let taskID = request.taskID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !taskID.isEmpty,
+                  UUID(uuidString: taskID) != nil else {
+                throw ControlHarnessCoreError.invalidArgument("Valid task_id is required")
+            }
+
+        case "agent.runtime.task.cancel":
+            guard let taskID = request.taskID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !taskID.isEmpty,
+                  UUID(uuidString: taskID) != nil else {
+                throw ControlHarnessCoreError.invalidArgument("Valid task_id is required")
+            }
+            if let sessionID = request.sessionID?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !sessionID.isEmpty,
+               UUID(uuidString: sessionID) == nil {
+                throw ControlHarnessCoreError.invalidArgument("session_id must be a UUID when provided")
+            }
+            if normalizedOptionalString(request.sessionID) == nil, request.force != true {
+                throw ControlHarnessCoreError.invalidArgument("task.cancel requires session_id or force=true")
+            }
+
+        case "agent.runtime.schedule.enqueue":
+            guard let taskKind = request.taskKind?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !taskKind.isEmpty,
+                  AgentRuntimeTaskKind(rawValue: taskKind) != nil else {
+                throw ControlHarnessCoreError.invalidArgument("Valid task_kind is required")
+            }
+            if let scheduledAt = request.scheduledAt?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !scheduledAt.isEmpty,
+               Self.parseISO8601Date(scheduledAt) == nil {
+                throw ControlHarnessCoreError.invalidArgument("scheduled_at must be ISO-8601")
+            }
+            if let recurrenceMode = normalizedOptionalString(request.recurrenceMode),
+               AgentRuntimeScheduleRecurrence.Mode(rawValue: recurrenceMode) == nil {
+                throw ControlHarnessCoreError.invalidArgument("recurrence_mode must be once|interval")
+            }
+            if let intervalSeconds = request.intervalSeconds,
+               intervalSeconds <= 0 {
+                throw ControlHarnessCoreError.invalidArgument("interval_seconds must be > 0")
+            }
+            if normalizedOptionalString(request.recurrenceMode) == AgentRuntimeScheduleRecurrence.Mode.interval.rawValue,
+               request.intervalSeconds == nil {
+                throw ControlHarnessCoreError.invalidArgument("interval recurrence requires interval_seconds")
+            }
+            if let maxRetryCount = request.maxRetryCount,
+               maxRetryCount < 0 {
+                throw ControlHarnessCoreError.invalidArgument("max_retry_count must be >= 0")
+            }
+            try validateAgentRuntimeTaskPayload(taskKind: taskKind, request: request)
+
+        case "agent.runtime.schedule.update":
+            guard let scheduleID = request.scheduleID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !scheduleID.isEmpty,
+                  UUID(uuidString: scheduleID) != nil else {
+                throw ControlHarnessCoreError.invalidArgument("Valid schedule_id is required")
+            }
+            if let scheduleState = normalizedOptionalString(request.scheduleState),
+               AgentRuntimeScheduleState(rawValue: scheduleState) == nil {
+                throw ControlHarnessCoreError.invalidArgument("schedule_state must be active|paused|completed|cancelled")
+            }
+            if let recurrenceMode = normalizedOptionalString(request.recurrenceMode),
+               AgentRuntimeScheduleRecurrence.Mode(rawValue: recurrenceMode) == nil {
+                throw ControlHarnessCoreError.invalidArgument("recurrence_mode must be once|interval")
+            }
+            if let scheduledAt = request.scheduledAt?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !scheduledAt.isEmpty,
+               Self.parseISO8601Date(scheduledAt) == nil {
+                throw ControlHarnessCoreError.invalidArgument("scheduled_at must be ISO-8601")
+            }
+            if let intervalSeconds = request.intervalSeconds,
+               intervalSeconds <= 0 {
+                throw ControlHarnessCoreError.invalidArgument("interval_seconds must be > 0")
+            }
+            if request.intervalSeconds != nil,
+               normalizedOptionalString(request.recurrenceMode) == nil {
+                throw ControlHarnessCoreError.invalidArgument("interval_seconds requires recurrence_mode=interval")
+            }
+            if normalizedOptionalString(request.recurrenceMode) == AgentRuntimeScheduleRecurrence.Mode.interval.rawValue,
+               request.intervalSeconds == nil {
+                throw ControlHarnessCoreError.invalidArgument("interval recurrence requires interval_seconds")
+            }
+
+        case "agent.runtime.schedule.cancel":
+            guard let scheduleID = request.scheduleID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !scheduleID.isEmpty,
+                  UUID(uuidString: scheduleID) != nil else {
+                throw ControlHarnessCoreError.invalidArgument("Valid schedule_id is required")
+            }
+
         default:
             break
         }
@@ -1739,7 +2044,23 @@ final class ControlHarnessCore {
             completed: request.completed,
             workspaceID: request.workspaceID,
             includeCompleted: request.includeCompleted,
-            expectedGeneration: request.expectedGeneration
+            expectedGeneration: request.expectedGeneration,
+            sessionID: request.sessionID,
+            taskID: request.taskID,
+            scheduleID: request.scheduleID,
+            capabilities: request.capabilities,
+            leaseDurationSeconds: request.leaseDurationSeconds,
+            taskKind: request.taskKind,
+            recurrenceMode: request.recurrenceMode,
+            intervalSeconds: request.intervalSeconds,
+            priority: request.priority,
+            scheduledAt: request.scheduledAt,
+            maxRetryCount: request.maxRetryCount,
+            metadata: request.metadata,
+            taskState: request.taskState,
+            scheduleState: request.scheduleState,
+            errorSummary: request.errorSummary,
+            reason: request.reason
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -1764,6 +2085,45 @@ final class ControlHarnessCore {
 
         case "snapshot":
             return (AnyEncodable(makeSnapshot()), nil)
+
+        case "agent.runtime.snapshot":
+            return (AnyEncodable(try agentRuntimeSnapshot()), nil)
+
+        case "agent.runtime.session.register":
+            return (AnyEncodable(try registerAgentRuntimeSession(from: request)), nil)
+
+        case "agent.runtime.session.heartbeat":
+            return (AnyEncodable(try heartbeatAgentRuntimeSession(from: request)), nil)
+
+        case "agent.runtime.session.release":
+            return (AnyEncodable(try releaseAgentRuntimeSession(from: request)), nil)
+
+        case "agent.runtime.task.enqueue":
+            return (AnyEncodable(try enqueueAgentRuntimeTask(from: request)), nil)
+
+        case "agent.runtime.task.claim":
+            return (AnyEncodable(try claimAgentRuntimeTask(from: request)), nil)
+
+        case "agent.runtime.task.claim_next":
+            return (AnyEncodable(try claimAgentRuntimeTask(from: request)), nil)
+
+        case "agent.runtime.task.update":
+            return (AnyEncodable(try updateAgentRuntimeTask(from: request)), nil)
+
+        case "agent.runtime.task.approve":
+            return (AnyEncodable(try approveAgentRuntimeTask(from: request)), nil)
+
+        case "agent.runtime.task.cancel":
+            return (AnyEncodable(try cancelAgentRuntimeTask(from: request)), nil)
+
+        case "agent.runtime.schedule.enqueue":
+            return (AnyEncodable(try enqueueAgentRuntimeSchedule(from: request)), nil)
+
+        case "agent.runtime.schedule.update":
+            return (AnyEncodable(try updateAgentRuntimeSchedule(from: request)), nil)
+
+        case "agent.runtime.schedule.cancel":
+            return (AnyEncodable(try cancelAgentRuntimeSchedule(from: request)), nil)
 
         case "new-tab":
             let result = try createTab(from: request)
@@ -1854,6 +2214,233 @@ final class ControlHarnessCore {
             lastSequence: eventHub.currentSequence(),
             tabs: tabs
         )
+    }
+
+    private func agentRuntimeSnapshot() throws -> ControlAgentRuntimeSnapshotResult {
+        let store = try runtimeStore()
+        let snapshot = store.agentRuntimeSnapshot(now: now())
+        return .init(
+            settings: snapshot.settings,
+            sessions: snapshot.sessions,
+            tasks: snapshot.tasks,
+            schedules: snapshot.schedules
+        )
+    }
+
+    private func registerAgentRuntimeSession(
+        from request: ControlHarnessRequest
+    ) throws -> ControlAgentRuntimeSessionResult {
+        let store = try runtimeStore()
+        do {
+            let session = try store.registerAgentRuntimeSession(
+                clientKind: .codexTab,
+                tabID: try parseOptionalUUID(request.tabID, field: "tab_id"),
+                terminalID: try parseOptionalUUID(request.terminalID, field: "terminal_id"),
+                hostWorkspaceID: try parseOptionalUUID(request.workspaceID, field: "workspace_id"),
+                capabilities: request.capabilities ?? [],
+                existingSessionID: try parseOptionalUUID(request.sessionID, field: "session_id"),
+                leaseDurationSeconds: request.leaseDurationSeconds,
+                now: now()
+            )
+            return .init(session: session)
+        } catch let error as AgentRuntimeStoreError {
+            throw mapAgentRuntimeError(error)
+        }
+    }
+
+    private func heartbeatAgentRuntimeSession(
+        from request: ControlHarnessRequest
+    ) throws -> ControlAgentRuntimeSessionResult {
+        let store = try runtimeStore()
+        do {
+            let session = try store.heartbeatAgentRuntimeSession(
+                try parseRequiredUUID(request.sessionID, field: "session_id"),
+                leaseDurationSeconds: request.leaseDurationSeconds,
+                now: now()
+            )
+            return .init(session: session)
+        } catch let error as AgentRuntimeStoreError {
+            throw mapAgentRuntimeError(error)
+        }
+    }
+
+    private func releaseAgentRuntimeSession(
+        from request: ControlHarnessRequest
+    ) throws -> ControlAgentRuntimeSessionResult {
+        let store = try runtimeStore()
+        do {
+            let session = try store.releaseAgentRuntimeSession(
+                try parseRequiredUUID(request.sessionID, field: "session_id"),
+                reason: normalizedOptionalString(request.reason),
+                now: now()
+            )
+            return .init(session: session)
+        } catch let error as AgentRuntimeStoreError {
+            throw mapAgentRuntimeError(error)
+        }
+    }
+
+    private func claimAgentRuntimeTask(
+        from request: ControlHarnessRequest
+    ) throws -> ControlAgentRuntimeTaskClaimResult {
+        let store = try runtimeStore()
+        do {
+            let task = try store.claimNextAgentRuntimeTask(
+                sessionID: try parseRequiredUUID(request.sessionID, field: "session_id"),
+                allowedKinds: try parseOptionalRuntimeTaskKinds(request),
+                now: now()
+            )
+            return .init(task: task)
+        } catch let error as AgentRuntimeStoreError {
+            throw mapAgentRuntimeError(error)
+        }
+    }
+
+    private func enqueueAgentRuntimeTask(
+        from request: ControlHarnessRequest
+    ) throws -> ControlAgentRuntimeTaskResult {
+        let store = try runtimeStore()
+        do {
+            let task = try store.enqueueAgentRuntimeTask(
+                kind: try parseRuntimeTaskKind(request.taskKind),
+                priority: request.priority ?? 0,
+                capabilityRequirements: request.capabilities ?? [],
+                payload: .init(
+                    command: normalizedOptionalString(request.commandText),
+                    text: normalizedOptionalString(request.text),
+                    metadata: request.metadata ?? [:]
+                ),
+                scheduledAt: try parseOptionalISO8601Date(request.scheduledAt),
+                maxRetryCount: request.maxRetryCount ?? 0,
+                now: now()
+            )
+            return .init(task: task)
+        } catch let error as AgentRuntimeStoreError {
+            throw mapAgentRuntimeError(error)
+        }
+    }
+
+    private func updateAgentRuntimeTask(
+        from request: ControlHarnessRequest
+    ) throws -> ControlAgentRuntimeTaskResult {
+        let store = try runtimeStore()
+        do {
+            let task = try store.updateAgentRuntimeTask(
+                sessionID: try parseRequiredUUID(request.sessionID, field: "session_id"),
+                taskID: try parseRequiredUUID(request.taskID, field: "task_id"),
+                state: try parseRuntimeTaskState(request.taskState),
+                errorSummary: normalizedOptionalString(request.errorSummary),
+                now: now()
+            )
+            return .init(task: task)
+        } catch let error as AgentRuntimeStoreError {
+            throw mapAgentRuntimeError(error)
+        }
+    }
+
+    private func approveAgentRuntimeTask(
+        from request: ControlHarnessRequest
+    ) throws -> ControlAgentRuntimeTaskResult {
+        let store = try runtimeStore()
+        do {
+            let task = try store.approveAgentRuntimeTask(
+                sessionID: try parseRequiredUUID(request.sessionID, field: "session_id"),
+                taskID: try parseRequiredUUID(request.taskID, field: "task_id"),
+                now: now()
+            )
+            return .init(task: task)
+        } catch let error as AgentRuntimeStoreError {
+            throw mapAgentRuntimeError(error)
+        }
+    }
+
+    private func cancelAgentRuntimeTask(
+        from request: ControlHarnessRequest
+    ) throws -> ControlAgentRuntimeTaskResult {
+        let store = try runtimeStore()
+        do {
+            let task = try store.cancelAgentRuntimeTask(
+                taskID: try parseRequiredUUID(request.taskID, field: "task_id"),
+                sessionID: try parseOptionalUUID(request.sessionID, field: "session_id"),
+                reason: normalizedOptionalString(request.reason),
+                force: request.force == true,
+                now: now()
+            )
+            return .init(task: task)
+        } catch let error as AgentRuntimeStoreError {
+            throw mapAgentRuntimeError(error)
+        }
+    }
+
+    private func enqueueAgentRuntimeSchedule(
+        from request: ControlHarnessRequest
+    ) throws -> ControlAgentRuntimeScheduleResult {
+        let store = try runtimeStore()
+        let recurrence = AgentRuntimeScheduleRecurrence(
+            mode: try parseRuntimeScheduleRecurrenceMode(request.recurrenceMode),
+            intervalSeconds: request.intervalSeconds
+        )
+        do {
+            let schedule = try store.enqueueAgentRuntimeSchedule(
+                taskKind: try parseRuntimeTaskKind(request.taskKind),
+                priority: request.priority ?? 0,
+                capabilityRequirements: request.capabilities ?? [],
+                payload: .init(
+                    command: normalizedOptionalString(request.commandText),
+                    text: normalizedOptionalString(request.text),
+                    metadata: request.metadata ?? [:]
+                ),
+                startAt: try parseOptionalISO8601Date(request.scheduledAt),
+                recurrence: recurrence,
+                maxRetryCount: request.maxRetryCount ?? 0,
+                now: now()
+            )
+            return .init(schedule: schedule)
+        } catch let error as AgentRuntimeStoreError {
+            throw mapAgentRuntimeError(error)
+        }
+    }
+
+    private func updateAgentRuntimeSchedule(
+        from request: ControlHarnessRequest
+    ) throws -> ControlAgentRuntimeScheduleResult {
+        let store = try runtimeStore()
+        do {
+            let recurrence: AgentRuntimeScheduleRecurrence? = if normalizedOptionalString(request.recurrenceMode) != nil {
+                .init(
+                    mode: try parseRuntimeScheduleRecurrenceMode(request.recurrenceMode),
+                    intervalSeconds: request.intervalSeconds
+                )
+            } else {
+                nil
+            }
+
+            let schedule = try store.updateAgentRuntimeSchedule(
+                scheduleID: try parseRequiredUUID(request.scheduleID, field: "schedule_id"),
+                state: try parseOptionalRuntimeScheduleState(request.scheduleState),
+                startAt: try parseOptionalISO8601Date(request.scheduledAt),
+                recurrence: recurrence,
+                now: now()
+            )
+            return .init(schedule: schedule)
+        } catch let error as AgentRuntimeStoreError {
+            throw mapAgentRuntimeError(error)
+        }
+    }
+
+    private func cancelAgentRuntimeSchedule(
+        from request: ControlHarnessRequest
+    ) throws -> ControlAgentRuntimeScheduleResult {
+        let store = try runtimeStore()
+        do {
+            let schedule = try store.cancelAgentRuntimeSchedule(
+                scheduleID: try parseRequiredUUID(request.scheduleID, field: "schedule_id"),
+                now: now()
+            )
+            return .init(schedule: schedule)
+        } catch let error as AgentRuntimeStoreError {
+            throw mapAgentRuntimeError(error)
+        }
     }
 
     private func createTab(from request: ControlHarnessRequest) throws -> ControlCreateTabResult {
@@ -2504,6 +3091,22 @@ final class ControlHarnessCore {
         return uuid
     }
 
+    private func parseRequiredUUID(_ rawValue: String?, field: String) throws -> UUID {
+        guard let rawValue = normalizedOptionalString(rawValue),
+              let uuid = UUID(uuidString: rawValue) else {
+            throw ControlHarnessCoreError.invalidArgument("Missing or invalid \(field)")
+        }
+        return uuid
+    }
+
+    private func parseOptionalUUID(_ rawValue: String?, field: String) throws -> UUID? {
+        guard let rawValue = normalizedOptionalString(rawValue) else { return nil }
+        guard let uuid = UUID(uuidString: rawValue) else {
+            throw ControlHarnessCoreError.invalidArgument("Missing or invalid \(field)")
+        }
+        return uuid
+    }
+
     private func parseTodoID(_ rawValue: String?) throws -> UUID {
         guard let rawValue else {
             throw ControlHarnessCoreError.invalidArgument("Missing or invalid todo_id")
@@ -2535,11 +3138,85 @@ final class ControlHarnessCore {
         return date
     }
 
+    private func parseRuntimeTaskState(_ rawValue: String?) throws -> AgentRuntimeTaskState {
+        guard let rawValue = normalizedOptionalString(rawValue),
+              let state = AgentRuntimeTaskState(rawValue: rawValue) else {
+            throw ControlHarnessCoreError.invalidArgument("Missing or invalid task_state")
+        }
+        return state
+    }
+
+    private func parseRuntimeTaskKind(_ rawValue: String?) throws -> AgentRuntimeTaskKind {
+        guard let rawValue = normalizedOptionalString(rawValue),
+              let kind = AgentRuntimeTaskKind(rawValue: rawValue) else {
+            throw ControlHarnessCoreError.invalidArgument("Missing or invalid task_kind")
+        }
+        return kind
+    }
+
+    private func parseOptionalRuntimeTaskKinds(
+        _ request: ControlHarnessRequest
+    ) throws -> Set<AgentRuntimeTaskKind>? {
+        var parsedKinds: [AgentRuntimeTaskKind] = []
+
+        if let taskKind = normalizedOptionalString(request.taskKind) {
+            guard let parsed = AgentRuntimeTaskKind(rawValue: taskKind) else {
+                throw ControlHarnessCoreError.invalidArgument("Missing or invalid task_kind")
+            }
+            parsedKinds.append(parsed)
+        }
+
+        for rawValue in request.taskKinds ?? [] {
+            guard let normalized = normalizedOptionalString(rawValue),
+                  let parsed = AgentRuntimeTaskKind(rawValue: normalized) else {
+                throw ControlHarnessCoreError.invalidArgument("Missing or invalid task_kinds")
+            }
+            parsedKinds.append(parsed)
+        }
+
+        guard !parsedKinds.isEmpty else { return nil }
+        return Set(parsedKinds)
+    }
+
+    private func parseOptionalRuntimeScheduleState(_ rawValue: String?) throws -> AgentRuntimeScheduleState? {
+        guard let rawValue = normalizedOptionalString(rawValue) else { return nil }
+        guard let state = AgentRuntimeScheduleState(rawValue: rawValue) else {
+            throw ControlHarnessCoreError.invalidArgument("Missing or invalid schedule_state")
+        }
+        return state
+    }
+
+    private func parseRuntimeScheduleRecurrenceMode(_ rawValue: String?) throws -> AgentRuntimeScheduleRecurrence.Mode {
+        let rawValue = normalizedOptionalString(rawValue) ?? AgentRuntimeScheduleRecurrence.Mode.once.rawValue
+        guard let mode = AgentRuntimeScheduleRecurrence.Mode(rawValue: rawValue) else {
+            throw ControlHarnessCoreError.invalidArgument("Missing or invalid recurrence_mode")
+        }
+        return mode
+    }
+
+    private func parseOptionalISO8601Date(_ rawValue: String?) throws -> Date? {
+        guard let rawValue = normalizedOptionalString(rawValue) else { return nil }
+        guard let parsed = Self.parseISO8601Date(rawValue) else {
+            throw ControlHarnessCoreError.invalidArgument("scheduled_at must be ISO-8601")
+        }
+        return parsed
+    }
+
+    private func normalizedOptionalString(_ rawValue: String?) -> String? {
+        guard let rawValue else { return nil }
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     private func todoStore() throws -> AITerminalManagerStore {
         guard let appDelegate else {
             throw ControlHarnessCoreError.appUnavailable
         }
         return appDelegate.aiTerminalManagerStore
+    }
+
+    private func runtimeStore() throws -> AITerminalManagerStore {
+        try todoStore()
     }
 
     private func makeTodoSnapshot(for date: Date, includeCompleted: Bool) throws -> ControlTodoSnapshotResult {
@@ -2633,15 +3310,94 @@ final class ControlHarnessCore {
         return lines.joined(separator: "\n") + "\n"
     }
 
+    private func validateAgentRuntimeTaskPayload(
+        taskKind rawTaskKind: String,
+        request: ControlHarnessRequest
+    ) throws {
+        let metadata = request.metadata ?? [:]
+        let normalizedMetadata = metadata.reduce(into: [String: String]()) { partial, entry in
+            let key = entry.key.trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = entry.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty, !value.isEmpty else { return }
+            partial[key] = value
+        }
+        switch AgentRuntimeTaskKind(rawValue: rawTaskKind) {
+        case .terminalCommand:
+            guard let commandText = normalizedOptionalString(request.commandText),
+                  !commandText.isEmpty else {
+                throw ControlHarnessCoreError.invalidArgument("terminal_command requires non-empty command_text")
+            }
+        case .terminalText:
+            guard let text = normalizedOptionalString(request.text),
+                  !text.isEmpty else {
+                throw ControlHarnessCoreError.invalidArgument("terminal_text requires non-empty text")
+            }
+        case .browserNavigation:
+            guard normalizedOptionalString(request.text) != nil ||
+                    normalizedMetadata["url"] != nil else {
+                throw ControlHarnessCoreError.invalidArgument("browser_navigation requires text or metadata.url")
+            }
+        case .browserInteraction:
+            guard normalizedMetadata["action"] != nil else {
+                throw ControlHarnessCoreError.invalidArgument("browser_interaction requires metadata.action")
+            }
+        case .visionAutomation:
+            guard normalizedOptionalString(request.text) != nil ||
+                    normalizedMetadata["instruction"] != nil else {
+                throw ControlHarnessCoreError.invalidArgument("vision_automation requires text or metadata.instruction")
+            }
+        case .hostWorkflow, .approvalCheckpoint, .systemMaintenance:
+            break
+        case nil:
+            break
+        }
+    }
+
     private func shellSingleQuoted(_ value: String) -> String {
         let escaped = value.replacingOccurrences(of: "'", with: "'\\''")
         return "'\(escaped)'"
+    }
+
+    private func mapAgentRuntimeError(_ error: AgentRuntimeStoreError) -> ControlHarnessCoreError {
+        switch error {
+        case .runtimeDisabled:
+            return .runtimeDisabled
+        case .sessionNotFound(let sessionID):
+            return .runtimeSessionNotFound(sessionID.uuidString)
+        case .sessionExpired(let sessionID):
+            return .runtimeSessionExpired(sessionID.uuidString)
+        case .sessionAlreadyHasActiveTask(let sessionID):
+            return .runtimeSessionBusy(sessionID.uuidString)
+        case .taskNotFound(let taskID):
+            return .runtimeTaskNotFound(taskID.uuidString)
+        case .taskOwnershipMismatch(let taskID, let sessionID):
+            return .runtimeTaskOwnershipMismatch(
+                taskID: taskID.uuidString,
+                sessionID: sessionID.uuidString
+            )
+        case .invalidTaskTransition(let from, let to):
+            return .runtimeTaskTransitionRejected(from: from.rawValue, to: to.rawValue)
+        case .scheduleNotFound(let scheduleID):
+            return .runtimeScheduleNotFound(scheduleID.uuidString)
+        case .invalidScheduleTransition(let from, let to):
+            return .runtimeScheduleTransitionRejected(from: from.rawValue, to: to.rawValue)
+        }
     }
 
     nonisolated static func iso8601(_ date: Date) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: date)
+    }
+
+    nonisolated private static func parseISO8601Date(_ rawValue: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let parsed = formatter.date(from: rawValue) {
+            return parsed
+        }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: rawValue)
     }
 }
 
@@ -2655,6 +3411,15 @@ enum ControlHarnessCoreError: LocalizedError {
     case operationFailed(String)
     case staleTarget(resourceType: String, resourceID: String, expected: Int, actual: Int)
     case idempotencyConflict(String)
+    case runtimeDisabled
+    case runtimeSessionNotFound(String)
+    case runtimeSessionExpired(String)
+    case runtimeSessionBusy(String)
+    case runtimeTaskNotFound(String)
+    case runtimeTaskOwnershipMismatch(taskID: String, sessionID: String)
+    case runtimeTaskTransitionRejected(from: String, to: String)
+    case runtimeScheduleNotFound(String)
+    case runtimeScheduleTransitionRejected(from: String, to: String)
     case internalFailure
 
     var code: String {
@@ -2677,6 +3442,24 @@ enum ControlHarnessCoreError: LocalizedError {
             return "stale_target"
         case .idempotencyConflict:
             return "idempotency_conflict"
+        case .runtimeDisabled:
+            return "runtime_disabled"
+        case .runtimeSessionNotFound:
+            return "runtime_session_not_found"
+        case .runtimeSessionExpired:
+            return "runtime_session_expired"
+        case .runtimeSessionBusy:
+            return "runtime_session_busy"
+        case .runtimeTaskNotFound:
+            return "runtime_task_not_found"
+        case .runtimeTaskOwnershipMismatch:
+            return "runtime_task_ownership_mismatch"
+        case .runtimeTaskTransitionRejected:
+            return "runtime_task_transition_rejected"
+        case .runtimeScheduleNotFound:
+            return "runtime_schedule_not_found"
+        case .runtimeScheduleTransitionRejected:
+            return "runtime_schedule_transition_rejected"
         case .internalFailure:
             return "internal_failure"
         }
@@ -2702,6 +3485,24 @@ enum ControlHarnessCoreError: LocalizedError {
             return "The \(resourceType) \(resourceID) is at generation \(actual), not \(expected)"
         case .idempotencyConflict(let token):
             return "The idempotency key \(token) was reused with different request parameters"
+        case .runtimeDisabled:
+            return "Agent runtime is disabled."
+        case .runtimeSessionNotFound(let sessionID):
+            return "Agent runtime session \(sessionID.lowercased()) was not found."
+        case .runtimeSessionExpired(let sessionID):
+            return "Agent runtime session \(sessionID.lowercased()) is expired."
+        case .runtimeSessionBusy(let sessionID):
+            return "Agent runtime session \(sessionID.lowercased()) already has an active task."
+        case .runtimeTaskNotFound(let taskID):
+            return "Agent runtime task \(taskID.lowercased()) was not found."
+        case .runtimeTaskOwnershipMismatch(let taskID, let sessionID):
+            return "Agent runtime task \(taskID.lowercased()) is not owned by session \(sessionID.lowercased())."
+        case .runtimeTaskTransitionRejected(let from, let to):
+            return "Invalid agent runtime task transition: \(from) -> \(to)."
+        case .runtimeScheduleNotFound(let scheduleID):
+            return "Agent runtime schedule \(scheduleID.lowercased()) was not found."
+        case .runtimeScheduleTransitionRejected(let from, let to):
+            return "Invalid agent runtime schedule transition: \(from) -> \(to)."
         case .internalFailure:
             return "An internal control harness failure occurred"
         }

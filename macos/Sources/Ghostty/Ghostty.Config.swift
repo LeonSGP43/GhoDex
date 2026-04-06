@@ -762,6 +762,18 @@ extension Ghostty {
             repeatableStrings(for: "ghodex-heartbeat-task")
         }
 
+        var ghodexAgentRuntimeSessions: [String] {
+            repeatableStrings(for: "ghodex-agent-runtime-session")
+        }
+
+        var ghodexAgentRuntimeTasks: [String] {
+            repeatableStrings(for: "ghodex-agent-runtime-task")
+        }
+
+        var ghodexAgentRuntimeSchedules: [String] {
+            repeatableStrings(for: "ghodex-agent-runtime-schedule")
+        }
+
         var ghodexLearningLogs: [String] {
             repeatableStrings(for: "ghodex-learning-log")
         }
@@ -848,6 +860,22 @@ extension Ghostty {
 
         var ghodexHeartbeatMaxConcurrentTasks: Int {
             Int(uint(for: "ghodex-heartbeat-max-concurrent-tasks", default: 4))
+        }
+
+        var ghodexHeartbeatAllowExternalInboxMutations: Bool {
+            bool(for: "ghodex-heartbeat-allow-external-inbox-mutations", default: false)
+        }
+
+        var ghodexAgentRuntimeEnabled: Bool {
+            bool(for: "ghodex-agent-runtime-enabled", default: true)
+        }
+
+        var ghodexAgentRuntimeDefaultLeaseSeconds: Double {
+            double(for: "ghodex-agent-runtime-default-lease-seconds", default: 30)
+        }
+
+        var ghodexAgentRuntimeStaleTaskPolicy: String? {
+            optionalString(for: "ghodex-agent-runtime-stale-task-policy")
         }
 
         private func optionalString(for key: String) -> String? {
