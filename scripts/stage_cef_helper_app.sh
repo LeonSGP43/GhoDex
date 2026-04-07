@@ -23,6 +23,49 @@ app_short_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionStri
 main_exec="$contents_dir/MacOS/$app_exec"
 helper_root="$contents_dir/Frameworks"
 
+remove_signature_artifacts() {
+  local target_path="$1"
+
+  [[ -e "$target_path" ]] || return 0
+  xattr -cr "$target_path" 2>/dev/null || true
+  /usr/bin/codesign --remove-signature "$target_path" >/dev/null 2>&1 || true
+}
+
+sign_code_path() {
+  local target_path="$1"
+
+  remove_signature_artifacts "$target_path"
+  /usr/bin/codesign --force --sign - --timestamp=none "$target_path"
+}
+
+verify_code_path() {
+  local target_path="$1"
+
+  /usr/bin/codesign --verify --deep --strict --verbose=2 "$target_path" >/dev/null
+}
+
+sign_with_retry() {
+  local target_path="$1"
+  local label="$2"
+  local max_attempts=2
+  local attempt=1
+
+  while (( attempt <= max_attempts )); do
+    if sign_code_path "$target_path" && verify_code_path "$target_path"; then
+      return 0
+    fi
+
+    if (( attempt == max_attempts )); then
+      echo "codesign failed for $label after $attempt attempt(s): $target_path" >&2
+      return 1
+    fi
+
+    echo "codesign retry $attempt for $label: $target_path" >&2
+    sleep 1
+    ((attempt++))
+  done
+}
+
 stage_rpath_dependency() {
   local dependency_path="$1"
   local framework_root framework_name framework_source dylib_name dylib_source
@@ -115,13 +158,36 @@ create_helper_bundle() {
 EOF
 }
 
+sign_helper_bundle() {
+  local helper_bundle="$1"
+  local helper_contents="$helper_bundle/Contents"
+  local helper_exec
+
+  helper_exec="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$helper_contents/Info.plist")"
+
+  while IFS= read -r nested_path; do
+    sign_with_retry "$nested_path" "nested helper code"
+  done < <(
+    find "$helper_contents" -depth \( \
+      -type f -path "$helper_contents/MacOS/*" \
+      -o -type f -name '*.dylib' \
+      -o -type d -name '*.framework' \
+      -o -type d -name '*.xpc' \
+      -o -type d -name '*.app' \
+    \) -print
+  )
+
+  sign_with_retry "$helper_contents/MacOS/$helper_exec" "helper executable"
+  sign_with_retry "$helper_bundle" "helper bundle"
+}
+
 create_helper_bundle "$app_exec Helper" ""
 create_helper_bundle "$app_exec Helper (GPU)" ".gpu"
 create_helper_bundle "$app_exec Helper (Plugin)" ".plugin"
 create_helper_bundle "$app_exec Helper (Renderer)" ".renderer"
 
-/usr/bin/codesign --force --sign - --deep --timestamp=none "$helper_root/$app_exec Helper.app"
-/usr/bin/codesign --force --sign - --deep --timestamp=none "$helper_root/$app_exec Helper (GPU).app"
-/usr/bin/codesign --force --sign - --deep --timestamp=none "$helper_root/$app_exec Helper (Plugin).app"
-/usr/bin/codesign --force --sign - --deep --timestamp=none "$helper_root/$app_exec Helper (Renderer).app"
-/usr/bin/codesign --force --sign - --deep --timestamp=none "$app_bundle"
+sign_helper_bundle "$helper_root/$app_exec Helper.app"
+sign_helper_bundle "$helper_root/$app_exec Helper (GPU).app"
+sign_helper_bundle "$helper_root/$app_exec Helper (Plugin).app"
+sign_helper_bundle "$helper_root/$app_exec Helper (Renderer).app"
+sign_with_retry "$app_bundle" "app bundle"
