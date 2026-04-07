@@ -360,6 +360,12 @@ def main [
         []
     }
 
+    let destination_args = if $action == "test" {
+        [-destination "platform=macOS"]
+    } else {
+        []
+    }
+
     let cef_build_settings = if $cef_enabled {
         [
             "GHODEX_CEF_ENABLED=1",
@@ -383,6 +389,7 @@ def main [
         -project $project
         -scheme $scheme
         -configuration $configuration
+        ...$destination_args
         ...$cef_arch_build_settings.xcodebuild_args
         -derivedDataPath $derived_data_dir
         $"SYMROOT=($build_dir)"
