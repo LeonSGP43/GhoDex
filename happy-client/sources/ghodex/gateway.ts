@@ -44,6 +44,7 @@ interface GatewayRequest {
     device_label?: string;
     requested_scopes?: string[];
     pairing_code?: string;
+    desktop_id?: string;
     tab_id?: string;
     parent_tab_id?: string;
     terminal_id?: string;
@@ -64,6 +65,22 @@ interface GatewayRequest {
     read_after_write_id?: string;
     since_sequence?: number;
     event_limit?: number;
+}
+
+export interface TerminalMutationChannel {
+    sendText(input: {
+        authToken: string;
+        terminalId: string;
+        text: string;
+        expectedGeneration?: number;
+    }): Promise<TerminalMutationResult>;
+    sendKey(input: {
+        authToken: string;
+        terminalId: string;
+        terminalKey: string;
+        expectedGeneration?: number;
+    }): Promise<TerminalMutationResult>;
+    close(): void;
 }
 
 function nextRequestId(prefix: string): string {
@@ -163,17 +180,36 @@ function relayFallbackConnection(connection: GatewayConnection): GatewayConnecti
     if (!connection.publicEndpoint?.trim() || !connection.transportSharedSecret?.trim()) {
         return null;
     }
+    if (!connection.desktopId?.trim()) {
+        return null;
+    }
     return {
         ...connection,
         transportMode: 'relay',
     };
 }
 
+function applyDesktopRouting(
+    request: GatewayRequest,
+    connection: GatewayConnection,
+): GatewayRequest {
+    const desktopId = connection.desktopId?.trim();
+    if (!desktopId || request.desktop_id) {
+        return request;
+    }
+    return {
+        ...request,
+        desktop_id: desktopId,
+    };
+}
+
 async function sendRequestOnce(connection: GatewayConnection, request: GatewayRequest): Promise<GatewayEnvelope> {
+    const routedRequest = applyDesktopRouting(request, connection);
     const url = resolveGatewaySocketUrl({
         transportMode: connection.transportMode === 'relay' ? 'relay' : 'lan',
         host: connection.host,
         port: connection.port,
+        desktopId: connection.desktopId,
         publicEndpoint: connection.publicEndpoint,
         transportSharedSecret: connection.transportSharedSecret,
     });
@@ -201,8 +237,8 @@ async function sendRequestOnce(connection: GatewayConnection, request: GatewayRe
         socket.onopen = () => {
             if (usesEncryptedGatewayTransport(connection)) {
                 void encodeEncryptedGatewayRequest({
-                    request: request as unknown as Record<string, unknown>,
-                    authToken: request.auth_token ?? '',
+                    request: routedRequest as unknown as Record<string, unknown>,
+                    authToken: routedRequest.auth_token ?? '',
                     transportSharedSecret: connection.transportSharedSecret!.trim(),
                 }).then((encryptedRequest) => {
                     socket.send(JSON.stringify(encryptedRequest));
@@ -217,7 +253,7 @@ async function sendRequestOnce(connection: GatewayConnection, request: GatewayRe
                 });
                 return;
             }
-            socket.send(JSON.stringify(request));
+            socket.send(JSON.stringify(routedRequest));
         };
 
         socket.onmessage = async (event) => {
@@ -276,6 +312,278 @@ async function sendRequest(connection: GatewayConnection, request: GatewayReques
         }
         return sendRequestOnce(relayConnection, request);
     }
+}
+
+export function createTerminalMutationChannel(connection: GatewayConnection): TerminalMutationChannel {
+    const relayConnection = relayFallbackConnection(connection);
+    let activeConnection = connection;
+    let socket: WebSocket | null = null;
+    let openingPromise: Promise<void> | null = null;
+    let openingReject: ((error: Error) => void) | null = null;
+    let pendingRequest: {
+        requestId: string;
+        resolve: (envelope: GatewayEnvelope) => void;
+        reject: (error: Error) => void;
+        timeout: ReturnType<typeof setTimeout>;
+    } | null = null;
+    let closed = false;
+
+    const clearPendingRequest = (error: Error) => {
+        if (!pendingRequest) {
+            return;
+        }
+        const pending = pendingRequest;
+        pendingRequest = null;
+        clearTimeout(pending.timeout);
+        pending.reject(error);
+    };
+
+    const resolveConnectionUrl = (target: GatewayConnection) => resolveGatewaySocketUrl({
+        transportMode: target.transportMode === 'relay' ? 'relay' : 'lan',
+        host: target.host,
+        port: target.port,
+        desktopId: target.desktopId,
+        publicEndpoint: target.publicEndpoint,
+        transportSharedSecret: target.transportSharedSecret,
+    });
+
+    const connect = async (target: GatewayConnection): Promise<void> => {
+        if (closed) {
+            throw new GatewayProtocolError('Terminal mutation channel is closed');
+        }
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            return;
+        }
+        if (openingPromise) {
+            return openingPromise;
+        }
+
+        const url = resolveConnectionUrl(target);
+        const nextSocket = new WebSocket(url);
+        socket = nextSocket;
+
+        openingPromise = new Promise<void>((resolve, reject) => {
+            openingReject = reject;
+
+            nextSocket.onopen = () => {
+                if (socket !== nextSocket) {
+                    return;
+                }
+                openingPromise = null;
+                openingReject = null;
+                resolve();
+            };
+
+            nextSocket.onmessage = (event) => {
+                const inFlight = pendingRequest;
+                if (!inFlight || socket !== nextSocket) {
+                    return;
+                }
+
+                const rawText = typeof event.data === 'string' ? event.data : String(event.data ?? '');
+                void parseReceivedEnvelope(rawText, target).then((envelope) => {
+                    if (pendingRequest !== inFlight) {
+                        return;
+                    }
+
+                    if (typeof envelope.request_id !== 'string' || envelope.request_id.length === 0) {
+                        pendingRequest = null;
+                        clearTimeout(inFlight.timeout);
+                        inFlight.reject(new GatewayProtocolError(
+                            'Gateway response request_id is missing for active mutation request',
+                        ));
+                        nextSocket.close();
+                        return;
+                    }
+
+                    if (envelope.request_id !== inFlight.requestId) {
+                        pendingRequest = null;
+                        clearTimeout(inFlight.timeout);
+                        inFlight.reject(new GatewayProtocolError('Gateway response request_id does not match active mutation request'));
+                        nextSocket.close();
+                        return;
+                    }
+
+                    pendingRequest = null;
+                    clearTimeout(inFlight.timeout);
+                    if (envelope.status === 'error') {
+                        inFlight.reject(new GatewayProtocolError(
+                            envelope.error_message ?? envelope.error_code ?? 'Gateway rejected request',
+                            envelope.error_code,
+                        ));
+                        return;
+                    }
+                    inFlight.resolve(envelope);
+                }).catch((error) => {
+                    if (pendingRequest !== inFlight) {
+                        return;
+                    }
+                    pendingRequest = null;
+                    clearTimeout(inFlight.timeout);
+                    inFlight.reject(error instanceof Error ? error : new GatewayProtocolError('Invalid gateway response'));
+                });
+            };
+
+            nextSocket.onerror = () => {
+                if (socket === nextSocket) {
+                    socket = null;
+                }
+                openingPromise = null;
+                const openReject = openingReject;
+                openingReject = null;
+                if (openReject) {
+                    openReject(new GatewayProtocolError(`Unable to open WebSocket to ${url}`));
+                    return;
+                }
+                clearPendingRequest(new GatewayProtocolError(`Gateway websocket transport error for ${url}`));
+            };
+
+            nextSocket.onclose = (event) => {
+                if (socket === nextSocket) {
+                    socket = null;
+                }
+                openingPromise = null;
+                const closeError = new GatewayProtocolError(
+                    event.reason || `Gateway socket closed before reply (code ${event.code})`,
+                );
+                const openReject = openingReject;
+                openingReject = null;
+                if (openReject) {
+                    openReject(closeError);
+                    return;
+                }
+                clearPendingRequest(closeError);
+            };
+        });
+
+        return openingPromise;
+    };
+
+    const ensureConnected = async (): Promise<void> => {
+        try {
+            await connect(activeConnection);
+        } catch (error) {
+            if (activeConnection.transportMode === 'relay' || !relayConnection) {
+                throw error;
+            }
+            activeConnection = relayConnection;
+            await connect(activeConnection);
+        }
+    };
+
+    const sendMutationRequest = async (request: GatewayRequest): Promise<GatewayEnvelope> => {
+        if (closed) {
+            throw new GatewayProtocolError('Terminal mutation channel is closed');
+        }
+        if (pendingRequest) {
+            throw new GatewayProtocolError('Terminal mutation channel does not support concurrent requests');
+        }
+
+        await ensureConnected();
+        const activeSocket = socket;
+        if (!activeSocket || activeSocket.readyState !== WebSocket.OPEN) {
+            throw new GatewayProtocolError('Terminal mutation channel is not connected');
+        }
+
+        const routedRequest = applyDesktopRouting(request, activeConnection);
+        const payloadText = usesEncryptedGatewayTransport(activeConnection)
+            ? JSON.stringify(await encodeEncryptedGatewayRequest({
+                request: routedRequest as unknown as Record<string, unknown>,
+                authToken: routedRequest.auth_token ?? '',
+                transportSharedSecret: activeConnection.transportSharedSecret!.trim(),
+            }))
+            : JSON.stringify(routedRequest);
+
+        return new Promise<GatewayEnvelope>((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                if (!pendingRequest || pendingRequest.requestId !== routedRequest.request_id) {
+                    return;
+                }
+                pendingRequest = null;
+                reject(new GatewayProtocolError(`Gateway request timed out after ${DEFAULT_TIMEOUT_MS}ms`));
+                activeSocket.close();
+            }, DEFAULT_TIMEOUT_MS);
+
+            pendingRequest = {
+                requestId: routedRequest.request_id,
+                resolve,
+                reject,
+                timeout,
+            };
+
+            try {
+                activeSocket.send(payloadText);
+            } catch (error) {
+                pendingRequest = null;
+                clearTimeout(timeout);
+                reject(error instanceof Error ? error : new GatewayProtocolError('Failed to send mutation request'));
+                activeSocket.close();
+            }
+        });
+    };
+
+    return {
+        async sendText(input) {
+            const authToken = input.authToken.trim();
+            const terminalId = input.terminalId.trim();
+            if (!authToken) {
+                throw new GatewayProtocolError('Auth token is empty');
+            }
+            if (!terminalId) {
+                throw new GatewayProtocolError('terminal_id is empty');
+            }
+            if (!input.text) {
+                throw new GatewayProtocolError('text is empty');
+            }
+
+            const envelope = await sendMutationRequest({
+                request_id: nextRequestId('send-text'),
+                command: 'send-text',
+                auth_token: authToken,
+                terminal_id: terminalId,
+                text: input.text,
+                expected_generation: input.expectedGeneration,
+            });
+            return parseTerminalMutationResult(envelope);
+        },
+        async sendKey(input) {
+            const authToken = input.authToken.trim();
+            const terminalId = input.terminalId.trim();
+            const terminalKey = input.terminalKey.trim();
+            if (!authToken) {
+                throw new GatewayProtocolError('Auth token is empty');
+            }
+            if (!terminalId) {
+                throw new GatewayProtocolError('terminal_id is empty');
+            }
+            if (!terminalKey) {
+                throw new GatewayProtocolError('terminal_key is empty');
+            }
+
+            const envelope = await sendMutationRequest({
+                request_id: nextRequestId('send-key'),
+                command: 'send-key',
+                auth_token: authToken,
+                terminal_id: terminalId,
+                terminal_key: terminalKey,
+                expected_generation: input.expectedGeneration,
+            });
+            return parseTerminalMutationResult(envelope);
+        },
+        close() {
+            closed = true;
+            clearPendingRequest(new GatewayProtocolError('Terminal mutation channel closed by client'));
+            const openReject = openingReject;
+            const activeSocket = socket;
+            socket = null;
+            openingPromise = null;
+            openingReject = null;
+            if (openReject) {
+                openReject(new GatewayProtocolError('Terminal mutation channel closed by client'));
+            }
+            activeSocket?.close();
+        },
+    };
 }
 
 function parsePairingBeginResult(envelope: GatewayEnvelope): PairingBeginResult {
@@ -433,6 +741,22 @@ function parseTerminalSnapshotV2Result(envelope: GatewayEnvelope): TerminalSnaps
     };
 }
 
+function mapLegacySnapshotReadToV2Result(
+    readResult: TerminalReadResult,
+): TerminalSnapshotV2Result {
+    return {
+        terminalId: readResult.terminalId,
+        generation: readResult.generation,
+        scope: readResult.scope || 'visible',
+        snapshotFormat: 'legacy_read_terminal',
+        capturedAt: readResult.capturedAt,
+        cacheAgeMs: readResult.cacheAgeMs,
+        frameId: readResult.frameId,
+        parentFrameId: readResult.parentFrameId,
+        content: readResult.content,
+    };
+}
+
 function parseTerminalSemanticV2Result(envelope: GatewayEnvelope): TerminalSemanticV2Result {
     const result = ensureObject(envelope.result, 'terminal semantic v2 result');
     const terminalId = readString(result, 'terminal_id');
@@ -463,6 +787,22 @@ function shouldFallbackToSnapshotFromSemanticError(error: unknown): boolean {
 
     const message = error.message.toLowerCase();
     return message.includes('terminal semantic v2');
+}
+
+function shouldFallbackToLegacySnapshotFromV2Error(error: unknown): boolean {
+    if (!(error instanceof GatewayProtocolError)) {
+        return false;
+    }
+
+    const code = (error.code ?? '').toLowerCase();
+    if (code === 'unsupported_command' || code === 'invalid_argument') {
+        return true;
+    }
+
+    const message = error.message.toLowerCase();
+    return message.includes('terminal snapshot v2')
+        || message.includes('terminal.snapshot.v2')
+        || message.includes('unsupported control command');
 }
 
 function parseTerminalStreamOpenResult(envelope: GatewayEnvelope): TerminalStreamOpenResult {
@@ -617,6 +957,7 @@ export async function pairingExchange(input: GatewayConnection & {
             request_id: nextRequestId('pair-exchange'),
             command: 'gateway.pairing.exchange',
             pairing_code: pairingCode,
+            desktop_id: input.desktopId?.trim() || undefined,
         },
     );
     return parsePairingExchangeResult(envelope);
@@ -709,6 +1050,29 @@ export async function readTerminalSnapshotV2(input: GatewayConnection & {
     return parseTerminalSnapshotV2Result(envelope);
 }
 
+export async function readTerminalSnapshotDefault(input: GatewayConnection & {
+    authToken: string;
+    terminalId: string;
+    expectedGeneration?: number;
+    scope?: 'visible' | 'screen';
+}): Promise<TerminalSnapshotV2Result> {
+    try {
+        return await readTerminalSnapshotV2(input);
+    } catch (error) {
+        if (!shouldFallbackToLegacySnapshotFromV2Error(error)) {
+            throw error;
+        }
+
+        const fallbackRead = await readTerminal({
+            ...input,
+            mode: 'snapshot',
+            maxChars: 24_000,
+            maxLines: 300,
+        });
+        return mapLegacySnapshotReadToV2Result(fallbackRead);
+    }
+}
+
 export async function readTerminalSemanticV2(input: GatewayConnection & {
     authToken: string;
     terminalId: string;
@@ -755,7 +1119,7 @@ export async function readTerminalSemanticDefault(input: GatewayConnection & {
             throw error;
         }
 
-        const snapshot = await readTerminalSnapshotV2(input);
+        const snapshot = await readTerminalSnapshotDefault(input);
         return {
             kind: 'snapshot',
             result: snapshot,
@@ -822,6 +1186,7 @@ export function subscribeToTerminalStream(input: GatewayConnection & {
             transportMode: connection.transportMode === 'relay' ? 'relay' : 'lan',
             host: connection.host,
             port: connection.port,
+            desktopId: connection.desktopId,
             publicEndpoint: connection.publicEndpoint,
             transportSharedSecret: connection.transportSharedSecret,
         }));
@@ -857,9 +1222,10 @@ export function subscribeToTerminalStream(input: GatewayConnection & {
                 expected_generation: input.expectedGeneration,
                 scope: input.scope ?? 'visible',
             };
+            const routedRequest = applyDesktopRouting(request, connection);
             if (usesEncryptedGatewayTransport(connection)) {
                 void encodeEncryptedGatewayRequest({
-                    request: request as unknown as Record<string, unknown>,
+                    request: routedRequest as unknown as Record<string, unknown>,
                     authToken,
                     transportSharedSecret: connection.transportSharedSecret!.trim(),
                 }).then((encryptedRequest) => {
@@ -870,7 +1236,7 @@ export function subscribeToTerminalStream(input: GatewayConnection & {
                 });
                 return;
             }
-            socket.send(JSON.stringify(request));
+            socket.send(JSON.stringify(routedRequest));
         };
 
         socket.onmessage = async (event) => {
@@ -1155,6 +1521,7 @@ export function subscribeToGatewayEvents(input: GatewayConnection & {
             transportMode: connection.transportMode === 'relay' ? 'relay' : 'lan',
             host: connection.host,
             port: connection.port,
+            desktopId: connection.desktopId,
             publicEndpoint: connection.publicEndpoint,
             transportSharedSecret: connection.transportSharedSecret,
         }));
@@ -1188,9 +1555,10 @@ export function subscribeToGatewayEvents(input: GatewayConnection & {
                 since_sequence: Math.max(0, Math.trunc(input.sinceSequence)),
                 event_limit: input.eventLimit ?? 128,
             };
+            const routedRequest = applyDesktopRouting(request, connection);
             if (usesEncryptedGatewayTransport(connection)) {
                 void encodeEncryptedGatewayRequest({
-                    request: request as unknown as Record<string, unknown>,
+                    request: routedRequest as unknown as Record<string, unknown>,
                     authToken,
                     transportSharedSecret: connection.transportSharedSecret!.trim(),
                 }).then((encryptedRequest) => {
@@ -1201,7 +1569,7 @@ export function subscribeToGatewayEvents(input: GatewayConnection & {
                 });
                 return;
             }
-            socket.send(JSON.stringify(request));
+            socket.send(JSON.stringify(routedRequest));
         };
 
         socket.onmessage = async (event) => {

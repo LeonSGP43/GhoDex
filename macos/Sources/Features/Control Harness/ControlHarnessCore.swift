@@ -176,6 +176,7 @@ struct ControlHarnessRequest: Codable {
     let client: String?
     let deviceID: String?
     let deviceLabel: String?
+    let desktopID: String?
     let idempotencyKey: String?
     let expectedGeneration: Int?
     let sinceSequence: Int64?
@@ -191,6 +192,9 @@ struct ControlHarnessRequest: Codable {
     let lastAckSequence: Int64?
     let pairingCode: String?
     let requestedScopes: [String]?
+    let desktopLabel: String?
+    let upstreamHost: String?
+    let upstreamPort: UInt16?
 
     enum CodingKeys: String, CodingKey {
         case requestID = "request_id"
@@ -219,6 +223,7 @@ struct ControlHarnessRequest: Codable {
         case client
         case deviceID = "device_id"
         case deviceLabel = "device_label"
+        case desktopID = "desktop_id"
         case idempotencyKey = "idempotency_key"
         case expectedGeneration = "expected_generation"
         case sinceSequence = "since_sequence"
@@ -234,6 +239,9 @@ struct ControlHarnessRequest: Codable {
         case lastAckSequence = "last_ack_sequence"
         case pairingCode = "pairing_code"
         case requestedScopes = "requested_scopes"
+        case desktopLabel = "desktop_label"
+        case upstreamHost = "upstream_host"
+        case upstreamPort = "upstream_port"
     }
 
     init(
@@ -263,6 +271,7 @@ struct ControlHarnessRequest: Codable {
         client: String?,
         deviceID: String? = nil,
         deviceLabel: String? = nil,
+        desktopID: String? = nil,
         idempotencyKey: String?,
         expectedGeneration: Int?,
         sinceSequence: Int64?,
@@ -277,7 +286,10 @@ struct ControlHarnessRequest: Codable {
         ackBytes: Int? = nil,
         lastAckSequence: Int64? = nil,
         pairingCode: String? = nil,
-        requestedScopes: [String]? = nil
+        requestedScopes: [String]? = nil,
+        desktopLabel: String? = nil,
+        upstreamHost: String? = nil,
+        upstreamPort: UInt16? = nil
     ) {
         self.requestID = requestID
         self.protocolVersion = protocolVersion
@@ -305,6 +317,7 @@ struct ControlHarnessRequest: Codable {
         self.client = client
         self.deviceID = deviceID
         self.deviceLabel = deviceLabel
+        self.desktopID = desktopID
         self.idempotencyKey = idempotencyKey
         self.expectedGeneration = expectedGeneration
         self.sinceSequence = sinceSequence
@@ -320,6 +333,9 @@ struct ControlHarnessRequest: Codable {
         self.lastAckSequence = lastAckSequence
         self.pairingCode = pairingCode
         self.requestedScopes = requestedScopes
+        self.desktopLabel = desktopLabel
+        self.upstreamHost = upstreamHost
+        self.upstreamPort = upstreamPort
     }
 }
 

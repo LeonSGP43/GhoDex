@@ -7,6 +7,7 @@ import type { StoredSession, StoredTransportMode } from './sessionTypes';
 const STORAGE_KEY = 'ghodex.gateway.session.v1';
 const STORED_SESSION_TIMEOUT_MS = 1500;
 const DEFAULT_DEVICE_LABEL = 'This phone';
+const MIN_POLL_INTERVAL_MS = 50;
 
 const DEFAULT_DEVICE_ID = randomUUID();
 
@@ -93,7 +94,7 @@ function sanitizeStoredSession(value: unknown): StoredSession {
             : [...DEFAULT_SESSION.requestedScopes],
         liveUpdatesEnabled: object.liveUpdatesEnabled !== false,
         pollIntervalMs: typeof object.pollIntervalMs === 'number' && Number.isFinite(object.pollIntervalMs)
-            ? Math.max(30, Math.min(Math.trunc(object.pollIntervalMs), 2000))
+            ? Math.max(MIN_POLL_INTERVAL_MS, Math.min(Math.trunc(object.pollIntervalMs), 2000))
             : DEFAULT_SESSION.pollIntervalMs,
     };
 }

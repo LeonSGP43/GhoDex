@@ -133,15 +133,17 @@ describe('ghodex gateway pairing', () => {
             host: '10.0.0.7',
             port: 29527,
             pairingCode: 'PAIR-RELAY',
+            desktopId: 'desktop-relay-qr',
             transportMode: 'relay',
             publicEndpoint: 'wss://edge.example.test/gateway',
         });
 
-        expect(MockWebSocket.openedUrls).toEqual(['wss://edge.example.test/gateway']);
+        expect(MockWebSocket.openedUrls).toEqual(['wss://edge.example.test/gateway?desktop_id=desktop-relay-qr']);
         expect(MockWebSocket.sentPayloads).toHaveLength(1);
         expect(MockWebSocket.sentPayloads[0]).toMatchObject({
             command: 'gateway.pairing.exchange',
             pairing_code: 'PAIR-RELAY',
+            desktop_id: 'desktop-relay-qr',
         });
     });
 
@@ -152,6 +154,7 @@ describe('ghodex gateway pairing', () => {
             host: '127.0.0.1',
             port: 29527,
             authToken: 'TOKEN-123',
+            desktopId: 'desktop-send-key-1',
             terminalId: 'terminal-xyz',
             terminalKey: 'enter',
         });
@@ -160,6 +163,7 @@ describe('ghodex gateway pairing', () => {
         expect(MockWebSocket.sentPayloads[0]).toMatchObject({
             command: 'send-key',
             auth_token: 'TOKEN-123',
+            desktop_id: 'desktop-send-key-1',
             terminal_id: 'terminal-xyz',
             terminal_key: 'enter',
         });

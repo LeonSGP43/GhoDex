@@ -1,6 +1,7 @@
 export interface GatewayConnection {
     host: string;
     port: number;
+    desktopId?: string | null;
     transportMode?: 'lan' | 'relay';
     publicEndpoint?: string | null;
     transportSharedSecret?: string | null;

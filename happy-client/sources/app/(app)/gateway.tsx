@@ -263,6 +263,7 @@ export default function GhoDexGatewayScreen() {
                 host: resolvedHost,
                 port: resolvedPort,
                 pairingCode: session.pairingCode,
+                desktopId: session.desktopId || undefined,
             });
 
             const nextSession = buildSession(
@@ -299,6 +300,7 @@ export default function GhoDexGatewayScreen() {
             let selectedAttempt = attempts[0] ?? {
                 host: payload.host,
                 port: payload.port,
+                desktopId: payload.desktopId,
                 transportMode: 'lan' as const,
                 publicEndpoint: undefined,
             };
@@ -310,6 +312,7 @@ export default function GhoDexGatewayScreen() {
                         host: attempt.host,
                         port: attempt.port,
                         pairingCode: payload.pairingCode,
+                        desktopId: attempt.desktopId,
                         transportMode: attempt.transportMode,
                         publicEndpoint: attempt.publicEndpoint,
                     });
@@ -328,6 +331,12 @@ export default function GhoDexGatewayScreen() {
             }
 
             const resolvedPublicEndpoint = exchange.publicEndpoint ?? payload.publicEndpoint ?? session.publicEndpoint;
+            const resolvedDesktopId = exchange.desktopId
+                ?? exchange.preferredDesktopId
+                ?? selectedAttempt.desktopId
+                ?? payload.desktopId
+                ?? session.desktopId
+                ?? null;
             const resolvedTransportMode = exchange.transportMode === 'relay'
                 ? 'relay'
                 : (selectedAttempt.transportMode === 'relay' && !!resolvedPublicEndpoint)
@@ -346,6 +355,8 @@ export default function GhoDexGatewayScreen() {
                     },
                     {
                         ...exchange,
+                        desktopId: resolvedDesktopId,
+                        preferredDesktopId: exchange.preferredDesktopId ?? resolvedDesktopId,
                         transportMode: resolvedTransportMode,
                         publicEndpoint: resolvedPublicEndpoint,
                         transportSharedSecret: exchange.transportSharedSecret ?? session.transportSharedSecret,

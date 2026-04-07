@@ -2,6 +2,7 @@ export interface GatewayPairingQrPayload {
     host: string;
     port: number;
     pairingCode: string;
+    desktopId?: string;
     transportMode?: 'lan' | 'relay';
     publicEndpoint?: string;
 }
@@ -9,6 +10,7 @@ export interface GatewayPairingQrPayload {
 export interface GatewayPairingExchangeAttempt {
     host: string;
     port: number;
+    desktopId?: string;
     transportMode: 'lan' | 'relay';
     publicEndpoint?: string;
 }
@@ -55,6 +57,7 @@ function parseJsonPayload(rawPayload: string): GatewayPairingQrPayload {
         host: requireNonBlank(object.host, 'QR host is missing'),
         port: requirePort(object.port),
         pairingCode: requireNonBlank(object.pairing_code, 'QR pairing code is missing'),
+        desktopId: parseDesktopId(object.desktop_id),
         transportMode,
         publicEndpoint,
     };
@@ -91,6 +94,7 @@ function parseUrlPayload(rawPayload: string): GatewayPairingQrPayload {
         host: requireNonBlank(url.searchParams.get('host'), 'QR host is missing'),
         port: requirePort(url.searchParams.get('port')),
         pairingCode: requireNonBlank(url.searchParams.get('pairing_code'), 'QR pairing code is missing'),
+        desktopId: parseDesktopId(url.searchParams.get('desktop_id')),
         transportMode,
         publicEndpoint,
     };
@@ -100,6 +104,7 @@ export function buildGatewayPairingExchangeAttempts(payload: GatewayPairingQrPay
     const lanAttempt: GatewayPairingExchangeAttempt = {
         host: payload.host,
         port: payload.port,
+        desktopId: payload.desktopId,
         transportMode: 'lan',
         publicEndpoint: undefined,
     };
@@ -111,6 +116,7 @@ export function buildGatewayPairingExchangeAttempts(payload: GatewayPairingQrPay
     const relayAttempt: GatewayPairingExchangeAttempt = {
         host: payload.host,
         port: payload.port,
+        desktopId: payload.desktopId,
         transportMode: 'relay',
         publicEndpoint: payload.publicEndpoint,
     };
@@ -178,6 +184,14 @@ function parsePublicEndpoint(value: unknown): string | undefined {
     } catch {
         return undefined;
     }
+}
+
+function parseDesktopId(value: unknown): string | undefined {
+    if (typeof value !== 'string') {
+        return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed || undefined;
 }
 
 function normalizeTransportMode(

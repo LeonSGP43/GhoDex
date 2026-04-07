@@ -5,7 +5,8 @@ vi.mock('@/encryption/aes', () => ({
     decryptAESGCM: async (data: Uint8Array) => data,
 }));
 
-import { ackTerminalStream, subscribeToTerminalStream } from './gateway';
+import { ackTerminalStream, createTerminalMutationChannel, subscribeToTerminalStream } from './gateway';
+import { decodeEncryptedGatewayEnvelope, encodeEncryptedGatewayRequest } from './transport';
 
 type MessageHandler = ((event: { data?: string }) => void) | null;
 type EventHandler = (() => void) | null;
@@ -13,6 +14,13 @@ type EventHandler = (() => void) | null;
 class MockWebSocket {
     static sentPayloads: Array<Record<string, unknown>> = [];
     static openedUrls: string[] = [];
+    static relaySharedSecret = 'relay-secret';
+    static mutedCommands = new Set<string>();
+    static mismatchRequestIDCommands = new Set<string>();
+    static missingRequestIDCommands = new Set<string>();
+    static closeBeforeReplyCommands = new Set<string>();
+    static failOnOpen = false;
+    static holdOpen = false;
 
     onopen: EventHandler = null;
     onmessage: MessageHandler = null;
@@ -21,7 +29,14 @@ class MockWebSocket {
 
     constructor(public readonly url: string) {
         MockWebSocket.openedUrls.push(url);
+        if (MockWebSocket.holdOpen) {
+            return;
+        }
         queueMicrotask(() => {
+            if (MockWebSocket.failOnOpen) {
+                this.onerror?.();
+                return;
+            }
             this.onopen?.();
         });
     }
@@ -29,7 +44,81 @@ class MockWebSocket {
     send(payload: string) {
         const parsed = JSON.parse(payload) as Record<string, unknown>;
         MockWebSocket.sentPayloads.push(parsed);
+        const command = typeof parsed.command === 'string' ? parsed.command : '';
+
         queueMicrotask(() => {
+            if (command === 'gateway.encrypted' && typeof parsed.encrypted_payload === 'string') {
+                void decodeEncryptedGatewayEnvelope({
+                    encryptedEnvelope: {
+                        transport_mode: 'relay',
+                        encrypted_payload: parsed.encrypted_payload,
+                    },
+                    transportSharedSecret: MockWebSocket.relaySharedSecret,
+                }).then((decryptedPayload) => {
+                    const decryptedCommand = typeof decryptedPayload.command === 'string' ? decryptedPayload.command : '';
+                    if (MockWebSocket.closeBeforeReplyCommands.has(decryptedCommand)) {
+                        this.onclose?.({
+                            code: 1011,
+                            reason: 'simulated close before reply',
+                        });
+                        return;
+                    }
+
+                    if (MockWebSocket.mutedCommands.has(decryptedCommand)) {
+                        return;
+                    }
+
+                    if (decryptedCommand === 'send-text' || decryptedCommand === 'send-key') {
+                        const terminalID = typeof decryptedPayload.terminal_id === 'string' ? decryptedPayload.terminal_id : '';
+                        const originalRequestID = typeof decryptedPayload.request_id === 'string' ? decryptedPayload.request_id : 'unknown';
+                        const missingRequestID = MockWebSocket.missingRequestIDCommands.has(decryptedCommand);
+                        const requestID = MockWebSocket.mismatchRequestIDCommands.has(decryptedCommand)
+                            ? `${originalRequestID}-mismatch`
+                            : originalRequestID;
+                        const response: Record<string, unknown> = {
+                            status: 'ok',
+                            result: {
+                                terminal_id: terminalID,
+                                generation: 7,
+                                sequence: 123,
+                                operation: decryptedCommand,
+                                acknowledged: true,
+                                write_id: 'wr_mutation',
+                            },
+                        };
+                        if (!missingRequestID) {
+                            response.request_id = requestID;
+                        }
+                        void encodeEncryptedGatewayRequest({
+                            request: response,
+                            authToken: typeof parsed.auth_token === 'string' ? parsed.auth_token : 'TOKEN-123',
+                            transportSharedSecret: MockWebSocket.relaySharedSecret,
+                        }).then((encryptedResponse) => {
+                            this.onmessage?.({
+                                data: JSON.stringify(encryptedResponse),
+                            });
+                        }).catch(() => {
+                            this.onerror?.();
+                        });
+                    }
+                }).catch(() => {
+                    this.onerror?.();
+                });
+                return;
+            }
+
+            if (MockWebSocket.closeBeforeReplyCommands.has(command)) {
+                this.onclose?.({
+                    code: 1011,
+                    reason: 'simulated close before reply',
+                });
+                return;
+            }
+
+            if (MockWebSocket.mutedCommands.has(command)) {
+                return;
+            }
+
             if (parsed.command === 'terminal.stream.open') {
                 this.onmessage?.({
                     data: JSON.stringify({
@@ -86,11 +175,40 @@ class MockWebSocket {
                         },
                     }),
                 });
+                return;
+            }
+
+            if (parsed.command === 'send-text' || parsed.command === 'send-key') {
+                const missingRequestID = MockWebSocket.missingRequestIDCommands.has(command);
+                const requestID = MockWebSocket.mismatchRequestIDCommands.has(command)
+                    ? `${String(parsed.request_id ?? 'unknown')}-mismatch`
+                    : parsed.request_id;
+                const response: Record<string, unknown> = {
+                    status: 'ok',
+                    result: {
+                        terminal_id: parsed.terminal_id,
+                        generation: 7,
+                        sequence: 123,
+                        operation: parsed.command,
+                        acknowledged: true,
+                        write_id: 'wr_mutation',
+                    },
+                };
+                if (!missingRequestID) {
+                    response.request_id = requestID;
+                }
+                this.onmessage?.({
+                    data: JSON.stringify(response),
+                });
             }
         });
     }
 
-    close() {}
+    close() {
+        queueMicrotask(() => {
+            this.onclose?.({ code: 1000, reason: 'client closed' });
+        });
+    }
 }
 
 describe('gateway terminal stream APIs', () => {
@@ -99,6 +217,13 @@ describe('gateway terminal stream APIs', () => {
     afterEach(() => {
         MockWebSocket.sentPayloads = [];
         MockWebSocket.openedUrls = [];
+        MockWebSocket.mutedCommands.clear();
+        MockWebSocket.mismatchRequestIDCommands.clear();
+        MockWebSocket.missingRequestIDCommands.clear();
+        MockWebSocket.closeBeforeReplyCommands.clear();
+        MockWebSocket.failOnOpen = false;
+        MockWebSocket.holdOpen = false;
+        vi.useRealTimers();
         globalThis.WebSocket = originalWebSocket;
     });
 
@@ -186,5 +311,259 @@ describe('gateway terminal stream APIs', () => {
             stream_id: 'strm_abc',
             ack_bytes: 512,
         });
+    });
+
+    it('reuses one websocket connection for sequential terminal mutations', async () => {
+        globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+        const channel = createTerminalMutationChannel({
+            host: '127.0.0.1',
+            port: 29527,
+        });
+
+        await expect(channel.sendText({
+            authToken: 'TOKEN-123',
+            terminalId: 'terminal-1',
+            text: 'echo hello',
+        })).resolves.toMatchObject({
+            terminalId: 'terminal-1',
+            operation: 'send-text',
+            acknowledged: true,
+        });
+
+        await expect(channel.sendKey({
+            authToken: 'TOKEN-123',
+            terminalId: 'terminal-1',
+            terminalKey: 'enter',
+        })).resolves.toMatchObject({
+            terminalId: 'terminal-1',
+            operation: 'send-key',
+            acknowledged: true,
+        });
+
+        channel.close();
+
+        expect(MockWebSocket.openedUrls).toHaveLength(1);
+        expect(MockWebSocket.sentPayloads.map((payload) => payload.command)).toEqual(['send-text', 'send-key']);
+    });
+
+    it('rejects timed-out mutation requests and reconnects for subsequent sends', async () => {
+        globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+        vi.useFakeTimers();
+        MockWebSocket.mutedCommands.add('send-text');
+        const channel = createTerminalMutationChannel({
+            host: '127.0.0.1',
+            port: 29527,
+        });
+
+        const timeoutPromise = channel.sendText({
+            authToken: 'TOKEN-123',
+            terminalId: 'terminal-1',
+            text: 'echo timeout',
+        });
+        const timeoutExpectation = expect(timeoutPromise).rejects.toThrow('Gateway request timed out after 10000ms');
+
+        await vi.advanceTimersByTimeAsync(10_001);
+        await timeoutExpectation;
+
+        MockWebSocket.mutedCommands.delete('send-text');
+        await expect(channel.sendKey({
+            authToken: 'TOKEN-123',
+            terminalId: 'terminal-1',
+            terminalKey: 'enter',
+        })).resolves.toMatchObject({
+            terminalId: 'terminal-1',
+            operation: 'send-key',
+            acknowledged: true,
+        });
+
+        channel.close();
+        expect(MockWebSocket.openedUrls).toHaveLength(2);
+    });
+
+    it('rejects request_id mismatch replies and reconnects cleanly', async () => {
+        globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+        MockWebSocket.mismatchRequestIDCommands.add('send-text');
+        const channel = createTerminalMutationChannel({
+            host: '127.0.0.1',
+            port: 29527,
+        });
+
+        await expect(channel.sendText({
+            authToken: 'TOKEN-123',
+            terminalId: 'terminal-1',
+            text: 'echo mismatch',
+        })).rejects.toThrow('Gateway response request_id does not match active mutation request');
+
+        MockWebSocket.mismatchRequestIDCommands.delete('send-text');
+        await expect(channel.sendKey({
+            authToken: 'TOKEN-123',
+            terminalId: 'terminal-1',
+            terminalKey: 'enter',
+        })).resolves.toMatchObject({
+            terminalId: 'terminal-1',
+            operation: 'send-key',
+            acknowledged: true,
+        });
+
+        channel.close();
+        expect(MockWebSocket.openedUrls).toHaveLength(2);
+    });
+
+    it('rejects missing request_id replies and reconnects cleanly', async () => {
+        globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+        MockWebSocket.missingRequestIDCommands.add('send-text');
+        const channel = createTerminalMutationChannel({
+            host: '127.0.0.1',
+            port: 29527,
+        });
+
+        await expect(channel.sendText({
+            authToken: 'TOKEN-123',
+            terminalId: 'terminal-1',
+            text: 'echo missing-id',
+        })).rejects.toThrow('Gateway response request_id is missing for active mutation request');
+
+        MockWebSocket.missingRequestIDCommands.delete('send-text');
+        await expect(channel.sendKey({
+            authToken: 'TOKEN-123',
+            terminalId: 'terminal-1',
+            terminalKey: 'enter',
+        })).resolves.toMatchObject({
+            terminalId: 'terminal-1',
+            operation: 'send-key',
+            acknowledged: true,
+        });
+
+        channel.close();
+        expect(MockWebSocket.openedUrls).toHaveLength(2);
+    });
+
+    it('rejects missing request_id replies on encrypted relay transport and reconnects cleanly', async () => {
+        globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+        MockWebSocket.missingRequestIDCommands.add('send-text');
+        const channel = createTerminalMutationChannel({
+            host: '127.0.0.1',
+            port: 29527,
+            desktopId: 'desktop-relay-stream-1',
+            transportMode: 'relay',
+            publicEndpoint: 'wss://edge.example.test/gateway',
+            transportSharedSecret: MockWebSocket.relaySharedSecret,
+        });
+
+        await expect(channel.sendText({
+            authToken: 'TOKEN-123',
+            terminalId: 'terminal-1',
+            text: 'echo missing-id-relay',
+        })).rejects.toThrow('Gateway response request_id is missing for active mutation request');
+
+        MockWebSocket.missingRequestIDCommands.delete('send-text');
+        await expect(channel.sendKey({
+            authToken: 'TOKEN-123',
+            terminalId: 'terminal-1',
+            terminalKey: 'enter',
+        })).resolves.toMatchObject({
+            terminalId: 'terminal-1',
+            operation: 'send-key',
+            acknowledged: true,
+        });
+
+        expect(MockWebSocket.openedUrls).toHaveLength(2);
+        expect(MockWebSocket.openedUrls).toEqual([
+            'wss://edge.example.test/gateway?desktop_id=desktop-relay-stream-1',
+            'wss://edge.example.test/gateway?desktop_id=desktop-relay-stream-1',
+        ]);
+        expect(MockWebSocket.sentPayloads[0]?.command).toBe('gateway.encrypted');
+        expect(MockWebSocket.sentPayloads[1]?.command).toBe('gateway.encrypted');
+
+        const firstDecrypted = await decodeEncryptedGatewayEnvelope({
+            encryptedEnvelope: {
+                transport_mode: 'relay',
+                encrypted_payload: String(MockWebSocket.sentPayloads[0]?.encrypted_payload ?? ''),
+            },
+            transportSharedSecret: MockWebSocket.relaySharedSecret,
+        });
+        expect(firstDecrypted.command).toBe('send-text');
+
+        channel.close();
+    });
+
+    it('rejects socket close before reply and reconnects on next mutation', async () => {
+        globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+        MockWebSocket.closeBeforeReplyCommands.add('send-text');
+        const channel = createTerminalMutationChannel({
+            host: '127.0.0.1',
+            port: 29527,
+        });
+
+        await expect(channel.sendText({
+            authToken: 'TOKEN-123',
+            terminalId: 'terminal-1',
+            text: 'echo close',
+        })).rejects.toThrow('simulated close before reply');
+
+        MockWebSocket.closeBeforeReplyCommands.delete('send-text');
+        await expect(channel.sendKey({
+            authToken: 'TOKEN-123',
+            terminalId: 'terminal-1',
+            terminalKey: 'enter',
+        })).resolves.toMatchObject({
+            terminalId: 'terminal-1',
+            operation: 'send-key',
+            acknowledged: true,
+        });
+
+        channel.close();
+        expect(MockWebSocket.openedUrls).toHaveLength(2);
+    });
+
+    it('rejects in-flight mutation when channel is closed by client', async () => {
+        globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+        MockWebSocket.mutedCommands.add('send-text');
+        const channel = createTerminalMutationChannel({
+            host: '127.0.0.1',
+            port: 29527,
+        });
+
+        const inFlight = channel.sendText({
+            authToken: 'TOKEN-123',
+            terminalId: 'terminal-1',
+            text: 'echo close-by-client',
+        });
+        for (let attempt = 0; attempt < 8 && MockWebSocket.sentPayloads.length === 0; attempt += 1) {
+            await Promise.resolve();
+        }
+        expect(MockWebSocket.sentPayloads.length).toBeGreaterThan(0);
+        channel.close();
+
+        await expect(inFlight).rejects.toThrow('Terminal mutation channel closed by client');
+        await expect(channel.sendKey({
+            authToken: 'TOKEN-123',
+            terminalId: 'terminal-1',
+            terminalKey: 'enter',
+        })).rejects.toThrow('Terminal mutation channel is closed');
+    });
+
+    it('rejects connect-in-flight mutation when channel closes before websocket opens', async () => {
+        globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+        MockWebSocket.holdOpen = true;
+        const channel = createTerminalMutationChannel({
+            host: '127.0.0.1',
+            port: 29527,
+        });
+
+        const pending = channel.sendText({
+            authToken: 'TOKEN-123',
+            terminalId: 'terminal-1',
+            text: 'echo close-during-connect',
+        });
+        channel.close();
+
+        await expect(Promise.race([
+            pending,
+            new Promise<never>((_, reject) => {
+                setTimeout(() => reject(new Error('connect-close promise did not settle in time')), 250);
+            }),
+        ])).rejects.toThrow('Terminal mutation channel closed by client');
+        expect(MockWebSocket.sentPayloads).toHaveLength(0);
     });
 });

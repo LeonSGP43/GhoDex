@@ -8,6 +8,7 @@ vi.mock('@/encryption/aes', () => ({
 import {
     readTerminalSemanticDefault,
     readTerminalSemanticV2,
+    readTerminalSnapshotDefault,
     readTerminalSnapshotV2,
 } from './gateway';
 
@@ -142,6 +143,42 @@ describe('gateway v2 terminal APIs', () => {
         });
     });
 
+    it('includes desktop_id routing on relay v2 reads', async () => {
+        globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+        MockWebSocket.responseFactory = (payload) => ({
+            request_id: payload.request_id,
+            status: 'ok',
+            result: {
+                terminal_id: 'terminal-8',
+                generation: 8,
+                scope: 'visible',
+                snapshot_format: 'ansi_text',
+                captured_at: '2026-03-29T01:30:00Z',
+                cache_age_ms: 10,
+                frame_id: 'frm_8',
+                parent_frame_id: 'frm_7',
+                content: 'relay snapshot',
+            },
+        });
+
+        await expect(readTerminalSnapshotV2({
+            host: '127.0.0.1',
+            port: 29527,
+            desktopId: 'desktop-relay-v2',
+            transportMode: 'relay',
+            publicEndpoint: 'wss://edge.example.test/gateway',
+            transportSharedSecret: 'relay-secret',
+            authToken: 'TOKEN-123',
+            terminalId: 'terminal-8',
+        })).resolves.toMatchObject({
+            terminalId: 'terminal-8',
+            generation: 8,
+            content: 'relay snapshot',
+        });
+
+        expect(MockWebSocket.openedUrls).toEqual(['wss://edge.example.test/gateway?desktop_id=desktop-relay-v2']);
+    });
+
     it('fails fast when terminal_id is empty for v2 reads', async () => {
         globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
 
@@ -246,5 +283,113 @@ describe('gateway v2 terminal APIs', () => {
         expect(MockWebSocket.sentPayloads).toHaveLength(2);
         expect(MockWebSocket.sentPayloads[0]).toMatchObject({ command: 'terminal.semantic.v2' });
         expect(MockWebSocket.sentPayloads[1]).toMatchObject({ command: 'terminal.snapshot.v2' });
+    });
+
+    it('falls back to read-terminal snapshot when terminal.snapshot.v2 is unsupported', async () => {
+        globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+        MockWebSocket.responseFactory = (payload) => {
+            if (payload.command === 'terminal.snapshot.v2') {
+                return {
+                    request_id: payload.request_id,
+                    status: 'error',
+                    error_code: 'unsupported_command',
+                    error_message: 'snapshot v2 not supported',
+                };
+            }
+
+            return {
+                request_id: payload.request_id,
+                status: 'ok',
+                result: {
+                    terminal_id: payload.terminal_id,
+                    generation: 13,
+                    scope: 'visible',
+                    mode: 'snapshot',
+                    captured_at: '2026-03-29T03:02:00Z',
+                    cache_age_ms: 5,
+                    frame_id: 'frm_13',
+                    parent_frame_id: 'frm_12',
+                    has_changes: true,
+                    content: 'legacy snapshot fallback',
+                },
+            };
+        };
+
+        await expect(readTerminalSnapshotDefault({
+            host: '127.0.0.1',
+            port: 29527,
+            authToken: 'TOKEN-123',
+            terminalId: 'terminal-5',
+        })).resolves.toMatchObject({
+            terminalId: 'terminal-5',
+            generation: 13,
+            snapshotFormat: 'legacy_read_terminal',
+            frameId: 'frm_13',
+            content: 'legacy snapshot fallback',
+        });
+
+        expect(MockWebSocket.sentPayloads).toHaveLength(2);
+        expect(MockWebSocket.sentPayloads[0]).toMatchObject({ command: 'terminal.snapshot.v2' });
+        expect(MockWebSocket.sentPayloads[1]).toMatchObject({
+            command: 'read-terminal',
+            mode: 'snapshot',
+            scope: 'visible',
+        });
+    });
+
+    it('falls back to read-terminal snapshot when semantic.v2 and snapshot.v2 are both unsupported', async () => {
+        globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+        MockWebSocket.responseFactory = (payload) => {
+            if (payload.command === 'terminal.semantic.v2' || payload.command === 'terminal.snapshot.v2') {
+                return {
+                    request_id: payload.request_id,
+                    status: 'error',
+                    error_code: 'unsupported_command',
+                    error_message: 'v2 not supported',
+                };
+            }
+
+            return {
+                request_id: payload.request_id,
+                status: 'ok',
+                result: {
+                    terminal_id: payload.terminal_id,
+                    generation: 14,
+                    scope: 'visible',
+                    mode: 'snapshot',
+                    captured_at: '2026-03-29T03:03:00Z',
+                    cache_age_ms: 4,
+                    frame_id: 'frm_14',
+                    parent_frame_id: 'frm_13',
+                    has_changes: true,
+                    content: 'semantic legacy fallback',
+                },
+            };
+        };
+
+        await expect(readTerminalSemanticDefault({
+            host: '127.0.0.1',
+            port: 29527,
+            authToken: 'TOKEN-123',
+            terminalId: 'terminal-6',
+        })).resolves.toMatchObject({
+            kind: 'snapshot',
+            result: {
+                terminalId: 'terminal-6',
+                generation: 14,
+                snapshotFormat: 'legacy_read_terminal',
+                frameId: 'frm_14',
+                content: 'semantic legacy fallback',
+            },
+        });
+
+        expect(MockWebSocket.sentPayloads).toHaveLength(3);
+        expect(MockWebSocket.sentPayloads[0]).toMatchObject({ command: 'terminal.semantic.v2' });
+        expect(MockWebSocket.sentPayloads[1]).toMatchObject({ command: 'terminal.snapshot.v2' });
+        expect(MockWebSocket.sentPayloads[2]).toMatchObject({
+            command: 'read-terminal',
+            mode: 'snapshot',
+            scope: 'visible',
+        });
     });
 });

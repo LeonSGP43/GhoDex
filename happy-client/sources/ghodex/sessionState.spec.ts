@@ -106,4 +106,68 @@ describe('ghodex session pairing merge', () => {
         expect(merged.publicEndpoint).toBe('');
         expect(merged.transportSharedSecret).toBe('');
     });
+
+    it('falls back to LAN when relay metadata has no desktop routing identity', () => {
+        const merged = applyPairingExchangeToSession(
+            {
+                ...INITIAL_GATEWAY_SESSION,
+                deviceId: 'device-4',
+                desktopId: '',
+                preferredDesktopId: '',
+            },
+            {
+                host: '192.168.3.145',
+                port: 29530,
+                pairingCode: 'PAIR-MISSING-DESKTOP',
+            },
+            {
+                authToken: 'token-missing-desktop',
+                tokenId: 'token-id-missing-desktop',
+                scopes: ['observe'],
+                desktopId: null,
+                desktopLabel: 'No desktop id',
+                preferredDesktopId: null,
+                transportMode: 'relay',
+                publicEndpoint: 'wss://edge.example.test/gateway',
+                transportSharedSecret: 'relay-secret',
+            },
+        );
+
+        expect(merged.desktopId).toBe('');
+        expect(merged.preferredDesktopId).toBe('');
+        expect(merged.transportMode).toBe('lan');
+        expect(merged.publicEndpoint).toBe('');
+        expect(merged.transportSharedSecret).toBe('');
+    });
+
+    it('uses preferred desktop id as routing id when desktop_id is missing', () => {
+        const merged = applyPairingExchangeToSession(
+            {
+                ...INITIAL_GATEWAY_SESSION,
+                deviceId: 'device-5',
+            },
+            {
+                host: '192.168.3.145',
+                port: 29531,
+                pairingCode: 'PAIR-PREFERRED-DESKTOP',
+            },
+            {
+                authToken: 'token-preferred',
+                tokenId: 'token-id-preferred',
+                scopes: ['observe'],
+                desktopId: null,
+                desktopLabel: 'Preferred desktop',
+                preferredDesktopId: 'desktop-preferred-only',
+                transportMode: 'relay',
+                publicEndpoint: 'wss://edge.example.test/gateway',
+                transportSharedSecret: 'relay-secret',
+            },
+        );
+
+        expect(merged.desktopId).toBe('desktop-preferred-only');
+        expect(merged.preferredDesktopId).toBe('desktop-preferred-only');
+        expect(merged.transportMode).toBe('relay');
+        expect(merged.publicEndpoint).toBe('wss://edge.example.test/gateway');
+        expect(merged.transportSharedSecret).toBe('relay-secret');
+    });
 });

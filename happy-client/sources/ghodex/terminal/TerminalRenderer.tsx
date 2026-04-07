@@ -8,14 +8,36 @@ export function TerminalRenderer({
     rows,
     optimisticInput,
     renderMode = 'terminal',
+    showOptimisticCursor = false,
 }: {
     rows: TerminalRenderRow[];
     optimisticInput?: string;
     renderMode?: 'terminal' | 'text';
+    showOptimisticCursor?: boolean;
 }) {
     const { theme } = useUnistyles();
-    const rowCount = rows.length;
+    const renderRows = React.useMemo(() => {
+        if (rows.length > 0) {
+            return rows;
+        }
+        if (!(optimisticInput || showOptimisticCursor)) {
+            return rows;
+        }
+        return [{ raw: '', plainText: '', segments: [{ style: {}, text: '' }] }];
+    }, [optimisticInput, rows, showOptimisticCursor]);
+    const rowCount = renderRows.length;
     const textOnlyMode = renderMode === 'text';
+    const listRef = React.useRef<FlatList<TerminalRenderRow> | null>(null);
+
+    const scrollToBottom = React.useCallback(() => {
+        requestAnimationFrame(() => {
+            listRef.current?.scrollToEnd({ animated: false });
+        });
+    }, []);
+
+    React.useEffect(() => {
+        scrollToBottom();
+    }, [optimisticInput, rowCount, scrollToBottom, showOptimisticCursor]);
 
     const renderItem = React.useCallback(({ item, index }: { item: TerminalRenderRow; index: number }) => (
         <View style={styles.row}>
@@ -34,21 +56,23 @@ export function TerminalRenderer({
                             {segment.text}
                         </Text>
                     ))}
-                {index === rowCount - 1 && optimisticInput ? (
+                {index === rowCount - 1 && (optimisticInput || showOptimisticCursor) ? (
                     <Text style={[styles.optimisticText, { color: theme.colors.terminal.stdout }]}>
-                        {optimisticInput}
+                        {`${optimisticInput ?? ''}${showOptimisticCursor ? '|' : ''}`}
                     </Text>
                 ) : null}
             </Text>
         </View>
-    ), [optimisticInput, rowCount, textOnlyMode, theme.colors.terminal.stdout]);
+    ), [optimisticInput, rowCount, showOptimisticCursor, textOnlyMode, theme.colors.terminal.stdout]);
 
     return (
         <FlatList
             contentContainerStyle={styles.content}
-            data={rows}
+            data={renderRows}
             initialNumToRender={60}
             keyExtractor={(_, index) => String(index)}
+            onContentSizeChange={scrollToBottom}
+            ref={listRef}
             removeClippedSubviews
             renderItem={renderItem}
             style={styles.list}

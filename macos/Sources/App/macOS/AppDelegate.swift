@@ -210,10 +210,18 @@ class AppDelegate: NSObject,
         bundleID: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex"
     )
 
-    lazy var controlHarnessAuth = ControlHarnessAuth(
-        storageURL: ControlHarnessAuditLogger
-            .baseDirectory(bundleID: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex")
+    private static func controlHarnessAuthStorageURL(bundleID: String) -> URL {
+        let scope = ControlHarnessGatewayAppSettings.StorageScope.current()
+        return ControlHarnessAuditLogger
+            .baseDirectory(bundleID: bundleID)
+            .appendingPathComponent(scope.namespaceKey, isDirectory: true)
             .appendingPathComponent("gateway-auth.json", isDirectory: false)
+    }
+
+    lazy var controlHarnessAuth = ControlHarnessAuth(
+        storageURL: Self.controlHarnessAuthStorageURL(
+            bundleID: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex"
+        )
     )
 
     @MainActor lazy var controlHarnessSampleStore = ControlHarnessSampleStore()
@@ -942,6 +950,7 @@ class AppDelegate: NSObject,
 
         let host = try preferredGatewayPairingHost()
         let publicEndpoint = resolvedGatewayPairingPublicEndpoint()
+        let desktopIdentity = await controlHarnessAuth.desktopIdentityResult()
         let pairing = try await controlHarnessAuth.beginPairing(
             client: "android-qr",
             requestedScopes: ["observe", "mutate"]
@@ -951,6 +960,7 @@ class AppDelegate: NSObject,
             host: host,
             port: port,
             pairingCode: pairing.pairingCode,
+            desktopID: desktopIdentity.desktopID,
             expiresAt: pairing.expiresAt,
             scopes: pairing.scopes,
             preferredTransport: publicEndpoint == nil ? "lan" : "relay",
@@ -1153,6 +1163,9 @@ class AppDelegate: NSObject,
         expires_at: \(payload.expiresAt)
         preferred_transport: \(payload.preferredTransport)
         """
+        if let desktopID = payload.desktopID, desktopID.isEmpty == false {
+            summaryText += "\ndesktop_id: \(desktopID)"
+        }
         if let publicEndpoint = payload.publicEndpoint, publicEndpoint.isEmpty == false {
             summaryText += "\npublic_endpoint: \(publicEndpoint)"
         }
@@ -1315,6 +1328,7 @@ class AppDelegate: NSObject,
         let host: String
         let port: UInt16
         let pairingCode: String
+        let desktopID: String?
         let expiresAt: String
         let scopes: [String]
         let preferredTransport: String
@@ -1327,6 +1341,7 @@ class AppDelegate: NSObject,
             case host
             case port
             case pairingCode = "pairing_code"
+            case desktopID = "desktop_id"
             case expiresAt = "expires_at"
             case scopes
             case preferredTransport = "preferred_transport"

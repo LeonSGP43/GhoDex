@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseGatewayPairingQrPayload } from './pairingQr';
+import { buildGatewayPairingExchangeAttempts, parseGatewayPairingQrPayload } from './pairingQr';
 
 describe('ghodex pairing QR parser', () => {
     it('parses JSON pairing payloads', () => {
@@ -8,21 +8,52 @@ describe('ghodex pairing QR parser', () => {
             host: '192.168.3.145',
             port: 29527,
             pairing_code: 'PAIR-JSON',
+            desktop_id: 'desktop-json-1',
         }))).toEqual({
             host: '192.168.3.145',
             port: 29527,
             pairingCode: 'PAIR-JSON',
+            desktopId: 'desktop-json-1',
         });
     });
 
     it('parses ghodex URL pairing payloads', () => {
         expect(parseGatewayPairingQrPayload(
-            'ghodex://pair?host=desktop.local&port=19527&pairing_code=PAIR-URL',
+            'ghodex://pair?host=desktop.local&port=19527&pairing_code=PAIR-URL&desktop_id=desktop-url-1',
         )).toEqual({
             host: 'desktop.local',
             port: 19527,
             pairingCode: 'PAIR-URL',
+            desktopId: 'desktop-url-1',
         });
+    });
+
+    it('propagates desktop_id to relay and lan pairing attempts', () => {
+        const attempts = buildGatewayPairingExchangeAttempts({
+            host: 'desktop.local',
+            port: 19527,
+            pairingCode: 'PAIR-URL',
+            desktopId: 'desktop-attempt-1',
+            transportMode: 'relay',
+            publicEndpoint: 'wss://edge.example.test/gateway',
+        });
+
+        expect(attempts).toEqual([
+            {
+                host: 'desktop.local',
+                port: 19527,
+                desktopId: 'desktop-attempt-1',
+                transportMode: 'relay',
+                publicEndpoint: 'wss://edge.example.test/gateway',
+            },
+            {
+                host: 'desktop.local',
+                port: 19527,
+                desktopId: 'desktop-attempt-1',
+                transportMode: 'lan',
+                publicEndpoint: undefined,
+            },
+        ]);
     });
 
     it('rejects invalid QR payloads with stable messages', () => {

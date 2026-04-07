@@ -43,5 +43,16 @@ describe('ghodex storage bootstrap safety', () => {
         expect(secureStore.getItemAsync).toHaveBeenCalledTimes(1);
         expect(secureStore.setItemAsync).toHaveBeenCalledTimes(1);
     });
-});
 
+    it('clamps stored poll interval to the mobile minimum', async () => {
+        secureStore.getItemAsync.mockResolvedValue(JSON.stringify({
+            pollIntervalMs: 30,
+        }));
+
+        const { loadStoredSession } = await import('./storage');
+        const session = await loadStoredSession();
+
+        expect(session.pollIntervalMs).toBe(50);
+        expect(secureStore.getItemAsync).toHaveBeenCalledTimes(1);
+    });
+});
