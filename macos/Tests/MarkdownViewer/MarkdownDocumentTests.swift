@@ -152,7 +152,7 @@ struct MarkdownDocumentTests {
         #expect(html.contains("<blockquote><p>quote</p></blockquote>"))
         #expect(html.contains("<pre><code class=\"language-swift\">"))
         #expect(html.contains("<span class=\"tok-call\">print</span>"))
-        #expect(html.contains("<span class=\"tok-string\">\"hi\"</span>"))
+        #expect(html.contains("<span class=\"tok-string\">&quot;hi&quot;</span>"))
     }
 
     @Test func markdownHTMLRendererAcceptsCustomBaseFontSize() {
@@ -208,7 +208,7 @@ struct MarkdownDocumentTests {
 
         #expect(html.contains("<pre><code class=\"language-shell-session\">"))
         #expect(html.contains("<span class=\"tok-call\">sudo</span>"))
-        #expect(html.contains("xcode-select"))
+        #expect(html.contains("xcode<span class=\"tok-symbol\">-</span>select"))
     }
 
     @Test func markdownHTMLRendererHighlightsZigBlocks() {

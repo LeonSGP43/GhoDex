@@ -844,6 +844,26 @@ final class AITerminalManagerStore: ObservableObject {
         open(host: host, directoryOverride: nil, inPaneOf: controller, sourceSurface: sourceSurface)
     }
 
+    func openInSplit(
+        host: AITerminalHost,
+        controller: TerminalController,
+        sourceSurface: Ghostty.SurfaceView,
+        direction: SplitTree<TerminalPane>.NewDirection
+    ) {
+        if host.isLocal {
+            _ = launch(.localShell(), inSplitOf: controller, sourceSurface: sourceSurface, direction: direction)
+            return
+        }
+
+        open(
+            host: host,
+            directoryOverride: nil,
+            inSplitOf: controller,
+            sourceSurface: sourceSurface,
+            direction: direction
+        )
+    }
+
     func newTabPickerEntries(mode: NewTabPickerMode = .topLevel) -> [NewTabPickerEntry] {
         NewTabPickerModel.entries(
             favoriteHosts: favoriteHosts,
@@ -943,6 +963,54 @@ final class AITerminalManagerStore: ObservableObject {
             }
 
             guard let sessionID = launch(plan, inPaneOf: controller, sourceSurface: sourceSurface) else { return }
+            registerRemoteSession(sessionID, host: host, savedPassword: savedPassword)
+            recordRecentHost(host.id, status: .connected)
+        }
+    }
+
+    private func open(
+        host: AITerminalHost,
+        directoryOverride: String?,
+        inSplitOf controller: TerminalController,
+        sourceSurface: Ghostty.SurfaceView,
+        direction: SplitTree<TerminalPane>.NewDirection
+    ) {
+        switch host.transport {
+        case .local:
+            _ = launch(.localShell(), inSplitOf: controller, sourceSurface: sourceSurface, direction: direction)
+            return
+
+        case .localmcd:
+            guard let plan = AITerminalLaunchPlan.localCommand(host: host, directoryOverride: directoryOverride) else {
+                lastError = L10n.AITerminalManager.localMCDCommandsEmpty
+                recordRecentHost(host.id, status: .failed, errorSummary: lastError)
+                return
+            }
+            _ = launch(plan, inSplitOf: controller, sourceSurface: sourceSurface, direction: direction)
+            recordRecentHost(host.id, status: .connected)
+            return
+
+        case .ssh:
+            let passwordResolution = resolvedPasswordAutomation(for: host)
+            if let message = passwordResolution.error {
+                lastError = message
+                recordRecentHost(host.id, status: .failed, errorSummary: message)
+                return
+            }
+            let savedPassword = passwordResolution.password
+
+            guard let plan = AITerminalLaunchPlan.remote(host: host, directoryOverride: directoryOverride) else {
+                lastError = L10n.AITerminalManager.hostMissingSSHDetails
+                recordRecentHost(host.id, status: .failed, errorSummary: lastError)
+                return
+            }
+
+            guard let sessionID = launch(
+                plan,
+                inSplitOf: controller,
+                sourceSurface: sourceSurface,
+                direction: direction
+            ) else { return }
             registerRemoteSession(sessionID, host: host, savedPassword: savedPassword)
             recordRecentHost(host.id, status: .connected)
         }
@@ -2777,6 +2845,27 @@ final class AITerminalManagerStore: ObservableObject {
         sourceSurface: Ghostty.SurfaceView
     ) -> UUID? {
         guard let createdSurface = controller.createPaneTab(from: sourceSurface, withBaseConfig: plan.surfaceConfiguration) else {
+            lastError = L10n.AITerminalManager.createSessionFailed
+            return nil
+        }
+
+        registrations[createdSurface.id] = plan.registration
+        rebuildSessions()
+        return createdSurface.id
+    }
+
+    @discardableResult
+    private func launch(
+        _ plan: AITerminalLaunchPlan,
+        inSplitOf controller: TerminalController,
+        sourceSurface: Ghostty.SurfaceView,
+        direction: SplitTree<TerminalPane>.NewDirection
+    ) -> UUID? {
+        guard let createdSurface = controller.newSplit(
+            at: sourceSurface,
+            direction: direction,
+            baseConfig: plan.surfaceConfiguration
+        ) else {
             lastError = L10n.AITerminalManager.createSessionFailed
             return nil
         }

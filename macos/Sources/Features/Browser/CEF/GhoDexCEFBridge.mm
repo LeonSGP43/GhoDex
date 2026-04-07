@@ -43,7 +43,7 @@ NSString * const GhoDexCEFControlErrorDomain = @"com.leongong.ghodex.browser.cef
 - (void)cancelPendingRuntimePromptRequests;
 - (void)browserDidClose;
 - (void)loadPendingBootstrapURLIfNeeded;
-- (void)requestNewTabFromKeyboardShortcut;
+- (void)requestAppShortcutSelector:(SEL)selector;
 @end
 
 #if GHODEX_CEF_ENABLED
@@ -53,12 +53,16 @@ NSString * const GhoDexCEFControlErrorDomain = @"com.leongong.ghodex.browser.cef
 #include <cmath>
 #include <cstdint>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <libproc.h>
+#include <mach/mach.h>
 #include <mutex>
 #include <signal.h>
 #include <stdlib.h>
+#include <sys/file.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <set>
 #include <string>
 #include <vector>
@@ -100,21 +104,38 @@ constexpr size_t kEvaluateScriptIndex = 1;
 constexpr size_t kEvaluateSuccessIndex = 1;
 constexpr size_t kEvaluatePayloadIndex = 2;
 
-bool IsBrowserNewTabShortcut(const CefKeyEvent &event) {
+SEL BrowserAppShortcutSelector(const CefKeyEvent &event) {
   if (event.type != KEYEVENT_RAWKEYDOWN && event.type != KEYEVENT_KEYDOWN) {
-    return false;
+    return nullptr;
   }
-  if ((event.modifiers & EVENTFLAG_COMMAND_DOWN) == 0) {
-    return false;
-  }
-
-  int windows_key_code = event.windows_key_code;
-  if (windows_key_code == 't' || windows_key_code == 'T') {
-    return true;
+  if ((event.modifiers & EVENTFLAG_COMMAND_DOWN) == 0 ||
+      (event.modifiers & EVENTFLAG_CONTROL_DOWN) != 0 ||
+      (event.modifiers & EVENTFLAG_ALT_DOWN) != 0) {
+    return nullptr;
   }
 
-  char16_t character = event.character;
-  return character == u't' || character == u'T';
+  const bool has_shift = (event.modifiers & EVENTFLAG_SHIFT_DOWN) != 0;
+  const int windows_key_code = event.windows_key_code;
+  const char16_t character = event.character;
+  auto matches_key = [&](char lowercase) {
+    const char uppercase = static_cast<char>(lowercase - ('a' - 'A'));
+    return windows_key_code == lowercase ||
+           windows_key_code == uppercase ||
+           character == static_cast<char16_t>(lowercase) ||
+           character == static_cast<char16_t>(uppercase);
+  };
+
+  if (!has_shift && matches_key('t')) {
+    return @selector(newTab:);
+  }
+  if (!has_shift && matches_key('w')) {
+    return @selector(closeTab:);
+  }
+  if (matches_key('d')) {
+    return has_shift ? @selector(splitDown:) : @selector(splitRight:);
+  }
+
+  return nullptr;
 }
 
 dispatch_queue_t RuntimeDiagnosticsQueue() {
@@ -178,6 +199,72 @@ NSString *RuntimeDiagnosticsRotatedLogPath() {
   return [RuntimeDiagnosticsDirectoryPath() stringByAppendingPathComponent:@"runtime-memory-diagnostics.1.jsonl"];
 }
 
+NSDictionary<NSString *, NSString *> *RuntimeProcessMemoryDetails() {
+  NSMutableDictionary<NSString *, NSString *> *details = [NSMutableDictionary dictionary];
+  details[@"pid"] = [NSString stringWithFormat:@"%d", getpid()];
+  details[@"cef_active_browsers"] =
+      [NSString stringWithFormat:@"%d", static_cast<int>(g_active_browser_count.load())];
+  details[@"cef_initialized"] = g_cef_initialized.load() ? @"true" : @"false";
+  details[@"cef_initializing"] = g_cef_initializing.load() ? @"true" : @"false";
+
+  mach_task_basic_info_data_t basic_info;
+  mach_msg_type_number_t basic_count = MACH_TASK_BASIC_INFO_COUNT;
+  kern_return_t basic_result = task_info(
+      mach_task_self(),
+      MACH_TASK_BASIC_INFO,
+      reinterpret_cast<task_info_t>(&basic_info),
+      &basic_count);
+  if (basic_result == KERN_SUCCESS) {
+    details[@"rss_bytes"] = [NSString stringWithFormat:@"%llu",
+                             static_cast<unsigned long long>(basic_info.resident_size)];
+    details[@"virtual_size_bytes"] = [NSString stringWithFormat:@"%llu",
+                                      static_cast<unsigned long long>(basic_info.virtual_size)];
+  }
+
+  task_vm_info_data_t vm_info;
+  mach_msg_type_number_t vm_count = TASK_VM_INFO_COUNT;
+  kern_return_t vm_result = task_info(
+      mach_task_self(),
+      TASK_VM_INFO,
+      reinterpret_cast<task_info_t>(&vm_info),
+      &vm_count);
+  if (vm_result == KERN_SUCCESS) {
+    details[@"physical_footprint_bytes"] = [NSString stringWithFormat:@"%llu",
+                                            static_cast<unsigned long long>(vm_info.phys_footprint)];
+  }
+
+  return details;
+}
+
+BOOL AppendRuntimeDiagnosticsLine(NSString *log_path, NSData *line_data) {
+  if (log_path.length == 0 || line_data.length == 0) {
+    return NO;
+  }
+
+  int file_descriptor = open(log_path.fileSystemRepresentation, O_WRONLY | O_CREAT | O_APPEND, 0644);
+  if (file_descriptor < 0) {
+    return NO;
+  }
+
+  const uint8_t *bytes = static_cast<const uint8_t *>(line_data.bytes);
+  size_t total = line_data.length;
+  size_t offset = 0;
+  while (offset < total) {
+    ssize_t wrote = write(file_descriptor, bytes + offset, total - offset);
+    if (wrote < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      close(file_descriptor);
+      return NO;
+    }
+    offset += static_cast<size_t>(wrote);
+  }
+
+  close(file_descriptor);
+  return YES;
+}
+
 void RotateRuntimeDiagnosticsLogIfNeeded(NSString *log_path, NSString *rotated_path) {
   if (log_path.length == 0 || rotated_path.length == 0) {
     return;
@@ -204,12 +291,17 @@ void AppendRuntimeDiagnosticsEvent(NSString *event, NSDictionary<NSString *, NSS
   }
 
   NSString *event_name = event.length > 0 ? event : @"unknown";
-  NSDictionary<NSString *, NSString *> *event_details = details ?: @{};
+  NSMutableDictionary<NSString *, NSString *> *event_details =
+      [NSMutableDictionary dictionaryWithDictionary:RuntimeProcessMemoryDetails()];
+  if (details.count > 0) {
+    [event_details addEntriesFromDictionary:details];
+  }
   dispatch_async(RuntimeDiagnosticsQueue(), ^{
     @autoreleasepool {
       NSString *directory = RuntimeDiagnosticsDirectoryPath();
       NSString *log_path = RuntimeDiagnosticsLogPath();
       NSString *rotated_path = RuntimeDiagnosticsRotatedLogPath();
+      NSString *lock_path = [log_path stringByAppendingString:@".lock"];
       NSFileManager *file_manager = [NSFileManager defaultManager];
 
       NSError *directory_error = nil;
@@ -221,41 +313,39 @@ void AppendRuntimeDiagnosticsEvent(NSString *event, NSDictionary<NSString *, NSS
         return;
       }
 
-      RotateRuntimeDiagnosticsLogIfNeeded(log_path, rotated_path);
-
-      NSMutableDictionary<NSString *, id> *record = [NSMutableDictionary dictionaryWithDictionary:@{
-        @"timestamp_ms": @((long long)(NSDate.date.timeIntervalSince1970 * 1000.0)),
-        @"component": @"cef",
-        @"event": event_name
-      }];
-      if (event_details.count > 0) {
-        record[@"details"] = event_details;
-      }
-
-      NSError *serialize_error = nil;
-      NSData *serialized = [NSJSONSerialization dataWithJSONObject:record options:0 error:&serialize_error];
-      if (serialize_error != nil || serialized == nil) {
+      int lock_fd = open(lock_path.fileSystemRepresentation, O_RDWR | O_CREAT, 0644);
+      if (lock_fd < 0) {
         return;
       }
-
-      if (![file_manager fileExistsAtPath:log_path]) {
-        [file_manager createFileAtPath:log_path contents:nil attributes:nil];
-      }
-
-      NSError *open_error = nil;
-      NSFileHandle *handle = [NSFileHandle fileHandleForWritingToURL:[NSURL fileURLWithPath:log_path]
-                                                               error:&open_error];
-      if (open_error != nil || handle == nil) {
+      if (flock(lock_fd, LOCK_EX) != 0) {
+        close(lock_fd);
         return;
       }
 
       @try {
-        [handle seekToEndOfFile];
-        [handle writeData:serialized];
-        [handle writeData:[NSData dataWithBytes:"\n" length:1]];
-      } @catch (__unused NSException *exception) {
+        RotateRuntimeDiagnosticsLogIfNeeded(log_path, rotated_path);
+
+        NSMutableDictionary<NSString *, id> *record = [NSMutableDictionary dictionaryWithDictionary:@{
+          @"timestamp_ms": @((long long)(NSDate.date.timeIntervalSince1970 * 1000.0)),
+          @"component": @"cef",
+          @"event": event_name
+        }];
+        if (event_details.count > 0) {
+          record[@"details"] = event_details;
+        }
+
+        NSError *serialize_error = nil;
+        NSData *serialized = [NSJSONSerialization dataWithJSONObject:record options:0 error:&serialize_error];
+        if (serialize_error != nil || serialized == nil) {
+          return;
+        }
+        NSMutableData *line = [serialized mutableCopy];
+        [line appendData:[NSData dataWithBytes:"\n" length:1]];
+        (void)AppendRuntimeDiagnosticsLine(log_path, line);
+      } @finally {
+        (void)flock(lock_fd, LOCK_UN);
+        close(lock_fd);
       }
-      [handle closeFile];
     }
   });
 }
@@ -1479,20 +1569,23 @@ typedef void (^GhoDexCEFRuntimePromptContinuation)(
   }
 }
 
-- (void)requestNewTabFromKeyboardShortcut {
-  dispatch_async(dispatch_get_main_queue(), ^{
-    if ([NSApp sendAction:@selector(newBrowserTab:) to:nil from:self]) {
-      return;
-    }
+- (void)requestAppShortcutSelector:(SEL)selector {
+  if (selector == nullptr) {
+    return;
+  }
 
+  dispatch_async(dispatch_get_main_queue(), ^{
     id app_delegate = NSApp.delegate;
-    if (app_delegate != nil && [app_delegate respondsToSelector:@selector(newBrowserTab:)]) {
+    if (app_delegate != nil && [app_delegate respondsToSelector:selector]) {
       void (*invoke_action)(id, SEL, id) =
-          (void (*)(id, SEL, id))[app_delegate methodForSelector:@selector(newBrowserTab:)];
+          (void (*)(id, SEL, id))[app_delegate methodForSelector:selector];
       if (invoke_action != nullptr) {
-        invoke_action(app_delegate, @selector(newBrowserTab:), self);
+        invoke_action(app_delegate, selector, self);
+        return;
       }
     }
+
+    (void)[NSApp sendAction:selector to:nil from:self];
   });
 }
 
@@ -2255,8 +2348,9 @@ bool GhoDexCEFClient::OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
                                     bool *is_keyboard_shortcut) {
   (void)browser;
   (void)os_event;
+  SEL shortcut_selector = BrowserAppShortcutSelector(event);
 
-  if (!owner_ || !IsBrowserNewTabShortcut(event)) {
+  if (!owner_ || shortcut_selector == nullptr) {
     return false;
   }
 
@@ -2264,7 +2358,7 @@ bool GhoDexCEFClient::OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
     *is_keyboard_shortcut = true;
   }
 
-  [owner_ requestNewTabFromKeyboardShortcut];
+  [owner_ requestAppShortcutSelector:shortcut_selector];
   return true;
 }
 

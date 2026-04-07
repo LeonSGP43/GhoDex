@@ -294,13 +294,10 @@ class AppDelegate: NSObject,
                     errorMessage: "Remote \(request.command) requires desktop approval for terminal_id=\(rawTerminalID)"
                 )
             case .manual:
-                if request.command == "close-terminal" {
-                    return .deny(
-                        errorCode: "remote_policy_blocked",
-                        errorMessage: "Remote \(request.command) is disabled for terminal state \(managedState.rawValue)"
-                    )
-                }
-                return .allow
+                return .deny(
+                    errorCode: "remote_policy_blocked",
+                    errorMessage: "Remote \(request.command) is disabled for terminal state \(managedState.rawValue)"
+                )
             case .managedPaused, .managedCompleted, .managedFailed:
                 return .deny(
                     errorCode: "remote_policy_blocked",
@@ -2372,6 +2369,62 @@ class AppDelegate: NSObject,
         activeTerminalController()?.newPaneTab(sender)
     }
 
+    @IBAction func closeTab(_ sender: Any?) {
+        let actionTopLevelWindow = preferredTopLevelWindow(for: sender)
+
+        if let terminalController = actionTopLevelWindow?.windowController as? TerminalController {
+            terminalController.closeTab(sender)
+            return
+        }
+
+        if let tabController = activeTopLevelTabController(preferred: actionTopLevelWindow) {
+            tabController.closeTabImmediately(registerRedo: true)
+            return
+        }
+
+        (actionTopLevelWindow ?? NSApp.keyWindow)?.performClose(sender)
+    }
+
+    @IBAction func splitRight(_ sender: Any?) {
+        handleSplitActionFallback(
+            sender,
+            browserSplitAxis: .vertical,
+            terminalSplitDirection: .right
+        ) { controller, resolvedSender in
+            controller.splitRight(resolvedSender)
+        }
+    }
+
+    @IBAction func splitLeft(_ sender: Any?) {
+        handleSplitActionFallback(
+            sender,
+            browserSplitAxis: .vertical,
+            terminalSplitDirection: .left
+        ) { controller, resolvedSender in
+            controller.splitLeft(resolvedSender)
+        }
+    }
+
+    @IBAction func splitDown(_ sender: Any?) {
+        handleSplitActionFallback(
+            sender,
+            browserSplitAxis: .horizontal,
+            terminalSplitDirection: .down
+        ) { controller, resolvedSender in
+            controller.splitDown(resolvedSender)
+        }
+    }
+
+    @IBAction func splitUp(_ sender: Any?) {
+        handleSplitActionFallback(
+            sender,
+            browserSplitAxis: .horizontal,
+            terminalSplitDirection: .up
+        ) { controller, resolvedSender in
+            controller.splitUp(resolvedSender)
+        }
+    }
+
     @IBAction func saveWorkspace(_ sender: Any?) {
         guard let controller = saveWorkspaceController(for: sender) else { return }
         presentSaveWorkspacePrompt(for: controller)
@@ -2501,13 +2554,20 @@ class AppDelegate: NSObject,
                 ?? self.selectedTopLevelWindow(for: NSApp.keyWindow)
             _ = BrowserTabController.newTab(self.ghostty, from: parentWindow)
         }
+        let workspaceMapAction = { [weak self] in
+            guard let self else { return }
+            let parentWindow = self.selectedTopLevelWindow(for: window)
+                ?? self.selectedTopLevelWindow(for: NSApp.keyWindow)
+            _ = WorkspaceMapController.newTab(self.ghostty, from: parentWindow)
+        }
 
         if let window {
             newTabPickerController.show(
                 relativeTo: window,
                 mode: .topLevel,
                 includeBrowserEntry: true,
-                onOpenBrowser: browserAction
+                onOpenBrowser: browserAction,
+                onOpenWorkspaceMap: workspaceMapAction
             )
             return
         }
@@ -2516,7 +2576,8 @@ class AppDelegate: NSObject,
             relativeTo: nil,
             mode: .topLevel,
             includeBrowserEntry: true,
-            onOpenBrowser: browserAction
+            onOpenBrowser: browserAction,
+            onOpenWorkspaceMap: workspaceMapAction
         )
     }
 
@@ -2543,6 +2604,83 @@ class AppDelegate: NSObject,
         }
 
         aiTerminalManagerStore.openInPaneTab(host: .local, controller: controller, sourceSurface: sourceSurface)
+    }
+
+    @MainActor
+    private func handleSplitActionFallback(
+        _ sender: Any?,
+        browserSplitAxis: BrowserDeckSplitAxis,
+        terminalSplitDirection: SplitTree<TerminalPane>.NewDirection,
+        terminalAction: @escaping (TerminalController, Any) -> Void
+    ) {
+        guard let context = splitActionContext(for: sender) else { return }
+
+        switch context {
+        case .terminal(let terminalController):
+            guard let sourceSurface = activePaneSurface(in: terminalController) else {
+                terminalAction(terminalController, self)
+                return
+            }
+
+            let defaultSplit: () -> Void = { [weak self, weak terminalController, weak sourceSurface] in
+                guard let self, let terminalController else { return }
+                let splitSource = self.activePaneSurface(in: terminalController) ?? sourceSurface
+                guard let splitSource else {
+                    terminalAction(terminalController, self)
+                    return
+                }
+                _ = terminalController.newSplit(
+                    at: splitSource,
+                    direction: terminalSplitDirection
+                )
+            }
+
+            showSplitPicker(
+                relativeTo: terminalController.window,
+                title: AppLocalization.localizedText("Split Pane"),
+                subtitle: AppLocalization.localizedText("Choose a target for the new split pane."),
+                includeBrowserEntry: false,
+                onCancel: defaultSplit,
+                onOpenHost: { [weak self, weak terminalController, weak sourceSurface] host in
+                    guard let self, let terminalController else { return }
+                    let splitSource = self.activePaneSurface(in: terminalController) ?? sourceSurface
+                    guard let splitSource else { return }
+                    self.aiTerminalManagerStore.openInSplit(
+                        host: host,
+                        controller: terminalController,
+                        sourceSurface: splitSource,
+                        direction: terminalSplitDirection
+                    )
+                },
+                onOpenBrowser: nil
+            )
+
+        case .browser(let browserController):
+            _ = browserSplitAxis
+            browserController.model.collapseSplitDeck()
+        }
+    }
+
+    @MainActor
+    private func showSplitPicker(
+        relativeTo window: NSWindow?,
+        title: String,
+        subtitle: String,
+        includeBrowserEntry: Bool,
+        onCancel: (() -> Void)?,
+        onOpenHost: ((AITerminalHost) -> Void)?,
+        onOpenBrowser: (() -> Void)?
+    ) {
+        newTabPickerController.show(
+            relativeTo: window,
+            mode: .paneChild,
+            title: title,
+            subtitle: subtitle,
+            includeBrowserEntry: includeBrowserEntry,
+            onCancel: onCancel,
+            onOpenHost: onOpenHost,
+            onOpenBrowser: onOpenBrowser
+        )
     }
 
     private func activeTerminalController(preferred window: NSWindow? = nil) -> TerminalController? {
@@ -2593,6 +2731,75 @@ class AppDelegate: NSObject,
         window?.tabGroup?.selectedWindow ?? window
     }
 
+    private func topLevelWindow(from sender: Any?) -> NSWindow? {
+        if let window = sender as? NSWindow {
+            return selectedTopLevelWindow(for: window)
+        }
+
+        if let view = sender as? NSView {
+            return selectedTopLevelWindow(for: view.window)
+        }
+
+        if let windowController = sender as? NSWindowController {
+            return selectedTopLevelWindow(for: windowController.window)
+        }
+
+        if let menuItem = sender as? NSMenuItem {
+            if let window = menuItem.representedObject as? NSWindow {
+                return selectedTopLevelWindow(for: window)
+            }
+
+            if let windowController = menuItem.representedObject as? NSWindowController {
+                return selectedTopLevelWindow(for: windowController.window)
+            }
+        }
+
+        return nil
+    }
+
+    private func preferredTopLevelWindow(for sender: Any?) -> NSWindow? {
+        if let senderWindow = topLevelWindow(from: sender) {
+            return senderWindow
+        }
+
+        if let keyWindow = selectedTopLevelWindow(for: NSApp.keyWindow) {
+            return keyWindow
+        }
+
+        if let mainWindow = selectedTopLevelWindow(for: NSApp.mainWindow) {
+            return mainWindow
+        }
+
+        return selectedTopLevelWindow(for: TerminalController.preferredParent?.window)
+    }
+
+    private enum SplitActionContext {
+        case terminal(TerminalController)
+        case browser(BrowserTabController)
+    }
+
+    private func splitActionContext(for sender: Any?) -> SplitActionContext? {
+        let preferredWindow = preferredTopLevelWindow(for: sender)
+
+        if let terminalController = selectedTerminalController(for: preferredWindow) {
+            return .terminal(terminalController)
+        }
+
+        if let browserController = selectedTopLevelTabController(for: preferredWindow) as? BrowserTabController {
+            return .browser(browserController)
+        }
+
+        if let browserController = activeTopLevelTabController(preferred: preferredWindow) as? BrowserTabController {
+            return .browser(browserController)
+        }
+
+        if let terminalController = activeTerminalController(preferred: preferredWindow) {
+            return .terminal(terminalController)
+        }
+
+        return nil
+    }
+
     private func activePaneSurface(
         in controller: TerminalController
     ) -> Ghostty.SurfaceView? {
@@ -2601,6 +2808,7 @@ class AppDelegate: NSObject,
 
     @IBAction func closeAllWindows(_ sender: Any?) {
         let browserControllers = BrowserTabController.all
+        let workspaceMapControllers = WorkspaceMapController.all
         let confirmWindow = TerminalController.all
             .first(where: { $0.allSurfaces.contains(where: { $0.needsConfirmQuit }) })?
             .allSurfaces.first(where: { $0.needsConfirmQuit })?
@@ -2609,6 +2817,7 @@ class AppDelegate: NSObject,
         guard let confirmWindow else {
             TerminalController.closeAllWindowsImmediately()
             BrowserTabController.closeAllWindowsImmediately()
+            WorkspaceMapController.closeAllWindowsImmediately()
             AboutController.shared.hide()
             return
         }
@@ -2626,6 +2835,7 @@ class AppDelegate: NSObject,
             alert.window.orderOut(nil)
             TerminalController.closeAllWindowsImmediately()
             browserControllers.forEach { $0.window?.close() }
+            workspaceMapControllers.forEach { $0.window?.close() }
             AboutController.shared.hide()
         }
 

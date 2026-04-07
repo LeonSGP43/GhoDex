@@ -253,7 +253,13 @@ private struct BrowserCEFDeckView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: BrowserCEFDeckHostView, context: Context) {
-        context.coordinator.sync(into: nsView, pages: model.pages, selectedPageID: model.selectedPageID)
+        context.coordinator.sync(
+            into: nsView,
+            pages: model.pages,
+            selectedPageID: model.selectedPageID,
+            visiblePageIDs: model.visiblePageIDsInDeck,
+            splitAxis: model.splitAxis
+        )
     }
 
     static func dismantleNSView(_ nsView: BrowserCEFDeckHostView, coordinator: Coordinator) {
@@ -270,8 +276,15 @@ private struct BrowserCEFDeckView: NSViewRepresentable {
             self.model = model
         }
 
-        func sync(into host: BrowserCEFDeckHostView, pages: [BrowserPageState], selectedPageID: UUID) {
+        func sync(
+            into host: BrowserCEFDeckHostView,
+            pages: [BrowserPageState],
+            selectedPageID: UUID,
+            visiblePageIDs: [UUID],
+            splitAxis: BrowserDeckSplitAxis
+        ) {
             let validIDs = Set(pages.map(\.id))
+            var removedIDs: [String] = []
             for id in views.keys where !validIDs.contains(id) {
                 if let view = views.removeValue(forKey: id) {
                     view.delegate = nil
@@ -279,20 +292,44 @@ private struct BrowserCEFDeckView: NSViewRepresentable {
                 }
                 delegates.removeValue(forKey: id)
                 model.unbindBridge(for: id)
+                removedIDs.append(id.uuidString)
             }
 
+            var createdIDs: [String] = []
             for page in pages {
+                let isNewView = views[page.id] == nil
                 let view = view(for: page)
+                if isNewView {
+                    createdIDs.append(page.id.uuidString)
+                }
                 if view.superview !== host {
                     host.addManagedSubview(view)
                 }
-                view.isHidden = page.id != selectedPageID
+                view.isHidden = !visiblePageIDs.contains(page.id)
             }
 
+            let arrangedViews = visiblePageIDs.compactMap { views[$0] }
+            let effectiveAxis: BrowserDeckSplitAxis? = arrangedViews.count >= 2 ? splitAxis : nil
+            host.configureLayout(views: arrangedViews, splitAxis: effectiveAxis)
             host.needsLayout = true
+
+            if !createdIDs.isEmpty || !removedIDs.isEmpty {
+                logDeckEvent(
+                    "deck_sync_structure_changed",
+                    details: [
+                        "selected_page_id": selectedPageID.uuidString,
+                        "page_count": "\(pages.count)",
+                        "visible_page_ids": visiblePageIDs.map(\.uuidString).joined(separator: ","),
+                        "split_axis": splitAxis.rawValue,
+                        "created_page_ids": createdIDs.joined(separator: ","),
+                        "removed_page_ids": removedIDs.joined(separator: ","),
+                    ]
+                )
+            }
         }
 
         func reset(from host: BrowserCEFDeckHostView) {
+            let removedIDs = views.keys.map(\.uuidString).sorted().joined(separator: ",")
             for (id, view) in views {
                 view.delegate = nil
                 view.removeFromSuperview()
@@ -301,6 +338,12 @@ private struct BrowserCEFDeckView: NSViewRepresentable {
             views.removeAll()
             delegates.removeAll()
             host.subviews.forEach { $0.removeFromSuperview() }
+            logDeckEvent(
+                "deck_reset",
+                details: [
+                    "removed_page_ids": removedIDs,
+                ]
+            )
         }
 
         private func view(for page: BrowserPageState) -> GhoDexCEFView {
@@ -314,7 +357,22 @@ private struct BrowserCEFDeckView: NSViewRepresentable {
             delegates[page.id] = delegate
             views[page.id] = view
             model.bindBridge(for: page.id, bridge: makeControlBridge(for: page.id, view: view))
+            logDeckEvent(
+                "deck_view_created",
+                details: [
+                    "page_id": page.id.uuidString,
+                    "initial_url": page.initialURL.absoluteString,
+                ]
+            )
             return view
+        }
+
+        private func logDeckEvent(_ event: String, details: [String: String]) {
+            RuntimeDiagnosticsLogger.log(
+                component: "browser.deck",
+                event: event,
+                details: details
+            )
         }
 
         private func makeControlBridge(for pageID: UUID, view: GhoDexCEFView) -> BrowserPageControlBridge {
@@ -976,10 +1034,42 @@ private final class PageDelegate: NSObject, @preconcurrency GhoDexCEFViewDelegat
 
 @MainActor
 private final class BrowserCEFDeckHostView: NSView {
+    private var arrangedViews: [NSView] = []
+    private var splitAxis: BrowserDeckSplitAxis?
+
     override func layout() {
         super.layout()
-        for subview in subviews {
-            subview.frame = bounds
+
+        guard arrangedViews.count >= 2, let splitAxis else {
+            for subview in subviews where !subview.isHidden {
+                subview.frame = bounds
+            }
+            return
+        }
+
+        let primaryView = arrangedViews[0]
+        let secondaryView = arrangedViews[1]
+        let divider: CGFloat = 1
+
+        switch splitAxis {
+        case .vertical:
+            let primaryWidth = floor((bounds.width - divider) * 0.5)
+            primaryView.frame = NSRect(x: 0, y: 0, width: primaryWidth, height: bounds.height)
+            secondaryView.frame = NSRect(
+                x: primaryWidth + divider,
+                y: 0,
+                width: max(0, bounds.width - primaryWidth - divider),
+                height: bounds.height
+            )
+        case .horizontal:
+            let secondaryHeight = floor((bounds.height - divider) * 0.5)
+            secondaryView.frame = NSRect(x: 0, y: 0, width: bounds.width, height: secondaryHeight)
+            primaryView.frame = NSRect(
+                x: 0,
+                y: secondaryHeight + divider,
+                width: bounds.width,
+                height: max(0, bounds.height - secondaryHeight - divider)
+            )
         }
     }
 
@@ -987,5 +1077,10 @@ private final class BrowserCEFDeckHostView: NSView {
         view.frame = bounds
         view.autoresizingMask = [.width, .height]
         addSubview(view)
+    }
+
+    func configureLayout(views: [NSView], splitAxis: BrowserDeckSplitAxis?) {
+        self.arrangedViews = views
+        self.splitAxis = splitAxis
     }
 }

@@ -16,7 +16,8 @@ final class BrowserTabController: NSWindowController, NSWindowDelegate, TopLevel
             ?? (NSApp.mainWindow?.windowController as? BrowserTabController)?.externalID
     }
 
-    let externalID = "browser-tab-\(UUID().uuidString.lowercased())"
+    let workspaceID: UUID
+    let externalID: String
     let ghostty: Ghostty.App
     let contextPolicy: BrowserContextPolicy
     let model: BrowserTabModel
@@ -65,8 +66,11 @@ final class BrowserTabController: NSWindowController, NSWindowDelegate, TopLevel
     init(
         _ ghostty: Ghostty.App,
         initialURL: URL? = nil,
-        contextPolicy: BrowserContextPolicy = .default
+        contextPolicy: BrowserContextPolicy = .default,
+        workspaceID: UUID = UUID()
     ) {
+        self.workspaceID = workspaceID
+        self.externalID = "browser-tab-\(workspaceID.uuidString.lowercased())"
         self.ghostty = ghostty
         self.contextPolicy = contextPolicy
         self.model = BrowserTabModel(initialURL: initialURL ?? Self.defaultHomePageURL(for: ghostty))
@@ -82,6 +86,12 @@ final class BrowserTabController: NSWindowController, NSWindowDelegate, TopLevel
             )
         }
         Self.registerLiveController(self)
+        logLifecycleEvent(
+            "controller_initialized",
+            extra: [
+                "context_policy": String(describing: contextPolicy),
+            ]
+        )
     }
 
     @available(*, unavailable)
@@ -103,6 +113,7 @@ final class BrowserTabController: NSWindowController, NSWindowDelegate, TopLevel
 
         window.contentView = NSHostingView(rootView: BrowserTabView(model: model))
         applyWindowTitle()
+        logLifecycleEvent("window_did_load")
 
         titleCancellable = model.$pageTitle
             .receive(on: RunLoop.main)
@@ -168,6 +179,23 @@ final class BrowserTabController: NSWindowController, NSWindowDelegate, TopLevel
 
     func windowWillClose(_ notification: Notification) {
         Self.unregisterLiveController(self)
+        logLifecycleEvent("window_will_close")
+    }
+
+    private func logLifecycleEvent(_ event: String, extra: [String: String] = [:]) {
+        var details: [String: String] = [
+            "workspace_id": workspaceID.uuidString,
+            "external_id": externalID,
+            "live_controller_count": "\(Self.all.count)",
+        ]
+        for (key, value) in extra {
+            details[key] = value
+        }
+        RuntimeDiagnosticsLogger.log(
+            component: "browser.controller",
+            event: event,
+            details: details
+        )
     }
 
     private func applyWindowTitle() {
@@ -249,6 +277,12 @@ final class BrowserTabController: NSWindowController, NSWindowDelegate, TopLevel
 
     static func lookup(externalID: String) -> BrowserTabController? {
         liveControllersByID[externalID]
+    }
+
+    static func lookup(workspaceID: UUID) -> BrowserTabController? {
+        liveControllerOrder
+            .compactMap { liveControllersByID[$0] }
+            .first(where: { $0.workspaceID == workspaceID })
     }
 
     static func closeAllWindowsImmediately() {

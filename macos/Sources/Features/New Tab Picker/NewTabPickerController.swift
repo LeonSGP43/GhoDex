@@ -60,8 +60,10 @@ final class NewTabPickerController: NSWindowController {
         title: String = L10n.AITerminalManager.newTab,
         subtitle: String = L10n.SSHConnections.newTabPickerSubtitle,
         includeBrowserEntry: Bool = true,
+        onCancel: (() -> Void)? = nil,
         onOpenHost: ((AITerminalHost) -> Void)? = nil,
         onOpenBrowser: (() -> Void)? = nil,
+        onOpenWorkspaceMap: (() -> Void)? = nil,
         onOpenWorkspace: ((AITerminalSavedWorkspaceTemplate) -> Void)? = nil
     ) {
         store.refresh()
@@ -72,8 +74,10 @@ final class NewTabPickerController: NSWindowController {
             title: title,
             subtitle: subtitle,
             includeBrowserEntry: includeBrowserEntry,
+            onCancel: onCancel,
             onOpenHost: onOpenHost,
             onOpenBrowser: onOpenBrowser,
+            onOpenWorkspaceMap: onOpenWorkspaceMap,
             onOpenWorkspace: onOpenWorkspace
         )
         syncChrome()
@@ -102,8 +106,10 @@ final class NewTabPickerController: NSWindowController {
         title: String = L10n.AITerminalManager.newTab,
         subtitle: String = L10n.SSHConnections.newTabPickerSubtitle,
         includeBrowserEntry: Bool = true,
+        onCancel: (() -> Void)? = nil,
         onOpenHost: ((AITerminalHost) -> Void)? = nil,
         onOpenBrowser: (() -> Void)? = nil,
+        onOpenWorkspaceMap: (() -> Void)? = nil,
         onOpenWorkspace: ((AITerminalSavedWorkspaceTemplate) -> Void)? = nil
     ) -> AnyView {
         AnyView(
@@ -120,8 +126,10 @@ final class NewTabPickerController: NSWindowController {
                     }
                 },
                 includeBrowserEntry: includeBrowserEntry,
+                onCancel: onCancel,
                 onOpenHost: onOpenHost,
                 onOpenBrowser: onOpenBrowser,
+                onOpenWorkspaceMap: onOpenWorkspaceMap,
                 onOpenWorkspace: onOpenWorkspace
             )
             .id(presentationID)

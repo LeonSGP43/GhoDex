@@ -1,5 +1,6 @@
 import Foundation
 import OSLog
+import Darwin
 
 struct ControlHarnessSamplerTarget {
     let terminalID: String
@@ -60,6 +61,17 @@ final class ControlHarnessReadSampler {
 
     private var timer: Timer?
     private var currentTickInterval: TimeInterval?
+    private var lastFootprintProbeDate: Date?
+    private var lastFootprintBytes: UInt64?
+    private var lastMemoryThrottleLogDate: Date?
+
+    private static let memoryPressureProbeIntervalSeconds: TimeInterval = 1.0
+    private static let memoryThrottleLogIntervalSeconds: TimeInterval = 10.0
+#if DEBUG
+    private static let memoryPressureFootprintThresholdBytes: UInt64 = 2 * 1024 * 1024 * 1024
+#else
+    private static let memoryPressureFootprintThresholdBytes: UInt64 = 3 * 1024 * 1024 * 1024
+#endif
 
     init(
         bundleID: String,
@@ -110,10 +122,11 @@ final class ControlHarnessReadSampler {
     func refreshAllNow(now: Date = Date()) {
         let started = DispatchTime.now()
         let targets = inventoryProvider()
-        reconfigureTimerIfNeeded(for: targets)
+        let samplingTargets = targets.filter { $0.activityClass != .background }
+        reconfigureTimerIfNeeded(for: samplingTargets)
         var refreshedCount = 0
 
-        for target in targets {
+        for target in samplingTargets {
             if refreshIfDue(target: target, scope: "visible", now: now) {
                 refreshedCount += 1
             }
@@ -123,7 +136,7 @@ final class ControlHarnessReadSampler {
         }
 
         performanceMonitor?.recordSamplerTick(
-            targetCount: targets.count,
+            targetCount: samplingTargets.count,
             refreshedCount: refreshedCount,
             durationMs: Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000,
             at: now
@@ -136,15 +149,40 @@ final class ControlHarnessReadSampler {
         scope: String,
         surface: any ControlHarnessReadableSurface,
         activityClass: ControlHarnessSamplingActivityClass,
+        forceRefresh: Bool = false,
         now: Date = Date()
     ) -> ControlHarnessTerminalSample {
+        if shouldThrottleSampling(activityClass: activityClass, now: now) {
+            let previous = sampleStore.sample(for: terminalID, scope: scope)
+            let footprintBytes = processPhysicalFootprintBytes(now: now)
+            maybeLogMemoryThrottle(
+                terminalID: terminalID,
+                scope: scope,
+                activityClass: activityClass,
+                now: now,
+                footprintBytes: footprintBytes
+            )
+            return sampleStore.store(
+                terminalID: terminalID,
+                scope: scope,
+                content: previous?.content ?? "",
+                consistency: "throttled_memory_pressure",
+                cacheAgeMs: previous?.cacheAgeMs ?? 0,
+                capturedAt: now,
+                activityClass: activityClass,
+                forcedFresh: false
+            )
+        }
+
         let started = DispatchTime.now()
         let read: (content: String, cacheAgeMs: Int)
         switch scope {
         case "visible":
-            read = surface.controlHarnessReadVisibleText(refresh: true)
+            // Avoid forcing a full terminal dump on every sampler tick.
+            // Cached reads still refresh automatically when the cache expires.
+            read = surface.controlHarnessReadVisibleText(refresh: forceRefresh)
         case "screen":
-            read = surface.controlHarnessReadScreenText(refresh: true)
+            read = surface.controlHarnessReadScreenText(refresh: forceRefresh)
         default:
             read = ("", 0)
         }
@@ -157,7 +195,7 @@ final class ControlHarnessReadSampler {
             cacheAgeMs: read.cacheAgeMs,
             capturedAt: now,
             activityClass: activityClass,
-            forcedFresh: true
+            forcedFresh: forceRefresh
         )
 
         performanceMonitor?.recordSamplerCapture(
@@ -235,5 +273,70 @@ final class ControlHarnessReadSampler {
         )
 
         return true
+    }
+
+    private func shouldThrottleSampling(
+        activityClass: ControlHarnessSamplingActivityClass,
+        now: Date
+    ) -> Bool {
+        guard let footprintBytes = processPhysicalFootprintBytes(now: now) else {
+            return false
+        }
+        return footprintBytes >= Self.memoryPressureFootprintThresholdBytes
+    }
+
+    private func processPhysicalFootprintBytes(now: Date) -> UInt64? {
+        if let lastFootprintProbeDate,
+           let lastFootprintBytes,
+           now.timeIntervalSince(lastFootprintProbeDate) < Self.memoryPressureProbeIntervalSeconds {
+            return lastFootprintBytes
+        }
+
+        var vmInfo = task_vm_info_data_t()
+        var vmInfoCount = mach_msg_type_number_t(
+            MemoryLayout.size(ofValue: vmInfo) / MemoryLayout<integer_t>.size
+        )
+        let result = withUnsafeMutablePointer(to: &vmInfo) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(vmInfoCount)) { intPointer in
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), intPointer, &vmInfoCount)
+            }
+        }
+        guard result == KERN_SUCCESS else {
+            return nil
+        }
+
+        let footprintBytes = UInt64(vmInfo.phys_footprint)
+        lastFootprintProbeDate = now
+        lastFootprintBytes = footprintBytes
+        return footprintBytes
+    }
+
+    private func maybeLogMemoryThrottle(
+        terminalID: String,
+        scope: String,
+        activityClass: ControlHarnessSamplingActivityClass,
+        now: Date,
+        footprintBytes: UInt64?
+    ) {
+        if let lastMemoryThrottleLogDate,
+           now.timeIntervalSince(lastMemoryThrottleLogDate) < Self.memoryThrottleLogIntervalSeconds {
+            return
+        }
+        lastMemoryThrottleLogDate = now
+
+        var details: [String: String] = [
+            "terminal_id": terminalID,
+            "scope": scope,
+            "activity_class": activityClass.rawValue,
+            "threshold_bytes": "\(Self.memoryPressureFootprintThresholdBytes)",
+        ]
+        if let footprintBytes {
+            details["physical_footprint_bytes"] = "\(footprintBytes)"
+        }
+        RuntimeDiagnosticsLogger.log(
+            component: "control_harness.read_sampler",
+            event: "throttled_for_memory_pressure",
+            details: details
+        )
     }
 }

@@ -380,6 +380,12 @@ struct MarkdownHTMLRenderer {
                 continue
             }
 
+            // A list marker for the same list type at a lower indentation level
+            // belongs to an outer list, so stop the nested collector.
+            if let marker = listMarker(in: rawLine, ordered: ordered), marker.indent < baseIndent {
+                break
+            }
+
             if let nestedUnordered = listMarker(in: rawLine, ordered: false), nestedUnordered.indent > baseIndent {
                 let result = collectList(from: lines, startIndex: index, ordered: false)
                 currentNested.append(result.html)

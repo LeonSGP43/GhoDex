@@ -15,7 +15,6 @@ jobs:
   # are other fast skip conditions, and add it as an output. Then modify
   # other tests `needs/if` to check them. Document the outputs.
   skip:
-    if: github.repository == 'ghostty-org/ghostty'
     runs-on: namespace-profile-ghostty-xsm
     outputs:
       # 'true' when all changed files are non-code (e.g. only VOUCHED.td),
@@ -27,6 +26,7 @@ jobs:
       macos: ${{ steps.filter_any.outputs.macos }}
       nix: ${{ steps.filter_any.outputs.nix }}
       shell: ${{ steps.filter_any.outputs.shell }}
+      workspace_map: ${{ steps.filter_any.outputs.workspace_map }}
       zig: ${{ steps.filter_any.outputs.zig }}
 
     steps:
@@ -48,6 +48,15 @@ jobs:
             macos:
               - '.swiftlint.yml'
               - 'macos/**'
+            workspace_map:
+              - '.github/workflows/test.yml'
+              - '.github/PULL_REQUEST_TEMPLATE.md'
+              - 'docs/workspace-map-v1.md'
+              - 'macos/Sources/Features/Workspace Map/**'
+              - 'macos/Tests/WorkspaceMap/**'
+              - 'macos/Tests/AITerminalManager/NewTabPickerWorkspaceMapTests.swift'
+              - 'plan.md'
+              - 'scripts/ci/**'
             actions_pins:
               - '.github/workflows/**'
               - '.github/pinact.yml'
@@ -104,6 +113,7 @@ jobs:
       - test-i18n
       - test-fuzz-libghostty
       - test-macos
+      - workspace-map-guard
       - pinact
       - prettier
       - swiftlint
@@ -975,6 +985,23 @@ jobs:
 
       - name: test
         run: nix develop -c zig build test --system ${{ steps.deps.outputs.deps }}
+
+  workspace-map-guard:
+    if: needs.skip.outputs.skip != 'true' && needs.skip.outputs.workspace_map == 'true'
+    runs-on: namespace-profile-ghostty-macos-tahoe
+    needs: skip
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Xcode Select
+        run: sudo xcode-select -s /Applications/Xcode_26.2.app
+
+      - name: Boundary guard
+        run: bash scripts/ci/check_workspace_map_boundaries.sh
+
+      - name: Workspace Map test matrix
+        run: bash scripts/ci/run_workspace_map_test_matrix.sh
 
   test-i18n:
     strategy:

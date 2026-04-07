@@ -1,12 +1,31 @@
 import Cocoa
 
 struct BrowserRestorableSnapshot: Codable {
+    let workspaceID: UUID
     let urlString: String
     let titleOverride: String?
 
-    init(urlString: String, titleOverride: String?) {
+    init(
+        workspaceID: UUID = UUID(),
+        urlString: String,
+        titleOverride: String?
+    ) {
+        self.workspaceID = workspaceID
         self.urlString = urlString
         self.titleOverride = titleOverride
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case workspaceID
+        case urlString
+        case titleOverride
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        workspaceID = try container.decodeIfPresent(UUID.self, forKey: .workspaceID) ?? UUID()
+        urlString = try container.decode(String.self, forKey: .urlString)
+        titleOverride = try container.decodeIfPresent(String.self, forKey: .titleOverride)
     }
 }
 
@@ -47,6 +66,7 @@ final class BrowserRestorableState: BrowserRestorable {
 
     init(from controller: BrowserTabController) {
         self.snapshot = .init(
+            workspaceID: controller.workspaceID,
             urlString: controller.model.restorableURL.absoluteString,
             titleOverride: controller.titleOverride)
     }
@@ -114,7 +134,11 @@ final class BrowserWindowRestoration: NSObject, NSWindowRestoration {
 
         let restoredURL = URL(string: state.snapshot.urlString)
             ?? BrowserTabController.defaultHomePageURL(for: appDelegate.ghostty)
-        let controller = BrowserTabController(appDelegate.ghostty, initialURL: restoredURL)
+        let controller = BrowserTabController(
+            appDelegate.ghostty,
+            initialURL: restoredURL,
+            workspaceID: state.snapshot.workspaceID
+        )
         controller.titleOverride = state.snapshot.titleOverride
 
         guard let window = controller.window else {

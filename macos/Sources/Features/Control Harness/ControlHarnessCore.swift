@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import OSLog
 import GhoDexKit
@@ -22,14 +23,161 @@ private struct RuntimeDiagnosticsRecord: Encodable {
     let details: [String: String]
 }
 
+private struct RuntimeLifecycleSessionState: Codable {
+    let schemaVersion: Int
+    var sessionID: String
+    var pid: Int32
+    var startedAt: String
+    var lastUpdatedAt: String
+    var gracefulEnd: Bool
+    var gracefulEndReason: String?
+    var terminateRequestedReason: String?
+    var terminateRequestedBy: String?
+    var lastSignal: String?
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case sessionID = "session_id"
+        case pid
+        case startedAt = "started_at"
+        case lastUpdatedAt = "last_updated_at"
+        case gracefulEnd = "graceful_end"
+        case gracefulEndReason = "graceful_end_reason"
+        case terminateRequestedReason = "terminate_requested_reason"
+        case terminateRequestedBy = "terminate_requested_by"
+        case lastSignal = "last_signal"
+    }
+}
+
+private struct RuntimeDiagnosticsRegionSnapshot {
+    let sampleDate: Date
+    let sampledAt: String
+    let iosurfaceResidentBytes: Int64?
+    let ioacceleratorGraphicsResidentBytes: Int64?
+    let mallocResidentBytes: Int64?
+    let totalResidentBytes: Int64?
+    let totalDirtyBytes: Int64?
+    let totalSwappedBytes: Int64?
+    let vmAllocateVirtualBytes: Int64?
+    let vmAllocateResidentBytes: Int64?
+    let vmAllocateDirtyBytes: Int64?
+    let vmAllocateSwappedBytes: Int64?
+    let vmAllocateRegionCount: Int?
+    let vmAllocateSwappedRatio: Double?
+    let memoryTag253VirtualBytes: Int64?
+    let memoryTag253ResidentBytes: Int64?
+    let memoryTag253SwappedBytes: Int64?
+    let topSwappedRegionName: String?
+    let topSwappedRegionBytes: Int64?
+    let topResidentRegionName: String?
+    let topResidentRegionBytes: Int64?
+    let deltaIntervalSeconds: TimeInterval?
+    let totalResidentDeltaBytes: Int64?
+    let totalSwappedDeltaBytes: Int64?
+    let vmAllocateVirtualDeltaBytes: Int64?
+    let vmAllocateResidentDeltaBytes: Int64?
+    let vmAllocateSwappedDeltaBytes: Int64?
+    let memoryTag253SwappedDeltaBytes: Int64?
+    let growthSuspect: String?
+
+    func merge(into details: inout [String: String]) {
+        details["vmmap_sampled_at"] = sampledAt
+        if let iosurfaceResidentBytes {
+            details["iosurface_resident_bytes"] = "\(iosurfaceResidentBytes)"
+        }
+        if let ioacceleratorGraphicsResidentBytes {
+            details["ioaccelerator_graphics_resident_bytes"] = "\(ioacceleratorGraphicsResidentBytes)"
+        }
+        if let mallocResidentBytes {
+            details["malloc_resident_bytes"] = "\(mallocResidentBytes)"
+        }
+        if let totalResidentBytes {
+            details["total_resident_bytes"] = "\(totalResidentBytes)"
+        }
+        if let totalDirtyBytes {
+            details["total_dirty_bytes"] = "\(totalDirtyBytes)"
+        }
+        if let totalSwappedBytes {
+            details["total_swapped_bytes"] = "\(totalSwappedBytes)"
+        }
+        if let vmAllocateVirtualBytes {
+            details["vm_allocate_virtual_bytes"] = "\(vmAllocateVirtualBytes)"
+        }
+        if let vmAllocateResidentBytes {
+            details["vm_allocate_resident_bytes"] = "\(vmAllocateResidentBytes)"
+        }
+        if let vmAllocateDirtyBytes {
+            details["vm_allocate_dirty_bytes"] = "\(vmAllocateDirtyBytes)"
+        }
+        if let vmAllocateSwappedBytes {
+            details["vm_allocate_swapped_bytes"] = "\(vmAllocateSwappedBytes)"
+        }
+        if let vmAllocateRegionCount {
+            details["vm_allocate_region_count"] = "\(vmAllocateRegionCount)"
+        }
+        if let vmAllocateSwappedRatio {
+            details["vm_allocate_swapped_ratio"] = String(format: "%.6f", vmAllocateSwappedRatio)
+        }
+        if let memoryTag253VirtualBytes {
+            details["memory_tag_253_virtual_bytes"] = "\(memoryTag253VirtualBytes)"
+        }
+        if let memoryTag253ResidentBytes {
+            details["memory_tag_253_resident_bytes"] = "\(memoryTag253ResidentBytes)"
+        }
+        if let memoryTag253SwappedBytes {
+            details["memory_tag_253_swapped_bytes"] = "\(memoryTag253SwappedBytes)"
+        }
+        if let topSwappedRegionName {
+            details["top_swapped_region"] = topSwappedRegionName
+        }
+        if let topSwappedRegionBytes {
+            details["top_swapped_region_bytes"] = "\(topSwappedRegionBytes)"
+        }
+        if let topResidentRegionName {
+            details["top_resident_region"] = topResidentRegionName
+        }
+        if let topResidentRegionBytes {
+            details["top_resident_region_bytes"] = "\(topResidentRegionBytes)"
+        }
+        if let deltaIntervalSeconds {
+            details["vmmap_delta_interval_seconds"] = String(format: "%.3f", deltaIntervalSeconds)
+        }
+        if let totalResidentDeltaBytes {
+            details["total_resident_delta_bytes"] = "\(totalResidentDeltaBytes)"
+        }
+        if let totalSwappedDeltaBytes {
+            details["total_swapped_delta_bytes"] = "\(totalSwappedDeltaBytes)"
+        }
+        if let vmAllocateVirtualDeltaBytes {
+            details["vm_allocate_virtual_delta_bytes"] = "\(vmAllocateVirtualDeltaBytes)"
+        }
+        if let vmAllocateResidentDeltaBytes {
+            details["vm_allocate_resident_delta_bytes"] = "\(vmAllocateResidentDeltaBytes)"
+        }
+        if let vmAllocateSwappedDeltaBytes {
+            details["vm_allocate_swapped_delta_bytes"] = "\(vmAllocateSwappedDeltaBytes)"
+        }
+        if let memoryTag253SwappedDeltaBytes {
+            details["memory_tag_253_swapped_delta_bytes"] = "\(memoryTag253SwappedDeltaBytes)"
+        }
+        if let growthSuspect {
+            details["vmmap_growth_suspect"] = growthSuspect
+        }
+    }
+}
+
 final class RuntimeDiagnosticsLogger {
     private static let fileName = "runtime-memory-diagnostics.jsonl"
     private static let rotatedFileName = "runtime-memory-diagnostics.1.jsonl"
+    private static let lifecycleStateFileName = "runtime-lifecycle-state.json"
+    private static let lifecycleStateSchemaVersion = 1
     private static let maxFileBytes: Int64 = 4 * 1024 * 1024
+    private static let periodicRegionSampleSeconds: TimeInterval = 60
 
     static let shared = RuntimeDiagnosticsLogger()
 
     private let queue = DispatchQueue(label: "com.leongong.ghodex.runtime-diagnostics")
+    private let queueSpecificKey = DispatchSpecificKey<Void>()
     private let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -38,18 +186,32 @@ final class RuntimeDiagnosticsLogger {
     private let fileManager = FileManager.default
     private let fileURL: URL?
     private let rotatedFileURL: URL?
+    private let lockFileURL: URL?
+    private let stateFileURL: URL?
     private let enabled: Bool
+    private let vmmapSamplingEnabled: Bool
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
         category: "RuntimeDiagnostics"
     )
+    private var periodicRegionSampler: DispatchSourceTimer?
+    private var latestRegionSnapshot: RuntimeDiagnosticsRegionSnapshot?
+    private var previousProcessMemorySnapshot: RuntimeProcessMemorySnapshot?
+    private var previousProcessMemorySampleDate: Date?
+    private var lifecycleSessionState: RuntimeLifecycleSessionState?
+    private var lifecycleSessionStarted = false
 
     private init() {
         let configured = Self.parseEnabledFlag(ProcessInfo.processInfo.environment["GHODEX_RUNTIME_DIAG_LOG"])
         self.enabled = configured ?? true
+        let vmmapConfigured = Self.parseEnabledFlag(ProcessInfo.processInfo.environment["GHODEX_RUNTIME_DIAG_VMMAP"])
+        self.vmmapSamplingEnabled = vmmapConfigured ?? false
+        queue.setSpecific(key: queueSpecificKey, value: ())
         guard enabled else {
             self.fileURL = nil
             self.rotatedFileURL = nil
+            self.lockFileURL = nil
+            self.stateFileURL = nil
             return
         }
 
@@ -57,10 +219,68 @@ final class RuntimeDiagnosticsLogger {
         let directory = Self.diagnosticsDirectory(bundleID: bundleID)
         self.fileURL = directory.appendingPathComponent(Self.fileName, isDirectory: false)
         self.rotatedFileURL = directory.appendingPathComponent(Self.rotatedFileName, isDirectory: false)
+        self.lockFileURL = directory.appendingPathComponent("\(Self.fileName).lock", isDirectory: false)
+        self.stateFileURL = directory.appendingPathComponent(Self.lifecycleStateFileName, isDirectory: false)
+        self.ensureLifecycleSessionStarted(waitUntilFinished: true)
+        self.startPeriodicRegionSampler()
     }
 
     static func log(component: String, event: String, details: [String: String] = [:]) {
         shared.append(component: component, event: event, details: details)
+    }
+
+    static func beginLifecycleSessionIfNeeded() {
+        shared.ensureLifecycleSessionStarted(waitUntilFinished: false)
+    }
+
+    static func recordLifecycleTerminateRequested(
+        reason: String,
+        requestedBy: String,
+        details: [String: String] = [:]
+    ) {
+        shared.appendLifecycleTerminateRequested(
+            reason: reason,
+            requestedBy: requestedBy,
+            details: details
+        )
+    }
+
+    static func recordLifecycleTerminateCancelled(
+        reason: String,
+        requestedBy: String,
+        details: [String: String] = [:]
+    ) {
+        shared.appendLifecycleTerminateCancelled(
+            reason: reason,
+            requestedBy: requestedBy,
+            details: details
+        )
+    }
+
+    static func recordLifecycleSignalReceived(
+        signalNumber: Int32,
+        signalName: String,
+        mappedReason: String
+    ) {
+        shared.appendLifecycleSignalReceived(
+            signalNumber: signalNumber,
+            signalName: signalName,
+            mappedReason: mappedReason
+        )
+    }
+
+    static func recordLifecycleWillTerminate(reason: String?, details: [String: String] = [:]) {
+        shared.appendLifecycleWillTerminate(reason: reason, details: details)
+    }
+
+    static func markLifecycleGracefulTerminate(
+        reason: String,
+        details: [String: String] = [:]
+    ) {
+        shared.appendLifecycleGracefulTerminate(
+            reason: reason,
+            details: details
+        )
     }
 
     private static func parseEnabledFlag(_ rawValue: String?) -> Bool? {
@@ -90,41 +310,287 @@ final class RuntimeDiagnosticsLogger {
     }
 
     private func append(component: String, event: String, details: [String: String]) {
-        guard enabled, let fileURL, let rotatedFileURL else { return }
+        guard enabled else { return }
+        runOnQueue(waitUntilFinished: false) { [weak self] in
+            self?.writeRecordLocked(component: component, event: event, details: details)
+        }
+    }
 
-        queue.async { [fileManager, encoder, logger] in
-            do {
-                try fileManager.createDirectory(
-                    at: fileURL.deletingLastPathComponent(),
-                    withIntermediateDirectories: true,
-                    attributes: nil
-                )
+    private func runOnQueue(waitUntilFinished: Bool, _ body: @escaping () -> Void) {
+        if DispatchQueue.getSpecific(key: queueSpecificKey) != nil {
+            body()
+            return
+        }
 
-                try Self.rotateIfNeeded(
-                    fileURL: fileURL,
-                    rotatedFileURL: rotatedFileURL,
-                    fileManager: fileManager
-                )
+        if waitUntilFinished {
+            queue.sync(execute: body)
+        } else {
+            queue.async(execute: body)
+        }
+    }
 
-                let record = RuntimeDiagnosticsRecord(
-                    timestamp: ISO8601DateFormatter().string(from: Date()),
-                    component: component,
-                    event: event,
-                    details: details
-                )
-                let data = try encoder.encode(record)
-                if !fileManager.fileExists(atPath: fileURL.path) {
-                    fileManager.createFile(atPath: fileURL.path, contents: nil)
-                }
-                let handle = try FileHandle(forWritingTo: fileURL)
-                defer { try? handle.close() }
-                try handle.seekToEnd()
-                try handle.write(contentsOf: data)
-                try handle.write(contentsOf: Data([0x0A]))
-            } catch {
-                logger.error("failed to write runtime diagnostics record: \(error.localizedDescription, privacy: .public)")
+    private func ensureLifecycleSessionStarted(waitUntilFinished: Bool) {
+        guard enabled else { return }
+        runOnQueue(waitUntilFinished: waitUntilFinished) { [weak self] in
+            self?.ensureLifecycleSessionStartedLocked()
+        }
+    }
+
+    private func ensureLifecycleSessionStartedLocked() {
+        guard enabled else { return }
+        guard !lifecycleSessionStarted else { return }
+        lifecycleSessionStarted = true
+        beginLifecycleSessionLocked()
+    }
+
+    private func appendLifecycleTerminateRequested(
+        reason: String,
+        requestedBy: String,
+        details: [String: String]
+    ) {
+        guard enabled else { return }
+        runOnQueue(waitUntilFinished: false) { [weak self] in
+            guard let self else { return }
+            self.ensureLifecycleSessionStartedLocked()
+
+            var payload = details
+            payload["reason"] = reason
+            payload["requested_by"] = requestedBy
+            self.appendLifecycleEventLocked(event: "terminate_requested", details: payload)
+            self.updateLifecycleStateLocked { state in
+                state.terminateRequestedReason = reason
+                state.terminateRequestedBy = requestedBy
             }
         }
+    }
+
+    private func appendLifecycleTerminateCancelled(
+        reason: String,
+        requestedBy: String,
+        details: [String: String]
+    ) {
+        guard enabled else { return }
+        runOnQueue(waitUntilFinished: false) { [weak self] in
+            guard let self else { return }
+            self.ensureLifecycleSessionStartedLocked()
+
+            var payload = details
+            payload["reason"] = reason
+            payload["requested_by"] = requestedBy
+            self.appendLifecycleEventLocked(event: "terminate_cancelled", details: payload)
+            self.updateLifecycleStateLocked { state in
+                state.terminateRequestedReason = nil
+                state.terminateRequestedBy = nil
+            }
+        }
+    }
+
+    private func appendLifecycleSignalReceived(
+        signalNumber: Int32,
+        signalName: String,
+        mappedReason: String
+    ) {
+        guard enabled else { return }
+        runOnQueue(waitUntilFinished: true) { [weak self] in
+            guard let self else { return }
+            self.ensureLifecycleSessionStartedLocked()
+
+            self.appendLifecycleEventLocked(
+                event: "signal_received",
+                details: [
+                    "signal_number": "\(signalNumber)",
+                    "signal_name": signalName,
+                    "mapped_reason": mappedReason,
+                ]
+            )
+            self.updateLifecycleStateLocked { state in
+                state.lastSignal = signalName
+                state.terminateRequestedReason = mappedReason
+                state.terminateRequestedBy = "signal"
+            }
+        }
+    }
+
+    private func appendLifecycleWillTerminate(reason: String?, details: [String: String]) {
+        guard enabled else { return }
+        runOnQueue(waitUntilFinished: true) { [weak self] in
+            guard let self else { return }
+            self.ensureLifecycleSessionStartedLocked()
+
+            var payload = details
+            if let reason {
+                payload["reason"] = reason
+            }
+            self.appendLifecycleEventLocked(event: "will_terminate", details: payload)
+        }
+    }
+
+    private func appendLifecycleGracefulTerminate(reason: String, details: [String: String]) {
+        guard enabled else { return }
+        runOnQueue(waitUntilFinished: true) { [weak self] in
+            guard let self else { return }
+            self.ensureLifecycleSessionStartedLocked()
+
+            var payload = details
+            payload["reason"] = reason
+            self.appendLifecycleEventLocked(event: "graceful_terminate", details: payload)
+            self.updateLifecycleStateLocked { state in
+                state.gracefulEnd = true
+                state.gracefulEndReason = reason
+                if state.terminateRequestedReason == nil {
+                    state.terminateRequestedReason = reason
+                }
+            }
+        }
+    }
+
+    private func appendLifecycleEventLocked(event: String, details: [String: String]) {
+        writeRecordLocked(
+            component: "runtime.lifecycle",
+            event: event,
+            details: lifecycleDetailsLocked(details)
+        )
+    }
+
+    private func lifecycleDetailsLocked(_ details: [String: String]) -> [String: String] {
+        var enriched = details
+        if let state = lifecycleSessionState {
+            enriched["session_id"] = state.sessionID
+            enriched["session_started_at"] = state.startedAt
+            enriched["session_pid"] = "\(state.pid)"
+        }
+        return enriched
+    }
+
+    private func updateLifecycleStateLocked(
+        _ mutate: (inout RuntimeLifecycleSessionState) -> Void
+    ) {
+        guard var state = lifecycleSessionState else { return }
+        mutate(&state)
+        state.lastUpdatedAt = Self.iso8601Timestamp()
+        lifecycleSessionState = state
+        persistLifecycleStateLocked(state)
+    }
+
+    private func persistLifecycleStateLocked(_ state: RuntimeLifecycleSessionState) {
+        guard
+            let stateFileURL,
+            let lockFileURL
+        else {
+            return
+        }
+
+        do {
+            try fileManager.createDirectory(
+                at: stateFileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
+
+            let stateData = try encoder.encode(state)
+            try Self.withFileLock(lockFileURL: lockFileURL) {
+                try stateData.write(to: stateFileURL, options: .atomic)
+            }
+        } catch {
+            logger.error("failed to write runtime lifecycle state: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func beginLifecycleSessionLocked() {
+        guard
+            enabled,
+            let stateFileURL,
+            let lockFileURL
+        else {
+            return
+        }
+
+        let previousState = readLifecycleStateLocked()
+        if let previousState, !previousState.gracefulEnd {
+            var details: [String: String] = [
+                "previous_session_id": previousState.sessionID,
+                "previous_started_at": previousState.startedAt,
+                "previous_pid": "\(previousState.pid)",
+            ]
+            if let reason = previousState.terminateRequestedReason {
+                details["previous_terminate_requested_reason"] = reason
+            }
+            if let requestedBy = previousState.terminateRequestedBy {
+                details["previous_terminate_requested_by"] = requestedBy
+            }
+            if let signal = previousState.lastSignal {
+                details["previous_last_signal"] = signal
+            }
+            if let gracefulReason = previousState.gracefulEndReason {
+                details["previous_graceful_end_reason"] = gracefulReason
+            }
+            appendLifecycleEventLocked(event: "unclean_previous_session", details: details)
+        }
+
+        let nowTimestamp = Self.iso8601Timestamp()
+        let state = RuntimeLifecycleSessionState(
+            schemaVersion: Self.lifecycleStateSchemaVersion,
+            sessionID: UUID().uuidString.lowercased(),
+            pid: ProcessInfo.processInfo.processIdentifier,
+            startedAt: nowTimestamp,
+            lastUpdatedAt: nowTimestamp,
+            gracefulEnd: false,
+            gracefulEndReason: nil,
+            terminateRequestedReason: nil,
+            terminateRequestedBy: nil,
+            lastSignal: nil
+        )
+        lifecycleSessionState = state
+
+        do {
+            try fileManager.createDirectory(
+                at: stateFileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
+            let stateData = try encoder.encode(state)
+            try Self.withFileLock(lockFileURL: lockFileURL) {
+                try stateData.write(to: stateFileURL, options: .atomic)
+            }
+        } catch {
+            logger.error("failed to initialize runtime lifecycle state: \(error.localizedDescription, privacy: .public)")
+        }
+
+        appendLifecycleEventLocked(event: "session_start", details: [:])
+    }
+
+    private func readLifecycleStateLocked() -> RuntimeLifecycleSessionState? {
+        guard
+            let stateFileURL,
+            let lockFileURL
+        else {
+            return nil
+        }
+
+        do {
+            var state: RuntimeLifecycleSessionState?
+            try Self.withFileLock(lockFileURL: lockFileURL) {
+                guard fileManager.fileExists(atPath: stateFileURL.path) else {
+                    state = nil
+                    return
+                }
+
+                let stateData = try Data(contentsOf: stateFileURL)
+                guard !stateData.isEmpty else {
+                    state = nil
+                    return
+                }
+                state = try JSONDecoder().decode(RuntimeLifecycleSessionState.self, from: stateData)
+            }
+            return state
+        } catch {
+            logger.error("failed to read runtime lifecycle state: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    private static func iso8601Timestamp() -> String {
+        ISO8601DateFormatter().string(from: Date())
     }
 
     private static func rotateIfNeeded(
@@ -146,6 +612,450 @@ final class RuntimeDiagnosticsLogger {
         if fileManager.fileExists(atPath: fileURL.path) {
             try fileManager.moveItem(at: fileURL, to: rotatedFileURL)
         }
+    }
+
+    private func startPeriodicRegionSampler() {
+        guard enabled else { return }
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(
+            deadline: .now(),
+            repeating: .seconds(Int(Self.periodicRegionSampleSeconds)),
+            leeway: .seconds(5)
+        )
+        timer.setEventHandler { [weak self] in
+            self?.capturePeriodicRegionSampleLocked()
+        }
+        periodicRegionSampler = timer
+        timer.resume()
+    }
+
+    private func capturePeriodicRegionSampleLocked() {
+        guard enabled else { return }
+        if vmmapSamplingEnabled {
+            if let snapshot = Self.captureRegionSnapshot(
+                processID: ProcessInfo.processInfo.processIdentifier,
+                previous: latestRegionSnapshot
+            ) {
+                latestRegionSnapshot = snapshot
+            }
+        }
+        writeRecordLocked(
+            component: "runtime.memory",
+            event: "periodic_sample",
+            details: [
+                "interval_seconds": String(format: "%.0f", Self.periodicRegionSampleSeconds),
+            ]
+        )
+    }
+
+    private func writeRecordLocked(component: String, event: String, details: [String: String]) {
+        guard
+            enabled,
+            let fileURL,
+            let rotatedFileURL,
+            let lockFileURL
+        else {
+            return
+        }
+
+        do {
+            try fileManager.createDirectory(
+                at: fileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
+
+            var enriched = details
+            let sampledAt = Date()
+            mergeProcessMemoryDetailsLocked(into: &enriched, sampledAt: sampledAt)
+            latestRegionSnapshot?.merge(into: &enriched)
+
+            let record = RuntimeDiagnosticsRecord(
+                timestamp: ISO8601DateFormatter().string(from: sampledAt),
+                component: component,
+                event: event,
+                details: enriched
+            )
+            var line = try encoder.encode(record)
+            line.append(0x0A)
+
+            try Self.withFileLock(lockFileURL: lockFileURL) {
+                try Self.rotateIfNeeded(
+                    fileURL: fileURL,
+                    rotatedFileURL: rotatedFileURL,
+                    fileManager: fileManager
+                )
+                try Self.appendLine(line, to: fileURL)
+            }
+        } catch {
+            logger.error("failed to write runtime diagnostics record: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private static func withFileLock(lockFileURL: URL, _ body: () throws -> Void) throws {
+        let fileDescriptor = open(
+            lockFileURL.path,
+            O_RDWR | O_CREAT,
+            mode_t(S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
+        )
+        guard fileDescriptor >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        defer { close(fileDescriptor) }
+
+        guard flock(fileDescriptor, LOCK_EX) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        defer { _ = flock(fileDescriptor, LOCK_UN) }
+
+        try body()
+    }
+
+    private static func appendLine(_ line: Data, to fileURL: URL) throws {
+        let fileDescriptor = open(
+            fileURL.path,
+            O_WRONLY | O_CREAT | O_APPEND,
+            mode_t(S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
+        )
+        guard fileDescriptor >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        defer { close(fileDescriptor) }
+
+        try line.withUnsafeBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress else { return }
+            var remaining = rawBuffer.count
+            var offset = 0
+            while remaining > 0 {
+                let wrote = Darwin.write(fileDescriptor, baseAddress.advanced(by: offset), remaining)
+                if wrote < 0 {
+                    if errno == EINTR {
+                        continue
+                    }
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                }
+                remaining -= wrote
+                offset += wrote
+            }
+        }
+    }
+
+    private struct RuntimeProcessMemorySnapshot {
+        let rssBytes: UInt64
+        let virtualSizeBytes: UInt64
+        let physicalFootprintBytes: UInt64?
+    }
+
+    private struct VmmapSummaryRow {
+        let regionType: String
+        let virtualBytes: Int64
+        let residentBytes: Int64
+        let dirtyBytes: Int64
+        let swappedBytes: Int64
+        let regionCount: Int
+    }
+
+    private func mergeProcessMemoryDetailsLocked(into details: inout [String: String], sampledAt: Date) {
+        details["pid"] = "\(ProcessInfo.processInfo.processIdentifier)"
+
+        guard let snapshot = Self.currentProcessMemorySnapshot() else { return }
+        details["rss_bytes"] = "\(snapshot.rssBytes)"
+        details["virtual_size_bytes"] = "\(snapshot.virtualSizeBytes)"
+        if let footprintBytes = snapshot.physicalFootprintBytes {
+            details["physical_footprint_bytes"] = "\(footprintBytes)"
+        }
+
+        if let previous = previousProcessMemorySnapshot {
+            details["rss_delta_bytes"] = "\(Self.deltaUInt64(current: snapshot.rssBytes, previous: previous.rssBytes))"
+            details["virtual_size_delta_bytes"] =
+                "\(Self.deltaUInt64(current: snapshot.virtualSizeBytes, previous: previous.virtualSizeBytes))"
+            if let currentFootprint = snapshot.physicalFootprintBytes,
+               let previousFootprint = previous.physicalFootprintBytes {
+                details["physical_footprint_delta_bytes"] =
+                    "\(Self.deltaUInt64(current: currentFootprint, previous: previousFootprint))"
+            }
+        }
+
+        if let previousSampleDate = previousProcessMemorySampleDate {
+            details["process_memory_delta_interval_seconds"] =
+                String(format: "%.3f", sampledAt.timeIntervalSince(previousSampleDate))
+        }
+
+        previousProcessMemorySnapshot = snapshot
+        previousProcessMemorySampleDate = sampledAt
+    }
+
+    private static func currentProcessMemorySnapshot() -> RuntimeProcessMemorySnapshot? {
+        var basicInfo = mach_task_basic_info()
+        var basicCount = mach_msg_type_number_t(
+            MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size
+        )
+        let basicResult: kern_return_t = withUnsafeMutablePointer(to: &basicInfo) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(basicCount)) { rebound in
+                task_info(
+                    mach_task_self_,
+                    task_flavor_t(MACH_TASK_BASIC_INFO),
+                    rebound,
+                    &basicCount
+                )
+            }
+        }
+        guard basicResult == KERN_SUCCESS else { return nil }
+
+        var vmInfo = task_vm_info_data_t()
+        var vmCount = mach_msg_type_number_t(
+            MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size
+        )
+        let vmResult: kern_return_t = withUnsafeMutablePointer(to: &vmInfo) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(vmCount)) { rebound in
+                task_info(
+                    mach_task_self_,
+                    task_flavor_t(TASK_VM_INFO),
+                    rebound,
+                    &vmCount
+                )
+            }
+        }
+
+        return RuntimeProcessMemorySnapshot(
+            rssBytes: UInt64(basicInfo.resident_size),
+            virtualSizeBytes: UInt64(basicInfo.virtual_size),
+            physicalFootprintBytes: vmResult == KERN_SUCCESS ? UInt64(vmInfo.phys_footprint) : nil
+        )
+    }
+
+    private static func captureRegionSnapshot(
+        processID: Int32,
+        previous: RuntimeDiagnosticsRegionSnapshot?
+    ) -> RuntimeDiagnosticsRegionSnapshot? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/vmmap")
+        process.arguments = ["-summary", "\(processID)"]
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        process.waitUntilExit()
+
+        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        guard !outputData.isEmpty else { return nil }
+        guard let output = String(data: outputData, encoding: .utf8) else { return nil }
+
+        let rows = parseVmmapSummaryRows(from: output)
+        guard !rows.isEmpty else { return nil }
+
+        let sampledAtDate = Date()
+        let totalRow = rows["TOTAL"]
+        let vmAllocateRow = rows["VM_ALLOCATE"]
+        let ioSurfaceRow = rows["IOSurface"]
+        let ioAcceleratorGraphicsRow = rows["IOAccelerator (graphics)"]
+        let mallocRow = rows["MALLOC"]
+        let memoryTag253Row = rows["Memory Tag 253"]
+        let topSwappedRow = rows.values
+            .filter { $0.regionType != "TOTAL" }
+            .max(by: { $0.swappedBytes < $1.swappedBytes })
+        let topResidentRow = rows.values
+            .filter { $0.regionType != "TOTAL" }
+            .max(by: { $0.residentBytes < $1.residentBytes })
+
+        let vmAllocateSwappedRatio: Double?
+        if let vmAllocateSwappedBytes = vmAllocateRow?.swappedBytes,
+           let totalSwappedBytes = totalRow?.swappedBytes,
+           totalSwappedBytes > 0 {
+            vmAllocateSwappedRatio = Double(vmAllocateSwappedBytes) / Double(totalSwappedBytes)
+        } else {
+            vmAllocateSwappedRatio = nil
+        }
+
+        let deltaIntervalSeconds = previous.map { sampledAtDate.timeIntervalSince($0.sampleDate) }
+        let totalResidentDeltaBytes = Self.delta(
+            current: totalRow?.residentBytes,
+            previous: previous?.totalResidentBytes
+        )
+        let totalSwappedDeltaBytes = Self.delta(
+            current: totalRow?.swappedBytes,
+            previous: previous?.totalSwappedBytes
+        )
+        let vmAllocateVirtualDeltaBytes = Self.delta(
+            current: vmAllocateRow?.virtualBytes,
+            previous: previous?.vmAllocateVirtualBytes
+        )
+        let vmAllocateResidentDeltaBytes = Self.delta(
+            current: vmAllocateRow?.residentBytes,
+            previous: previous?.vmAllocateResidentBytes
+        )
+        let vmAllocateSwappedDeltaBytes = Self.delta(
+            current: vmAllocateRow?.swappedBytes,
+            previous: previous?.vmAllocateSwappedBytes
+        )
+        let memoryTag253SwappedDeltaBytes = Self.delta(
+            current: memoryTag253Row?.swappedBytes,
+            previous: previous?.memoryTag253SwappedBytes
+        )
+        let growthSuspect = Self.growthSuspect(
+            vmAllocateSwappedRatio: vmAllocateSwappedRatio,
+            vmAllocateSwappedDeltaBytes: vmAllocateSwappedDeltaBytes,
+            totalSwappedDeltaBytes: totalSwappedDeltaBytes,
+            vmAllocateVirtualDeltaBytes: vmAllocateVirtualDeltaBytes,
+            memoryTag253SwappedDeltaBytes: memoryTag253SwappedDeltaBytes
+        )
+
+        return RuntimeDiagnosticsRegionSnapshot(
+            sampleDate: sampledAtDate,
+            sampledAt: ISO8601DateFormatter().string(from: sampledAtDate),
+            iosurfaceResidentBytes: ioSurfaceRow?.residentBytes,
+            ioacceleratorGraphicsResidentBytes: ioAcceleratorGraphicsRow?.residentBytes,
+            mallocResidentBytes: mallocRow?.residentBytes,
+            totalResidentBytes: totalRow?.residentBytes,
+            totalDirtyBytes: totalRow?.dirtyBytes,
+            totalSwappedBytes: totalRow?.swappedBytes,
+            vmAllocateVirtualBytes: vmAllocateRow?.virtualBytes,
+            vmAllocateResidentBytes: vmAllocateRow?.residentBytes,
+            vmAllocateDirtyBytes: vmAllocateRow?.dirtyBytes,
+            vmAllocateSwappedBytes: vmAllocateRow?.swappedBytes,
+            vmAllocateRegionCount: vmAllocateRow?.regionCount,
+            vmAllocateSwappedRatio: vmAllocateSwappedRatio,
+            memoryTag253VirtualBytes: memoryTag253Row?.virtualBytes,
+            memoryTag253ResidentBytes: memoryTag253Row?.residentBytes,
+            memoryTag253SwappedBytes: memoryTag253Row?.swappedBytes,
+            topSwappedRegionName: topSwappedRow?.regionType,
+            topSwappedRegionBytes: topSwappedRow?.swappedBytes,
+            topResidentRegionName: topResidentRow?.regionType,
+            topResidentRegionBytes: topResidentRow?.residentBytes,
+            deltaIntervalSeconds: deltaIntervalSeconds,
+            totalResidentDeltaBytes: totalResidentDeltaBytes,
+            totalSwappedDeltaBytes: totalSwappedDeltaBytes,
+            vmAllocateVirtualDeltaBytes: vmAllocateVirtualDeltaBytes,
+            vmAllocateResidentDeltaBytes: vmAllocateResidentDeltaBytes,
+            vmAllocateSwappedDeltaBytes: vmAllocateSwappedDeltaBytes,
+            memoryTag253SwappedDeltaBytes: memoryTag253SwappedDeltaBytes,
+            growthSuspect: growthSuspect
+        )
+    }
+
+    private static func parseVmmapSummaryRows(from vmmapSummary: String) -> [String: VmmapSummaryRow] {
+        var rows: [String: VmmapSummaryRow] = [:]
+        var inRegionSummaryTable = false
+
+        for rawLine in vmmapSummary.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
+            if line.contains("REGION TYPE") {
+                inRegionSummaryTable = true
+                continue
+            }
+            guard inRegionSummaryTable else { continue }
+
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, !trimmed.hasPrefix("==========") else { continue }
+
+            guard let row = parseVmmapSummaryRow(trimmed) else { continue }
+            rows[row.regionType] = row
+
+            if row.regionType == "TOTAL" {
+                break
+            }
+        }
+
+        return rows
+    }
+
+    private static func parseVmmapSummaryRow(_ line: String) -> VmmapSummaryRow? {
+        let tokens = line.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard tokens.count >= 9 else { return nil }
+
+        for valueStart in 1..<(tokens.count - 7) {
+            guard
+                let virtualBytes = parseByteToken(tokens[valueStart]),
+                let residentBytes = parseByteToken(tokens[valueStart + 1]),
+                let dirtyBytes = parseByteToken(tokens[valueStart + 2]),
+                let swappedBytes = parseByteToken(tokens[valueStart + 3]),
+                parseByteToken(tokens[valueStart + 4]) != nil,
+                parseByteToken(tokens[valueStart + 5]) != nil,
+                parseByteToken(tokens[valueStart + 6]) != nil
+            else {
+                continue
+            }
+
+            let regionCountToken = tokens[valueStart + 7].replacingOccurrences(of: ",", with: "")
+            guard let regionCount = Int(regionCountToken) else { continue }
+
+            let regionType = tokens[0..<valueStart].joined(separator: " ")
+            guard !regionType.isEmpty else { continue }
+
+            return VmmapSummaryRow(
+                regionType: regionType,
+                virtualBytes: virtualBytes,
+                residentBytes: residentBytes,
+                dirtyBytes: dirtyBytes,
+                swappedBytes: swappedBytes,
+                regionCount: regionCount
+            )
+        }
+
+        return nil
+    }
+
+    private static func delta(current: Int64?, previous: Int64?) -> Int64? {
+        guard let current, let previous else { return nil }
+        return current - previous
+    }
+
+    private static func deltaUInt64(current: UInt64, previous: UInt64) -> Int64 {
+        if current >= previous {
+            let difference = current - previous
+            return difference > UInt64(Int64.max) ? Int64.max : Int64(difference)
+        }
+        let difference = previous - current
+        return difference > UInt64(Int64.max) ? Int64.min : -Int64(difference)
+    }
+
+    private static func growthSuspect(
+        vmAllocateSwappedRatio: Double?,
+        vmAllocateSwappedDeltaBytes: Int64?,
+        totalSwappedDeltaBytes: Int64?,
+        vmAllocateVirtualDeltaBytes: Int64?,
+        memoryTag253SwappedDeltaBytes: Int64?
+    ) -> String? {
+        let positiveSignals: [(String, Int64)] = [
+            ("vm_allocate_swapped_growth", vmAllocateSwappedDeltaBytes ?? Int64.min),
+            ("total_swapped_growth", totalSwappedDeltaBytes ?? Int64.min),
+            ("vm_allocate_virtual_growth", vmAllocateVirtualDeltaBytes ?? Int64.min),
+            ("memory_tag_253_swapped_growth", memoryTag253SwappedDeltaBytes ?? Int64.min),
+        ]
+            .filter { $0.1 > 0 }
+
+        if let strongestSignal = positiveSignals.max(by: { $0.1 < $1.1 }) {
+            return strongestSignal.0
+        }
+        if let vmAllocateSwappedRatio, vmAllocateSwappedRatio >= 0.60 {
+            return "vm_allocate_dominant_swapped"
+        }
+        return nil
+    }
+
+    private static func parseByteToken(_ token: String) -> Int64? {
+        let normalized = token.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard !normalized.isEmpty else { return nil }
+        guard let lastCharacter = normalized.last else { return nil }
+        let multipliers: [Character: Double] = [
+            "K": 1_024,
+            "M": 1_024 * 1_024,
+            "G": 1_024 * 1_024 * 1_024,
+            "T": 1_024 * 1_024 * 1_024 * 1_024,
+        ]
+
+        if let multiplier = multipliers[lastCharacter] {
+            let numberPortion = normalized.dropLast()
+            guard let value = Double(numberPortion) else { return nil }
+            return Int64(value * multiplier)
+        }
+        guard let bytes = Double(normalized) else { return nil }
+        return Int64(bytes)
     }
 }
 
@@ -998,10 +1908,20 @@ final class ControlHarnessCore {
     private let streamPollInterval: TimeInterval
     private let now: @MainActor () -> Date
     private var terminalWindowBellObserver: NSObjectProtocol?
+    private var lastReadFootprintProbeDate: Date?
+    private var lastReadFootprintBytes: UInt64?
+    private var lastReadMemoryThrottleLogDate: Date?
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
         category: "ControlHarnessCore"
     )
+    private static let readMemoryPressureProbeIntervalSeconds: TimeInterval = 1.0
+    private static let readMemoryThrottleLogIntervalSeconds: TimeInterval = 10.0
+#if DEBUG
+    private static let readMemoryPressureFootprintThresholdBytes: UInt64 = 2 * 1024 * 1024 * 1024
+#else
+    private static let readMemoryPressureFootprintThresholdBytes: UInt64 = 3 * 1024 * 1024 * 1024
+#endif
 
     @MainActor
     convenience init(
@@ -2117,12 +3037,19 @@ final class ControlHarnessCore {
             )
         }
 
+        let shouldForceRefresh = shouldForceFreshRead(
+            requested: forceFresh,
+            terminalID: terminalID,
+            scope: scope,
+            activityClass: activityClass,
+            now: currentTime
+        )
         let read: (content: String, cacheAgeMs: Int)
         switch scope {
         case "visible":
-            read = surface.controlHarnessReadVisibleText(refresh: true)
+            read = surface.controlHarnessReadVisibleText(refresh: shouldForceRefresh)
         case "screen":
-            read = surface.controlHarnessReadScreenText(refresh: true)
+            read = surface.controlHarnessReadScreenText(refresh: shouldForceRefresh)
         default:
             throw ControlHarnessCoreError.invalidArgument("Unsupported read scope: \(scope)")
         }
@@ -2131,17 +3058,96 @@ final class ControlHarnessCore {
             terminalID: terminalID,
             scope: scope,
             content: read.content,
-            consistency: "fresh_\(scope)",
+            consistency: shouldForceRefresh ? "fresh_\(scope)" : "sampled_\(scope)",
             cacheAgeMs: read.cacheAgeMs,
             capturedAt: currentTime,
             activityClass: activityClass,
-            forcedFresh: true
+            forcedFresh: shouldForceRefresh
         )
         return (
             content: sample.content,
             consistency: sample.consistency,
             cacheAgeMs: sample.cacheAgeMs,
             capturedAt: sample.capturedAt
+        )
+    }
+
+    private func shouldForceFreshRead(
+        requested: Bool,
+        terminalID: String,
+        scope: String,
+        activityClass: ControlHarnessSamplingActivityClass,
+        now: Date
+    ) -> Bool {
+        guard requested else {
+            return false
+        }
+        guard let footprintBytes = currentReadPhysicalFootprintBytes(now: now) else {
+            return true
+        }
+        guard footprintBytes >= Self.readMemoryPressureFootprintThresholdBytes else {
+            return true
+        }
+
+        maybeLogReadMemoryThrottle(
+            terminalID: terminalID,
+            scope: scope,
+            activityClass: activityClass,
+            now: now,
+            footprintBytes: footprintBytes
+        )
+        return false
+    }
+
+    private func currentReadPhysicalFootprintBytes(now: Date) -> UInt64? {
+        if let lastReadFootprintProbeDate,
+           let lastReadFootprintBytes,
+           now.timeIntervalSince(lastReadFootprintProbeDate) < Self.readMemoryPressureProbeIntervalSeconds {
+            return lastReadFootprintBytes
+        }
+
+        var vmInfo = task_vm_info_data_t()
+        var vmInfoCount = mach_msg_type_number_t(
+            MemoryLayout.size(ofValue: vmInfo) / MemoryLayout<integer_t>.size
+        )
+        let result = withUnsafeMutablePointer(to: &vmInfo) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(vmInfoCount)) { intPointer in
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), intPointer, &vmInfoCount)
+            }
+        }
+        guard result == KERN_SUCCESS else {
+            return nil
+        }
+
+        let footprintBytes = UInt64(vmInfo.phys_footprint)
+        lastReadFootprintProbeDate = now
+        lastReadFootprintBytes = footprintBytes
+        return footprintBytes
+    }
+
+    private func maybeLogReadMemoryThrottle(
+        terminalID: String,
+        scope: String,
+        activityClass: ControlHarnessSamplingActivityClass,
+        now: Date,
+        footprintBytes: UInt64
+    ) {
+        if let lastReadMemoryThrottleLogDate,
+           now.timeIntervalSince(lastReadMemoryThrottleLogDate) < Self.readMemoryThrottleLogIntervalSeconds {
+            return
+        }
+        lastReadMemoryThrottleLogDate = now
+
+        RuntimeDiagnosticsLogger.log(
+            component: "control_harness.core",
+            event: "fresh_read_degraded_for_memory_pressure",
+            details: [
+                "terminal_id": terminalID,
+                "scope": scope,
+                "activity_class": activityClass.rawValue,
+                "threshold_bytes": "\(Self.readMemoryPressureFootprintThresholdBytes)",
+                "physical_footprint_bytes": "\(footprintBytes)",
+            ]
         )
     }
 

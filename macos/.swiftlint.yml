@@ -5,6 +5,8 @@ check_for_updates: false
 excluded:
   - .zig-cache
   - build
+  - build-release-local
+  - build-release-arm64-local
 
 disabled_rules:
   - cyclomatic_complexity

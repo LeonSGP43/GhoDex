@@ -1022,6 +1022,13 @@ final class BrowserTabModel: ObservableObject {
 
         refreshRuntimeState()
         syncActivePageState()
+        logLifecycleEvent(
+            "tab_model_initialized",
+            extra: [
+                "initial_page_id": initialPage.id.uuidString,
+                "initial_url": initialURL.absoluteString,
+            ]
+        )
     }
 
     deinit {
@@ -1067,6 +1074,7 @@ final class BrowserTabModel: ObservableObject {
     }
 
     func newPageTab() {
+        logLifecycleEvent("new_page_tab_requested")
         appendPage(initialURL: defaultPageURL, activate: true)
     }
 
@@ -1095,6 +1103,13 @@ final class BrowserTabModel: ObservableObject {
 
         normalizeSplitCompanion()
         scheduleActivePageStateSync()
+        logLifecycleEvent(
+            "close_page",
+            extra: [
+                "closed_page_id": pageID.uuidString,
+                "closed_selected_page": closingSelectedPage ? "true" : "false",
+            ]
+        )
     }
 
     func bindBridge(
@@ -1103,11 +1118,23 @@ final class BrowserTabModel: ObservableObject {
     ) {
         guard let page = pages.first(where: { $0.id == pageID }) else { return }
         page.bindControlBridge(bridge)
+        logLifecycleEvent(
+            "bind_bridge",
+            extra: [
+                "page_id": pageID.uuidString,
+            ]
+        )
     }
 
     func unbindBridge(for pageID: UUID) {
         guard let page = pages.first(where: { $0.id == pageID }) else { return }
         page.unbindControlBridge()
+        logLifecycleEvent(
+            "unbind_bridge",
+            extra: [
+                "page_id": pageID.uuidString,
+            ]
+        )
     }
 
     func submitAddress() {
@@ -1457,6 +1484,14 @@ final class BrowserTabModel: ObservableObject {
             )
             scheduleActivePageStateSync()
         }
+        logLifecycleEvent(
+            "append_page",
+            extra: [
+                "new_page_id": page.id.uuidString,
+                "activate": activate ? "true" : "false",
+                "initial_url": initialURL.absoluteString,
+            ]
+        )
         return page
     }
 
@@ -1649,27 +1684,82 @@ final class BrowserTabModel: ObservableObject {
     }
 
     private func beginRuntimeActivationIfNeeded() {
-        guard GhoDexCEFBuildHasRuntime(), !GhoDexCEFIsInitialized(), !GhoDexCEFIsInitializing() else {
+        let hasRuntime = GhoDexCEFBuildHasRuntime()
+        let isInitialized = GhoDexCEFIsInitialized()
+        let isInitializing = GhoDexCEFIsInitializing()
+        guard hasRuntime, !isInitialized, !isInitializing else {
+            logLifecycleEvent(
+                "runtime_activation_skipped",
+                extra: [
+                    "has_runtime": hasRuntime ? "true" : "false",
+                    "is_initialized": isInitialized ? "true" : "false",
+                    "is_initializing": isInitializing ? "true" : "false",
+                ]
+            )
             return
         }
+        logLifecycleEvent("runtime_activation_scheduled")
 
         Task { @MainActor [weak self] in
             guard let self else { return }
             guard !GhoDexCEFIsInitialized() else {
                 refreshRuntimeState()
                 syncActivePageState()
+                logLifecycleEvent("runtime_activation_completed_early")
                 return
             }
 
             if !GhoDexCEFIsInitializing() {
+                logLifecycleEvent("runtime_activation_initialize_requested")
                 _ = GhoDexCEFInitializeGlobal()
             }
             if !GhoDexCEFIsInitialized(), GhoDexCEFIsInitializing() {
+                logLifecycleEvent("runtime_activation_wait_begin")
                 await waitForRuntimeInitialization()
+                logLifecycleEvent("runtime_activation_wait_end")
             }
             refreshRuntimeState()
             syncActivePageState()
+            logLifecycleEvent("runtime_activation_finished")
         }
+    }
+
+    private func runtimeStateLabel() -> String {
+        switch runtimeState {
+        case .ready:
+            return "ready"
+        case .unsupportedBuild:
+            return "unsupportedBuild"
+        case .runtimeUnavailable:
+            return "runtimeUnavailable"
+        case .initializationFailed:
+            return "initializationFailed"
+        }
+    }
+
+    private func logLifecycleEvent(_ event: String, extra: [String: String] = [:]) {
+        var details: [String: String] = [
+            "page_count": "\(pages.count)",
+            "visible_page_count": "\(visiblePageIDsInDeck.count)",
+            "selected_page_id": selectedPageID.uuidString,
+            "split_axis": splitAxis.rawValue,
+            "runtime_state": runtimeStateLabel(),
+        ]
+        if let splitCompanionPageID {
+            details["split_companion_page_id"] = splitCompanionPageID.uuidString
+        }
+        if let activePage {
+            details["active_page_id"] = activePage.id.uuidString
+            details["active_page_url"] = activePage.displayedURL
+        }
+        for (key, value) in extra {
+            details[key] = value
+        }
+        RuntimeDiagnosticsLogger.log(
+            component: "browser.lifecycle",
+            event: event,
+            details: details
+        )
     }
 
     private func emit(_ event: BrowserControlEvent) {

@@ -4,6 +4,69 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(pagelist): normalize viewport after layout changes
+
+- What changed: Centralized `PageList` viewport repair in `normalizeViewportAfterLayoutChange()` so layout-mutating paths now clear stale pin-offset cache, reclassify `.pin` to `.top` or `.active` when boundaries overlap, and collapse invalid pins that no longer have enough remaining rows. Updated `resize()`, `resizeWithoutReflow()`, `grow()` prune handling, and `fixupViewport()` to use the shared normalization path. Added `docs/pagelist-viewport-normalization-fix.md` and expanded regression coverage for non-reflow resize and prune-on-grow cases.
+- Why: `ViewportPinInsufficientRows` could panic after row-count mutations left `self.viewport` as an illegal `.pin`, especially when `total_rows` shrank or the active region moved and scattered fixups missed the path.
+- Impact: `PageList` now normalizes viewport state consistently after row/viewport-boundary changes, preventing the `remaining_rows < self.rows` crash while preserving expected `.top` versus `.active` behavior.
+- Verification: `zig build test -Dtest-filter='PageList resize (no reflow) more rows contains viewport'`; `zig build test -Dtest-filter='PageList resize (no reflow) more rows promotes pin viewport to active'`; `zig build test -Dtest-filter='PageList grow prune normalizes viewport pinned to pruned page'`; `zig build test -Dtest-filter='prune'`; `zig build test -Dtest-filter='PageList'`
+- Files: `src/terminal/PageList.zig`, `docs/pagelist-viewport-normalization-fix.md`, `CHANGELOG.md`
+- Decision trail: Fix the invalid viewport state at the `PageList` layout-normalization layer instead of weakening the integrity assertion, so every row-count mutation path shares one repair contract.
+
+### feat(macos): add runtime lifecycle exit-attribution diagnostics
+
+- What changed: Extended `RuntimeDiagnosticsLogger` with a lifecycle session state file (`runtime-lifecycle-state.json`) and new `runtime.lifecycle` events (`session_start`, `terminate_requested`, `terminate_cancelled`, `signal_received`, `will_terminate`, `graceful_terminate`, `unclean_previous_session`). Updated `AppDelegate` quit/signal paths to emit stable reason codes for user/system/update/signal-driven termination, and wired `SIGTERM`/`SIGINT`/`SIGHUP` through diagnostics before app termination. Added `AppDelegateTerminationDiagnosticsTests` to lock reason-code mapping behavior.
+- Why: Existing diagnostics could show memory/runtime timeline but could not reliably answer whether a process ended by user confirmation, system shutdown/logout, updater flow, signal-based termination, or unclean interruption (`kill -9`/force quit style).
+- Impact: Exit analysis now has a single JSONL timeline with explicit termination reasons, and next launch can backfill prior unclean exits from persisted lifecycle state so crash-vs-kill-vs-manual triage is actionable.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' test -only-testing:GhosttyTests/AppDelegateTerminationDiagnosticsTests CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS' build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO`
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Tests/AppDelegateTerminationDiagnosticsTests.swift`, `CHANGELOG.md`
+- Decision trail: Keep attribution in the existing runtime diagnostics pipeline (same rotating JSONL + same Diagnostics directory) and add a tiny durable lifecycle state file for cross-session compensation instead of introducing a second telemetry subsystem.
+
+### fix(control-harness): add memory-pressure backoff and stop sampling manual/background terminals
+
+- What changed: Updated `ControlHarnessSamplingActivityClass` classification so `manual`, `managedPaused`, `managedCompleted`, and `managedFailed` terminals are always treated as `background`. Updated `ControlHarnessReadSampler` to skip background targets in periodic sampler loops, support cache-first reads (`refresh: false`) by default, and apply automatic sampling backoff for all activity classes once `physical_footprint` crosses a hard threshold (2 GiB in Debug, 3 GiB otherwise). Updated `ControlHarnessCore.resolveTerminalRead` so normal reads no longer force terminal dumps and force-fresh reads automatically degrade to cache-backed reads under memory pressure; degrade events are rate-limited as `control_harness.core.fresh_read_degraded_for_memory_pressure`.
+- Why: Long-run memory growth sessions showed sustained VM allocation churn from repeated terminal text dumps. The highest-growth path happened under frequent read pressure where `refresh: true` was overused.
+- Impact: Periodic sampling and control-harness read-terminal now share hard memory-pressure brakes and cache-first behavior, which prevents runaway footprint growth during long sessions while keeping read semantics available.
+- Verification: `nu macos/build.nu --scheme GhoDex --configuration Debug --action build`; overwrite-install `/Applications/GhoDex.app`; verify diagnostics contain `control_harness.read_sampler` timer reconfiguration to `1.500` when only manual/background tabs exist, and under high footprint include `throttled_for_memory_pressure` / `fresh_read_degraded_for_memory_pressure`.
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessSampleStore.swift`, `macos/Sources/Features/Control Harness/ControlHarnessReadSampler.swift`, `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `CHANGELOG.md`
+- Decision trail: Keep mitigation at the harness read boundary (classification + cache-first + pressure backoff) so it is immediate and low-risk, while avoiding intrusive renderer allocator changes before pressure is stabilized.
+
+### fix(macos): stop forcing terminal text refresh on every control-harness sampler tick
+
+- What changed: Updated `ControlHarnessReadSampler.captureFreshSample` to stop forcing `refresh: true` reads for both `visible` and `screen` scopes. Sampler reads now use cached surface content (`refresh: false`), allowing the existing `CachedValue` expiry path in `SurfaceView_AppKit` to decide when a fresh terminal dump is required.
+- Why: Live `sample` + `vmmap` analysis on high-footprint sessions showed repeated `mmap` allocations in the `ControlHarnessReadSampler -> aiManagerVisibleText/readAIManagerText -> ghostty_surface_read_text` path, with `VM_ALLOCATE` dominated by many small regions (notably 128K/80K buckets). Forcing full reads on every sampler interval amplified allocation churn and long-run footprint growth.
+- Impact: Reduces high-frequency terminal text extraction pressure from the sampler loop, which lowers VM allocation churn and slows/avoids long-session memory accumulation while preserving on-demand fresh reads for explicit control operations.
+- Verification: `sample <pid>` for a high-footprint app process now attributes less time to forced refresh reads during steady-state sampler ticks; `vmmap -summary <pid>` trend checks show reduced `VM_ALLOCATE` growth rate under the same idle workload.
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessReadSampler.swift`, `CHANGELOG.md`
+- Decision trail: Keep the fix narrow and reversible at the sampler boundary rather than changing Ghostty text-read internals first. This addresses the highest-frequency caller immediately while preserving existing direct read semantics for explicit commands.
+
+### fix(macos): attribute high footprint growth with vmmap deltas and browser model breadcrumbs
+
+- What changed: Expanded `RuntimeDiagnosticsLogger` vmmap sampling to parse full region summary buckets (`TOTAL`, `VM_ALLOCATE`, `Memory Tag 253`, `IOSurface`, `IOAccelerator (graphics)`, `MALLOC`) and emit both absolute and per-sample delta fields (`*_delta_bytes`, `vm_allocate_swapped_ratio`, `top_swapped_region`, `vmmap_growth_suspect`). Added process-level delta fields (`rss_delta_bytes`, `virtual_size_delta_bytes`, `physical_footprint_delta_bytes`) on every diagnostics record. Added Browser lifecycle breadcrumbs in `BrowserTabModel` so memory trend spikes can be correlated to concrete page/bridge/runtime activation operations.
+- Why: We could observe `3.8G+` process footprint growth, but previous logs only exposed coarse totals and could not answer which vmmap bucket was actually accumulating or which Browser operation sequence preceded the growth.
+- Impact: The diagnostics stream now directly surfaces whether growth is dominated by `VM_ALLOCATE` swapped pages, `Memory Tag 253`, graphics surfaces, or other buckets, and links those memory movements to tab/page bridge/runtime-activation lifecycle events without relying on ad-hoc manual vmmap sessions.
+- Verification: `nu macos/build.nu --scheme GhoDex --configuration Debug --action build`; overwrite-install `/Applications/GhoDex.app`; run with `GHODEX_RUNTIME_DIAG_LOG=1 GHODEX_RUNTIME_DIAG_VMMAP=1`; confirm `runtime.memory periodic_sample` records include `total_swapped_bytes`, `vm_allocate_swapped_bytes`, `vm_allocate_swapped_delta_bytes`, `vmmap_delta_interval_seconds`, and `vmmap_growth_suspect`.
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `macos/Sources/Features/Browser/BrowserTabModel.swift`, `CHANGELOG.md`
+- Decision trail: Keep vmmap sampling opt-in (`GHODEX_RUNTIME_DIAG_VMMAP=1`) for normal runs, but make opt-in samples attribution-complete so one capture session can answer “what is 3.8G” without adding another telemetry system.
+
+### fix(macos): disable vmmap region sampling by default in runtime diagnostics
+
+- What changed: Updated `RuntimeDiagnosticsLogger` so `vmmap`-based region sampling runs only when `GHODEX_RUNTIME_DIAG_VMMAP=1` is explicitly set. The default runtime diagnostics path now keeps periodic `runtime.memory` records but skips `vmmap` process spawning.
+- Why: Long-running sessions showed `physical_footprint` growing even while `rss` stayed low, and triage confirmed the high-overhead `vmmap` sampler itself was the dominant contributor.
+- Impact: Runtime diagnostics remains available, but default memory overhead is significantly reduced and the previous diagnostics-induced `physical_footprint` growth pattern is avoided.
+- Verification: `nu macos/build.nu --scheme GhoDex --configuration Debug --action build`; overwrite-install `/Applications/GhoDex.app`; verify new `runtime.memory` records continue without `vmmap_sampled_at` / `iosurface_resident_bytes` unless `GHODEX_RUNTIME_DIAG_VMMAP=1`.
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `CHANGELOG.md`
+- Decision trail: Keep the lightweight task-level memory telemetry on by default for ongoing observability, and move expensive region-level diagnostics behind an explicit opt-in switch for targeted investigations.
+
+### fix(renderer): guard shaper index catch-up after preedit skip
+
+- What changed: Added an explicit `shaper_cells_i < shaper_cells_unwrapped.len` bound guard in `src/renderer/generic.zig` while catching up shaped-cell cursor position after preedit-range skipping in `rebuildRow`.
+- Why: Crash forensics showed a renderer-thread panic `index out of bounds: index 4, len 4` at `generic.zig:2740` when `shaper_cells_i` advanced beyond the shaped-cell slice length during catch-up.
+- Impact: Prevents this out-of-bounds panic path from aborting the app during row rebuild in affected preedit/shaping sequences.
+- Verification: `zig build -Demit-macos-app=false`; `nu macos/build.nu --scheme GhoDex --configuration Debug --action build`; overwrite-install `/Applications/GhoDex.app`; relaunch and confirm process starts.
+- Files: `src/renderer/generic.zig`, `CHANGELOG.md`
+- Decision trail: Apply the smallest safe fix directly at the crash site (index guard) so runtime behavior stays unchanged except for eliminating the panic path; broader shaping-flow refactors are deferred.
+
 ### fix(control-harness): harden multi-instance desktop routing with route validation and self-healing proxy behavior
 
 - What changed: Updated `ControlHarnessGateway` route registration and proxy behavior for multi-instance owner/passive routing. `gateway.instance.ping` now reports `desktop_id` / `desktop_label`. `gateway.desktop.register` now enforces loopback upstream hosts and validates upstream identity by probing the target gateway and matching `desktop_id`. TCP/WebSocket request proxy paths now evict unreachable `desktop_id` routes and return explicit `desktop_route_unreachable` instead of keeping stale routes. WebSocket route proxy duplex no longer has a fixed 600s timeout and now follows actual socket lifecycle.
