@@ -1,4 +1,6 @@
 import Testing
+import AppKit
+import Foundation
 @testable import GhoDex
 
 struct AppDelegateStartupPolicyTests {
@@ -45,5 +47,24 @@ struct AppDelegateStartupPolicyTests {
                 environment: ["GHODEX_SKIP_INITIAL_TERMINAL_WINDOW": "nope"]
             ) == false
         )
+    }
+
+    @Test func applyMenuShortcutAssignsConfiguredNewTabShortcut() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        try """
+        keybind = super+t=new_tab
+        """.write(to: tempURL, atomically: true, encoding: .utf8)
+
+        let config = Ghostty.Config(at: tempURL.path(percentEncoded: false))
+        #expect(config.errors.isEmpty)
+
+        let item = NSMenuItem()
+        AppDelegate.applyMenuShortcut(config, action: "new_tab", to: item)
+
+        #expect(item.keyEquivalent == "t")
+        #expect(item.keyEquivalentModifierMask.contains(.command))
     }
 }

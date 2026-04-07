@@ -1588,7 +1588,9 @@ class AppDelegate: NSObject,
         syncMenuShortcut(config, action: "quit", menuItem: self.menuQuit)
 
         syncMenuShortcut(config, action: "new_window", menuItem: self.menuNewWindow)
-        clearMenuShortcut(self.menuNewTab)
+        // Non-terminal surfaces such as the Settings Panel still need Cmd+T to
+        // reach the shared new-tab picker even when no Ghostty surface is focused.
+        syncMenuShortcut(config, action: "new_tab", menuItem: self.menuNewTab)
         syncMenuShortcut(config, action: "close_surface", menuItem: self.menuClose)
         syncMenuShortcut(config, action: "close_tab", menuItem: self.menuCloseTab)
         syncMenuShortcut(config, action: "close_window", menuItem: self.menuCloseWindow)
@@ -1650,16 +1652,20 @@ class AppDelegate: NSObject,
 
     /// Syncs a single menu shortcut for the given action. The action string is the same
     /// action string used for the Ghostty configuration.
-    private func syncMenuShortcut(_ config: Ghostty.Config, action: String, menuItem: NSMenuItem?) {
-        guard let menu = menuItem else { return }
+    static func applyMenuShortcut(_ config: Ghostty.Config, action: String, to menuItem: NSMenuItem) {
         guard let shortcut = config.keyboardShortcut(for: action) else {
-            // No shortcut, clear the menu item
-            clearMenuShortcut(menu)
+            menuItem.keyEquivalent = ""
+            menuItem.keyEquivalentModifierMask = []
             return
         }
 
-        menu.keyEquivalent = shortcut.key.character.description
-        menu.keyEquivalentModifierMask = .init(swiftUIFlags: shortcut.modifiers)
+        menuItem.keyEquivalent = shortcut.key.character.description
+        menuItem.keyEquivalentModifierMask = .init(swiftUIFlags: shortcut.modifiers)
+    }
+
+    private func syncMenuShortcut(_ config: Ghostty.Config, action: String, menuItem: NSMenuItem?) {
+        guard let menu = menuItem else { return }
+        Self.applyMenuShortcut(config, action: action, to: menu)
     }
 
     private func clearMenuShortcut(_ menuItem: NSMenuItem?) {
