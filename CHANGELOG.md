@@ -13,6 +13,24 @@ All notable changes to this project are documented in this file.
 - Files: `src/terminal/PageList.zig`, `docs/pagelist-viewport-normalization-fix.md`, `CHANGELOG.md`
 - Decision trail: Fix the invalid viewport state at the `PageList` layout-normalization layer instead of weakening the integrity assertion, so every row-count mutation path shares one repair contract.
 
+### feat(macos): add runtime lifecycle exit-attribution diagnostics
+
+- What changed: Extended `RuntimeDiagnosticsLogger` with a lifecycle session state file (`runtime-lifecycle-state.json`) and new `runtime.lifecycle` events (`session_start`, `terminate_requested`, `terminate_cancelled`, `signal_received`, `will_terminate`, `graceful_terminate`, `unclean_previous_session`). Updated `AppDelegate` quit/signal paths to emit stable reason codes for user/system/update/signal-driven termination, and wired `SIGTERM`/`SIGINT`/`SIGHUP` through diagnostics before app termination. Added `AppDelegateTerminationDiagnosticsTests` to lock reason-code mapping behavior.
+- Why: Existing diagnostics could show memory/runtime timeline but could not reliably answer whether a process ended by user confirmation, system shutdown/logout, updater flow, signal-based termination, or unclean interruption (`kill -9`/force quit style).
+- Impact: Exit analysis now has a single JSONL timeline with explicit termination reasons, and next launch can backfill prior unclean exits from persisted lifecycle state so crash-vs-kill-vs-manual triage is actionable.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' test -only-testing:GhosttyTests/AppDelegateTerminationDiagnosticsTests CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS' build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO`
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Tests/AppDelegateTerminationDiagnosticsTests.swift`, `CHANGELOG.md`
+- Decision trail: Keep attribution in the existing runtime diagnostics pipeline (same rotating JSONL + same Diagnostics directory) and add a tiny durable lifecycle state file for cross-session compensation instead of introducing a second telemetry subsystem.
+
+### fix(control-harness): add memory-pressure backoff and stop sampling manual/background terminals
+
+- What changed: Updated `ControlHarnessSamplingActivityClass` classification so `manual`, `managedPaused`, `managedCompleted`, and `managedFailed` terminals are always treated as `background`. Updated `ControlHarnessReadSampler` to skip background targets in periodic sampler loops, support cache-first reads (`refresh: false`) by default, and apply automatic sampling backoff for all activity classes once `physical_footprint` crosses a hard threshold (2 GiB in Debug, 3 GiB otherwise). Updated `ControlHarnessCore.resolveTerminalRead` so normal reads no longer force terminal dumps and force-fresh reads automatically degrade to cache-backed reads under memory pressure; degrade events are rate-limited as `control_harness.core.fresh_read_degraded_for_memory_pressure`.
+- Why: Long-run memory growth sessions showed sustained VM allocation churn from repeated terminal text dumps. The highest-growth path happened under frequent read pressure where `refresh: true` was overused.
+- Impact: Periodic sampling and control-harness read-terminal now share hard memory-pressure brakes and cache-first behavior, which prevents runaway footprint growth during long sessions while keeping read semantics available.
+- Verification: `nu macos/build.nu --scheme GhoDex --configuration Debug --action build`; overwrite-install `/Applications/GhoDex.app`; verify diagnostics contain `control_harness.read_sampler` timer reconfiguration to `1.500` when only manual/background tabs exist, and under high footprint include `throttled_for_memory_pressure` / `fresh_read_degraded_for_memory_pressure`.
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessSampleStore.swift`, `macos/Sources/Features/Control Harness/ControlHarnessReadSampler.swift`, `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `CHANGELOG.md`
+- Decision trail: Keep mitigation at the harness read boundary (classification + cache-first + pressure backoff) so it is immediate and low-risk, while avoiding intrusive renderer allocator changes before pressure is stabilized.
+
 ### fix(macos): stop forcing terminal text refresh on every control-harness sampler tick
 
 - What changed: Updated `ControlHarnessReadSampler.captureFreshSample` to stop forcing `refresh: true` reads for both `visible` and `screen` scopes. Sampler reads now use cached surface content (`refresh: false`), allowing the existing `CachedValue` expiry path in `SurfaceView_AppKit` to decide when a fresh terminal dump is required.

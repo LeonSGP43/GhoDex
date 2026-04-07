@@ -42,31 +42,19 @@ enum ControlHarnessSamplingActivityClass: String, Sendable {
     }
 
     init(managedState: AITerminalManagedState, isFocused: Bool, isVisible: Bool) {
-        if isFocused {
-            switch managedState {
-            case .managedActive:
+        switch managedState {
+        case .manual, .managedPaused, .managedCompleted, .managedFailed:
+            self = .background
+        case .managedActive:
+            if isFocused {
                 self = .managedActive
-            default:
+            } else if isVisible {
                 self = .observed
-            }
-            return
-        }
-
-        if isVisible {
-            switch managedState {
-            case .managedActive, .observed, .managedWaitingApproval:
-                self = .observed
-            default:
+            } else {
                 self = .background
             }
-            return
-        }
-
-        switch managedState {
-        case .managedActive, .observed, .managedWaitingApproval:
-            self = .observed
-        default:
-            self = .background
+        case .observed, .managedWaitingApproval:
+            self = (isFocused || isVisible) ? .observed : .background
         }
     }
 }

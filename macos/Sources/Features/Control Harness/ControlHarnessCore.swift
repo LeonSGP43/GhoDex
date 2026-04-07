@@ -23,6 +23,32 @@ private struct RuntimeDiagnosticsRecord: Encodable {
     let details: [String: String]
 }
 
+private struct RuntimeLifecycleSessionState: Codable {
+    let schemaVersion: Int
+    var sessionID: String
+    var pid: Int32
+    var startedAt: String
+    var lastUpdatedAt: String
+    var gracefulEnd: Bool
+    var gracefulEndReason: String?
+    var terminateRequestedReason: String?
+    var terminateRequestedBy: String?
+    var lastSignal: String?
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case sessionID = "session_id"
+        case pid
+        case startedAt = "started_at"
+        case lastUpdatedAt = "last_updated_at"
+        case gracefulEnd = "graceful_end"
+        case gracefulEndReason = "graceful_end_reason"
+        case terminateRequestedReason = "terminate_requested_reason"
+        case terminateRequestedBy = "terminate_requested_by"
+        case lastSignal = "last_signal"
+    }
+}
+
 private struct RuntimeDiagnosticsRegionSnapshot {
     let sampleDate: Date
     let sampledAt: String
@@ -143,12 +169,15 @@ private struct RuntimeDiagnosticsRegionSnapshot {
 final class RuntimeDiagnosticsLogger {
     private static let fileName = "runtime-memory-diagnostics.jsonl"
     private static let rotatedFileName = "runtime-memory-diagnostics.1.jsonl"
+    private static let lifecycleStateFileName = "runtime-lifecycle-state.json"
+    private static let lifecycleStateSchemaVersion = 1
     private static let maxFileBytes: Int64 = 4 * 1024 * 1024
     private static let periodicRegionSampleSeconds: TimeInterval = 60
 
     static let shared = RuntimeDiagnosticsLogger()
 
     private let queue = DispatchQueue(label: "com.leongong.ghodex.runtime-diagnostics")
+    private let queueSpecificKey = DispatchSpecificKey<Void>()
     private let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -158,6 +187,7 @@ final class RuntimeDiagnosticsLogger {
     private let fileURL: URL?
     private let rotatedFileURL: URL?
     private let lockFileURL: URL?
+    private let stateFileURL: URL?
     private let enabled: Bool
     private let vmmapSamplingEnabled: Bool
     private let logger = Logger(
@@ -168,16 +198,20 @@ final class RuntimeDiagnosticsLogger {
     private var latestRegionSnapshot: RuntimeDiagnosticsRegionSnapshot?
     private var previousProcessMemorySnapshot: RuntimeProcessMemorySnapshot?
     private var previousProcessMemorySampleDate: Date?
+    private var lifecycleSessionState: RuntimeLifecycleSessionState?
+    private var lifecycleSessionStarted = false
 
     private init() {
         let configured = Self.parseEnabledFlag(ProcessInfo.processInfo.environment["GHODEX_RUNTIME_DIAG_LOG"])
         self.enabled = configured ?? true
         let vmmapConfigured = Self.parseEnabledFlag(ProcessInfo.processInfo.environment["GHODEX_RUNTIME_DIAG_VMMAP"])
         self.vmmapSamplingEnabled = vmmapConfigured ?? false
+        queue.setSpecific(key: queueSpecificKey, value: ())
         guard enabled else {
             self.fileURL = nil
             self.rotatedFileURL = nil
             self.lockFileURL = nil
+            self.stateFileURL = nil
             return
         }
 
@@ -186,11 +220,67 @@ final class RuntimeDiagnosticsLogger {
         self.fileURL = directory.appendingPathComponent(Self.fileName, isDirectory: false)
         self.rotatedFileURL = directory.appendingPathComponent(Self.rotatedFileName, isDirectory: false)
         self.lockFileURL = directory.appendingPathComponent("\(Self.fileName).lock", isDirectory: false)
+        self.stateFileURL = directory.appendingPathComponent(Self.lifecycleStateFileName, isDirectory: false)
+        self.ensureLifecycleSessionStarted(waitUntilFinished: true)
         self.startPeriodicRegionSampler()
     }
 
     static func log(component: String, event: String, details: [String: String] = [:]) {
         shared.append(component: component, event: event, details: details)
+    }
+
+    static func beginLifecycleSessionIfNeeded() {
+        shared.ensureLifecycleSessionStarted(waitUntilFinished: false)
+    }
+
+    static func recordLifecycleTerminateRequested(
+        reason: String,
+        requestedBy: String,
+        details: [String: String] = [:]
+    ) {
+        shared.appendLifecycleTerminateRequested(
+            reason: reason,
+            requestedBy: requestedBy,
+            details: details
+        )
+    }
+
+    static func recordLifecycleTerminateCancelled(
+        reason: String,
+        requestedBy: String,
+        details: [String: String] = [:]
+    ) {
+        shared.appendLifecycleTerminateCancelled(
+            reason: reason,
+            requestedBy: requestedBy,
+            details: details
+        )
+    }
+
+    static func recordLifecycleSignalReceived(
+        signalNumber: Int32,
+        signalName: String,
+        mappedReason: String
+    ) {
+        shared.appendLifecycleSignalReceived(
+            signalNumber: signalNumber,
+            signalName: signalName,
+            mappedReason: mappedReason
+        )
+    }
+
+    static func recordLifecycleWillTerminate(reason: String?, details: [String: String] = [:]) {
+        shared.appendLifecycleWillTerminate(reason: reason, details: details)
+    }
+
+    static func markLifecycleGracefulTerminate(
+        reason: String,
+        details: [String: String] = [:]
+    ) {
+        shared.appendLifecycleGracefulTerminate(
+            reason: reason,
+            details: details
+        )
     }
 
     private static func parseEnabledFlag(_ rawValue: String?) -> Bool? {
@@ -221,9 +311,286 @@ final class RuntimeDiagnosticsLogger {
 
     private func append(component: String, event: String, details: [String: String]) {
         guard enabled else { return }
-        queue.async { [weak self] in
+        runOnQueue(waitUntilFinished: false) { [weak self] in
             self?.writeRecordLocked(component: component, event: event, details: details)
         }
+    }
+
+    private func runOnQueue(waitUntilFinished: Bool, _ body: @escaping () -> Void) {
+        if DispatchQueue.getSpecific(key: queueSpecificKey) != nil {
+            body()
+            return
+        }
+
+        if waitUntilFinished {
+            queue.sync(execute: body)
+        } else {
+            queue.async(execute: body)
+        }
+    }
+
+    private func ensureLifecycleSessionStarted(waitUntilFinished: Bool) {
+        guard enabled else { return }
+        runOnQueue(waitUntilFinished: waitUntilFinished) { [weak self] in
+            self?.ensureLifecycleSessionStartedLocked()
+        }
+    }
+
+    private func ensureLifecycleSessionStartedLocked() {
+        guard enabled else { return }
+        guard !lifecycleSessionStarted else { return }
+        lifecycleSessionStarted = true
+        beginLifecycleSessionLocked()
+    }
+
+    private func appendLifecycleTerminateRequested(
+        reason: String,
+        requestedBy: String,
+        details: [String: String]
+    ) {
+        guard enabled else { return }
+        runOnQueue(waitUntilFinished: false) { [weak self] in
+            guard let self else { return }
+            self.ensureLifecycleSessionStartedLocked()
+
+            var payload = details
+            payload["reason"] = reason
+            payload["requested_by"] = requestedBy
+            self.appendLifecycleEventLocked(event: "terminate_requested", details: payload)
+            self.updateLifecycleStateLocked { state in
+                state.terminateRequestedReason = reason
+                state.terminateRequestedBy = requestedBy
+            }
+        }
+    }
+
+    private func appendLifecycleTerminateCancelled(
+        reason: String,
+        requestedBy: String,
+        details: [String: String]
+    ) {
+        guard enabled else { return }
+        runOnQueue(waitUntilFinished: false) { [weak self] in
+            guard let self else { return }
+            self.ensureLifecycleSessionStartedLocked()
+
+            var payload = details
+            payload["reason"] = reason
+            payload["requested_by"] = requestedBy
+            self.appendLifecycleEventLocked(event: "terminate_cancelled", details: payload)
+            self.updateLifecycleStateLocked { state in
+                state.terminateRequestedReason = nil
+                state.terminateRequestedBy = nil
+            }
+        }
+    }
+
+    private func appendLifecycleSignalReceived(
+        signalNumber: Int32,
+        signalName: String,
+        mappedReason: String
+    ) {
+        guard enabled else { return }
+        runOnQueue(waitUntilFinished: true) { [weak self] in
+            guard let self else { return }
+            self.ensureLifecycleSessionStartedLocked()
+
+            self.appendLifecycleEventLocked(
+                event: "signal_received",
+                details: [
+                    "signal_number": "\(signalNumber)",
+                    "signal_name": signalName,
+                    "mapped_reason": mappedReason,
+                ]
+            )
+            self.updateLifecycleStateLocked { state in
+                state.lastSignal = signalName
+                state.terminateRequestedReason = mappedReason
+                state.terminateRequestedBy = "signal"
+            }
+        }
+    }
+
+    private func appendLifecycleWillTerminate(reason: String?, details: [String: String]) {
+        guard enabled else { return }
+        runOnQueue(waitUntilFinished: true) { [weak self] in
+            guard let self else { return }
+            self.ensureLifecycleSessionStartedLocked()
+
+            var payload = details
+            if let reason {
+                payload["reason"] = reason
+            }
+            self.appendLifecycleEventLocked(event: "will_terminate", details: payload)
+        }
+    }
+
+    private func appendLifecycleGracefulTerminate(reason: String, details: [String: String]) {
+        guard enabled else { return }
+        runOnQueue(waitUntilFinished: true) { [weak self] in
+            guard let self else { return }
+            self.ensureLifecycleSessionStartedLocked()
+
+            var payload = details
+            payload["reason"] = reason
+            self.appendLifecycleEventLocked(event: "graceful_terminate", details: payload)
+            self.updateLifecycleStateLocked { state in
+                state.gracefulEnd = true
+                state.gracefulEndReason = reason
+                if state.terminateRequestedReason == nil {
+                    state.terminateRequestedReason = reason
+                }
+            }
+        }
+    }
+
+    private func appendLifecycleEventLocked(event: String, details: [String: String]) {
+        writeRecordLocked(
+            component: "runtime.lifecycle",
+            event: event,
+            details: lifecycleDetailsLocked(details)
+        )
+    }
+
+    private func lifecycleDetailsLocked(_ details: [String: String]) -> [String: String] {
+        var enriched = details
+        if let state = lifecycleSessionState {
+            enriched["session_id"] = state.sessionID
+            enriched["session_started_at"] = state.startedAt
+            enriched["session_pid"] = "\(state.pid)"
+        }
+        return enriched
+    }
+
+    private func updateLifecycleStateLocked(
+        _ mutate: (inout RuntimeLifecycleSessionState) -> Void
+    ) {
+        guard var state = lifecycleSessionState else { return }
+        mutate(&state)
+        state.lastUpdatedAt = Self.iso8601Timestamp()
+        lifecycleSessionState = state
+        persistLifecycleStateLocked(state)
+    }
+
+    private func persistLifecycleStateLocked(_ state: RuntimeLifecycleSessionState) {
+        guard
+            let stateFileURL,
+            let lockFileURL
+        else {
+            return
+        }
+
+        do {
+            try fileManager.createDirectory(
+                at: stateFileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
+
+            let stateData = try encoder.encode(state)
+            try Self.withFileLock(lockFileURL: lockFileURL) {
+                try stateData.write(to: stateFileURL, options: .atomic)
+            }
+        } catch {
+            logger.error("failed to write runtime lifecycle state: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func beginLifecycleSessionLocked() {
+        guard
+            enabled,
+            let stateFileURL,
+            let lockFileURL
+        else {
+            return
+        }
+
+        let previousState = readLifecycleStateLocked()
+        if let previousState, !previousState.gracefulEnd {
+            var details: [String: String] = [
+                "previous_session_id": previousState.sessionID,
+                "previous_started_at": previousState.startedAt,
+                "previous_pid": "\(previousState.pid)",
+            ]
+            if let reason = previousState.terminateRequestedReason {
+                details["previous_terminate_requested_reason"] = reason
+            }
+            if let requestedBy = previousState.terminateRequestedBy {
+                details["previous_terminate_requested_by"] = requestedBy
+            }
+            if let signal = previousState.lastSignal {
+                details["previous_last_signal"] = signal
+            }
+            if let gracefulReason = previousState.gracefulEndReason {
+                details["previous_graceful_end_reason"] = gracefulReason
+            }
+            appendLifecycleEventLocked(event: "unclean_previous_session", details: details)
+        }
+
+        let nowTimestamp = Self.iso8601Timestamp()
+        let state = RuntimeLifecycleSessionState(
+            schemaVersion: Self.lifecycleStateSchemaVersion,
+            sessionID: UUID().uuidString.lowercased(),
+            pid: ProcessInfo.processInfo.processIdentifier,
+            startedAt: nowTimestamp,
+            lastUpdatedAt: nowTimestamp,
+            gracefulEnd: false,
+            gracefulEndReason: nil,
+            terminateRequestedReason: nil,
+            terminateRequestedBy: nil,
+            lastSignal: nil
+        )
+        lifecycleSessionState = state
+
+        do {
+            try fileManager.createDirectory(
+                at: stateFileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
+            let stateData = try encoder.encode(state)
+            try Self.withFileLock(lockFileURL: lockFileURL) {
+                try stateData.write(to: stateFileURL, options: .atomic)
+            }
+        } catch {
+            logger.error("failed to initialize runtime lifecycle state: \(error.localizedDescription, privacy: .public)")
+        }
+
+        appendLifecycleEventLocked(event: "session_start", details: [:])
+    }
+
+    private func readLifecycleStateLocked() -> RuntimeLifecycleSessionState? {
+        guard
+            let stateFileURL,
+            let lockFileURL
+        else {
+            return nil
+        }
+
+        do {
+            var state: RuntimeLifecycleSessionState?
+            try Self.withFileLock(lockFileURL: lockFileURL) {
+                guard fileManager.fileExists(atPath: stateFileURL.path) else {
+                    state = nil
+                    return
+                }
+
+                let stateData = try Data(contentsOf: stateFileURL)
+                guard !stateData.isEmpty else {
+                    state = nil
+                    return
+                }
+                state = try JSONDecoder().decode(RuntimeLifecycleSessionState.self, from: stateData)
+            }
+            return state
+        } catch {
+            logger.error("failed to read runtime lifecycle state: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    private static func iso8601Timestamp() -> String {
+        ISO8601DateFormatter().string(from: Date())
     }
 
     private static func rotateIfNeeded(
@@ -1370,10 +1737,20 @@ final class ControlHarnessCore {
     private let samplingActivityResolver: @MainActor (UUID) -> ControlHarnessSamplingActivityClass?
     private let now: @MainActor () -> Date
     private var terminalWindowBellObserver: NSObjectProtocol?
+    private var lastReadFootprintProbeDate: Date?
+    private var lastReadFootprintBytes: UInt64?
+    private var lastReadMemoryThrottleLogDate: Date?
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
         category: "ControlHarnessCore"
     )
+    private static let readMemoryPressureProbeIntervalSeconds: TimeInterval = 1.0
+    private static let readMemoryThrottleLogIntervalSeconds: TimeInterval = 10.0
+#if DEBUG
+    private static let readMemoryPressureFootprintThresholdBytes: UInt64 = 2 * 1024 * 1024 * 1024
+#else
+    private static let readMemoryPressureFootprintThresholdBytes: UInt64 = 3 * 1024 * 1024 * 1024
+#endif
 
     @MainActor
     convenience init(
@@ -2260,12 +2637,19 @@ final class ControlHarnessCore {
             )
         }
 
+        let shouldForceRefresh = shouldForceFreshRead(
+            requested: forceFresh,
+            terminalID: terminalID,
+            scope: scope,
+            activityClass: activityClass,
+            now: currentTime
+        )
         let read: (content: String, cacheAgeMs: Int)
         switch scope {
         case "visible":
-            read = surface.controlHarnessReadVisibleText(refresh: true)
+            read = surface.controlHarnessReadVisibleText(refresh: shouldForceRefresh)
         case "screen":
-            read = surface.controlHarnessReadScreenText(refresh: true)
+            read = surface.controlHarnessReadScreenText(refresh: shouldForceRefresh)
         default:
             throw ControlHarnessCoreError.invalidArgument("Unsupported read scope: \(scope)")
         }
@@ -2274,17 +2658,96 @@ final class ControlHarnessCore {
             terminalID: terminalID,
             scope: scope,
             content: read.content,
-            consistency: "fresh_\(scope)",
+            consistency: shouldForceRefresh ? "fresh_\(scope)" : "sampled_\(scope)",
             cacheAgeMs: read.cacheAgeMs,
             capturedAt: currentTime,
             activityClass: activityClass,
-            forcedFresh: true
+            forcedFresh: shouldForceRefresh
         )
         return (
             content: sample.content,
             consistency: sample.consistency,
             cacheAgeMs: sample.cacheAgeMs,
             capturedAt: sample.capturedAt
+        )
+    }
+
+    private func shouldForceFreshRead(
+        requested: Bool,
+        terminalID: String,
+        scope: String,
+        activityClass: ControlHarnessSamplingActivityClass,
+        now: Date
+    ) -> Bool {
+        guard requested else {
+            return false
+        }
+        guard let footprintBytes = currentReadPhysicalFootprintBytes(now: now) else {
+            return true
+        }
+        guard footprintBytes >= Self.readMemoryPressureFootprintThresholdBytes else {
+            return true
+        }
+
+        maybeLogReadMemoryThrottle(
+            terminalID: terminalID,
+            scope: scope,
+            activityClass: activityClass,
+            now: now,
+            footprintBytes: footprintBytes
+        )
+        return false
+    }
+
+    private func currentReadPhysicalFootprintBytes(now: Date) -> UInt64? {
+        if let lastReadFootprintProbeDate,
+           let lastReadFootprintBytes,
+           now.timeIntervalSince(lastReadFootprintProbeDate) < Self.readMemoryPressureProbeIntervalSeconds {
+            return lastReadFootprintBytes
+        }
+
+        var vmInfo = task_vm_info_data_t()
+        var vmInfoCount = mach_msg_type_number_t(
+            MemoryLayout.size(ofValue: vmInfo) / MemoryLayout<integer_t>.size
+        )
+        let result = withUnsafeMutablePointer(to: &vmInfo) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(vmInfoCount)) { intPointer in
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), intPointer, &vmInfoCount)
+            }
+        }
+        guard result == KERN_SUCCESS else {
+            return nil
+        }
+
+        let footprintBytes = UInt64(vmInfo.phys_footprint)
+        lastReadFootprintProbeDate = now
+        lastReadFootprintBytes = footprintBytes
+        return footprintBytes
+    }
+
+    private func maybeLogReadMemoryThrottle(
+        terminalID: String,
+        scope: String,
+        activityClass: ControlHarnessSamplingActivityClass,
+        now: Date,
+        footprintBytes: UInt64
+    ) {
+        if let lastReadMemoryThrottleLogDate,
+           now.timeIntervalSince(lastReadMemoryThrottleLogDate) < Self.readMemoryThrottleLogIntervalSeconds {
+            return
+        }
+        lastReadMemoryThrottleLogDate = now
+
+        RuntimeDiagnosticsLogger.log(
+            component: "control_harness.core",
+            event: "fresh_read_degraded_for_memory_pressure",
+            details: [
+                "terminal_id": terminalID,
+                "scope": scope,
+                "activity_class": activityClass.rawValue,
+                "threshold_bytes": "\(Self.readMemoryPressureFootprintThresholdBytes)",
+                "physical_footprint_bytes": "\(footprintBytes)",
+            ]
         )
     }
 
