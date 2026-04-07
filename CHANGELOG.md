@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(macos): restore lifecycle diagnostics wiring after main sync
+
+- What changed: Restored the `AppDelegate` lifecycle diagnostics plumbing that the runtime-diagnostics feature depends on: startup session initialization, stable signal/system reason-code helpers, signal registration for `SIGTERM` / `SIGINT` / `SIGHUP`, and terminate accept/cancel bookkeeping that writes the intended lifecycle records. Also restored the missing `ControlHarnessTests` helper methods (`makeFreshEventHub`, `makeBundleID`) so the merged gateway session-cap regressions compile cleanly.
+- Why: The main-worktree runtime-diagnostics change brought in tests and changelog notes without the matching `AppDelegate` implementation and test helpers, so the synced worktree still failed in the macOS test target after conflict resolution.
+- Impact: Runtime lifecycle diagnostics now match the documented behavior, and the merged control-harness/AppDelegate regression slice builds and passes instead of failing on missing symbols.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' test -only-testing:GhosttyTests/ControlHarnessTests/gatewayRejectsDifferentSubscriptionKindWhenSessionCapIsReached -only-testing:GhosttyTests/ControlHarnessTests/gatewayRejectsConcurrentSessionsForSamePairedIdentity -only-testing:GhosttyTests/ControlHarnessTests/gatewayReconnectReplacesSupersededEventSubscriptionWithoutTrippingSessionLimit -only-testing:GhosttyTests/AppDelegateTerminationDiagnosticsTests CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO`
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Tests/ControlHarness/ControlHarnessTests.swift`, `CHANGELOG.md`
+- Decision trail: Keep the repair as a narrow follow-up fix on top of the sync so the merge resolution stays readable while the runtime diagnostics contract is brought back into line with its tests and changelog.
+
 ### fix(pagelist): normalize viewport after layout changes
 
 - What changed: Centralized `PageList` viewport repair in `normalizeViewportAfterLayoutChange()` so layout-mutating paths now clear stale pin-offset cache, reclassify `.pin` to `.top` or `.active` when boundaries overlap, and collapse invalid pins that no longer have enough remaining rows. Updated `resize()`, `resizeWithoutReflow()`, `grow()` prune handling, and `fixupViewport()` to use the shared normalization path. Added `docs/pagelist-viewport-normalization-fix.md` and expanded regression coverage for non-reflow resize and prune-on-grow cases.

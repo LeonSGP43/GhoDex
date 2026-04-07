@@ -787,6 +787,14 @@ struct ControlHarnessTests {
     }
 
     @MainActor
+    private func makeFreshEventHub(bundleID: String) -> ControlHarnessEventHub {
+        let eventsFileURL = ControlHarnessAuditLogger.baseDirectory(bundleID: bundleID)
+            .appendingPathComponent("control-harness-events.jsonl", isDirectory: false)
+        try? FileManager.default.removeItem(at: eventsFileURL)
+        return ControlHarnessEventHub(bundleID: bundleID)
+    }
+
+    @MainActor
     private func makeCore(
         delegate: AppDelegate? = nil,
         bundleID: String = "ghdx.tests.control-harness",
@@ -803,7 +811,7 @@ struct ControlHarnessTests {
         eventHub: ControlHarnessEventHub,
         generations: ControlHarnessGenerationTracker
     ) {
-        let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+        let eventHub = makeFreshEventHub(bundleID: bundleID)
         let generations = ControlHarnessGenerationTracker()
         let resolvedSampleStore = sampleStore ?? ControlHarnessSampleStore()
         let resolvedReadStore = readStore ?? ControlHarnessTerminalReadStore()
@@ -1109,6 +1117,14 @@ struct ControlHarnessTests {
     private func writeAcceptanceArtifact(_ filename: String, data: Data) throws {
         let url = URL(fileURLWithPath: "/tmp").appendingPathComponent(filename, isDirectory: false)
         try data.write(to: url, options: .atomic)
+    }
+
+    private func makeBundleID(_ base: String) -> String {
+        let suffix = UUID()
+            .uuidString
+            .replacingOccurrences(of: "-", with: "")
+            .prefix(8)
+        return "\(base).\(suffix)"
     }
 
     private func requestGatewayMetrics(port: UInt16, requestID: String) throws -> (
