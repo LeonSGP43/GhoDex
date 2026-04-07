@@ -466,6 +466,11 @@ enum AppLocalization {
         "settings.gateway.pairing_host": "Pairing QR Host",
         "settings.gateway.pairing_host.placeholder": "Auto-detect from current LAN address",
         "settings.gateway.pairing_host.help": "Optional override for the host embedded in the pairing QR. Leave blank to auto-detect.",
+        "settings.gateway.semantic_profile": "Semantic Extraction Profile",
+        "settings.gateway.semantic_profile.help": "Choose how terminal semantic lines are projected for automation and AI reads. Generic is the safest default.",
+        "settings.gateway.semantic_profile.generic": "Generic",
+        "settings.gateway.semantic_profile.codex": "Codex",
+        "settings.gateway.semantic_profile.claude_code": "Claude Code",
         "settings.gateway.status": "Status",
         "settings.gateway.status.disabled": "Disabled",
         "settings.gateway.status.pending": "Applying settings...",
@@ -941,6 +946,11 @@ enum AppLocalization {
         "settings.gateway.pairing_host": "配对二维码主机地址",
         "settings.gateway.pairing_host.placeholder": "默认自动探测当前局域网地址",
         "settings.gateway.pairing_host.help": "可选。覆盖二维码里编码的主机地址；留空时自动探测。",
+        "settings.gateway.semantic_profile": "语义提取模式",
+        "settings.gateway.semantic_profile.help": "选择终端语义行的提取策略，供自动化与 AI 读取使用。Generic 兼容性最好。",
+        "settings.gateway.semantic_profile.generic": "通用",
+        "settings.gateway.semantic_profile.codex": "Codex",
+        "settings.gateway.semantic_profile.claude_code": "Claude Code",
         "settings.gateway.status": "状态",
         "settings.gateway.status.disabled": "已禁用",
         "settings.gateway.status.pending": "正在应用设置...",
@@ -1573,6 +1583,11 @@ enum L10n {
         nonisolated static var gatewayPairingHost: String { AppLocalization.localizedString("settings.gateway.pairing_host") }
         nonisolated static var gatewayPairingHostPlaceholder: String { AppLocalization.localizedString("settings.gateway.pairing_host.placeholder") }
         nonisolated static var gatewayPairingHostHelp: String { AppLocalization.localizedString("settings.gateway.pairing_host.help") }
+        nonisolated static var gatewaySemanticProfile: String { AppLocalization.localizedString("settings.gateway.semantic_profile") }
+        nonisolated static var gatewaySemanticProfileHelp: String { AppLocalization.localizedString("settings.gateway.semantic_profile.help") }
+        nonisolated static var gatewaySemanticProfileGeneric: String { AppLocalization.localizedString("settings.gateway.semantic_profile.generic") }
+        nonisolated static var gatewaySemanticProfileCodex: String { AppLocalization.localizedString("settings.gateway.semantic_profile.codex") }
+        nonisolated static var gatewaySemanticProfileClaudeCode: String { AppLocalization.localizedString("settings.gateway.semantic_profile.claude_code") }
         nonisolated static var gatewayStatus: String { AppLocalization.localizedString("settings.gateway.status") }
         nonisolated static var gatewayStatusDisabled: String { AppLocalization.localizedString("settings.gateway.status.disabled") }
         nonisolated static var gatewayStatusPending: String { AppLocalization.localizedString("settings.gateway.status.pending") }

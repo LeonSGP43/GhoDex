@@ -11,6 +11,8 @@ export const LocalSettingsSchema = z.object({
     commandPaletteEnabled: z.boolean().describe('Enable CMD+K command palette (web only)'),
     themePreference: z.enum(['light', 'dark', 'adaptive']).describe('Theme preference: light, dark, or adaptive (follows system)'),
     markdownCopyV2: z.boolean().describe('Replace native paragraph selection with long-press modal for full markdown copy'),
+    mobileTerminalInputMode: z.enum(['simple', 'realtime']).describe('GhoDex mobile terminal input mode'),
+    mobileTerminalDisplayMode: z.enum(['terminal', 'text']).describe('GhoDex mobile terminal display mode'),
     // CLI version acknowledgments - keyed by machineId
     acknowledgedCliVersions: z.record(z.string(), z.string()).describe('Acknowledged CLI versions per machine'),
 });
@@ -34,6 +36,8 @@ export const localSettingsDefaults: LocalSettings = {
     commandPaletteEnabled: false,
     themePreference: 'dark',
     markdownCopyV2: false,
+    mobileTerminalInputMode: 'simple',
+    mobileTerminalDisplayMode: 'terminal',
     acknowledgedCliVersions: {},
 };
 Object.freeze(localSettingsDefaults);

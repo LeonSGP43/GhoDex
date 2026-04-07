@@ -84,6 +84,11 @@ struct ControlHarnessRegisteredDeviceResult: Sendable {
     let capabilityFlags: [String]
 }
 
+struct ControlHarnessDesktopIdentityResult: Sendable {
+    let desktopID: String
+    let desktopLabel: String
+}
+
 actor ControlHarnessAuth {
     struct Configuration: Sendable {
         var pairingCodeTTLSeconds: TimeInterval = 300
@@ -434,6 +439,13 @@ actor ControlHarnessAuth {
                 return lhs.displayLabel.localizedCaseInsensitiveCompare(rhs.displayLabel) == .orderedAscending
             })
             .map(Self.registeredDeviceResult(from:))
+    }
+
+    func desktopIdentityResult() -> ControlHarnessDesktopIdentityResult {
+        ControlHarnessDesktopIdentityResult(
+            desktopID: desktopIdentity.desktopID,
+            desktopLabel: desktopIdentity.desktopLabel
+        )
     }
 
     func revokeDevice(deviceID: String) throws -> ControlHarnessRegisteredDeviceResult {

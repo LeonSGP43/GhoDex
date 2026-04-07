@@ -1887,7 +1887,18 @@ pub fn dumpText(
 ) !Text {
     self.renderer_state.mutex.lock();
     defer self.renderer_state.mutex.unlock();
-    return try self.dumpTextLocked(alloc, sel);
+    return try self.dumpTextLockedWithFormat(alloc, sel, .plain);
+}
+
+pub fn dumpTextWithFormat(
+    self: *Surface,
+    alloc: Allocator,
+    sel: terminal.Selection,
+    format: terminal.formatter.Format,
+) !Text {
+    self.renderer_state.mutex.lock();
+    defer self.renderer_state.mutex.unlock();
+    return try self.dumpTextLockedWithFormat(alloc, sel, format);
 }
 
 /// Same as `dumpText` but assumes the renderer state mutex is already
@@ -1897,10 +1908,21 @@ pub fn dumpTextLocked(
     alloc: Allocator,
     sel: terminal.Selection,
 ) !Text {
+    return try self.dumpTextLockedWithFormat(alloc, sel, .plain);
+}
+
+/// Same as `dumpTextLocked` but allows choosing the output format.
+pub fn dumpTextLockedWithFormat(
+    self: *Surface,
+    alloc: Allocator,
+    sel: terminal.Selection,
+    format: terminal.formatter.Format,
+) !Text {
     // Read out the text
     const text = try self.io.terminal.screens.active.selectionString(alloc, .{
         .sel = sel,
         .trim = false,
+        .emit = format,
     });
     errdefer alloc.free(text);
 

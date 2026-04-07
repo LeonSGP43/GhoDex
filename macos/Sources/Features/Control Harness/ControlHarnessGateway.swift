@@ -29,6 +29,86 @@ private struct ControlHarnessGatewayRegisteredDeviceListPayload: Encodable {
     let devices: [ControlHarnessGatewayRegisteredDevicePayload]
 }
 
+private struct ControlHarnessGatewayDesktopRoutePayload: Encodable {
+    let desktopID: String
+    let desktopLabel: String
+    let upstreamHost: String
+    let upstreamPort: UInt16
+    let source: String
+    let updatedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case desktopID = "desktop_id"
+        case desktopLabel = "desktop_label"
+        case upstreamHost = "upstream_host"
+        case upstreamPort = "upstream_port"
+        case source
+        case updatedAt = "updated_at"
+    }
+}
+
+private struct ControlHarnessGatewayDesktopRouteListPayload: Encodable {
+    let desktops: [ControlHarnessGatewayDesktopRoutePayload]
+}
+
+private struct ControlHarnessGatewayRouteRegistrationPayload: Encodable {
+    let desktopID: String
+    let desktopLabel: String
+    let upstreamHost: String
+    let upstreamPort: UInt16
+    let registered: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case desktopID = "desktop_id"
+        case desktopLabel = "desktop_label"
+        case upstreamHost = "upstream_host"
+        case upstreamPort = "upstream_port"
+        case registered
+    }
+}
+
+private struct ControlHarnessGatewayPingPayload: Codable {
+    let component: String
+    let supportsDesktopRouting: Bool
+    let listenerPort: UInt16?
+    let desktopID: String?
+    let desktopLabel: String?
+
+    enum CodingKeys: String, CodingKey {
+        case component
+        case supportsDesktopRouting = "supports_desktop_routing"
+        case listenerPort = "listener_port"
+        case desktopID = "desktop_id"
+        case desktopLabel = "desktop_label"
+    }
+}
+
+private struct ControlHarnessGatewayLocalCommandEnvelope: Decodable {
+    let status: String
+    let errorCode: String?
+    let errorMessage: String?
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case errorCode = "error_code"
+        case errorMessage = "error_message"
+    }
+}
+
+private struct ControlHarnessGatewayLocalCommandResultEnvelope<Result: Decodable>: Decodable {
+    let status: String
+    let errorCode: String?
+    let errorMessage: String?
+    let result: Result?
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case errorCode = "error_code"
+        case errorMessage = "error_message"
+        case result
+    }
+}
+
 private enum ControlHarnessGatewayDeviceRegistryError: LocalizedError {
     case invalidDeviceID
     case deviceNotFound
@@ -39,6 +119,32 @@ private enum ControlHarnessGatewayDeviceRegistryError: LocalizedError {
             return "A valid device_id is required"
         case .deviceNotFound:
             return "The requested device is not registered"
+        }
+    }
+}
+
+private enum ControlHarnessGatewayRouteRegistryError: LocalizedError {
+    case invalidDesktopID
+    case invalidUpstreamHost
+    case invalidUpstreamPort
+    case nonLoopbackUpstreamHost
+    case upstreamProbeFailed
+    case upstreamDesktopIDMismatch
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidDesktopID:
+            return "A valid desktop_id is required"
+        case .invalidUpstreamHost:
+            return "A valid upstream_host is required"
+        case .invalidUpstreamPort:
+            return "A valid upstream_port is required"
+        case .nonLoopbackUpstreamHost:
+            return "upstream_host must be a local loopback address"
+        case .upstreamProbeFailed:
+            return "Unable to verify upstream gateway route target"
+        case .upstreamDesktopIDMismatch:
+            return "upstream gateway desktop identity does not match desktop_id"
         }
     }
 }
@@ -54,6 +160,10 @@ final class ControlHarnessGateway {
         case devicesRevoke
         case metrics
         case metricsReset
+        case instancePing
+        case desktopRegister
+        case desktopUnregister
+        case desktopsList
     }
 
     struct Configuration: Sendable, Equatable {
@@ -67,8 +177,10 @@ final class ControlHarnessGateway {
         var maxConcurrentSessionsPerIdentity = 2
         var maxGlobalRequestsPerMinute = 240
         var maxCommandsPerMinute = 60
+        var maxInputEventsPerMinute = 6_000
         var maxSnapshotRequestsPerMinute = 30
-        var maxResyncAttemptsPerMinute = 30
+        var maxResyncAttemptsPerMinute = 1_800
+        var semanticProfile: ControlHarnessSemanticProfile = .defaultValue
 
         static func environment(
             _ environment: [String: String] = ProcessInfo.processInfo.environment
@@ -105,11 +217,17 @@ final class ControlHarnessGateway {
             if let value = parseInt(environment["GHODEX_CONTROL_HARNESS_GATEWAY_MAX_COMMANDS_PER_MINUTE"]) {
                 configuration.maxCommandsPerMinute = max(1, value)
             }
+            if let value = parseInt(environment["GHODEX_CONTROL_HARNESS_GATEWAY_MAX_INPUT_EVENTS_PER_MINUTE"]) {
+                configuration.maxInputEventsPerMinute = max(1, value)
+            }
             if let value = parseInt(environment["GHODEX_CONTROL_HARNESS_GATEWAY_MAX_SNAPSHOT_REQUESTS_PER_MINUTE"]) {
                 configuration.maxSnapshotRequestsPerMinute = max(1, value)
             }
             if let value = parseInt(environment["GHODEX_CONTROL_HARNESS_GATEWAY_MAX_RESYNC_ATTEMPTS_PER_MINUTE"]) {
                 configuration.maxResyncAttemptsPerMinute = max(1, value)
+            }
+            if let value = parseString(environment["GHODEX_CONTROL_HARNESS_SEMANTIC_PROFILE"]) {
+                configuration.semanticProfile = ControlHarnessSemanticProfile.parse(value)
             }
 
             return configuration
@@ -155,9 +273,53 @@ final class ControlHarnessGateway {
         case deny(ControlHarnessResponse)
     }
 
+    private enum RouteDecision {
+        case local
+        case proxy(DesktopRoute)
+        case notFound
+    }
+
     private struct ActiveStream {
         let sessionIdentity: String?
+        let command: String
+        let startedAt: Date
         let close: @Sendable () -> Void
+    }
+
+    private struct DesktopRoute: Sendable {
+        let desktopID: String
+        let desktopLabel: String
+        let upstreamHost: String
+        let upstreamPort: UInt16
+        let source: String
+        let updatedAt: Date
+    }
+
+    private struct PassiveGatewayRegistration: Sendable {
+        let desktopID: String
+        let desktopLabel: String
+        let ownerHost: String
+        let ownerPort: UInt16
+        let upstreamHost: String
+        let upstreamPort: UInt16
+    }
+
+    private struct LocalGatewayCommandRequest: Encodable {
+        let requestID: String
+        let command: String
+        let desktopID: String?
+        let desktopLabel: String?
+        let upstreamHost: String?
+        let upstreamPort: UInt16?
+
+        enum CodingKeys: String, CodingKey {
+            case requestID = "request_id"
+            case command
+            case desktopID = "desktop_id"
+            case desktopLabel = "desktop_label"
+            case upstreamHost = "upstream_host"
+            case upstreamPort = "upstream_port"
+        }
     }
 
     private let bundleID: String
@@ -200,6 +362,8 @@ final class ControlHarnessGateway {
     private var acceptSource: DispatchSourceRead?
     private var activeStreams: [UUID: ActiveStream] = [:]
     private var activeStreamIDsByIdentity: [String: Set<UUID>] = [:]
+    private var desktopRoutesByID: [String: DesktopRoute] = [:]
+    private var passiveRegistration: PassiveGatewayRegistration?
 
     init(
         bundleID: String,
@@ -276,7 +440,7 @@ final class ControlHarnessGateway {
 
         do {
             let requestedPort = configuration.listenPort
-            let listener = try makeListenerRecoveringPortConflict(
+            let listener = try makeListenerWithPortConflictRouting(
                 host: configuration.listenHost,
                 requestedPort: requestedPort
             )
@@ -295,9 +459,15 @@ final class ControlHarnessGateway {
             source.resume()
             acceptSource = source
             if requestedPort > 0, listener.port != requestedPort {
-                logger.notice(
-                    "control harness gateway port \(requestedPort) was unavailable; recovered on \(listener.port)"
-                )
+                if let passive = passiveRegistration {
+                    logger.notice(
+                        "control harness gateway running in passive mode on \(listener.port); owner \(passive.ownerHost, privacy: .public):\(passive.ownerPort)"
+                    )
+                } else {
+                    logger.notice(
+                        "control harness gateway port \(requestedPort) was unavailable; recovered on \(listener.port)"
+                    )
+                }
             }
             logger.notice(
                 "control harness gateway listening at \(self.configuration.listenHost, privacy: .public):\(listener.port)"
@@ -321,9 +491,13 @@ final class ControlHarnessGateway {
     }
 
     func stop() {
+        unregisterPassiveRouteIfNeeded()
+
         let activeStreams = lifecycleQueue.sync {
             let streams = Array(self.activeStreams.values)
             self.activeStreams.removeAll()
+            self.activeStreamIDsByIdentity.removeAll()
+            self.desktopRoutesByID.removeAll()
             return streams
         }
         for stream in activeStreams {
@@ -346,7 +520,7 @@ final class ControlHarnessGateway {
         outboundQueue.async {}
     }
 
-    private func makeListenerRecoveringPortConflict(
+    private func makeListenerWithPortConflictRouting(
         host: String,
         requestedPort: UInt16
     ) throws -> (fd: Int32, port: UInt16) {
@@ -354,6 +528,17 @@ final class ControlHarnessGateway {
             return try makeListener(host: host, port: requestedPort)
         } catch let error as POSIXError
             where error.code == .EADDRINUSE && requestedPort > 0 {
+            do {
+                if let passiveListener = try makePassiveListenerRegisteringToExistingGateway(
+                    host: host,
+                    requestedPort: requestedPort
+                ) {
+                    return passiveListener
+                }
+            } catch {
+                logger.debug("port conflict owner probe failed, using fallback listener recovery: \(error.localizedDescription, privacy: .public)")
+            }
+
             for candidatePort in Self.portConflictRecoveryCandidates(startingAt: requestedPort) {
                 do {
                     return try makeListener(host: host, port: candidatePort)
@@ -364,6 +549,167 @@ final class ControlHarnessGateway {
 
             return try makeListener(host: host, port: 0)
         }
+    }
+
+    private func makePassiveListenerRegisteringToExistingGateway(
+        host: String,
+        requestedPort: UInt16
+    ) throws -> (fd: Int32, port: UInt16)? {
+        guard let desktopIdentity = currentDesktopIdentity() else {
+            return nil
+        }
+
+        let ownerHost = Self.localProbeHost(from: host)
+        let supportsRouting = try gatewayOwnerSupportsDesktopRouting(host: ownerHost, port: requestedPort)
+        guard supportsRouting else {
+            return nil
+        }
+
+        let listener = try makeListener(host: host, port: 0)
+        let registration = PassiveGatewayRegistration(
+            desktopID: desktopIdentity.desktopID,
+            desktopLabel: desktopIdentity.desktopLabel,
+            ownerHost: ownerHost,
+            ownerPort: requestedPort,
+            upstreamHost: Self.localProbeHost(from: host),
+            upstreamPort: listener.port
+        )
+
+        do {
+            try registerPassiveRoute(registration)
+            passiveRegistration = registration
+            return listener
+        } catch {
+            Darwin.close(listener.fd)
+            logger.error("failed to register passive desktop route: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    private func gatewayOwnerSupportsDesktopRouting(
+        host: String,
+        port: UInt16
+    ) throws -> Bool {
+        let payload = try queryGatewayPingPayload(host: host, port: port)
+        return payload.supportsDesktopRouting
+    }
+
+    private func queryGatewayPingPayload(
+        host: String,
+        port: UInt16
+    ) throws -> ControlHarnessGatewayPingPayload {
+        let request = LocalGatewayCommandRequest(
+            requestID: "gateway-owner-ping-\(UUID().uuidString.lowercased())",
+            command: "gateway.instance.ping",
+            desktopID: nil,
+            desktopLabel: nil,
+            upstreamHost: nil,
+            upstreamPort: nil
+        )
+        let envelope = try Self.sendLocalGatewayCommandResult(
+            request,
+            host: host,
+            port: port,
+            payloadType: ControlHarnessGatewayPingPayload.self
+        )
+        guard envelope.status == "ok", let payload = envelope.result else {
+            throw ControlHarnessGatewayRouteRegistryError.upstreamProbeFailed
+        }
+        return payload
+    }
+
+    private func registerPassiveRoute(_ registration: PassiveGatewayRegistration) throws {
+        let request = LocalGatewayCommandRequest(
+            requestID: "gateway-route-register-\(UUID().uuidString.lowercased())",
+            command: "gateway.desktop.register",
+            desktopID: registration.desktopID,
+            desktopLabel: registration.desktopLabel,
+            upstreamHost: registration.upstreamHost,
+            upstreamPort: registration.upstreamPort
+        )
+        let envelope = try Self.sendLocalGatewayCommandEnvelope(
+            request,
+            host: registration.ownerHost,
+            port: registration.ownerPort
+        )
+        guard envelope.status == "ok" else {
+            throw POSIXError(.ECONNREFUSED)
+        }
+    }
+
+    private func unregisterPassiveRouteIfNeeded() {
+        guard let registration = passiveRegistration else {
+            return
+        }
+        passiveRegistration = nil
+
+        do {
+            let request = LocalGatewayCommandRequest(
+                requestID: "gateway-route-unregister-\(UUID().uuidString.lowercased())",
+                command: "gateway.desktop.unregister",
+                desktopID: registration.desktopID,
+                desktopLabel: nil,
+                upstreamHost: nil,
+                upstreamPort: nil
+            )
+            _ = try Self.sendLocalGatewayCommandEnvelope(
+                request,
+                host: registration.ownerHost,
+                port: registration.ownerPort
+            )
+        } catch {
+            logger.debug("passive desktop route unregister skipped: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private static func sendLocalGatewayCommandData(
+        _ request: LocalGatewayCommandRequest,
+        host: String,
+        port: UInt16
+    ) throws -> Data {
+        let fd = try connectTCP(host: host, port: port)
+        defer { Darwin.close(fd) }
+
+        try setBlocking(fd)
+        try setNoDelay(fd)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let payload = try encoder.encode(request)
+        try writeAll(payload, to: fd)
+        guard Darwin.shutdown(fd, SHUT_WR) == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+
+        return try readAll(from: fd)
+    }
+
+    private static func sendLocalGatewayCommandEnvelope(
+        _ request: LocalGatewayCommandRequest,
+        host: String,
+        port: UInt16
+    ) throws -> ControlHarnessGatewayLocalCommandEnvelope {
+        let responseData = try sendLocalGatewayCommandData(
+            request,
+            host: host,
+            port: port
+        )
+        return try JSONDecoder().decode(ControlHarnessGatewayLocalCommandEnvelope.self, from: responseData)
+    }
+
+    private static func sendLocalGatewayCommandResult<ResultPayload: Decodable>(
+        _ request: LocalGatewayCommandRequest,
+        host: String,
+        port: UInt16,
+        payloadType: ResultPayload.Type
+    ) throws -> ControlHarnessGatewayLocalCommandResultEnvelope<ResultPayload> {
+        _ = payloadType
+        let responseData = try sendLocalGatewayCommandData(
+            request,
+            host: host,
+            port: port
+        )
+        return try JSONDecoder()
+            .decode(ControlHarnessGatewayLocalCommandResultEnvelope<ResultPayload>.self, from: responseData)
     }
 
     private func acceptAvailableConnections() {
@@ -379,6 +725,7 @@ final class ControlHarnessGateway {
 
             do {
                 try Self.setBlocking(clientFD)
+                try Self.setNoDelay(clientFD)
             } catch {
                 logger.error("failed to configure control harness gateway client socket: \(error.localizedDescription, privacy: .public)")
                 Darwin.close(clientFD)
@@ -405,6 +752,12 @@ final class ControlHarnessGateway {
             }
 
             let requestData = try Self.readAll(from: clientFD)
+            if let proxied = try proxyRawRequestIfNeeded(requestData) {
+                requestCommand = proxied.command
+                try Self.writeAll(proxied.responseData, to: clientFD)
+                recordRequestIfNeeded()
+                return
+            }
             let decoded = try decodeGatewayRequest(from: requestData)
             let request = decoded.request
             let transportSharedSecret = decoded.transportSharedSecret
@@ -450,6 +803,7 @@ final class ControlHarnessGateway {
                     case .subscription(let envelope):
                         try streamSubscription(
                             envelope,
+                            command: request.command,
                             to: clientFD,
                             transport: "tcp",
                             closeReason: "client_disconnect",
@@ -486,48 +840,91 @@ final class ControlHarnessGateway {
         _ clientFD: Int32,
         peerDescription: String
     ) throws {
-        let started = DispatchTime.now()
         let handshake = try Self.readHTTPHeaders(from: clientFD)
+        if let requestedDesktopID = Self.parseRequestedDesktopID(fromWebSocketHandshake: handshake.headers) {
+            switch resolveRouteDecision(for: requestedDesktopID) {
+            case .local:
+                break
+            case .proxy(let route):
+                var initialData = handshake.headers
+                initialData.append(handshake.remainder)
+                do {
+                    try proxyWebSocketClient(
+                        clientFD,
+                        initialData: initialData,
+                        route: route
+                    )
+                } catch {
+                    evictDesktopRoute(
+                        route.desktopID,
+                        reason: "websocket handshake proxy failed: \(error.localizedDescription)"
+                    )
+                    try Self.writeAll(Self.httpBadGatewayResponse(), to: clientFD)
+                }
+                return
+            case .notFound:
+                try Self.writeAll(Self.httpNotFoundResponse(), to: clientFD)
+                return
+            }
+        }
+
         let key = try Self.parseWebSocketKey(from: handshake.headers)
         try Self.writeAll(Self.webSocketHandshakeResponse(for: key), to: clientFD)
 
         var bufferedBytes = handshake.remainder
-        let requestData = try Self.readWebSocketFrame(from: clientFD, bufferedBytes: &bufferedBytes)
-        let decoded = try decodeGatewayRequest(from: requestData)
-        let request = decoded.request
-        let transportSharedSecret = decoded.transportSharedSecret
-        var requestRecorded = false
+        while true {
+            let requestStarted = DispatchTime.now()
+            let requestData = try Self.readWebSocketFrame(from: clientFD, bufferedBytes: &bufferedBytes)
+            if requestData.isEmpty {
+                return
+            }
 
-        func recordRequestIfNeeded() {
-            guard !requestRecorded else { return }
-            requestRecorded = true
-            performanceMonitor?.recordGatewayRequest(
-                command: request.command,
-                transport: "websocket",
-                durationMs: Self.elapsedMilliseconds(since: started)
-            )
-        }
+            let decoded = try decodeGatewayRequest(from: requestData)
+            let request = decoded.request
+            let transportSharedSecret = decoded.transportSharedSecret
+            var requestRecorded = false
+            var shouldCloseAfterRequest = false
 
-        switch authorize(request, peerDescription: peerDescription) {
-        case .deny(let response):
-            try Self.writeAll(
-                try encodeWebSocketResponse(response, transportSharedSecret: transportSharedSecret),
-                to: clientFD
-            )
-            recordRequestIfNeeded()
-        case .allow(let sessionIdentity):
-            try withSessionReservation(
-                request: request,
-                peerDescription: peerDescription,
-                sessionIdentity: sessionIdentity,
-                responseWriter: { response in
-                    try Self.writeAll(
-                        try encodeWebSocketResponse(response, transportSharedSecret: transportSharedSecret),
-                        to: clientFD
-                    )
-                    recordRequestIfNeeded()
-                },
-                operation: {
+            func recordRequestIfNeeded() {
+                guard !requestRecorded else { return }
+                requestRecorded = true
+                performanceMonitor?.recordGatewayRequest(
+                    command: request.command,
+                    transport: "websocket",
+                    durationMs: Self.elapsedMilliseconds(since: requestStarted)
+                )
+            }
+
+            if transportSharedSecret == nil,
+               let proxiedResponse = try proxyWebSocketRequestIfNeeded(
+                rawRequestData: requestData,
+                request: request
+               ) {
+                try Self.writeAll(proxiedResponse, to: clientFD)
+                recordRequestIfNeeded()
+                continue
+            }
+
+            switch authorize(request, peerDescription: peerDescription) {
+            case .deny(let response):
+                try Self.writeAll(
+                    try encodeWebSocketResponse(response, transportSharedSecret: transportSharedSecret),
+                    to: clientFD
+                )
+                recordRequestIfNeeded()
+            case .allow(let sessionIdentity):
+                try withSessionReservation(
+                    request: request,
+                    peerDescription: peerDescription,
+                    sessionIdentity: sessionIdentity,
+                    responseWriter: { response in
+                        try Self.writeAll(
+                            try encodeWebSocketResponse(response, transportSharedSecret: transportSharedSecret),
+                            to: clientFD
+                        )
+                        recordRequestIfNeeded()
+                    },
+                    operation: {
                     let reply = handleGatewayCommand(request).map(ControlHarnessServiceReply.single)
                         ?? callRequestHandler(request)
                     switch reply {
@@ -538,17 +935,25 @@ final class ControlHarnessGateway {
                         )
                         recordRequestIfNeeded()
                     case .subscription(let envelope):
+                        recordRequestIfNeeded()
                         try streamWebSocketSubscription(
                             envelope,
+                            command: request.command,
                             to: clientFD,
                             transport: "websocket",
                             closeReason: "client_disconnect",
                             transportSharedSecret: transportSharedSecret,
                             sessionIdentity: sessionIdentity
                         )
+                        shouldCloseAfterRequest = true
                     }
                 }
-            )
+                )
+            }
+
+            if shouldCloseAfterRequest {
+                return
+            }
         }
     }
 
@@ -618,6 +1023,10 @@ final class ControlHarnessGateway {
         _ request: ControlHarnessRequest,
         peerDescription: String
     ) -> AuthorizationResult {
+        if let routingValidation = validateDesktopRouting(request) {
+            return .deny(routingValidation)
+        }
+
         if let gatewayCommand = gatewayCommand(for: request) {
             return authorizeGatewayCommand(
                 gatewayCommand,
@@ -682,6 +1091,39 @@ final class ControlHarnessGateway {
         )
     }
 
+    private func validateDesktopRouting(_ request: ControlHarnessRequest) -> ControlHarnessResponse? {
+        if gatewayCommand(for: request) != nil {
+            return nil
+        }
+        guard let requestedDesktopID = request.desktopID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              requestedDesktopID.isEmpty == false,
+              let authManager else {
+            return nil
+        }
+
+        let desktopIdentityResult: ControlHarnessDesktopIdentityResult
+        switch withAuthManager(authManager, operation: {
+            await authManager.desktopIdentityResult()
+        }) {
+        case .success(let result):
+            desktopIdentityResult = result
+        case .failure:
+            return nil
+        }
+
+        guard requestedDesktopID == desktopIdentityResult.desktopID else {
+            return ControlHarnessResponse(
+                requestID: request.requestID,
+                status: "error",
+                result: nil,
+                errorCode: "desktop_id_mismatch",
+                errorMessage: "Gateway desktop_id does not match this desktop instance"
+            )
+        }
+
+        return nil
+    }
+
     private func continueAuthorization(
         request: ControlHarnessRequest,
         requestAuthorizer: (@MainActor (ControlHarnessRequest) -> RequestAuthorization)?,
@@ -727,18 +1169,15 @@ final class ControlHarnessGateway {
         case .pairingExchange:
             return .allow(sessionIdentity: nil)
 
-        case .devicesList, .devicesRevoke, .metrics, .metricsReset:
+        case .devicesList, .devicesRevoke, .metrics, .metricsReset,
+                .instancePing, .desktopRegister, .desktopUnregister, .desktopsList:
             guard Self.isLoopbackPeer(peerDescription) else {
                 return .deny(ControlHarnessResponse(
                     requestID: request.requestID,
                     status: "error",
                     result: nil,
-                    errorCode: gatewayCommand == .metrics || gatewayCommand == .metricsReset
-                        ? "metrics_requires_local_origin"
-                        : "device_registry_requires_local_origin",
-                    errorMessage: gatewayCommand == .metrics || gatewayCommand == .metricsReset
-                        ? "Gateway metrics can only be requested from a local desktop client"
-                        : "Device registry commands can only be requested from a local desktop client"
+                    errorCode: gatewayLocalOriginErrorCode(for: gatewayCommand),
+                    errorMessage: gatewayLocalOriginErrorMessage(for: gatewayCommand)
                 ))
             }
             return .allow(sessionIdentity: nil)
@@ -773,6 +1212,38 @@ final class ControlHarnessGateway {
         }
     }
 
+    private func gatewayLocalOriginErrorCode(for command: GatewayCommand) -> String {
+        switch command {
+        case .metrics, .metricsReset:
+            return "metrics_requires_local_origin"
+        case .devicesList, .devicesRevoke:
+            return "device_registry_requires_local_origin"
+        case .instancePing, .desktopRegister, .desktopUnregister, .desktopsList:
+            return "desktop_route_requires_local_origin"
+        case .pairingBegin:
+            return "pairing_requires_local_origin"
+        case .pairingExchange, .tokenInfo, .tokenRotate, .tokenRevoke:
+            return "unauthorized"
+        }
+    }
+
+    private func gatewayLocalOriginErrorMessage(for command: GatewayCommand) -> String {
+        switch command {
+        case .metrics, .metricsReset:
+            return "Gateway metrics can only be requested from a local desktop client"
+        case .devicesList, .devicesRevoke:
+            return "Device registry commands can only be requested from a local desktop client"
+        case .instancePing:
+            return "Gateway instance commands can only be requested from a local desktop client"
+        case .desktopRegister, .desktopUnregister, .desktopsList:
+            return "Desktop route commands can only be requested from a local desktop client"
+        case .pairingBegin:
+            return "Pairing can only be started from a local desktop client"
+        case .pairingExchange, .tokenInfo, .tokenRotate, .tokenRevoke:
+            return "A valid gateway auth token is required"
+        }
+    }
+
     private func handleGatewayCommand(_ request: ControlHarnessRequest) -> ControlHarnessResponse? {
         guard let gatewayCommand = gatewayCommand(for: request) else { return nil }
 
@@ -796,6 +1267,69 @@ final class ControlHarnessGateway {
                     performanceMonitor?.reset()
                         ?? ControlHarnessPerformanceSnapshot.empty()
                 ),
+                errorCode: nil,
+                errorMessage: nil
+            )
+        case .instancePing:
+            let desktopIdentity = currentDesktopIdentity()
+            return ControlHarnessResponse(
+                requestID: request.requestID,
+                status: "ok",
+                result: AnyEncodable(ControlHarnessGatewayPingPayload(
+                    component: "ghodex.control-harness.gateway",
+                    supportsDesktopRouting: true,
+                    listenerPort: listenerPort,
+                    desktopID: desktopIdentity?.desktopID,
+                    desktopLabel: desktopIdentity?.desktopLabel
+                )),
+                errorCode: nil,
+                errorMessage: nil
+            )
+        case .desktopRegister:
+            do {
+                let payload = try upsertDesktopRoute(from: request, source: "local_register")
+                return ControlHarnessResponse(
+                    requestID: request.requestID,
+                    status: "ok",
+                    result: AnyEncodable(payload),
+                    errorCode: nil,
+                    errorMessage: nil
+                )
+            } catch {
+                let mapped = gatewayCommandErrorPayload(for: error)
+                return ControlHarnessResponse(
+                    requestID: request.requestID,
+                    status: "error",
+                    result: nil,
+                    errorCode: mapped.code,
+                    errorMessage: mapped.message
+                )
+            }
+        case .desktopUnregister:
+            do {
+                let payload = try removeDesktopRoute(from: request)
+                return ControlHarnessResponse(
+                    requestID: request.requestID,
+                    status: "ok",
+                    result: AnyEncodable(payload),
+                    errorCode: nil,
+                    errorMessage: nil
+                )
+            } catch {
+                let mapped = gatewayCommandErrorPayload(for: error)
+                return ControlHarnessResponse(
+                    requestID: request.requestID,
+                    status: "error",
+                    result: nil,
+                    errorCode: mapped.code,
+                    errorMessage: mapped.message
+                )
+            }
+        case .desktopsList:
+            return ControlHarnessResponse(
+                requestID: request.requestID,
+                status: "ok",
+                result: AnyEncodable(makeDesktopRouteListPayload()),
                 errorCode: nil,
                 errorMessage: nil
             )
@@ -868,6 +1402,8 @@ final class ControlHarnessGateway {
                     self.performanceMonitor?.reset()
                         ?? ControlHarnessPerformanceSnapshot.empty()
                 )
+            case .instancePing, .desktopRegister, .desktopUnregister, .desktopsList:
+                return AnyEncodable([String: String]())
             }
         }
 
@@ -942,6 +1478,14 @@ final class ControlHarnessGateway {
             return .metrics
         case "gateway.metrics.reset":
             return .metricsReset
+        case "gateway.instance.ping":
+            return .instancePing
+        case "gateway.desktop.register":
+            return .desktopRegister
+        case "gateway.desktop.unregister":
+            return .desktopUnregister
+        case "gateway.desktops.list":
+            return .desktopsList
         default:
             return nil
         }
@@ -973,9 +1517,300 @@ final class ControlHarnessGateway {
         sessionRegistry.isActive(identity: "paired:\(deviceID)") ? "connected" : "idle"
     }
 
+    private func upsertDesktopRoute(
+        from request: ControlHarnessRequest,
+        source: String
+    ) throws -> ControlHarnessGatewayRouteRegistrationPayload {
+        guard let desktopID = request.desktopID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              desktopID.isEmpty == false else {
+            throw ControlHarnessGatewayRouteRegistryError.invalidDesktopID
+        }
+        guard let upstreamHost = request.upstreamHost?.trimmingCharacters(in: .whitespacesAndNewlines),
+              upstreamHost.isEmpty == false else {
+            throw ControlHarnessGatewayRouteRegistryError.invalidUpstreamHost
+        }
+        guard let upstreamPort = request.upstreamPort, upstreamPort > 0 else {
+            throw ControlHarnessGatewayRouteRegistryError.invalidUpstreamPort
+        }
+        guard Self.isLoopbackHost(upstreamHost) else {
+            throw ControlHarnessGatewayRouteRegistryError.nonLoopbackUpstreamHost
+        }
+
+        let upstreamPingPayload = try queryGatewayPingPayload(
+            host: upstreamHost,
+            port: upstreamPort
+        )
+        guard upstreamPingPayload.supportsDesktopRouting,
+              let upstreamDesktopID = upstreamPingPayload.desktopID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              upstreamDesktopID.isEmpty == false else {
+            throw ControlHarnessGatewayRouteRegistryError.upstreamProbeFailed
+        }
+        guard upstreamDesktopID == desktopID else {
+            throw ControlHarnessGatewayRouteRegistryError.upstreamDesktopIDMismatch
+        }
+
+        let desktopLabel = request.desktopLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let route = DesktopRoute(
+            desktopID: desktopID,
+            desktopLabel: (desktopLabel?.isEmpty == false) ? desktopLabel! : desktopID,
+            upstreamHost: upstreamHost,
+            upstreamPort: upstreamPort,
+            source: source,
+            updatedAt: Date()
+        )
+        lifecycleQueue.sync {
+            desktopRoutesByID[desktopID] = route
+        }
+
+        return ControlHarnessGatewayRouteRegistrationPayload(
+            desktopID: route.desktopID,
+            desktopLabel: route.desktopLabel,
+            upstreamHost: route.upstreamHost,
+            upstreamPort: route.upstreamPort,
+            registered: true
+        )
+    }
+
+    private func removeDesktopRoute(
+        from request: ControlHarnessRequest
+    ) throws -> ControlHarnessGatewayRouteRegistrationPayload {
+        guard let desktopID = request.desktopID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              desktopID.isEmpty == false else {
+            throw ControlHarnessGatewayRouteRegistryError.invalidDesktopID
+        }
+
+        let removed = lifecycleQueue.sync {
+            desktopRoutesByID.removeValue(forKey: desktopID)
+        }
+        return ControlHarnessGatewayRouteRegistrationPayload(
+            desktopID: desktopID,
+            desktopLabel: removed?.desktopLabel ?? desktopID,
+            upstreamHost: removed?.upstreamHost ?? "",
+            upstreamPort: removed?.upstreamPort ?? 0,
+            registered: false
+        )
+    }
+
+    private func evictDesktopRoute(
+        _ desktopID: String,
+        reason: String
+    ) {
+        let trimmed = desktopID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return }
+        let removed = lifecycleQueue.sync {
+            desktopRoutesByID.removeValue(forKey: trimmed)
+        }
+        guard removed != nil else { return }
+        logger.notice(
+            "evicted desktop route \(trimmed, privacy: .public): \(reason, privacy: .public)"
+        )
+    }
+
+    private func makeDesktopRouteListPayload() -> ControlHarnessGatewayDesktopRouteListPayload {
+        let localRoute = localDesktopRoute()
+        let remotes = lifecycleQueue.sync { Array(desktopRoutesByID.values) }
+        let payload = ([localRoute] + remotes)
+            .sorted(by: { lhs, rhs in lhs.desktopID < rhs.desktopID })
+            .map { route in
+                ControlHarnessGatewayDesktopRoutePayload(
+                    desktopID: route.desktopID,
+                    desktopLabel: route.desktopLabel,
+                    upstreamHost: route.upstreamHost,
+                    upstreamPort: route.upstreamPort,
+                    source: route.source,
+                    updatedAt: ISO8601DateFormatter().string(from: route.updatedAt)
+                )
+            }
+        return ControlHarnessGatewayDesktopRouteListPayload(desktops: payload)
+    }
+
+    private func localDesktopRoute() -> DesktopRoute {
+        let desktopIdentity = currentDesktopIdentity()
+        let desktopID = desktopIdentity?.desktopID ?? "unknown"
+        let desktopLabel = desktopIdentity?.desktopLabel ?? "local"
+        return DesktopRoute(
+            desktopID: desktopID,
+            desktopLabel: desktopLabel,
+            upstreamHost: Self.localProbeHost(from: configuration.listenHost),
+            upstreamPort: listenerPort ?? configuration.listenPort,
+            source: "local_owner",
+            updatedAt: Date()
+        )
+    }
+
+    private func currentDesktopIdentity() -> ControlHarnessDesktopIdentityResult? {
+        guard let authManager else { return nil }
+        switch withAuthManager(authManager, operation: {
+            await authManager.desktopIdentityResult()
+        }) {
+        case .success(let identity):
+            return identity
+        case .failure:
+            return nil
+        }
+    }
+
+    private func resolveRouteDecision(for requestedDesktopID: String) -> RouteDecision {
+        let normalized = requestedDesktopID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.isEmpty == false else { return .local }
+        if normalized == currentDesktopIdentity()?.desktopID {
+            return .local
+        }
+        guard let route = lifecycleQueue.sync(execute: { desktopRoutesByID[normalized] }) else {
+            return .notFound
+        }
+        return .proxy(route)
+    }
+
+    private func proxyRawRequestIfNeeded(
+        _ requestData: Data
+    ) throws -> (command: String, responseData: Data)? {
+        guard let request = try? JSONDecoder().decode(ControlHarnessRequest.self, from: requestData),
+              let requestedDesktopID = request.desktopID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              requestedDesktopID.isEmpty == false else {
+            return nil
+        }
+        switch resolveRouteDecision(for: requestedDesktopID) {
+        case .local, .notFound:
+            return nil
+        case .proxy(let route):
+            do {
+                let responseData = try proxyUnaryRequest(requestData, route: route)
+                return (request.command, responseData)
+            } catch {
+                evictDesktopRoute(
+                    route.desktopID,
+                    reason: "tcp proxy failed: \(error.localizedDescription)"
+                )
+                let response = ControlHarnessResponse(
+                    requestID: request.requestID,
+                    status: "error",
+                    result: nil,
+                    errorCode: "desktop_route_unreachable",
+                    errorMessage: "Desktop route is unreachable; reconnect and rebind this desktop"
+                )
+                return (request.command, try encodeResponse(response))
+            }
+        }
+    }
+
+    private func proxyWebSocketRequestIfNeeded(
+        rawRequestData: Data,
+        request: ControlHarnessRequest
+    ) throws -> Data? {
+        guard request.command != "gateway.encrypted",
+              let requestedDesktopID = request.desktopID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              requestedDesktopID.isEmpty == false else {
+            return nil
+        }
+        switch resolveRouteDecision(for: requestedDesktopID) {
+        case .local, .notFound:
+            return nil
+        case .proxy(let route):
+            do {
+                let responseData = try proxyUnaryRequest(rawRequestData, route: route)
+                return Self.encodeWebSocketTextFrame(Self.trimTrailingLineFeed(responseData))
+            } catch {
+                evictDesktopRoute(
+                    route.desktopID,
+                    reason: "websocket request proxy failed: \(error.localizedDescription)"
+                )
+                let response = ControlHarnessResponse(
+                    requestID: request.requestID,
+                    status: "error",
+                    result: nil,
+                    errorCode: "desktop_route_unreachable",
+                    errorMessage: "Desktop route is unreachable; reconnect and rebind this desktop"
+                )
+                return try encodeWebSocketResponse(response)
+            }
+        }
+    }
+
+    private func proxyUnaryRequest(
+        _ requestData: Data,
+        route: DesktopRoute
+    ) throws -> Data {
+        let upstreamFD = try Self.connectTCP(
+            host: route.upstreamHost,
+            port: route.upstreamPort
+        )
+        defer { Darwin.close(upstreamFD) }
+
+        try Self.setBlocking(upstreamFD)
+        try Self.setNoDelay(upstreamFD)
+        try Self.writeAll(requestData, to: upstreamFD)
+        guard Darwin.shutdown(upstreamFD, SHUT_WR) == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+        return try Self.readAll(from: upstreamFD)
+    }
+
+    private func proxyWebSocketClient(
+        _ clientFD: Int32,
+        initialData: Data,
+        route: DesktopRoute
+    ) throws {
+        let upstreamFD = try Self.connectTCP(
+            host: route.upstreamHost,
+            port: route.upstreamPort
+        )
+        defer { Darwin.close(upstreamFD) }
+
+        try Self.setBlocking(upstreamFD)
+        try Self.setNoDelay(upstreamFD)
+        try Self.writeAll(initialData, to: upstreamFD)
+        Self.proxySocketDuplex(clientFD: clientFD, upstreamFD: upstreamFD)
+    }
+
+    private static func proxySocketDuplex(clientFD: Int32, upstreamFD: Int32) {
+        let group = DispatchGroup()
+        let queue = DispatchQueue.global(qos: .userInitiated)
+
+        func pump(from sourceFD: Int32, to destinationFD: Int32) {
+            group.enter()
+            queue.async {
+                defer { group.leave() }
+                var buffer = [UInt8](repeating: 0, count: 8192)
+                while true {
+                    let amount = Darwin.read(sourceFD, &buffer, buffer.count)
+                    if amount > 0 {
+                        do {
+                            try writeAll(Data(buffer.prefix(amount)), to: destinationFD)
+                        } catch {
+                            _ = Darwin.shutdown(destinationFD, SHUT_WR)
+                            return
+                        }
+                        continue
+                    }
+                    if amount == 0 {
+                        _ = Darwin.shutdown(destinationFD, SHUT_WR)
+                        return
+                    }
+                    if errno == EINTR {
+                        continue
+                    }
+                    _ = Darwin.shutdown(destinationFD, SHUT_WR)
+                    return
+                }
+            }
+        }
+
+        pump(from: clientFD, to: upstreamFD)
+        pump(from: upstreamFD, to: clientFD)
+        group.wait()
+    }
+
     private func gatewayCommandErrorPayload(for error: Error) -> (code: String, message: String) {
         switch error {
         case ControlHarnessGatewayDeviceRegistryError.invalidDeviceID:
+            return ("invalid_argument", error.localizedDescription)
+        case ControlHarnessGatewayRouteRegistryError.invalidDesktopID,
+             ControlHarnessGatewayRouteRegistryError.invalidUpstreamHost,
+             ControlHarnessGatewayRouteRegistryError.invalidUpstreamPort,
+             ControlHarnessGatewayRouteRegistryError.nonLoopbackUpstreamHost,
+             ControlHarnessGatewayRouteRegistryError.upstreamProbeFailed,
+             ControlHarnessGatewayRouteRegistryError.upstreamDesktopIDMismatch:
             return ("invalid_argument", error.localizedDescription)
         case ControlHarnessGatewayDeviceRegistryError.deviceNotFound,
              ControlHarnessAuthError.deviceNotFound:
@@ -987,7 +1822,14 @@ final class ControlHarnessGateway {
 
     private func requiredScope(for request: ControlHarnessRequest) -> ControlHarnessAuthScope? {
         switch request.command {
-        case "snapshot", "agent.runtime.snapshot", "read-terminal", "events.subscribe":
+        case "snapshot",
+            "agent.runtime.snapshot",
+            "read-terminal",
+            "events.subscribe",
+            "terminal.stream.open",
+            "terminal.stream.ack",
+            "terminal.snapshot.v2",
+            "terminal.semantic.v2":
             return .observe
         case "new-tab",
             "close-tab",
@@ -1005,6 +1847,7 @@ final class ControlHarnessGateway {
             "agent.runtime.schedule.update",
             "agent.runtime.schedule.cancel",
             "send-text",
+            "send-key",
             "run-command",
             "close-terminal":
             return .mutate
@@ -1073,7 +1916,25 @@ final class ControlHarnessGateway {
             try operation()
             return
         }
+        guard shouldReserveSessionSlot(for: request) else {
+            try operation()
+            return
+        }
         guard sessionRegistry.acquire(identity: sessionIdentity) else {
+            if shouldReplaceSupersededSubscription(for: request),
+               closeOldestActiveSubscription(identity: sessionIdentity, command: request.command) {
+                let deadline = Date().addingTimeInterval(0.35)
+                repeat {
+                    if sessionRegistry.acquire(identity: sessionIdentity) {
+                        defer {
+                            sessionRegistry.release(identity: sessionIdentity)
+                        }
+                        try operation()
+                        return
+                    }
+                    Thread.sleep(forTimeInterval: 0.01)
+                } while Date() < deadline
+            }
             try responseWriter(ControlHarnessResponse(
                 requestID: request.requestID,
                 status: "error",
@@ -1091,15 +1952,35 @@ final class ControlHarnessGateway {
         try operation()
     }
 
+    private func shouldReplaceSupersededSubscription(for request: ControlHarnessRequest) -> Bool {
+        switch request.command {
+        case "events.subscribe", "terminal.stream.open":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func shouldReserveSessionSlot(for request: ControlHarnessRequest) -> Bool {
+        // Session caps are intended to guard long-lived streams only.
+        // One-shot requests (snapshot/read/input/ack/etc.) should not consume
+        // the same concurrency budget, otherwise refresh and typing can fail
+        // while an observe stream is active.
+        request.commandKind == .subscription
+    }
+
     private func registerActiveStream(
         clientSession: ControlHarnessGatewayClientSession,
         clientFD: Int32,
+        command: String,
         sessionIdentity: String?
     ) -> UUID {
         let streamID = UUID()
         lifecycleQueue.sync {
             activeStreams[streamID] = ActiveStream(
                 sessionIdentity: sessionIdentity,
+                command: command,
+                startedAt: Date(),
                 close: {
                     clientSession.close()
                     _ = Darwin.shutdown(clientFD, SHUT_RDWR)
@@ -1134,6 +2015,30 @@ final class ControlHarnessGateway {
             (activeStreamIDsByIdentity[identity] ?? []).compactMap { activeStreams[$0]?.close }
         }
         closures.forEach { $0() }
+    }
+
+    private func closeOldestActiveSubscription(identity: String, command: String) -> Bool {
+        let closure = lifecycleQueue.sync { () -> (@Sendable () -> Void)? in
+            let matchingStreamIDs = (activeStreamIDsByIdentity[identity] ?? []).filter { streamID in
+                activeStreams[streamID]?.command == command
+            }
+            guard let streamID = matchingStreamIDs.min(by: { lhs, rhs in
+                guard let lhsStream = activeStreams[lhs], let rhsStream = activeStreams[rhs] else {
+                    return false
+                }
+                return lhsStream.startedAt < rhsStream.startedAt
+            }),
+            let stream = activeStreams[streamID] else {
+                return nil
+            }
+            return stream.close
+        }
+
+        guard let closure else {
+            return false
+        }
+        closure()
+        return true
     }
 
     private func waitForSessionDrain(identity: String, timeoutSeconds: TimeInterval = 1.0) {
@@ -1173,6 +2078,7 @@ final class ControlHarnessGateway {
 
     private func streamSubscription(
         _ envelope: ControlHarnessSubscriptionEnvelope,
+        command: String,
         to clientFD: Int32,
         transport: String,
         closeReason: String,
@@ -1185,6 +2091,7 @@ final class ControlHarnessGateway {
         let activeStreamID = registerActiveStream(
             clientSession: clientSession,
             clientFD: clientFD,
+            command: command,
             sessionIdentity: sessionIdentity
         )
         performanceMonitor?.recordGatewayStreamOpened(transport: transport)
@@ -1228,6 +2135,7 @@ final class ControlHarnessGateway {
 
     private func streamWebSocketSubscription(
         _ envelope: ControlHarnessSubscriptionEnvelope,
+        command: String,
         to clientFD: Int32,
         transport: String,
         closeReason: String,
@@ -1240,6 +2148,7 @@ final class ControlHarnessGateway {
         let activeStreamID = registerActiveStream(
             clientSession: clientSession,
             clientFD: clientFD,
+            command: command,
             sessionIdentity: sessionIdentity
         )
         performanceMonitor?.recordGatewayStreamOpened(transport: transport)
@@ -1316,7 +2225,9 @@ final class ControlHarnessGateway {
             return true
         }
         if count > 0 {
-            return true
+            // Readable bytes only mean the peer sent data (for example ping/control
+            // frames). This is not a disconnect signal.
+            return false
         }
         switch errno {
         case EAGAIN, EWOULDBLOCK:
@@ -1487,6 +2398,68 @@ final class ControlHarnessGateway {
         }
     }
 
+    private static func connectTCP(host: String, port: UInt16) throws -> Int32 {
+        let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+
+        do {
+            var timeout = timeval(tv_sec: 2, tv_usec: 0)
+            let timeoutSize = socklen_t(MemoryLayout<timeval>.size)
+            guard setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, timeoutSize) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            guard setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, timeoutSize) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+
+            var address = sockaddr_in()
+            address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            address.sin_family = sa_family_t(AF_INET)
+            address.sin_port = port.bigEndian
+            let parseResult = withUnsafeMutablePointer(to: &address.sin_addr) {
+                inet_pton(AF_INET, host, UnsafeMutableRawPointer($0).assumingMemoryBound(to: Int8.self))
+            }
+            guard parseResult == 1 else {
+                throw POSIXError(.EADDRNOTAVAIL)
+            }
+
+            let connectResult = withUnsafePointer(to: &address) { pointer in
+                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                }
+            }
+            guard connectResult == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+
+            return fd
+        } catch {
+            Darwin.close(fd)
+            throw error
+        }
+    }
+
+    private static func localProbeHost(from host: String) -> String {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if trimmed.isEmpty || trimmed == "0.0.0.0" || trimmed == "*" || trimmed == "::" || trimmed == "[::]" {
+            return "127.0.0.1"
+        }
+        if trimmed.contains(":") {
+            return "127.0.0.1"
+        }
+        return trimmed
+    }
+
+    private static func isLoopbackHost(_ host: String) -> Bool {
+        let normalized = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "127.0.0.1"
+            || normalized == "localhost"
+            || normalized == "::1"
+            || normalized == "[::1]"
+    }
+
     private static func portConflictRecoveryCandidates(startingAt requestedPort: UInt16) -> [UInt16] {
         guard requestedPort < UInt16.max else { return [] }
 
@@ -1517,6 +2490,19 @@ final class ControlHarnessGateway {
         }
     }
 
+    private static func setNoDelay(_ fd: Int32) throws {
+        var enabled: Int32 = 1
+        guard setsockopt(
+            fd,
+            IPPROTO_TCP,
+            TCP_NODELAY,
+            &enabled,
+            socklen_t(MemoryLayout<Int32>.size)
+        ) == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+    }
+
     private static func readAll(from fd: Int32) throws -> Data {
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 4096)
@@ -1539,17 +2525,45 @@ final class ControlHarnessGateway {
 
     private static func looksLikeWebSocketHandshake(_ fd: Int32) throws -> Bool {
         var buffer = [UInt8](repeating: 0, count: 4)
-        let count = Darwin.recv(fd, &buffer, buffer.count, MSG_PEEK)
-        if count == -1 {
-            if errno == EINTR {
-                return try looksLikeWebSocketHandshake(fd)
+        let deadline = DispatchTime.now().uptimeNanoseconds + 250_000_000
+
+        while true {
+            let count = Darwin.recv(fd, &buffer, buffer.count, MSG_PEEK | MSG_DONTWAIT)
+            if count == -1 {
+                if errno == EINTR {
+                    continue
+                }
+                if errno == EAGAIN || errno == EWOULDBLOCK {
+                    if DispatchTime.now().uptimeNanoseconds >= deadline {
+                        return false
+                    }
+                    usleep(1_000)
+                    continue
+                }
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
-            throw POSIXError(.init(rawValue: errno) ?? .EIO)
-        }
-        guard count >= 3 else {
+            if count == 0 {
+                return false
+            }
+
+            let prefix = String(decoding: buffer.prefix(count), as: UTF8.self)
+            if prefix.hasPrefix("GET ") {
+                return true
+            }
+
+            // Reverse tunnels can fragment the handshake verb and initially
+            // deliver only "G", "GE", or "GET". Wait briefly before falling
+            // back to the raw JSON request path to avoid false negatives.
+            if (prefix == "G" || prefix == "GE" || prefix == "GET"),
+               DispatchTime.now().uptimeNanoseconds < deadline {
+                usleep(1_000)
+                continue
+            }
+
             return false
         }
-        return String(bytes: buffer.prefix(count), encoding: .utf8)?.hasPrefix("GET ") == true
+
+
     }
 
     private static func readHTTPHeaders(from fd: Int32) throws -> (headers: Data, remainder: Data) {
@@ -1603,6 +2617,28 @@ final class ControlHarnessGateway {
         throw ControlHarnessGatewayError.invalidWebSocketHandshake
     }
 
+    private static func parseRequestedDesktopID(fromWebSocketHandshake handshake: Data) -> String? {
+        guard let request = String(data: handshake, encoding: .utf8),
+              let firstLine = request.components(separatedBy: "\r\n").first else {
+            return nil
+        }
+        let parts = firstLine.split(separator: " ", omittingEmptySubsequences: true)
+        guard parts.count >= 2 else {
+            return nil
+        }
+
+        let requestTarget = String(parts[1])
+        guard let components = URLComponents(string: "http://localhost\(requestTarget)"),
+              let desktopID = components.queryItems?
+                .first(where: { $0.name == "desktop_id" })?
+                .value?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              desktopID.isEmpty == false else {
+            return nil
+        }
+        return desktopID
+    }
+
     private static func webSocketHandshakeResponse(for key: String) -> Data {
         let acceptSeed = Data("\(key)258EAFA5-E914-47DA-95CA-C5AB0DC85B11".utf8)
         let digest = Insecure.SHA1.hash(data: acceptSeed)
@@ -1614,6 +2650,14 @@ final class ControlHarnessGateway {
             "Sec-WebSocket-Accept: \(accept)\r\n" +
             "\r\n"
         return Data(response.utf8)
+    }
+
+    private static func httpNotFoundResponse() -> Data {
+        Data("HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n".utf8)
+    }
+
+    private static func httpBadGatewayResponse() -> Data {
+        Data("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n".utf8)
     }
 
     private static func readWebSocketFrame(
@@ -1813,6 +2857,7 @@ private final class ControlHarnessGatewayRateLimiter {
 
     private struct IdentityCounters {
         var command = WindowCounter()
+        var input = WindowCounter()
         var snapshot = WindowCounter()
         var resync = WindowCounter()
         var lastSeenMinuteWindow: Int64 = 0
@@ -1820,6 +2865,7 @@ private final class ControlHarnessGatewayRateLimiter {
 
     private enum Category {
         case command
+        case input
         case snapshot
         case resync
     }
@@ -1849,14 +2895,21 @@ private final class ControlHarnessGatewayRateLimiter {
         queue.sync {
             let minuteWindow = Int64(now().timeIntervalSince1970 / 60.0)
             pruneIdentitiesLocked(currentMinuteWindow: minuteWindow)
-            guard globalCounter.allow(limit: configuration.maxGlobalRequestsPerMinute, minuteWindow: minuteWindow) else {
-                return .deny(
-                    errorCode: "rate_limited",
-                    errorMessage: "Gateway global request rate limit exceeded"
-                )
+
+            let resolvedCategory = category(for: request)
+            if shouldApplyGlobalLimit(for: request, category: resolvedCategory) {
+                guard globalCounter.allow(
+                    limit: configuration.maxGlobalRequestsPerMinute,
+                    minuteWindow: minuteWindow
+                ) else {
+                    return .deny(
+                        errorCode: "rate_limited",
+                        errorMessage: "Gateway global request rate limit exceeded"
+                    )
+                }
             }
 
-            guard let category = category(for: request) else {
+            guard let category = resolvedCategory else {
                 return .allow
             }
 
@@ -1872,6 +2925,12 @@ private final class ControlHarnessGatewayRateLimiter {
                     minuteWindow: minuteWindow
                 )
                 errorMessage = "Gateway command rate limit exceeded"
+            case .input:
+                allowed = counters.input.allow(
+                    limit: configuration.maxInputEventsPerMinute,
+                    minuteWindow: minuteWindow
+                )
+                errorMessage = "Gateway input rate limit exceeded"
             case .snapshot:
                 allowed = counters.snapshot.allow(
                     limit: configuration.maxSnapshotRequestsPerMinute,
@@ -1898,6 +2957,26 @@ private final class ControlHarnessGatewayRateLimiter {
 
             return .allow
         }
+    }
+
+    private func shouldApplyGlobalLimit(
+        for request: ControlHarnessRequest,
+        category: Category?
+    ) -> Bool {
+        // terminal.stream.ack is a high-frequency flow-control signal. Applying
+        // the global low-frequency guard to ACK traffic causes false positives
+        // in realtime sessions under healthy throughput.
+        if request.command == "terminal.stream.ack" {
+            return false
+        }
+
+        // Input and resync paths already have category-specific budgets and can
+        // legitimately be high-frequency in SSH-like interactive sessions.
+        if category == .input || category == .resync {
+            return false
+        }
+
+        return true
     }
 
     private func pruneIdentitiesLocked(currentMinuteWindow: Int64) {
@@ -1948,14 +3027,23 @@ private final class ControlHarnessGatewayRateLimiter {
     }
 
     private func category(for request: ControlHarnessRequest) -> Category? {
+        let readMode = request.mode?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
         switch request.command {
-        case "send-text", "run-command", "close-terminal", "new-tab", "close-tab", "rename-tab":
+        case "send-text", "send-key":
+            return .input
+        case "run-command", "close-terminal", "new-tab", "close-tab", "rename-tab":
             return .command
-        case "snapshot":
+        case "snapshot", "terminal.snapshot.v2", "terminal.semantic.v2":
             return .snapshot
-        case "read-terminal" where request.mode == "snapshot":
+        case "read-terminal" where readMode == "delta":
+            return .resync
+        case "read-terminal":
+            // read-terminal defaults to snapshot mode when mode is omitted, so
+            // limiter categorization must mirror core read semantics.
             return .snapshot
-        case "events.subscribe":
+        case "events.subscribe", "terminal.stream.open":
             return .resync
         default:
             return nil

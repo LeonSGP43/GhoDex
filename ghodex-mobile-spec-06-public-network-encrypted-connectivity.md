@@ -8,6 +8,7 @@ Status: Completed
 This spec implements the smallest public-network slice that fits the current repo:
 
 - support a stored public `wss://` endpoint for an already-paired desktop
+- support first-pair QR bootstrap metadata so mobile can start pairing through relay when available
 - add an application-layer encrypted gateway frame wrapper for public transport
 - keep existing LAN `ws://host:port` behavior unchanged
 - reuse existing token auth, `since_sequence`, and `frame_id` resume semantics
@@ -34,7 +35,9 @@ After this spec:
 
 - pairing exchange can optionally return a durable `public_endpoint`
 - pairing exchange can optionally return a per-binding `transport_shared_secret`
+- pairing QR can optionally include relay bootstrap metadata (`public_endpoint` plus preferred transport mode)
 - mobile stores those values alongside the current desktop binding
+- first-time QR pairing can attempt relay first when QR metadata prefers relay, then fall back to LAN when needed
 - mobile uses `wss://` public transport when `transportMode === 'relay'`
 - public transport frames wrap the existing gateway request/response/event JSON inside an encrypted payload
 - desktop decrypts `gateway.encrypted` requests, handles the inner request normally, and encrypts the response/event payloads back to mobile
@@ -64,6 +67,19 @@ Compatibility rules:
 
 - old mobile clients ignore the new fields
 - new mobile clients stay on LAN mode if either field is missing
+
+### Pairing QR relay-bootstrap additions
+
+Optional QR fields:
+
+- `public_endpoint`
+- `preferred_transport` or `transport_mode`
+
+Compatibility rules:
+
+- older mobile clients still parse `host`, `port`, and `pairing_code`
+- newer mobile clients can choose relay-first pairing when `public_endpoint` is a valid `wss://` endpoint
+- relay-first pairing must keep a LAN retry path for mixed desktop/network environments
 
 ### Mobile stored session additions
 
@@ -131,6 +147,8 @@ Before implementation:
 - add mobile unit tests for URL resolution and encrypted frame wrapping/unwrapping
 - add desktop unit tests for encrypted request/envelope encode-decode round trips
 - extend session-storage tests for `publicEndpoint` and `transportSharedSecret` persistence/reset behavior if needed during implementation
+- add QR parser tests for relay bootstrap fields and backward compatibility
+- add pairing-attempt ordering tests to lock relay-first plus LAN fallback semantics
 
 After implementation:
 
@@ -148,11 +166,19 @@ Completed in this worktree on 2026-03-26:
 - desktop control-harness auth now issues and persists a per-token `transport_shared_secret`, migrates older persisted tokens forward by synthesizing the missing secret during decode, and uses that secret to decrypt inbound relay requests plus encrypt outbound responses/events
 - desktop gateway configuration now accepts an optional `GHODEX_CONTROL_HARNESS_GATEWAY_PUBLIC_ENDPOINT` / `publicEndpoint` and publishes relay metadata during pairing/token issue flows only when that endpoint resolves to a valid `wss://` URL
 
+Extended in this worktree on 2026-03-27:
+
+- desktop pairing QR payloads now include optional `public_endpoint` plus `preferred_transport`, so first-time pairing can bootstrap relay without waiting for a prior LAN exchange
+- mobile QR parsing now preserves those relay bootstrap fields with backward compatibility for legacy payloads
+- mobile QR pairing now executes deterministic relay/LAN attempt ordering (relay-first when preferred or implied by valid `public_endpoint`, with automatic LAN fallback before surfacing failure)
+
 Verified with:
 
 - `cd happy-client && yarn test sources/ghodex/routes.spec.ts sources/sync/settings.spec.ts sources/ghodex/transport.spec.ts`
 - `cd happy-client && yarn typecheck`
+- `cd happy-client && yarn test sources/ghodex/pairingQr.spec.ts sources/ghodex/gateway.spec.ts sources/ghodex/transport.spec.ts`
 - `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -derivedDataPath /tmp/ghodex-spec06-focused-deriveddata -destination 'platform=macOS' -skip-testing:GhosttyUITests -only-testing:GhosttyTests/ControlHarnessTests/authExpiresPairingCodesAndPersistsIssuedTokens -only-testing:GhosttyTests/ControlHarnessTests/authPairingExchangeReturnsStableDesktopIdentity -only-testing:GhosttyTests/ControlHarnessTests/authRestoresDesktopIdentityAcrossReload -only-testing:GhosttyTests/ControlHarnessTests/gatewaySecureChannelRoundTripsEncryptedRequest -only-testing:GhosttyTests/ControlHarnessTests/gatewaySecureChannelRoundTripsEncryptedEnvelope -only-testing:GhosttyTests/ControlHarnessTests/gatewayPairingLifecycleIssuesRotatesAndRevokesTokens -only-testing:GhosttyTests/ControlHarnessTests/gatewayPairingLifecyclePublishesRelayMetadataWhenPublicEndpointIsConfigured test`
+- `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -derivedDataPath /tmp/ghodex-relay-qr-deriveddata -destination 'platform=macOS' -skip-testing:GhosttyUITests CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build-for-testing`
 
 Environment note:
 

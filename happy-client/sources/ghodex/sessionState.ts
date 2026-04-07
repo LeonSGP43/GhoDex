@@ -77,9 +77,21 @@ export function applyPairingExchangeToSession(
 ): StoredSession {
     const normalizedPublicEndpoint = exchange.publicEndpoint?.trim() ?? '';
     const normalizedTransportSharedSecret = exchange.transportSharedSecret?.trim() ?? '';
+    const normalizedDesktopID = exchange.desktopId?.trim()
+        || exchange.preferredDesktopId?.trim()
+        || base.desktopId.trim()
+        || base.preferredDesktopId.trim()
+        || '';
+    const normalizedPreferredDesktopID = exchange.preferredDesktopId?.trim()
+        || exchange.desktopId?.trim()
+        || base.preferredDesktopId.trim()
+        || base.desktopId.trim()
+        || normalizedDesktopID;
+    const relayRoutingDesktopID = normalizedDesktopID || normalizedPreferredDesktopID;
     const shouldUseRelay = exchange.transportMode === 'relay'
         && normalizedPublicEndpoint.length > 0
-        && normalizedTransportSharedSecret.length > 0;
+        && normalizedTransportSharedSecret.length > 0
+        && relayRoutingDesktopID.length > 0;
 
     return {
         ...base,
@@ -89,9 +101,9 @@ export function applyPairingExchangeToSession(
         authToken: exchange.authToken,
         tokenId: exchange.tokenId ?? '',
         scopes: [...exchange.scopes],
-        desktopId: exchange.desktopId ?? base.desktopId,
+        desktopId: relayRoutingDesktopID,
         desktopLabel: exchange.desktopLabel ?? base.desktopLabel,
-        preferredDesktopId: exchange.preferredDesktopId ?? exchange.desktopId ?? base.preferredDesktopId,
+        preferredDesktopId: normalizedPreferredDesktopID,
         transportMode: shouldUseRelay ? 'relay' : 'lan',
         publicEndpoint: shouldUseRelay ? normalizedPublicEndpoint : '',
         transportSharedSecret: shouldUseRelay ? normalizedTransportSharedSecret : '',

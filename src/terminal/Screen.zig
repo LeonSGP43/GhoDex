@@ -15,6 +15,7 @@ const Selection = @import("Selection.zig");
 const PageList = @import("PageList.zig");
 const StringMap = @import("StringMap.zig");
 const ScreenFormatter = @import("formatter.zig").ScreenFormatter;
+const ScreenFormat = @import("formatter.zig").Format;
 const osc = @import("osc.zig");
 const pagepkg = @import("page.zig");
 const point = @import("point.zig");
@@ -2430,6 +2431,9 @@ pub const SelectionString = struct {
     /// If true, trim whitespace around the selection.
     trim: bool = true,
 
+    /// Output format for the selection content.
+    emit: ScreenFormat = .plain,
+
     /// If non-null, a stringmap will be written here. This will use
     /// the same allocator as the call to selectionString. The string will
     /// be duplicated here and in the return value so both must be freed.
@@ -2458,7 +2462,7 @@ pub fn selectionString(
     var formatter: ScreenFormatter = .init(
         self,
         .{
-            .emit = .plain,
+            .emit = opts.emit,
             .unwrap = true,
             .trim = opts.trim,
         },
@@ -8729,6 +8733,41 @@ test "Screen: selectionString basic" {
         const expected = "2EFGH\n3IJ";
         try testing.expectEqualStrings(expected, contents);
     }
+}
+
+test "Screen: selectionString emit vt preserves ansi styling" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var s = try init(alloc, .{ .cols = 10, .rows = 2, .max_scrollback = 0 });
+    defer s.deinit();
+    try s.setAttribute(.{ .@"256_fg" = 1 });
+    try s.testWriteString("red");
+    try s.setAttribute(.{ .reset_fg = {} });
+
+    const sel = Selection.init(
+        s.pages.pin(.{ .screen = .{ .x = 0, .y = 0 } }).?,
+        s.pages.pin(.{ .screen = .{ .x = 2, .y = 0 } }).?,
+        false,
+    );
+
+    const plain_contents = try s.selectionString(alloc, .{
+        .sel = sel,
+        .trim = true,
+        .emit = .plain,
+    });
+    defer alloc.free(plain_contents);
+    try testing.expectEqualStrings("red", plain_contents);
+
+    const vt_contents = try s.selectionString(alloc, .{
+        .sel = sel,
+        .trim = true,
+        .emit = .vt,
+    });
+    defer alloc.free(vt_contents);
+    try testing.expect(std.mem.indexOf(u8, vt_contents, "\x1b[38;5;1m") != null);
+    try testing.expect(std.mem.indexOf(u8, vt_contents, "red") != null);
+    try testing.expect(std.mem.endsWith(u8, vt_contents, "\x1b[0m"));
 }
 
 test "Screen: selectionString start outside of written area" {

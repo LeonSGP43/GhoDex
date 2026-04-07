@@ -1,5 +1,9 @@
 type ScreenKey = 'device' | 'workspace';
-type ReconnectReason = 'subscription_drop' | 'subscription_open_failed';
+type ReconnectReason =
+    | 'subscription_drop'
+    | 'subscription_open_failed'
+    | 'terminal_stream_drop'
+    | 'terminal_stream_open_failed';
 
 type GhoDexObservabilitySnapshot = {
     launch: {

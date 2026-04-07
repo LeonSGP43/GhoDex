@@ -1,6 +1,39 @@
-import type { TerminalChangedRow, TerminalReadResult } from './types';
+import type {
+    TerminalChangedRow,
+    TerminalReadResult,
+    TerminalSemanticDefaultReadResult,
+    TerminalSnapshotV2Result,
+    TerminalStreamChunkRecord,
+} from './types';
 
 type TerminalDeltaBaseView = Pick<TerminalReadResult, 'terminalId' | 'frameId' | 'truncated'>;
+type TerminalStreamBaseView = Pick<TerminalReadResult, 'terminalId' | 'frameId' | 'content' | 'lastSequence'>;
+
+interface TerminalStreamAckAccumulatorInput {
+    pendingBytes: number;
+    incomingBytes: number;
+    batchBytes: number;
+}
+
+interface TerminalStreamAckRetryDelayInput {
+    attempt: number;
+    elapsedMs: number;
+    maxAttempts: number;
+    maxWindowMs: number;
+    baseDelayMs: number;
+    maxDelayMs: number;
+}
+
+export interface TerminalAutomationReadResult {
+    source: 'semantic' | 'snapshot';
+    terminalId: string;
+    generation: number;
+    scope: string;
+    extractedAt: string | null;
+    promptDetected: boolean | null;
+    lines: string[];
+    text: string;
+}
 
 export function applyTerminalDelta(content: string, changedRows: TerminalChangedRow[]): string | null {
     if (changedRows.length === 0) {
@@ -81,4 +114,230 @@ export function shouldFallbackToTerminalSnapshot(input: {
         || (!input.result.hasChanges && input.result.frameId === input.requestedSinceFrameId);
 
     return !lineageMatches || (input.result.hasChanges && input.result.changedRows.length === 0);
+}
+
+export function mapSnapshotV2ToTerminalReadResult(
+    snapshot: TerminalSnapshotV2Result,
+    previous: Pick<TerminalReadResult, 'terminalId' | 'frameId'> | null,
+): TerminalReadResult {
+    const splitLines = snapshot.content.split('\n');
+    const totalLines = snapshot.content.length === 0 ? 0 : splitLines.length;
+    const frameChanged = !previous
+        || previous.terminalId !== snapshot.terminalId
+        || previous.frameId !== snapshot.frameId;
+    const hasChanges = frameChanged;
+
+    return {
+        terminalId: snapshot.terminalId,
+        generation: snapshot.generation,
+        scope: snapshot.scope,
+        mode: 'snapshot',
+        contentKind: 'snapshot',
+        consistency: `fresh_${snapshot.scope}`,
+        capturedAt: snapshot.capturedAt,
+        cacheAgeMs: snapshot.cacheAgeMs,
+        lastSequence: 0,
+        frameId: snapshot.frameId,
+        parentFrameId: snapshot.parentFrameId,
+        hasChanges,
+        deltaKind: hasChanges ? 'reset' : 'none',
+        deltaText: hasChanges ? snapshot.content : null,
+        changedRows: [],
+        totalLines,
+        returnedLines: totalLines,
+        truncated: false,
+        nextCursor: null,
+        observedWriteId: null,
+        readAfterReady: null,
+        content: snapshot.content,
+    };
+}
+
+function splitTerminalText(text: string): string[] {
+    if (!text) {
+        return [];
+    }
+    return text.split('\n');
+}
+
+export function mapTerminalSemanticDefaultToAutomationRead(
+    read: TerminalSemanticDefaultReadResult,
+): TerminalAutomationReadResult {
+    if (read.kind === 'semantic') {
+        const text = read.result.exactText;
+        return {
+            source: 'semantic',
+            terminalId: read.result.terminalId,
+            generation: read.result.generation,
+            scope: read.result.scope,
+            extractedAt: read.result.extractedAt,
+            promptDetected: read.result.promptDetected,
+            lines: read.result.logicalLines.length ? read.result.logicalLines : splitTerminalText(text),
+            text,
+        };
+    }
+
+    return {
+        source: 'snapshot',
+        terminalId: read.result.terminalId,
+        generation: read.result.generation,
+        scope: read.result.scope,
+        extractedAt: read.result.capturedAt,
+        promptDetected: null,
+        lines: splitTerminalText(read.result.content),
+        text: read.result.content,
+    };
+}
+
+export function resolveTerminalStreamAckRetryDelay(input: TerminalStreamAckRetryDelayInput): number | null {
+    if (input.attempt < 1) {
+        return null;
+    }
+
+    if (input.attempt > input.maxAttempts || input.elapsedMs > input.maxWindowMs) {
+        return null;
+    }
+
+    const rawDelay = input.baseDelayMs * (2 ** (input.attempt - 1));
+    return Math.min(rawDelay, input.maxDelayMs);
+}
+
+function countTerminalLines(content: string): number {
+    if (!content) {
+        return 0;
+    }
+    return content.split('\n').length;
+}
+
+function streamChunkHasFrameChange(
+    chunk: TerminalStreamChunkRecord,
+    previous: TerminalStreamBaseView | null,
+): boolean {
+    return !previous
+        || previous.terminalId !== chunk.terminalId
+        || previous.frameId !== chunk.frameId;
+}
+
+export function mapTerminalStreamChunkToTerminalReadResult(
+    chunk: TerminalStreamChunkRecord,
+    previous: TerminalStreamBaseView | null,
+): TerminalReadResult | null {
+    const isSnapshotLike = chunk.deltaKind === 'reset' || chunk.deltaKind === 'snapshot';
+
+    if (isSnapshotLike) {
+        const totalLines = countTerminalLines(chunk.content);
+        return {
+            terminalId: chunk.terminalId,
+            generation: chunk.generation,
+            scope: 'visible',
+            mode: 'snapshot',
+            contentKind: 'snapshot',
+            consistency: 'stream_live',
+            capturedAt: null,
+            cacheAgeMs: 0,
+            lastSequence: previous?.lastSequence ?? 0,
+            frameId: chunk.frameId,
+            parentFrameId: chunk.parentFrameId,
+            hasChanges: streamChunkHasFrameChange(chunk, previous),
+            deltaKind: chunk.deltaKind,
+            deltaText: chunk.content,
+            changedRows: [],
+            totalLines,
+            returnedLines: totalLines,
+            truncated: false,
+            nextCursor: null,
+            observedWriteId: null,
+            readAfterReady: null,
+            content: chunk.content,
+        };
+    }
+
+    if (!previous || previous.terminalId !== chunk.terminalId) {
+        return null;
+    }
+
+    if (
+        chunk.parentFrameId
+        && previous.frameId
+        && chunk.parentFrameId !== previous.frameId
+        && chunk.frameId !== previous.frameId
+    ) {
+        return null;
+    }
+
+    if (!chunk.changedRows.length) {
+        const unchangedFrame = chunk.frameId === previous.frameId;
+        if (!unchangedFrame) {
+            return null;
+        }
+        const totalLines = countTerminalLines(previous.content);
+        return {
+            terminalId: chunk.terminalId,
+            generation: chunk.generation,
+            scope: 'visible',
+            mode: 'delta',
+            contentKind: 'delta',
+            consistency: 'stream_live',
+            capturedAt: null,
+            cacheAgeMs: 0,
+            lastSequence: previous.lastSequence,
+            frameId: chunk.frameId,
+            parentFrameId: chunk.parentFrameId,
+            hasChanges: false,
+            deltaKind: chunk.deltaKind,
+            deltaText: chunk.content || null,
+            changedRows: [],
+            totalLines,
+            returnedLines: totalLines,
+            truncated: false,
+            nextCursor: null,
+            observedWriteId: null,
+            readAfterReady: null,
+            content: previous.content,
+        };
+    }
+
+    const merged = applyTerminalDelta(previous.content, chunk.changedRows);
+    if (merged === null) {
+        return null;
+    }
+
+    const totalLines = countTerminalLines(merged);
+    return {
+        terminalId: chunk.terminalId,
+        generation: chunk.generation,
+        scope: 'visible',
+        mode: 'delta',
+        contentKind: 'delta',
+        consistency: 'stream_live',
+        capturedAt: null,
+        cacheAgeMs: 0,
+        lastSequence: previous.lastSequence,
+        frameId: chunk.frameId,
+        parentFrameId: chunk.parentFrameId,
+        hasChanges: true,
+        deltaKind: chunk.deltaKind,
+        deltaText: chunk.content || null,
+        changedRows: chunk.changedRows,
+        totalLines,
+        returnedLines: totalLines,
+        truncated: false,
+        nextCursor: null,
+        observedWriteId: null,
+        readAfterReady: null,
+        content: merged,
+    };
+}
+
+export function accumulateTerminalStreamAckBytes(
+    input: TerminalStreamAckAccumulatorInput,
+): { pendingBytes: number; shouldFlush: boolean } {
+    const pendingBytes = Math.max(0, Math.trunc(input.pendingBytes));
+    const incomingBytes = Math.max(0, Math.trunc(input.incomingBytes));
+    const batchBytes = Math.max(1, Math.trunc(input.batchBytes));
+    const nextPendingBytes = pendingBytes + incomingBytes;
+    return {
+        pendingBytes: nextPendingBytes,
+        shouldFlush: nextPendingBytes >= batchBytes,
+    };
 }

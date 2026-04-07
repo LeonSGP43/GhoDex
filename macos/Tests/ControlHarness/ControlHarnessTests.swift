@@ -50,6 +50,30 @@ private struct ControlHarnessDecodedEventRecord: Decodable {
     }
 }
 
+private struct ControlHarnessDecodedTerminalChunkRecord: Decodable {
+    let streamKind: String
+    let streamID: String
+    let terminalID: String
+    let generation: Int
+    let frameID: String
+    let parentFrameID: String?
+    let deltaKind: String
+    let content: String
+    let contentLength: Int
+
+    enum CodingKeys: String, CodingKey {
+        case streamKind = "stream_kind"
+        case streamID = "stream_id"
+        case terminalID = "terminal_id"
+        case generation
+        case frameID = "frame_id"
+        case parentFrameID = "parent_frame_id"
+        case deltaKind = "delta_kind"
+        case content
+        case contentLength = "content_length"
+    }
+}
+
 private struct ControlHarnessHandshakeEnvelope: Decodable {
     let requestID: String
     let status: String
@@ -239,6 +263,30 @@ private struct ControlAgentRuntimeSchedulePayload: Decodable {
     let schedule: AgentRuntimeSchedule
 }
 
+private struct ControlHarnessDesktopRouteListPayload: Decodable {
+    let desktops: [ControlHarnessDesktopRoutePayload]
+}
+
+private struct ControlHarnessDesktopRoutePayload: Decodable {
+    let desktopID: String
+    let desktopLabel: String
+    let upstreamHost: String
+    let upstreamPort: UInt16
+    let source: String
+
+    enum CodingKeys: String, CodingKey {
+        case desktopID = "desktop_id"
+        case desktopLabel = "desktop_label"
+        case upstreamHost = "upstream_host"
+        case upstreamPort = "upstream_port"
+        case source
+    }
+}
+
+private struct ControlHarnessProbePayload: Decodable {
+    let instance: String
+}
+
 private enum ControlHarnessSocketSupport {
     static func connect(to path: String) throws -> Int32 {
         let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
@@ -303,16 +351,11 @@ private enum ControlHarnessSocketSupport {
         }
     }
 
-    static func readLine(
-        from fd: Int32,
-        timeoutSeconds: TimeInterval = 30.0
-    ) throws -> Data {
+    static func readLine(from fd: Int32) throws -> Data {
         var data = Data()
         var byte: UInt8 = 0
-        let deadline = Date().addingTimeInterval(timeoutSeconds)
-
-        while Date() < deadline {
-            let amount = Darwin.recv(fd, &byte, 1, MSG_DONTWAIT)
+        while true {
+            let amount = Darwin.read(fd, &byte, 1)
             if amount == 1 {
                 data.append(byte)
                 if byte == 0x0A {
@@ -323,24 +366,16 @@ private enum ControlHarnessSocketSupport {
             if amount == 0 {
                 return data
             }
-            switch errno {
-            case EINTR:
+            if errno == EINTR {
                 continue
-            case EAGAIN, EWOULDBLOCK:
-                usleep(10_000)
-                continue
-            default:
-                throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
-
-        throw POSIXError(.ETIMEDOUT)
     }
 
     static func readAll(from fd: Int32) throws -> Data {
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 4096)
-        let deadline = Date().addingTimeInterval(30.0)
         while true {
             let amount = Darwin.read(fd, &buffer, buffer.count)
             if amount > 0 {
@@ -353,45 +388,8 @@ private enum ControlHarnessSocketSupport {
             if errno == EINTR {
                 continue
             }
-            if errno == EAGAIN || errno == EWOULDBLOCK {
-                if Date() >= deadline {
-                    throw POSIXError(.ETIMEDOUT)
-                }
-                usleep(10_000)
-                continue
-            }
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
-    }
-
-    static func waitForDisconnect(
-        from fd: Int32,
-        timeoutSeconds: TimeInterval
-    ) -> Bool {
-        let deadline = Date().addingTimeInterval(timeoutSeconds)
-        var probe: UInt8 = 0
-
-        while Date() < deadline {
-            let count = Darwin.recv(fd, &probe, 1, MSG_PEEK | MSG_DONTWAIT)
-            if count == 0 {
-                return true
-            }
-            if count > 0 {
-                return false
-            }
-
-            switch errno {
-            case EAGAIN, EWOULDBLOCK:
-                usleep(20_000)
-                continue
-            case EINTR:
-                continue
-            default:
-                return true
-            }
-        }
-
-        return false
     }
 
     static func connectTCP(host: String, port: UInt16) throws -> Int32 {
@@ -441,7 +439,6 @@ private enum ControlHarnessSocketSupport {
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 1024)
         let terminator = Data("\r\n\r\n".utf8)
-        let deadline = Date().addingTimeInterval(30.0)
 
         while data.range(of: terminator) == nil {
             let amount = Darwin.read(fd, &buffer, buffer.count)
@@ -455,13 +452,6 @@ private enum ControlHarnessSocketSupport {
             if errno == EINTR {
                 continue
             }
-            if errno == EAGAIN || errno == EWOULDBLOCK {
-                if Date() >= deadline {
-                    throw POSIXError(.ETIMEDOUT)
-                }
-                usleep(10_000)
-                continue
-            }
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
 
@@ -473,7 +463,8 @@ private enum ControlHarnessSocketSupport {
 
     static func performWebSocketHandshake(
         host: String,
-        port: UInt16
+        port: UInt16,
+        path: String = "/control-harness"
     ) throws -> Int32 {
         let fd = try connectTCP(host: host, port: port)
 
@@ -481,7 +472,7 @@ private enum ControlHarnessSocketSupport {
             let key = Data("test-websocket-key".utf8).base64EncodedString()
             let request = Data(
                 (
-                    "GET /control-harness HTTP/1.1\r\n" +
+                    "GET \(path) HTTP/1.1\r\n" +
                     "Host: \(host):\(port)\r\n" +
                     "Upgrade: websocket\r\n" +
                     "Connection: Upgrade\r\n" +
@@ -510,9 +501,13 @@ private enum ControlHarnessSocketSupport {
         }
     }
 
-    static func writeWebSocketTextFrame(_ payload: Data, to fd: Int32) throws {
+    private static func writeWebSocketFrame(
+        opcode: UInt8,
+        payload: Data,
+        to fd: Int32
+    ) throws {
         var frame = Data()
-        frame.append(0x81)
+        frame.append(0x80 | (opcode & 0x0F))
 
         let payloadLength = payload.count
         if payloadLength <= 125 {
@@ -535,6 +530,14 @@ private enum ControlHarnessSocketSupport {
         }
 
         try writeAll(frame, to: fd)
+    }
+
+    static func writeWebSocketTextFrame(_ payload: Data, to fd: Int32) throws {
+        try writeWebSocketFrame(opcode: 0x1, payload: payload, to: fd)
+    }
+
+    static func writeWebSocketPingFrame(_ payload: Data, to fd: Int32) throws {
+        try writeWebSocketFrame(opcode: 0x9, payload: payload, to: fd)
     }
 
     static func readWebSocketTextFrame(from fd: Int32) throws -> Data {
@@ -560,7 +563,6 @@ private enum ControlHarnessSocketSupport {
 
     static func readExactly(_ count: Int, from fd: Int32) throws -> Data {
         var data = Data(count: count)
-        let deadline = Date().addingTimeInterval(30.0)
         try data.withUnsafeMutableBytes { rawBuffer in
             guard let baseAddress = rawBuffer.baseAddress else { return }
             var offset = 0
@@ -576,13 +578,6 @@ private enum ControlHarnessSocketSupport {
                 if errno == EINTR {
                     continue
                 }
-                if errno == EAGAIN || errno == EWOULDBLOCK {
-                    if Date() >= deadline {
-                        throw POSIXError(.ETIMEDOUT)
-                    }
-                    usleep(10_000)
-                    continue
-                }
                 throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
         }
@@ -590,7 +585,6 @@ private enum ControlHarnessSocketSupport {
     }
 }
 
-@Suite(.serialized)
 struct ControlHarnessTests {
     @Test func gatewayConfigurationDefaultsToDisabledLoopback() {
         let configuration = ControlHarnessGateway.Configuration.environment([:])
@@ -604,8 +598,10 @@ struct ControlHarnessTests {
         #expect(configuration.maxConcurrentSessionsPerIdentity == 2)
         #expect(configuration.maxGlobalRequestsPerMinute == 240)
         #expect(configuration.maxCommandsPerMinute == 60)
+        #expect(configuration.maxInputEventsPerMinute == 6_000)
         #expect(configuration.maxSnapshotRequestsPerMinute == 30)
-        #expect(configuration.maxResyncAttemptsPerMinute == 30)
+        #expect(configuration.maxResyncAttemptsPerMinute == 1_800)
+        #expect(configuration.semanticProfile == .generic)
     }
 
     @Test func gatewayConfigurationParsesEnvironmentOverrides() {
@@ -619,8 +615,10 @@ struct ControlHarnessTests {
             "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_CONCURRENT_SESSIONS_PER_IDENTITY": "3",
             "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_GLOBAL_REQUESTS_PER_MINUTE": "120",
             "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_COMMANDS_PER_MINUTE": "40",
+            "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_INPUT_EVENTS_PER_MINUTE": "480",
             "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_SNAPSHOT_REQUESTS_PER_MINUTE": "20",
             "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_RESYNC_ATTEMPTS_PER_MINUTE": "10",
+            "GHODEX_CONTROL_HARNESS_SEMANTIC_PROFILE": "codex",
         ])
 
         #expect(configuration.isEnabled == true)
@@ -632,8 +630,10 @@ struct ControlHarnessTests {
         #expect(configuration.maxConcurrentSessionsPerIdentity == 3)
         #expect(configuration.maxGlobalRequestsPerMinute == 120)
         #expect(configuration.maxCommandsPerMinute == 40)
+        #expect(configuration.maxInputEventsPerMinute == 480)
         #expect(configuration.maxSnapshotRequestsPerMinute == 20)
         #expect(configuration.maxResyncAttemptsPerMinute == 10)
+        #expect(configuration.semanticProfile == .codex)
     }
 
     @Test func gatewayConfigurationClampsOrIgnoresInvalidEnvironmentOverrides() {
@@ -646,8 +646,10 @@ struct ControlHarnessTests {
             "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_CONCURRENT_SESSIONS_PER_IDENTITY": "0",
             "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_GLOBAL_REQUESTS_PER_MINUTE": "0",
             "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_COMMANDS_PER_MINUTE": "-1",
+            "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_INPUT_EVENTS_PER_MINUTE": "0",
             "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_SNAPSHOT_REQUESTS_PER_MINUTE": "0",
             "GHODEX_CONTROL_HARNESS_GATEWAY_MAX_RESYNC_ATTEMPTS_PER_MINUTE": "-1",
+            "GHODEX_CONTROL_HARNESS_SEMANTIC_PROFILE": "unknown",
         ])
 
         #expect(configuration.isEnabled == false)
@@ -658,8 +660,10 @@ struct ControlHarnessTests {
         #expect(configuration.maxConcurrentSessionsPerIdentity == 1)
         #expect(configuration.maxGlobalRequestsPerMinute == 1)
         #expect(configuration.maxCommandsPerMinute == 1)
+        #expect(configuration.maxInputEventsPerMinute == 1)
         #expect(configuration.maxSnapshotRequestsPerMinute == 1)
         #expect(configuration.maxResyncAttemptsPerMinute == 1)
+        #expect(configuration.semanticProfile == .generic)
     }
 
     @MainActor
@@ -714,6 +718,25 @@ struct ControlHarnessTests {
         }
     }
 
+    private final class DataBufferBox: @unchecked Sendable {
+        private let queue = DispatchQueue(label: "ControlHarnessTests.DataBufferBox")
+        private var storage: [Data] = []
+
+        func append(_ data: Data) {
+            queue.sync {
+                storage.append(data)
+            }
+        }
+
+        func snapshot() -> [Data] {
+            queue.sync { storage }
+        }
+
+        func count() -> Int {
+            queue.sync { storage.count }
+        }
+    }
+
     private final class MutableClock: @unchecked Sendable {
         private let queue = DispatchQueue(label: "ControlHarnessTests.MutableClock")
         private var currentDate: Date
@@ -739,6 +762,7 @@ struct ControlHarnessTests {
         var unavailableTerminals: Set<UUID> = []
         var managedStates: [UUID: AITerminalManagedState] = [:]
         var sentInputs: [(terminalID: UUID, text: String)] = []
+        var sentKeys: [(terminalID: UUID, key: String)] = []
         var executedCommands: [(terminalID: UUID, command: String)] = []
         var closedTerminals: [UUID] = []
         var readableSurfaces: [UUID: any ControlHarnessReadableSurface] = [:]
@@ -779,6 +803,15 @@ struct ControlHarnessTests {
             return true
         }
 
+        override func controlHarnessSendKey(_ key: String, to terminalID: UUID) -> Bool {
+            guard !unavailableTerminals.contains(terminalID) else {
+                return false
+            }
+
+            sentKeys.append((terminalID, key))
+            return true
+        }
+
         override func controlHarnessRunCommand(_ command: String, to terminalID: UUID) -> Bool {
             guard !unavailableTerminals.contains(terminalID) else {
                 return false
@@ -812,9 +845,11 @@ struct ControlHarnessTests {
         bundleID: String = "ghdx.tests.control-harness",
         readStore: ControlHarnessTerminalReadStore? = nil,
         readAfterWriteStore: ControlHarnessReadAfterWriteStore? = nil,
+        streamStore: ControlHarnessTerminalStreamStore? = nil,
         sampleStore: ControlHarnessSampleStore? = nil,
         surfaceResolver: (@MainActor (UUID) -> (any ControlHarnessReadableSurface)?)? = nil,
         samplingActivityResolver: (@MainActor (UUID) -> ControlHarnessSamplingActivityClass?)? = nil,
+        streamPollInterval: TimeInterval = 0.08,
         now: @escaping @MainActor () -> Date = Date.init
     ) -> (
         core: ControlHarnessCore,
@@ -826,6 +861,7 @@ struct ControlHarnessTests {
         let resolvedSampleStore = sampleStore ?? ControlHarnessSampleStore()
         let resolvedReadStore = readStore ?? ControlHarnessTerminalReadStore()
         let resolvedReadAfterWriteStore = readAfterWriteStore ?? ControlHarnessReadAfterWriteStore()
+        let resolvedStreamStore = streamStore ?? ControlHarnessTerminalStreamStore()
         let core = ControlHarnessCore(
             appDelegate: delegate,
             auditLogger: ControlHarnessAuditLogger(bundleID: bundleID),
@@ -834,9 +870,11 @@ struct ControlHarnessTests {
             idempotencyStore: ControlHarnessIdempotencyStore(),
             readStore: resolvedReadStore,
             readAfterWriteStore: resolvedReadAfterWriteStore,
+            streamStore: resolvedStreamStore,
             sampleStore: resolvedSampleStore,
             surfaceResolver: surfaceResolver,
             samplingActivityResolver: samplingActivityResolver,
+            streamPollInterval: streamPollInterval,
             now: now
         )
         return (core, eventHub, generations)
@@ -911,6 +949,26 @@ struct ControlHarnessTests {
         #expect(status.desktopLabel == issued.desktopLabel)
         #expect(status.preferredDesktopID == issued.preferredDesktopID)
         #expect(status.transportMode == issued.transportMode)
+    }
+
+    @Test func authDesktopIdentityResultMatchesPairingIdentity() async throws {
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let storageURL = tempDirectory.appendingPathComponent("auth.json", isDirectory: false)
+        let auth = ControlHarnessAuth(
+            storageURL: storageURL,
+            configuration: .init(pairingCodeTTLSeconds: 5, tokenTTLSeconds: 60)
+        )
+
+        let identity = await auth.desktopIdentityResult()
+        let pairing = try await auth.beginPairing(
+            client: "android-desktop-id",
+            requestedScopes: ["observe"]
+        )
+        let issued = try await auth.exchangePairingCode(pairing.pairingCode)
+
+        #expect(identity.desktopID == issued.desktopID)
+        #expect(identity.desktopLabel == issued.desktopLabel)
     }
 
     @Test func authRestoresDesktopIdentityAcrossReload() async throws {
@@ -1060,6 +1118,47 @@ struct ControlHarnessTests {
         return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
+    private func makeHarnessRequest(
+        requestID: String,
+        command: String,
+        terminalID: String? = nil,
+        scope: String? = nil,
+        mode: String? = nil,
+        streamID: String? = nil,
+        ackBytes: Int? = nil,
+        lastAckSequence: Int64? = nil
+    ) -> ControlHarnessRequest {
+        ControlHarnessRequest(
+            requestID: requestID,
+            protocolVersion: nil,
+            command: command,
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: terminalID,
+            scope: scope,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: mode,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            streamID: streamID,
+            ackBytes: ackBytes,
+            lastAckSequence: lastAckSequence
+        )
+    }
+
     private func writeAcceptanceArtifact(_ filename: String, data: Data) throws {
         let url = URL(fileURLWithPath: "/tmp").appendingPathComponent(filename, isDirectory: false)
         try data.write(to: url, options: .atomic)
@@ -1092,7 +1191,7 @@ struct ControlHarnessTests {
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
 
-        let data = try ControlHarnessSocketSupport.readLine(from: clientFD)
+        let data = try ControlHarnessSocketSupport.readAll(from: clientFD)
         let envelope = try JSONDecoder().decode(
             ControlHarnessResponseResultEnvelope<ControlHarnessPerformanceSnapshot>.self,
             from: data
@@ -1103,7 +1202,7 @@ struct ControlHarnessTests {
 
     @Test @MainActor func runCommandUsesDedicatedExecutionPath() {
         let delegate = RecordingAppDelegate()
-        let bundleID = makeBundleID("ghdx.tests.run-command")
+        let bundleID = "ghdx.tests.run-command"
         let (core, _, _) = makeCore(delegate: delegate, bundleID: bundleID)
         let terminalID = UUID()
         let request = ControlHarnessRequest(
@@ -1181,6 +1280,50 @@ struct ControlHarnessTests {
         #expect(delegate.sentInputs.isEmpty)
         #expect(eventHub.currentSequence() == 0)
         #expect(generations.currentTerminalGeneration(for: terminalID.uuidString) == 1)
+    }
+
+    @Test @MainActor func sendKeyUsesDedicatedKeyExecutionPath() throws {
+        let delegate = RecordingAppDelegate()
+        let bundleID = "ghdx.tests.send-key"
+        let (core, _, _) = makeCore(delegate: delegate, bundleID: bundleID)
+        let terminalID = UUID()
+        let request = ControlHarnessRequest(
+            requestID: "req-send-key",
+            protocolVersion: nil,
+            command: "send-key",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: terminalID.uuidString,
+            scope: nil,
+            text: nil,
+            terminalKey: "enter",
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil
+        )
+
+        let response = core.handle(request, socketPath: "/tmp/control-harness-test.sock")
+        let json = try responseJSON(response)
+        let result = try #require(json["result"] as? [String: Any])
+
+        #expect(response.status == "ok")
+        #expect(result["operation"] as? String == "send-key")
+        #expect(delegate.sentKeys.count == 1)
+        #expect(delegate.sentKeys[0].terminalID == terminalID)
+        #expect(delegate.sentKeys[0].key == "enter")
     }
 
     @Test @MainActor func runCommandRejectsNewlineOnlyPayloadWithoutEmittingEvents() {
@@ -1340,6 +1483,416 @@ struct ControlHarnessTests {
         #expect(sampleStore.sample(for: terminalID.uuidString, scope: "visible") == nil)
         #expect(eventHub.currentSequence() == 1)
         #expect(generations.currentTerminalGeneration(for: terminalID.uuidString) == 2)
+    }
+
+    @Test @MainActor func terminalStreamOpenRejectsInvalidTerminalID() {
+        let (core, eventHub, _) = makeCore(bundleID: "ghdx.tests.terminal-stream-open-invalid")
+        let request = makeHarnessRequest(
+            requestID: "req-terminal-stream-open-invalid",
+            command: "terminal.stream.open",
+            terminalID: "not-a-uuid"
+        )
+
+        let envelope = core.handleSubscription(request, socketPath: "/tmp/control-harness-test.sock")
+
+        #expect(envelope.response.status == "error")
+        #expect(envelope.response.errorCode == "invalid_argument")
+        #expect(envelope.response.errorMessage == "terminal.stream.open requires valid terminal_id")
+        #expect(envelope.session == nil)
+        #expect(eventHub.currentSequence() == 0)
+    }
+
+    @Test @MainActor func terminalStreamOpenReturnsSubscriptionMetadata() throws {
+        let terminalID = UUID()
+        let surface = RecordingReadableSurface(id: terminalID)
+        let (core, eventHub, generations) = makeCore(
+            bundleID: "ghdx.tests.terminal-stream-open-success",
+            surfaceResolver: { requestedID in
+                requestedID == terminalID ? surface : nil
+            }
+        )
+        let request = makeHarnessRequest(
+            requestID: "req-terminal-stream-open-success",
+            command: "terminal.stream.open",
+            terminalID: terminalID.uuidString
+        )
+
+        let envelope = core.handleSubscription(request, socketPath: "/tmp/control-harness-test.sock")
+        let json = try responseJSON(envelope.response)
+        let result = try #require(json["result"] as? [String: Any])
+        let streamID = try #require(result["stream_id"] as? String)
+
+        #expect(envelope.response.status == "ok")
+        #expect(result["terminal_id"] as? String == terminalID.uuidString)
+        #expect(result["generation"] as? Int == 1)
+        #expect(result["mode"] as? String == "stream")
+        #expect(result["protocol_version"] as? String == ControlHarnessCore.protocolVersion)
+        #expect(result["last_sequence"] as? Int64 == eventHub.currentSequence())
+        #expect(result["unacked_bytes"] as? Int == 0)
+        #expect(result["flow_paused"] as? Bool == false)
+        #expect((result["high_watermark_bytes"] as? Int ?? 0) > 0)
+        #expect((result["low_watermark_bytes"] as? Int ?? -1) >= 0)
+        #expect(streamID.hasPrefix("strm_"))
+        #expect(generations.currentTerminalGeneration(for: terminalID.uuidString) == 1)
+    }
+
+    @Test @MainActor func terminalStreamOpenProvidesSeedReplayChunk() throws {
+        let terminalID = UUID()
+        let surface = RecordingReadableSurface(id: terminalID)
+        surface.visibleReads = [
+            (refresh: true, content: "seed-line", cacheAgeMs: 0),
+        ]
+        let (core, _, _) = makeCore(
+            bundleID: "ghdx.tests.terminal-stream-seed-replay",
+            surfaceResolver: { requestedID in
+                requestedID == terminalID ? surface : nil
+            }
+        )
+        let envelope = core.handleSubscription(
+            makeHarnessRequest(
+                requestID: "req-terminal-stream-seed-replay",
+                command: "terminal.stream.open",
+                terminalID: terminalID.uuidString
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        )
+        let session = try #require(envelope.session)
+        let firstReplay = try #require(session.replayEvents.first)
+        let decoded = try JSONDecoder().decode(ControlHarnessDecodedTerminalChunkRecord.self, from: firstReplay)
+        let responseJSON = try responseJSON(envelope.response)
+        let responseResult = try #require(responseJSON["result"] as? [String: Any])
+        let streamID = try #require(responseResult["stream_id"] as? String)
+
+        #expect(decoded.streamKind == "terminal_chunk")
+        #expect(decoded.streamID == streamID)
+        #expect(decoded.terminalID == terminalID.uuidString)
+        #expect(decoded.deltaKind == "reset")
+        #expect(decoded.content == "seed-line")
+        #expect(decoded.contentLength == "seed-line".utf8.count)
+    }
+
+    @Test @MainActor func terminalStreamBackpressurePausesUntilAckResumesFlow() async throws {
+        let terminalID = UUID()
+        let surface = RecordingReadableSurface(id: terminalID)
+        let payloadA = String(repeating: "A", count: 96)
+        let payloadB = String(repeating: "B", count: 96)
+        let payloadC = String(repeating: "C", count: 96)
+        surface.visibleReads = [
+            (refresh: true, content: payloadA, cacheAgeMs: 0),
+            (refresh: true, content: payloadB, cacheAgeMs: 0),
+            (refresh: true, content: payloadC, cacheAgeMs: 0),
+        ]
+        let streamStore = ControlHarnessTerminalStreamStore(
+            maxTotalStreams: 8,
+            maxStreamsPerTerminal: 4,
+            highWatermarkBytes: 80,
+            lowWatermarkBytes: 20
+        )
+        let (core, _, _) = makeCore(
+            bundleID: "ghdx.tests.terminal-stream-backpressure",
+            streamStore: streamStore,
+            surfaceResolver: { requestedID in
+                requestedID == terminalID ? surface : nil
+            },
+            streamPollInterval: 0.05
+        )
+        let openEnvelope = core.handleSubscription(
+            makeHarnessRequest(
+                requestID: "req-terminal-stream-backpressure-open",
+                command: "terminal.stream.open",
+                terminalID: terminalID.uuidString
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        )
+        let session = try #require(openEnvelope.session)
+        let openJSON = try responseJSON(openEnvelope.response)
+        let openResult = try #require(openJSON["result"] as? [String: Any])
+        let streamID = try #require(openResult["stream_id"] as? String)
+
+        let liveSink = DataBufferBox()
+        let subscriberID = session.addSubscriber(
+            sink: { data in
+                liveSink.append(data)
+                return true
+            },
+            onFinish: {}
+        )
+        session.completeReplay()
+
+        try await Task.sleep(nanoseconds: 250_000_000)
+        let beforeAckCount = liveSink.count()
+        #expect(beforeAckCount == 1)
+
+        try await Task.sleep(nanoseconds: 250_000_000)
+        #expect(liveSink.count() == beforeAckCount)
+
+        let ackResponse = core.handle(
+            makeHarnessRequest(
+                requestID: "req-terminal-stream-backpressure-ack",
+                command: "terminal.stream.ack",
+                terminalID: terminalID.uuidString,
+                streamID: streamID,
+                ackBytes: 2_048
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        )
+        #expect(ackResponse.status == "ok")
+
+        try await Task.sleep(nanoseconds: 250_000_000)
+        #expect(liveSink.count() >= 2)
+
+        session.removeSubscriber(subscriberID)
+    }
+
+    @Test @MainActor func terminalStreamSessionCloseReleasesStreamState() throws {
+        let terminalID = UUID()
+        let surface = RecordingReadableSurface(id: terminalID)
+        surface.visibleReads = [
+            (refresh: true, content: "seed", cacheAgeMs: 0),
+        ]
+        let (core, _, _) = makeCore(
+            bundleID: "ghdx.tests.terminal-stream-session-close",
+            surfaceResolver: { requestedID in
+                requestedID == terminalID ? surface : nil
+            },
+            streamPollInterval: 0.05
+        )
+        let openEnvelope = core.handleSubscription(
+            makeHarnessRequest(
+                requestID: "req-terminal-stream-close-open",
+                command: "terminal.stream.open",
+                terminalID: terminalID.uuidString
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        )
+        let session = try #require(openEnvelope.session)
+        let openJSON = try responseJSON(openEnvelope.response)
+        let openResult = try #require(openJSON["result"] as? [String: Any])
+        let streamID = try #require(openResult["stream_id"] as? String)
+
+        let subscriberID = session.addSubscriber(
+            sink: { _ in true },
+            onFinish: {}
+        )
+        session.completeReplay()
+        session.removeSubscriber(subscriberID)
+
+        let ackAfterClose = core.handle(
+            makeHarnessRequest(
+                requestID: "req-terminal-stream-close-ack",
+                command: "terminal.stream.ack",
+                terminalID: terminalID.uuidString,
+                streamID: streamID,
+                ackBytes: 64
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        )
+        #expect(ackAfterClose.status == "error")
+        #expect(ackAfterClose.errorCode == "invalid_argument")
+        #expect(ackAfterClose.errorMessage == "No active stream exists for terminal_id=\(terminalID.uuidString)")
+    }
+
+    @Test @MainActor func terminalStreamAckRejectsMissingAckBytes() {
+        let terminalID = UUID()
+        let (core, eventHub, generations) = makeCore(bundleID: "ghdx.tests.terminal-stream-ack-invalid")
+        let request = makeHarnessRequest(
+            requestID: "req-terminal-stream-ack-invalid",
+            command: "terminal.stream.ack",
+            terminalID: terminalID.uuidString
+        )
+
+        let response = core.handle(request, socketPath: "/tmp/control-harness-test.sock")
+
+        #expect(response.status == "error")
+        #expect(response.errorCode == "invalid_argument")
+        #expect(response.errorMessage == "terminal.stream.ack requires ack_bytes > 0")
+        #expect(eventHub.currentSequence() == 0)
+        #expect(generations.currentTerminalGeneration(for: terminalID.uuidString) == 1)
+    }
+
+    @Test @MainActor func terminalStreamAckReturnsDeterministicState() throws {
+        let terminalID = UUID()
+        let surface = RecordingReadableSurface(id: terminalID)
+        let (core, _, generations) = makeCore(
+            bundleID: "ghdx.tests.terminal-stream-ack-success",
+            surfaceResolver: { requestedID in
+                requestedID == terminalID ? surface : nil
+            }
+        )
+        let openEnvelope = core.handleSubscription(
+            makeHarnessRequest(
+                requestID: "req-terminal-stream-open-before-ack",
+                command: "terminal.stream.open",
+                terminalID: terminalID.uuidString
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        )
+        let openJSON = try responseJSON(openEnvelope.response)
+        let openResult = try #require(openJSON["result"] as? [String: Any])
+        let streamID = try #require(openResult["stream_id"] as? String)
+
+        let ackResponse = core.handle(
+            makeHarnessRequest(
+                requestID: "req-terminal-stream-ack-success",
+                command: "terminal.stream.ack",
+                terminalID: terminalID.uuidString,
+                streamID: streamID,
+                ackBytes: 256,
+                lastAckSequence: 0
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        )
+        let ackJSON = try responseJSON(ackResponse)
+        let ackResult = try #require(ackJSON["result"] as? [String: Any])
+
+        #expect(ackResponse.status == "ok")
+        #expect(ackResult["terminal_id"] as? String == terminalID.uuidString)
+        #expect(ackResult["stream_id"] as? String == streamID)
+        #expect(ackResult["generation"] as? Int == 1)
+        #expect(ackResult["acknowledged_bytes"] as? Int == 0)
+        #expect(ackResult["remaining_unacked_bytes"] as? Int == 0)
+        #expect(ackResult["flow_paused"] as? Bool == false)
+        #expect(generations.currentTerminalGeneration(for: terminalID.uuidString) == 1)
+    }
+
+    @Test @MainActor func terminalSnapshotV2ReturnsAnsiContent() throws {
+        let terminalID = UUID()
+        let surface = RecordingReadableSurface(id: terminalID)
+        surface.visibleReads = [
+            (refresh: true, content: "\u{001B}[31mERR\u{001B}[0m\nok", cacheAgeMs: 9),
+        ]
+        let (core, _, generations) = makeCore(
+            bundleID: "ghdx.tests.terminal-snapshot-v2",
+            surfaceResolver: { requestedID in
+                requestedID == terminalID ? surface : nil
+            }
+        )
+        let request = makeHarnessRequest(
+            requestID: "req-terminal-snapshot-v2",
+            command: "terminal.snapshot.v2",
+            terminalID: terminalID.uuidString,
+            scope: "visible",
+            mode: "snapshot"
+        )
+
+        let response = core.handle(request, socketPath: "/tmp/control-harness-test.sock")
+        let json = try responseJSON(response)
+        let result = try #require(json["result"] as? [String: Any])
+
+        #expect(response.status == "ok")
+        #expect(result["terminal_id"] as? String == terminalID.uuidString)
+        #expect(result["generation"] as? Int == 1)
+        #expect(result["scope"] as? String == "visible")
+        #expect(result["snapshot_format"] as? String == "ansi_text")
+        #expect(result["content"] as? String == "\u{001B}[31mERR\u{001B}[0m\nok")
+        #expect((result["frame_id"] as? String)?.hasPrefix("frm_") == true)
+        #expect(generations.currentTerminalGeneration(for: terminalID.uuidString) == 1)
+    }
+
+    @Test @MainActor func terminalSemanticV2ExtractsLogicalLines() throws {
+        let terminalID = UUID()
+        let surface = RecordingReadableSurface(id: terminalID)
+        surface.visibleReads = [
+            (refresh: true, content: "$ ls\n- README.md\n- src\n$ ", cacheAgeMs: 0),
+        ]
+        let (core, _, generations) = makeCore(
+            bundleID: "ghdx.tests.terminal-semantic-v2",
+            surfaceResolver: { requestedID in
+                requestedID == terminalID ? surface : nil
+            }
+        )
+        let request = makeHarnessRequest(
+            requestID: "req-terminal-semantic-v2",
+            command: "terminal.semantic.v2",
+            terminalID: terminalID.uuidString,
+            scope: "visible",
+            mode: "snapshot"
+        )
+
+        let response = core.handle(request, socketPath: "/tmp/control-harness-test.sock")
+        let json = try responseJSON(response)
+        let result = try #require(json["result"] as? [String: Any])
+        let logicalLines = try #require(result["logical_lines"] as? [String])
+
+        #expect(response.status == "ok")
+        #expect(result["terminal_id"] as? String == terminalID.uuidString)
+        #expect(result["generation"] as? Int == 1)
+        #expect(result["scope"] as? String == "visible")
+        #expect(result["exact_text"] as? String == "$ ls\n- README.md\n- src\n$ ")
+        #expect(logicalLines == ["$ ls", "- README.md", "- src", "$ "])
+        #expect(result["prompt_detected"] as? Bool == true)
+        #expect(generations.currentTerminalGeneration(for: terminalID.uuidString) == 1)
+    }
+
+    @Test func controlHarnessSemanticProjectionPreservesExactTextAndPromptMetadata() {
+        let source = "$ ls\n- README.md\n- src\n$ "
+        let projection = controlHarnessSemanticProjection(from: source)
+
+        #expect(projection.exactText == source)
+        #expect(projection.logicalLines == ["$ ls", "- README.md", "- src", "$ "])
+        #expect(projection.promptDetected == true)
+    }
+
+    @Test func controlHarnessSemanticProjectionStripsAnsiNoiseInLogicalLines() {
+        let source = "$ \u{001B}[31mERR\u{001B}[0m\n$ "
+        let projection = controlHarnessSemanticProjection(from: source)
+
+        #expect(projection.exactText == source)
+        #expect(projection.logicalLines == ["$ ERR", "$ "])
+        #expect(projection.promptDetected == true)
+    }
+
+    @Test func controlHarnessSemanticProjectionCodexProfileKeepsAgentBulletsAsHardBreaks() {
+        let source = "Plan\n› Step A\n› Step B\n$ "
+        let generic = controlHarnessSemanticProjection(from: source, profile: .generic)
+        let codex = controlHarnessSemanticProjection(from: source, profile: .codex)
+
+        #expect(generic.logicalLines == ["Plan› Step A› Step B", "$ "])
+        #expect(codex.logicalLines == ["Plan", "› Step A", "› Step B", "$ "])
+    }
+
+    @Test @MainActor func readTerminalSnapshotCompatibilityUsesV2SnapshotCapturePath() throws {
+        let terminalID = UUID()
+        let surface = RecordingReadableSurface(id: terminalID)
+        surface.visibleReads = [
+            (refresh: true, content: "\u{001B}[31mERR\u{001B}[0m\nok", cacheAgeMs: 4),
+        ]
+        let (core, _, _) = makeCore(
+            bundleID: "ghdx.tests.read-terminal-compat-v2",
+            surfaceResolver: { requestedID in
+                requestedID == terminalID ? surface : nil
+            }
+        )
+
+        let compatResponse = core.handle(
+            makeHarnessRequest(
+                requestID: "req-read-terminal-compat-v2",
+                command: "read-terminal",
+                terminalID: terminalID.uuidString,
+                scope: "visible",
+                mode: "snapshot"
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        )
+        let compatJSON = try responseJSON(compatResponse)
+        let compatResult = try #require(compatJSON["result"] as? [String: Any])
+
+        let snapshotResponse = core.handle(
+            makeHarnessRequest(
+                requestID: "req-terminal-snapshot-v2-compat-check",
+                command: "terminal.snapshot.v2",
+                terminalID: terminalID.uuidString,
+                scope: "visible"
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        )
+        let snapshotJSON = try responseJSON(snapshotResponse)
+        let snapshotResult = try #require(snapshotJSON["result"] as? [String: Any])
+
+        #expect(compatResponse.status == "ok")
+        #expect(snapshotResponse.status == "ok")
+        #expect(compatResult["content"] as? String == snapshotResult["content"] as? String)
+        #expect(compatResult["frame_id"] as? String == snapshotResult["frame_id"] as? String)
     }
 
     @Test @MainActor func readTerminalRejectsInvalidCursorBeforeTouchingTheApp() {
@@ -1707,6 +2260,97 @@ struct ControlHarnessTests {
         #expect(changedRows.compactMap { $0["kind"] as? String } == ["update", "delete", "delete"])
     }
 
+    @Test @MainActor func readTerminalDeltaPreservesAnsiRowsForMobileRenderer() throws {
+        let terminalID = UUID()
+        let surface = RecordingReadableSurface(id: terminalID)
+        surface.visibleReads = [
+            (refresh: true, content: "\u{001B}[31mERR\u{001B}[0m\nok", cacheAgeMs: 0),
+            (refresh: true, content: "\u{001B}[32mOK\u{001B}[0m\nok", cacheAgeMs: 0),
+        ]
+
+        let (core, _, _) = makeCore(
+            bundleID: "ghdx.tests.read-delta-ansi-rows",
+            surfaceResolver: { requestedID in
+                requestedID == terminalID ? surface : nil
+            }
+        )
+
+        let baselineResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-read-ansi-baseline",
+                protocolVersion: nil,
+                command: "read-terminal",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: terminalID.uuidString,
+                scope: "visible",
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: "snapshot",
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        )
+        let baselineJSON = try responseJSON(baselineResponse)
+        let baselineResult = try #require(baselineJSON["result"] as? [String: Any])
+        let baselineFrameID = try #require(baselineResult["frame_id"] as? String)
+        #expect(baselineResult["content"] as? String == "\u{001B}[31mERR\u{001B}[0m\nok")
+
+        let deltaResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-read-ansi-delta",
+                protocolVersion: nil,
+                command: "read-terminal",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: terminalID.uuidString,
+                scope: "visible",
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: "delta",
+                sinceFrameID: baselineFrameID,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        )
+        let deltaJSON = try responseJSON(deltaResponse)
+        let deltaResult = try #require(deltaJSON["result"] as? [String: Any])
+        let changedRows = try #require(deltaResult["changed_rows"] as? [[String: Any]])
+        let firstChangedRow = try #require(changedRows.first)
+
+        #expect(deltaResult["delta_kind"] as? String == "rows")
+        #expect(changedRows.count == 1)
+        #expect(firstChangedRow["index"] as? Int == 0)
+        #expect(firstChangedRow["kind"] as? String == "update")
+        #expect(firstChangedRow["text"] as? String == "\u{001B}[32mOK\u{001B}[0m")
+        #expect(deltaResult["content"] as? String == "\u{001B}[32mOK\u{001B}[0m\nok")
+    }
+
     @Test @MainActor func readTerminalDeltaFallsBackToResetWhenSinceFrameWasEvicted() throws {
         let terminalID = UUID()
         let surface = RecordingReadableSurface(id: terminalID)
@@ -1715,7 +2359,6 @@ struct ControlHarnessTests {
             (refresh: true, content: "A\nB", cacheAgeMs: 0),
             (refresh: true, content: "A\nB\nC", cacheAgeMs: 0),
         ]
-        let clock = MutableClock(Date(timeIntervalSince1970: 10))
         let readStore = ControlHarnessTerminalReadStore(
             maxFramesPerKey: 1,
             maxTotalFrames: 16,
@@ -1727,8 +2370,7 @@ struct ControlHarnessTests {
             readStore: readStore,
             surfaceResolver: { requestedID in
                 requestedID == terminalID ? surface : nil
-            },
-            now: { clock.now() }
+            }
         )
 
         let firstResponse = core.handle(
@@ -1763,7 +2405,6 @@ struct ControlHarnessTests {
         let firstJSON = try responseJSON(firstResponse)
         let firstResult = try #require(firstJSON["result"] as? [String: Any])
         let firstFrameID = try #require(firstResult["frame_id"] as? String)
-        clock.advance(by: 1.0)
 
         _ = core.handle(
             ControlHarnessRequest(
@@ -1794,7 +2435,6 @@ struct ControlHarnessTests {
             ),
             socketPath: "/tmp/control-harness-test.sock"
         )
-        clock.advance(by: 1.0)
 
         let deltaResponse = core.handle(
             ControlHarnessRequest(
@@ -1860,6 +2500,213 @@ struct ControlHarnessTests {
         readinessStore.removeTerminal("terminal-a")
 
         #expect(readinessStore.debugEntryCount() == 1)
+    }
+
+    @Test func terminalStreamStoreSupportsOpenAckCloseLifecycle() {
+        let store = ControlHarnessTerminalStreamStore(
+            maxTotalStreams: 16,
+            maxStreamsPerTerminal: 4,
+            highWatermarkBytes: 1024,
+            lowWatermarkBytes: 128
+        )
+        let terminalID = "terminal-a"
+        let open = store.openStream(terminalID: terminalID, generation: 1)
+
+        #expect(open.streamID.hasPrefix("strm_"))
+        #expect(open.unackedBytes == 0)
+        #expect(open.flowPaused == false)
+        #expect(open.highWatermarkBytes == 1024)
+        #expect(open.lowWatermarkBytes == 128)
+
+        let ack = store.acknowledge(
+            terminalID: terminalID,
+            streamID: open.streamID,
+            ackBytes: 64
+        )
+        #expect(ack?.streamID == open.streamID)
+        #expect(ack?.ackedBytes == 0)
+        #expect(ack?.remainingUnackedBytes == 0)
+        #expect(ack?.flowPaused == false)
+
+        store.removeTerminal(terminalID)
+        let ackAfterClose = store.acknowledge(
+            terminalID: terminalID,
+            streamID: open.streamID,
+            ackBytes: 64
+        )
+        #expect(ackAfterClose == nil)
+    }
+
+    @Test func terminalStreamStoreRespectsPerTerminalAndGlobalBounds() {
+        let store = ControlHarnessTerminalStreamStore(
+            maxTotalStreams: 3,
+            maxStreamsPerTerminal: 2,
+            highWatermarkBytes: 512,
+            lowWatermarkBytes: 64
+        )
+        let terminalA = "terminal-a"
+        let terminalB = "terminal-b"
+
+        let streamA1 = store.openStream(terminalID: terminalA, generation: 1).streamID
+        let streamA2 = store.openStream(terminalID: terminalA, generation: 1).streamID
+        let streamA3 = store.openStream(terminalID: terminalA, generation: 1).streamID
+
+        // Per-terminal cap=2 should evict the oldest stream (A1).
+        #expect(store.acknowledge(terminalID: terminalA, streamID: streamA1, ackBytes: 1) == nil)
+        #expect(store.acknowledge(terminalID: terminalA, streamID: streamA2, ackBytes: 1)?.streamID == streamA2)
+        #expect(store.acknowledge(terminalID: terminalA, streamID: streamA3, ackBytes: 1)?.streamID == streamA3)
+
+        let streamB1 = store.openStream(terminalID: terminalB, generation: 1).streamID
+
+        // Global cap=3 keeps latest 3 streams total, so A2 should be evicted after opening B1.
+        #expect(store.acknowledge(terminalID: terminalA, streamID: streamA2, ackBytes: 1) == nil)
+        #expect(store.acknowledge(terminalID: terminalA, streamID: streamA3, ackBytes: 1)?.streamID == streamA3)
+        #expect(store.acknowledge(terminalID: terminalB, streamID: streamB1, ackBytes: 1)?.streamID == streamB1)
+    }
+
+    @Test func terminalStreamStorePausesAndResumesFlowAcrossWatermarks() {
+        let store = ControlHarnessTerminalStreamStore(
+            maxTotalStreams: 8,
+            maxStreamsPerTerminal: 4,
+            highWatermarkBytes: 100,
+            lowWatermarkBytes: 25
+        )
+        let terminalID = "terminal-flow"
+        let streamID = store.openStream(terminalID: terminalID, generation: 1).streamID
+
+        let firstProduce = store.produce(terminalID: terminalID, streamID: streamID, chunkBytes: 80)
+        #expect(firstProduce?.accepted == true)
+        #expect(firstProduce?.flowPaused == false)
+        #expect(firstProduce?.remainingUnackedBytes == 80)
+
+        let secondProduce = store.produce(terminalID: terminalID, streamID: streamID, chunkBytes: 40)
+        #expect(secondProduce?.accepted == true)
+        #expect(secondProduce?.flowPaused == true)
+        #expect(secondProduce?.remainingUnackedBytes == 120)
+
+        // Once paused, new chunks must be rejected until ACK drops below low watermark.
+        let pausedProduce = store.produce(terminalID: terminalID, streamID: streamID, chunkBytes: 10)
+        #expect(pausedProduce?.accepted == false)
+        #expect(pausedProduce?.producedBytes == 0)
+        #expect(pausedProduce?.flowPaused == true)
+
+        let partialAck = store.acknowledge(terminalID: terminalID, streamID: streamID, ackBytes: 70)
+        #expect(partialAck?.remainingUnackedBytes == 50)
+        #expect(partialAck?.flowPaused == true)
+
+        let fullResumeAck = store.acknowledge(terminalID: terminalID, streamID: streamID, ackBytes: 30)
+        #expect(fullResumeAck?.remainingUnackedBytes == 20)
+        #expect(fullResumeAck?.flowPaused == false)
+
+        let resumedProduce = store.produce(terminalID: terminalID, streamID: streamID, chunkBytes: 5)
+        #expect(resumedProduce?.accepted == true)
+        #expect(resumedProduce?.flowPaused == false)
+    }
+
+    @Test func terminalStreamStoreLongRunChurnRemainsBoundedAndReleasable() {
+        let store = ControlHarnessTerminalStreamStore(
+            maxTotalStreams: 6,
+            maxStreamsPerTerminal: 2,
+            highWatermarkBytes: 256,
+            lowWatermarkBytes: 64
+        )
+        let terminalIDs = (0..<12).map { "terminal-\($0)" }
+
+        for iteration in 0..<2_000 {
+            let terminalID = terminalIDs[iteration % terminalIDs.count]
+            let open = store.openStream(terminalID: terminalID, generation: 1 + (iteration % 3))
+            _ = store.produce(
+                terminalID: terminalID,
+                streamID: open.streamID,
+                chunkBytes: 96
+            )
+            if iteration % 3 == 0 {
+                _ = store.acknowledge(
+                    terminalID: terminalID,
+                    streamID: open.streamID,
+                    ackBytes: 48
+                )
+            }
+            if iteration % 5 == 0 {
+                _ = store.acknowledge(
+                    terminalID: terminalID,
+                    streamID: open.streamID,
+                    ackBytes: 4_096
+                )
+            }
+            if iteration % 11 == 0 {
+                let evictedTerminalID = terminalIDs[(iteration / 11) % terminalIDs.count]
+                store.removeTerminal(evictedTerminalID)
+            }
+
+            if iteration % 200 == 0 {
+                let snapshot = store.debugSnapshot()
+                #expect(snapshot.streamCount <= snapshot.maxTotalStreams)
+                #expect(snapshot.totalUnackedBytes >= 0)
+            }
+        }
+
+        let midSnapshot = store.debugSnapshot()
+        #expect(midSnapshot.streamCount <= midSnapshot.maxTotalStreams)
+        #expect(midSnapshot.pausedStreamCount <= midSnapshot.streamCount)
+
+        for terminalID in terminalIDs {
+            store.removeTerminal(terminalID)
+        }
+
+        let finalSnapshot = store.debugSnapshot()
+        #expect(finalSnapshot.streamCount == 0)
+        #expect(finalSnapshot.terminalCount == 0)
+        #expect(finalSnapshot.totalUnackedBytes == 0)
+    }
+
+    @Test @MainActor func closeTerminalAlsoClearsTerminalStreamState() throws {
+        let delegate = RecordingAppDelegate()
+        let terminalID = UUID()
+        let surface = RecordingReadableSurface(id: terminalID)
+        let (core, _, _) = makeCore(
+            delegate: delegate,
+            bundleID: "ghdx.tests.close-terminal-stream-cleanup",
+            surfaceResolver: { requestedID in
+                requestedID == terminalID ? surface : nil
+            }
+        )
+
+        let openResponse = core.handleSubscription(
+            makeHarnessRequest(
+                requestID: "req-stream-open-before-close",
+                command: "terminal.stream.open",
+                terminalID: terminalID.uuidString
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        ).response
+        let openJSON = try responseJSON(openResponse)
+        let openResult = try #require(openJSON["result"] as? [String: Any])
+        let streamID = try #require(openResult["stream_id"] as? String)
+
+        let closeResponse = core.handle(
+            makeHarnessRequest(
+                requestID: "req-close-terminal-stream-cleanup",
+                command: "close-terminal",
+                terminalID: terminalID.uuidString
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        )
+        #expect(closeResponse.status == "ok")
+
+        let ackAfterClose = core.handle(
+            makeHarnessRequest(
+                requestID: "req-stream-ack-after-close",
+                command: "terminal.stream.ack",
+                terminalID: terminalID.uuidString,
+                streamID: streamID,
+                ackBytes: 64
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        )
+        #expect(ackAfterClose.status == "error")
+        #expect(ackAfterClose.errorCode == "invalid_argument")
+        #expect(ackAfterClose.errorMessage == "No active stream exists for terminal_id=\(terminalID.uuidString)")
     }
 
     @Test @MainActor func readTerminalPrefersSampledStoreWithoutFreshRead() throws {
@@ -2204,9 +3051,9 @@ struct ControlHarnessTests {
         sampler.refreshAllNow(now: start.addingTimeInterval(1.0))
         sampler.refreshAllNow(now: start.addingTimeInterval(3.0))
 
-        #expect(surface.visibleReads.count == 2)
-        #expect(surface.screenReads.count == 1)
-        #expect(sampleStore.sample(for: terminalID.uuidString, scope: "visible")?.content == "visible-1")
+        #expect(surface.visibleReads.count == 0)
+        #expect(surface.screenReads.count == 0)
+        #expect(sampleStore.sample(for: terminalID.uuidString, scope: "visible")?.content == "visible-2")
         #expect(sampleStore.sample(for: terminalID.uuidString, scope: "screen")?.content == "screen-1")
     }
 
@@ -2472,7 +3319,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayTcpHandshakeReturnsStructuredResponse() async throws {
-        let bundleID = makeBundleID("ghdx.tests.gateway-tcp-handshake")
+        let bundleID = "ghdx.tests.gateway-tcp-handshake"
         let gateway = await MainActor.run {
             let (core, _, _) = makeCore(bundleID: bundleID)
             return ControlHarnessGateway(
@@ -2497,7 +3344,7 @@ struct ControlHarnessTests {
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
 
-        let responseData = try ControlHarnessSocketSupport.readLine(from: clientFD)
+        let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
         let envelope = try JSONDecoder().decode(ControlHarnessHandshakeEnvelope.self, from: responseData)
         #expect(envelope.status == "ok")
         #expect(envelope.requestID == "req-gateway-handshake")
@@ -2505,7 +3352,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayTcpRejectsUnauthorizedSnapshot() async throws {
-        let bundleID = makeBundleID("ghdx.tests.gateway-tcp-auth")
+        let bundleID = "ghdx.tests.gateway-tcp-auth"
         let gateway = await MainActor.run {
             let (core, _, _) = makeCore(bundleID: bundleID)
             let gateway = ControlHarnessGateway(
@@ -2538,7 +3385,7 @@ struct ControlHarnessTests {
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
 
-        let responseData = try ControlHarnessSocketSupport.readLine(from: clientFD)
+        let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
         let envelope = try JSONDecoder().decode(ControlHarnessResponseEnvelope.self, from: responseData)
         #expect(envelope.status == "error")
         #expect(envelope.requestID == "req-gateway-unauthorized")
@@ -2546,7 +3393,8 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayRecoversFromPortConflictBySelectingAnotherPort() async throws {
-        let primaryBundleID = makeBundleID("ghdx.tests.gateway-primary")
+        let requestedPort: UInt16 = 29527
+        let primaryBundleID = "ghdx.tests.gateway-primary"
         let primaryGateway = await MainActor.run {
             let (core, _, _) = makeCore(bundleID: primaryBundleID)
             return ControlHarnessGateway(
@@ -2554,7 +3402,7 @@ struct ControlHarnessTests {
                 configuration: .init(
                     isEnabled: true,
                     listenHost: "127.0.0.1",
-                    listenPort: 0,
+                    listenPort: requestedPort,
                     maxBufferedEvents: 16,
                     maxBufferedBytes: 4096
                 ),
@@ -2565,10 +3413,9 @@ struct ControlHarnessTests {
         }
         defer { primaryGateway.stop() }
         primaryGateway.startIfNeeded()
-        let requestedPort = try #require(primaryGateway.listenerPort)
         #expect(primaryGateway.listenerPort == requestedPort)
 
-        let fallbackBundleID = makeBundleID("ghdx.tests.gateway-fallback")
+        let fallbackBundleID = "ghdx.tests.gateway-fallback"
         let fallbackGateway = await MainActor.run {
             let (core, _, _) = makeCore(bundleID: fallbackBundleID)
             return ControlHarnessGateway(
@@ -2601,14 +3448,218 @@ struct ControlHarnessTests {
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
 
-        let responseData = try ControlHarnessSocketSupport.readLine(from: clientFD)
+        let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
         let envelope = try JSONDecoder().decode(ControlHarnessHandshakeEnvelope.self, from: responseData)
         #expect(envelope.status == "ok")
         #expect(envelope.requestID == "req-gateway-fallback")
     }
 
+    @Test func gatewayPortConflictRegistersPassiveDesktopRouteAndProxiesByDesktopID() async throws {
+        let requestedPort: UInt16 = 29537
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        let ownerStorageURL = tempDirectory.appendingPathComponent("owner-auth.json", isDirectory: false)
+        let passiveStorageURL = tempDirectory.appendingPathComponent("passive-auth.json", isDirectory: false)
+
+        let ownerGateway = await MainActor.run {
+            ControlHarnessGateway(
+                bundleID: "ghdx.tests.gateway-owner-route",
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: requestedPort,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096
+                ),
+                authManager: ControlHarnessAuth(
+                    storageURL: ownerStorageURL,
+                    configuration: .init(pairingCodeTTLSeconds: 60, tokenTTLSeconds: 300)
+                ),
+                requestHandler: { request, _ in
+                    .single(ControlHarnessResponse(
+                        requestID: request.requestID,
+                        status: "ok",
+                        result: AnyEncodable(["instance": "owner"]),
+                        errorCode: nil,
+                        errorMessage: nil
+                    ))
+                }
+            )
+        }
+        defer { ownerGateway.stop() }
+        ownerGateway.startIfNeeded()
+        #expect(ownerGateway.listenerPort == requestedPort)
+
+        let passiveGateway = await MainActor.run {
+            ControlHarnessGateway(
+                bundleID: "ghdx.tests.gateway-passive-route",
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: requestedPort,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096
+                ),
+                authManager: ControlHarnessAuth(
+                    storageURL: passiveStorageURL,
+                    configuration: .init(pairingCodeTTLSeconds: 60, tokenTTLSeconds: 300)
+                ),
+                requestHandler: { request, _ in
+                    .single(ControlHarnessResponse(
+                        requestID: request.requestID,
+                        status: "ok",
+                        result: AnyEncodable(["instance": "passive"]),
+                        errorCode: nil,
+                        errorMessage: nil
+                    ))
+                }
+            )
+        }
+        defer { passiveGateway.stop() }
+        passiveGateway.startIfNeeded()
+
+        let ownerPort = try #require(ownerGateway.listenerPort)
+        let passivePort = try #require(passiveGateway.listenerPort)
+        #expect(passivePort != requestedPort)
+
+        func requestTCP(_ payload: String) throws -> Data {
+            let fd = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: ownerPort)
+            defer { Darwin.close(fd) }
+            try ControlHarnessSocketSupport.writeAll(Data(payload.utf8), to: fd)
+            guard Darwin.shutdown(fd, SHUT_WR) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            return try ControlHarnessSocketSupport.readAll(from: fd)
+        }
+
+        let routeListData = try requestTCP(
+            #"{"request_id":"req-route-list","command":"gateway.desktops.list"}"#
+        )
+        let routeList = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessDesktopRouteListPayload>.self,
+            from: routeListData
+        )
+        let passiveRoute = try #require(
+            routeList.result?.desktops.first(where: { $0.source == "local_register" })
+        )
+        #expect(passiveRoute.upstreamHost == "127.0.0.1")
+        #expect(passiveRoute.upstreamPort == passivePort)
+
+        let routedTCPData = try requestTCP(
+            #"{"request_id":"req-route-proxy-tcp","command":"probe.instance","desktop_id":"\#(passiveRoute.desktopID)"}"#
+        )
+        let routedTCP = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessProbePayload>.self,
+            from: routedTCPData
+        )
+        #expect(routedTCP.status == "ok")
+        #expect(routedTCP.result?.instance == "passive")
+
+        let wsFD = try ControlHarnessSocketSupport.performWebSocketHandshake(
+            host: "127.0.0.1",
+            port: ownerPort,
+            path: "/control-harness?desktop_id=\(passiveRoute.desktopID)"
+        )
+        defer { Darwin.close(wsFD) }
+
+        try ControlHarnessSocketSupport.writeWebSocketTextFrame(
+            Data(#"{"request_id":"req-route-proxy-ws","command":"probe.instance"}"#.utf8),
+            to: wsFD
+        )
+        let routedWSData = try ControlHarnessSocketSupport.readWebSocketTextFrame(from: wsFD)
+        let routedWS = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessProbePayload>.self,
+            from: routedWSData
+        )
+        #expect(routedWS.status == "ok")
+        #expect(routedWS.result?.instance == "passive")
+
+        passiveGateway.stop()
+
+        let unreachableData = try requestTCP(
+            #"{"request_id":"req-route-proxy-after-stop","command":"probe.instance","desktop_id":"\#(passiveRoute.desktopID)"}"#
+        )
+        let unreachable = try JSONDecoder().decode(
+            ControlHarnessResponseEnvelope.self,
+            from: unreachableData
+        )
+        #expect(unreachable.status == "error")
+        #expect(unreachable.errorCode == "desktop_route_unreachable")
+
+        let routeListAfterEvictData = try requestTCP(
+            #"{"request_id":"req-route-list-after-evict","command":"gateway.desktops.list"}"#
+        )
+        let routeListAfterEvict = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessDesktopRouteListPayload>.self,
+            from: routeListAfterEvictData
+        )
+        #expect(
+            routeListAfterEvict.result?.desktops
+                .contains(where: { $0.desktopID == passiveRoute.desktopID && $0.source == "local_register" }) == false
+        )
+    }
+
+    @Test func gatewayDesktopRegisterRejectsUpstreamDesktopIdentityMismatch() async throws {
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        let storageURL = tempDirectory.appendingPathComponent("owner-auth.json", isDirectory: false)
+        let gateway = await MainActor.run {
+            ControlHarnessGateway(
+                bundleID: "ghdx.tests.gateway-route-mismatch",
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: 0,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096
+                ),
+                authManager: ControlHarnessAuth(
+                    storageURL: storageURL,
+                    configuration: .init(pairingCodeTTLSeconds: 60, tokenTTLSeconds: 300)
+                )
+            )
+        }
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+
+        func requestTCP(_ payload: String) throws -> Data {
+            let fd = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+            defer { Darwin.close(fd) }
+            try ControlHarnessSocketSupport.writeAll(Data(payload.utf8), to: fd)
+            guard Darwin.shutdown(fd, SHUT_WR) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            return try ControlHarnessSocketSupport.readAll(from: fd)
+        }
+
+        let mismatchRegisterData = try requestTCP(
+            #"{"request_id":"req-route-register-mismatch","command":"gateway.desktop.register","desktop_id":"desktop-other","desktop_label":"other","upstream_host":"127.0.0.1","upstream_port":\#(port)}"#
+        )
+        let mismatchRegister = try JSONDecoder().decode(
+            ControlHarnessResponseEnvelope.self,
+            from: mismatchRegisterData
+        )
+        #expect(mismatchRegister.status == "error")
+        #expect(mismatchRegister.errorCode == "invalid_argument")
+
+        let routeListData = try requestTCP(
+            #"{"request_id":"req-route-list-after-mismatch","command":"gateway.desktops.list"}"#
+        )
+        let routeList = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessDesktopRouteListPayload>.self,
+            from: routeListData
+        )
+        #expect(
+            routeList.result?.desktops
+                .contains(where: { $0.desktopID == "desktop-other" && $0.source == "local_register" }) == false
+        )
+    }
+
     @Test func gatewayMetricsReturnsPerformanceSnapshot() async throws {
-        let bundleID = makeBundleID("ghdx.tests.gateway-metrics")
+        let bundleID = "ghdx.tests.gateway-metrics"
         let performanceMonitor = ControlHarnessPerformanceMonitor()
         performanceMonitor.recordSamplerTick(
             targetCount: 3,
@@ -2663,7 +3714,7 @@ struct ControlHarnessTests {
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
 
-        let responseData = try ControlHarnessSocketSupport.readLine(from: clientFD)
+        let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
         let envelope = try JSONDecoder().decode(
             ControlHarnessResponseResultEnvelope<ControlHarnessPerformanceSnapshot>.self,
             from: responseData
@@ -2689,7 +3740,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayMetricsResetClearsRollingWindow() async throws {
-        let bundleID = makeBundleID("ghdx.tests.gateway-metrics-reset")
+        let bundleID = "ghdx.tests.gateway-metrics-reset"
         let performanceMonitor = ControlHarnessPerformanceMonitor(
             now: { Date(timeIntervalSince1970: 1_710_100_000) }
         )
@@ -2734,7 +3785,7 @@ struct ControlHarnessTests {
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
 
-        let responseData = try ControlHarnessSocketSupport.readLine(from: clientFD)
+        let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
         let envelope = try JSONDecoder().decode(
             ControlHarnessResponseResultEnvelope<ControlHarnessPerformanceSnapshot>.self,
             from: responseData
@@ -2756,7 +3807,7 @@ struct ControlHarnessTests {
     }
 
     @Test func acceptanceScenarioAActiveObservedTerminalArchivesMetrics() async throws {
-        let bundleID = makeBundleID("ghdx.tests.acceptance-scenario-a")
+        let bundleID = "ghdx.tests.acceptance-scenario-a"
         let base = Date(timeIntervalSince1970: 1_710_200_000)
         let performanceMonitor = ControlHarnessPerformanceMonitor(now: { base })
         performanceMonitor.recordSamplerTick(
@@ -2814,7 +3865,7 @@ struct ControlHarnessTests {
     }
 
     @Test func acceptanceScenarioBFiveObservedTerminalsArchivesMetrics() async throws {
-        let bundleID = makeBundleID("ghdx.tests.acceptance-scenario-b")
+        let bundleID = "ghdx.tests.acceptance-scenario-b"
         let base = Date(timeIntervalSince1970: 1_710_200_100)
         let performanceMonitor = ControlHarnessPerformanceMonitor(now: { base })
         performanceMonitor.recordSamplerTick(
@@ -2883,7 +3934,7 @@ struct ControlHarnessTests {
     }
 
     @Test func acceptanceScenarioCSlowClientOverflowArchivesMetrics() async throws {
-        let bundleID = makeBundleID("ghdx.tests.acceptance-scenario-c")
+        let bundleID = "ghdx.tests.acceptance-scenario-c"
         let base = Date(timeIntervalSince1970: 1_710_200_200)
         let performanceMonitor = ControlHarnessPerformanceMonitor(now: { base })
         performanceMonitor.recordSamplerTick(
@@ -2942,7 +3993,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayPairingLifecycleIssuesRotatesAndRevokesTokens() async throws {
-        let bundleID = makeBundleID("ghdx.tests.gateway-pairing-lifecycle")
+        let bundleID = "ghdx.tests.gateway-pairing-lifecycle"
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
@@ -2986,7 +4037,7 @@ struct ControlHarnessTests {
             guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
                 throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
-            return try ControlHarnessSocketSupport.readLine(from: clientFD)
+            return try ControlHarnessSocketSupport.readAll(from: clientFD)
         }
 
         let beginData = try request(
@@ -3077,8 +4128,91 @@ struct ControlHarnessTests {
         #expect(callCount.value() == 2)
     }
 
+    @Test func gatewayRejectsDesktopIDMismatchBeforeDispatch() async throws {
+        let bundleID = "ghdx.tests.gateway-desktop-id-routing"
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
+        let callCount = CounterBox()
+        let gateway = await MainActor.run {
+            ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: 0,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096
+                ),
+                authManager: ControlHarnessAuth(
+                    storageURL: storageURL,
+                    configuration: .init(pairingCodeTTLSeconds: 60, tokenTTLSeconds: 300)
+                ),
+                requestHandler: { request, _ in
+                    callCount.increment()
+                    return .single(ControlHarnessResponse(
+                        requestID: request.requestID,
+                        status: "ok",
+                        result: AnyEncodable(["accepted": request.command]),
+                        errorCode: nil,
+                        errorMessage: nil
+                    ))
+                }
+            )
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+        let decoder = JSONDecoder()
+
+        func request(_ payload: String) throws -> Data {
+            let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+            defer { Darwin.close(clientFD) }
+            try ControlHarnessSocketSupport.writeAll(Data(payload.utf8), to: clientFD)
+            guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            return try ControlHarnessSocketSupport.readAll(from: clientFD)
+        }
+
+        let beginData = try request(
+            #"{"request_id":"req-desktop-route-begin","command":"gateway.pairing.begin","client":"android-route","requested_scopes":["observe"]}"#
+        )
+        let begin = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessPairingBeginPayload>.self,
+            from: beginData
+        )
+        let pairingCode = try #require(begin.result?.pairingCode)
+
+        let exchangeData = try request(
+            #"{"request_id":"req-desktop-route-exchange","command":"gateway.pairing.exchange","pairing_code":"\#(pairingCode)"}"#
+        )
+        let exchange = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessTokenIssuePayload>.self,
+            from: exchangeData
+        )
+        let authToken = try #require(exchange.result?.token)
+        let desktopID = try #require(exchange.result?.desktopID)
+
+        let mismatchData = try request(
+            #"{"request_id":"req-desktop-route-mismatch","command":"snapshot","auth_token":"\#(authToken)","desktop_id":"desktop-other"}"#
+        )
+        let mismatch = try decoder.decode(ControlHarnessResponseEnvelope.self, from: mismatchData)
+        #expect(mismatch.status == "error")
+        #expect(mismatch.errorCode == "desktop_id_mismatch")
+        #expect(callCount.value() == 0)
+
+        let matchedData = try request(
+            #"{"request_id":"req-desktop-route-match","command":"snapshot","auth_token":"\#(authToken)","desktop_id":"\#(desktopID)"}"#
+        )
+        let matched = try decoder.decode(ControlHarnessResponseEnvelope.self, from: matchedData)
+        #expect(matched.status == "ok")
+        #expect(callCount.value() == 1)
+    }
+
     @Test func gatewayPairingLifecyclePublishesRelayMetadataWhenPublicEndpointIsConfigured() async throws {
-        let bundleID = makeBundleID("ghdx.tests.gateway-pairing-relay-metadata")
+        let bundleID = "ghdx.tests.gateway-pairing-relay-metadata"
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
@@ -3112,7 +4246,7 @@ struct ControlHarnessTests {
             guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
                 throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
-            return try ControlHarnessSocketSupport.readLine(from: clientFD)
+            return try ControlHarnessSocketSupport.readAll(from: clientFD)
         }
 
         let beginData = try request(
@@ -3151,7 +4285,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayDeviceRegistryListsKnownDevicesAndPersistsAcrossReload() async throws {
-        let bundleID = makeBundleID("ghdx.tests.gateway-device-registry-list")
+        let bundleID = "ghdx.tests.gateway-device-registry-list"
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
@@ -3188,7 +4322,7 @@ struct ControlHarnessTests {
             guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
                 throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
-            return try ControlHarnessSocketSupport.readLine(from: clientFD)
+            return try ControlHarnessSocketSupport.readAll(from: clientFD)
         }
 
         let beginData = try request(
@@ -3255,13 +4389,13 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayDeviceRegistryRevokesOnlyTargetDeviceAndClosesActiveStreams() async throws {
-        let bundleID = makeBundleID("ghdx.tests.gateway-device-registry-revoke")
+        let bundleID = "ghdx.tests.gateway-device-registry-revoke"
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
         let (eventHub, gateway) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
-            let eventHub = makeFreshEventHub(bundleID: bundleID)
+            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
             let core = ControlHarnessCore(
                 appDelegate: nil,
                 auditLogger: auditLogger,
@@ -3307,7 +4441,7 @@ struct ControlHarnessTests {
             guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
                 throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
-            return try ControlHarnessSocketSupport.readLine(from: clientFD)
+            return try ControlHarnessSocketSupport.readAll(from: clientFD)
         }
 
         func pair(deviceID: String, label: String, requestIDPrefix: String) throws -> String {
@@ -3390,11 +4524,120 @@ struct ControlHarnessTests {
         #expect(postRevokeList.result?.devices.first(where: { $0.deviceID == "device-revoked" })?.currentConnectionState == "idle")
         #expect(postRevokeList.result?.devices.first(where: { $0.deviceID == "device-survives" })?.trustState == "trusted")
 
-        #expect(ControlHarnessSocketSupport.waitForDisconnect(from: subscribedFD, timeoutSeconds: 2.0))
+        let drainAfterRevoke = try ControlHarnessSocketSupport.readAll(from: subscribedFD)
+        #expect(drainAfterRevoke.isEmpty)
         Darwin.close(subscribedFD)
         _ = eventHub.emit(
             event: "terminal.input.sent",
             requestID: "req-device-registry-release",
+            resource: ControlHarnessEventResource(type: "terminal", id: "terminal-1", generation: 2),
+            payload: AnyEncodable(["text_length": 1])
+        )
+    }
+
+    @Test func gatewayRejectsDifferentSubscriptionKindWhenSessionCapIsReached() async throws {
+        let bundleID = "ghdx.tests.gateway-session-cap"
+        let terminalID = UUID()
+        let surface = await MainActor.run { RecordingReadableSurface(id: terminalID) }
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
+        let (eventHub, gateway) = await MainActor.run {
+            let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
+            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let core = ControlHarnessCore(
+                appDelegate: nil,
+                auditLogger: auditLogger,
+                eventHub: eventHub,
+                generations: ControlHarnessGenerationTracker(),
+                idempotencyStore: ControlHarnessIdempotencyStore(),
+                readStore: ControlHarnessTerminalReadStore(),
+                readAfterWriteStore: ControlHarnessReadAfterWriteStore(),
+                sampleStore: ControlHarnessSampleStore(),
+                surfaceResolver: { requestedID in
+                    requestedID == terminalID ? surface : nil
+                }
+            )
+            let gateway = ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: 0,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096,
+                    authToken: nil,
+                    maxConcurrentSessionsPerIdentity: 1
+                ),
+                authManager: ControlHarnessAuth(
+                    storageURL: storageURL,
+                    configuration: .init(pairingCodeTTLSeconds: 60, tokenTTLSeconds: 300)
+                ),
+                requestHandler: { request, socketPath in
+                    if request.command == "events.subscribe" || request.command == "terminal.stream.open" {
+                        return .subscription(core.handleSubscription(request, socketPath: socketPath))
+                    }
+                    return .single(core.handle(request, socketPath: socketPath))
+                }
+            )
+            return (eventHub, gateway)
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+        let decoder = JSONDecoder()
+
+        func request(_ payload: String) throws -> Data {
+            let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+            defer { Darwin.close(clientFD) }
+            try ControlHarnessSocketSupport.writeAll(Data(payload.utf8), to: clientFD)
+            guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            return try ControlHarnessSocketSupport.readAll(from: clientFD)
+        }
+
+        let beginData = try request(
+            #"{"request_id":"req-cap-begin","command":"gateway.pairing.begin","client":"android-cap","requested_scopes":["observe"]}"#
+        )
+        let begin = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessPairingBeginPayload>.self,
+            from: beginData
+        )
+        let pairingCode = try #require(begin.result?.pairingCode)
+        let exchangeData = try request(
+            #"{"request_id":"req-cap-exchange","command":"gateway.pairing.exchange","pairing_code":"\#(pairingCode)"}"#
+        )
+        let exchange = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessTokenIssuePayload>.self,
+            from: exchangeData
+        )
+        let token = try #require(exchange.result?.token)
+
+        let firstClientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+        let subscribePayload = Data(
+            #"{"request_id":"req-cap-subscribe-1","command":"events.subscribe","auth_token":"\#(token)","since_sequence":0,"event_limit":2}"#.utf8
+        )
+        try ControlHarnessSocketSupport.writeAll(subscribePayload, to: firstClientFD)
+        guard Darwin.shutdown(firstClientFD, SHUT_WR) == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+        let firstAckLine = try ControlHarnessSocketSupport.readLine(from: firstClientFD)
+        let firstAck = try decoder.decode(ControlHarnessSubscriptionAckEnvelope.self, from: firstAckLine)
+        #expect(firstAck.status == "ok")
+
+        let secondResponseData = try request(
+            #"{"request_id":"req-cap-subscribe-2","command":"terminal.stream.open","auth_token":"\#(token)","terminal_id":"\#(terminalID.uuidString)"}"#
+        )
+        let secondResponse = try decoder.decode(ControlHarnessResponseEnvelope.self, from: secondResponseData)
+        #expect(secondResponse.status == "error")
+        #expect(secondResponse.errorCode == "session_limit_exceeded")
+
+        Darwin.close(firstClientFD)
+        _ = eventHub.emit(
+            event: "terminal.input.sent",
+            requestID: "req-cap-release",
             resource: ControlHarnessEventResource(type: "terminal", id: "terminal-1", generation: 2),
             payload: AnyEncodable(["text_length": 1])
         )
@@ -3503,8 +4746,441 @@ struct ControlHarnessTests {
         )
     }
 
+    @Test func gatewayReconnectReplacesSupersededEventSubscriptionWithoutTrippingSessionLimit() async throws {
+        let bundleID = "ghdx.tests.gateway-session-cap-events-reconnect"
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
+        let (eventHub, gateway) = await MainActor.run {
+            let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
+            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let core = ControlHarnessCore(
+                appDelegate: nil,
+                auditLogger: auditLogger,
+                eventHub: eventHub,
+                generations: ControlHarnessGenerationTracker(),
+                idempotencyStore: ControlHarnessIdempotencyStore(),
+                readStore: ControlHarnessTerminalReadStore(),
+                readAfterWriteStore: ControlHarnessReadAfterWriteStore(),
+                sampleStore: ControlHarnessSampleStore()
+            )
+            let gateway = ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: 0,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096,
+                    authToken: nil,
+                    maxConcurrentSessionsPerIdentity: 1
+                ),
+                authManager: ControlHarnessAuth(
+                    storageURL: storageURL,
+                    configuration: .init(pairingCodeTTLSeconds: 60, tokenTTLSeconds: 300)
+                ),
+                requestHandler: { request, socketPath in
+                    if request.command == "events.subscribe" {
+                        return .subscription(core.handleSubscription(request, socketPath: socketPath))
+                    }
+                    return .single(core.handle(request, socketPath: socketPath))
+                }
+            )
+            return (eventHub, gateway)
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+        let decoder = JSONDecoder()
+
+        func request(_ payload: String) throws -> Data {
+            let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+            defer { Darwin.close(clientFD) }
+            try ControlHarnessSocketSupport.writeAll(Data(payload.utf8), to: clientFD)
+            guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            return try ControlHarnessSocketSupport.readAll(from: clientFD)
+        }
+
+        func openSubscription(token: String, requestID: String) throws -> (Int32, ControlHarnessSubscriptionAckEnvelope) {
+            let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+            let payload = Data(
+                #"{"request_id":"\#(requestID)","command":"events.subscribe","auth_token":"\#(token)","since_sequence":0,"event_limit":2}"#.utf8
+            )
+            try ControlHarnessSocketSupport.writeAll(payload, to: clientFD)
+            guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+                Darwin.close(clientFD)
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            let ackLine = try ControlHarnessSocketSupport.readLine(from: clientFD)
+            let ack = try decoder.decode(ControlHarnessSubscriptionAckEnvelope.self, from: ackLine)
+            return (clientFD, ack)
+        }
+
+        let beginData = try request(
+            #"{"request_id":"req-cap-events-begin","command":"gateway.pairing.begin","client":"android-cap-events","requested_scopes":["observe"]}"#
+        )
+        let begin = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessPairingBeginPayload>.self,
+            from: beginData
+        )
+        let pairingCode = try #require(begin.result?.pairingCode)
+        let exchangeData = try request(
+            #"{"request_id":"req-cap-events-exchange","command":"gateway.pairing.exchange","pairing_code":"\#(pairingCode)"}"#
+        )
+        let exchange = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessTokenIssuePayload>.self,
+            from: exchangeData
+        )
+        let token = try #require(exchange.result?.token)
+
+        let (firstSubscribeFD, firstSubscribeAck) = try openSubscription(token: token, requestID: "req-cap-events-subscribe-1")
+        defer { Darwin.close(firstSubscribeFD) }
+        #expect(firstSubscribeAck.status == "ok")
+
+        let (secondSubscribeFD, secondSubscribeAck) = try openSubscription(token: token, requestID: "req-cap-events-subscribe-2")
+        defer { Darwin.close(secondSubscribeFD) }
+        #expect(secondSubscribeAck.status == "ok")
+
+        let firstSubscriptionClosure = try ControlHarnessSocketSupport.readLine(from: firstSubscribeFD)
+        #expect(firstSubscriptionClosure.isEmpty)
+
+        _ = eventHub.emit(
+            event: "terminal.input.sent",
+            requestID: "req-cap-events-live",
+            resource: ControlHarnessEventResource(type: "terminal", id: "terminal-1", generation: 2),
+            payload: AnyEncodable(["text_length": 1])
+        )
+        let liveLine = try ControlHarnessSocketSupport.readLine(from: secondSubscribeFD)
+        let liveEvent = try decoder.decode(ControlHarnessDecodedEventRecord.self, from: liveLine)
+        #expect(liveEvent.requestID == "req-cap-events-live")
+    }
+
+    @Test func gatewayReconnectReplacesSupersededTerminalStreamWithoutTrippingSessionLimit() async throws {
+        let bundleID = "ghdx.tests.gateway-session-cap-terminal-reconnect"
+        let terminalID = UUID()
+        let surface = await MainActor.run { RecordingReadableSurface(id: terminalID) }
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
+        let (eventHub, gateway) = await MainActor.run {
+            let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
+            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let core = ControlHarnessCore(
+                appDelegate: nil,
+                auditLogger: auditLogger,
+                eventHub: eventHub,
+                generations: ControlHarnessGenerationTracker(),
+                idempotencyStore: ControlHarnessIdempotencyStore(),
+                readStore: ControlHarnessTerminalReadStore(),
+                readAfterWriteStore: ControlHarnessReadAfterWriteStore(),
+                sampleStore: ControlHarnessSampleStore(),
+                surfaceResolver: { requestedID in
+                    requestedID == terminalID ? surface : nil
+                }
+            )
+            let gateway = ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: 0,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096,
+                    authToken: nil,
+                    maxConcurrentSessionsPerIdentity: 2
+                ),
+                authManager: ControlHarnessAuth(
+                    storageURL: storageURL,
+                    configuration: .init(pairingCodeTTLSeconds: 60, tokenTTLSeconds: 300)
+                ),
+                requestHandler: { request, socketPath in
+                    if request.command == "events.subscribe" || request.command == "terminal.stream.open" {
+                        return .subscription(core.handleSubscription(request, socketPath: socketPath))
+                    }
+                    return .single(core.handle(request, socketPath: socketPath))
+                }
+            )
+            return (eventHub, gateway)
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+        let decoder = JSONDecoder()
+
+        func request(_ payload: String) throws -> Data {
+            let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+            defer { Darwin.close(clientFD) }
+            try ControlHarnessSocketSupport.writeAll(Data(payload.utf8), to: clientFD)
+            guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            return try ControlHarnessSocketSupport.readAll(from: clientFD)
+        }
+
+        func openStream(token: String, requestID: String) throws -> (Int32, ControlHarnessResponseEnvelope) {
+            let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+            let payload = Data(
+                #"{"request_id":"\#(requestID)","command":"terminal.stream.open","auth_token":"\#(token)","terminal_id":"\#(terminalID.uuidString)"}"#.utf8
+            )
+            try ControlHarnessSocketSupport.writeAll(payload, to: clientFD)
+            guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+                Darwin.close(clientFD)
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            let ackLine = try ControlHarnessSocketSupport.readLine(from: clientFD)
+            let ack = try decoder.decode(ControlHarnessResponseEnvelope.self, from: ackLine)
+            return (clientFD, ack)
+        }
+
+        let beginData = try request(
+            #"{"request_id":"req-cap-reconnect-begin","command":"gateway.pairing.begin","client":"android-cap-reconnect","requested_scopes":["observe"]}"#
+        )
+        let begin = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessPairingBeginPayload>.self,
+            from: beginData
+        )
+        let pairingCode = try #require(begin.result?.pairingCode)
+        let exchangeData = try request(
+            #"{"request_id":"req-cap-reconnect-exchange","command":"gateway.pairing.exchange","pairing_code":"\#(pairingCode)"}"#
+        )
+        let exchange = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessTokenIssuePayload>.self,
+            from: exchangeData
+        )
+        let token = try #require(exchange.result?.token)
+
+        let subscribeFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+        defer { Darwin.close(subscribeFD) }
+        let subscribePayload = Data(
+            #"{"request_id":"req-cap-reconnect-subscribe","command":"events.subscribe","auth_token":"\#(token)","since_sequence":0,"event_limit":2}"#.utf8
+        )
+        try ControlHarnessSocketSupport.writeAll(subscribePayload, to: subscribeFD)
+        guard Darwin.shutdown(subscribeFD, SHUT_WR) == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+        let subscribeAckLine = try ControlHarnessSocketSupport.readLine(from: subscribeFD)
+        let subscribeAck = try decoder.decode(ControlHarnessSubscriptionAckEnvelope.self, from: subscribeAckLine)
+        #expect(subscribeAck.status == "ok")
+
+        let (firstStreamFD, firstStreamAck) = try openStream(token: token, requestID: "req-cap-reconnect-stream-1")
+        defer { Darwin.close(firstStreamFD) }
+        #expect(firstStreamAck.status == "ok")
+
+        let (secondStreamFD, secondStreamAck) = try openStream(token: token, requestID: "req-cap-reconnect-stream-2")
+        defer { Darwin.close(secondStreamFD) }
+        #expect(secondStreamAck.status == "ok")
+        #expect(secondStreamAck.errorCode == nil)
+
+        let firstStreamClosure = try ControlHarnessSocketSupport.readLine(from: firstStreamFD)
+        #expect(firstStreamClosure.isEmpty)
+
+        _ = eventHub.emit(
+            event: "terminal.input.sent",
+            requestID: "req-cap-reconnect-live",
+            resource: ControlHarnessEventResource(type: "terminal", id: terminalID.uuidString, generation: 2),
+            payload: AnyEncodable(["text_length": 1])
+        )
+        let liveLine = try ControlHarnessSocketSupport.readLine(from: subscribeFD)
+        let liveEvent = try decoder.decode(ControlHarnessDecodedEventRecord.self, from: liveLine)
+        #expect(liveEvent.requestID == "req-cap-reconnect-live")
+    }
+
+    @Test func gatewayAllowsInputRequestWhenSubscriptionSessionCapIsReached() async throws {
+        let bundleID = "ghdx.tests.gateway-session-cap-input-bypass"
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
+        let gateway = await MainActor.run {
+            let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
+            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let core = ControlHarnessCore(
+                appDelegate: nil,
+                auditLogger: auditLogger,
+                eventHub: eventHub,
+                generations: ControlHarnessGenerationTracker(),
+                idempotencyStore: ControlHarnessIdempotencyStore(),
+                readStore: ControlHarnessTerminalReadStore(),
+                readAfterWriteStore: ControlHarnessReadAfterWriteStore(),
+                sampleStore: ControlHarnessSampleStore()
+            )
+            return ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: 0,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096,
+                    authToken: nil,
+                    maxConcurrentSessionsPerIdentity: 1
+                ),
+                authManager: ControlHarnessAuth(
+                    storageURL: storageURL,
+                    configuration: .init(pairingCodeTTLSeconds: 60, tokenTTLSeconds: 300)
+                ),
+                requestHandler: { request, socketPath in
+                    if request.command == "events.subscribe" {
+                        return .subscription(core.handleSubscription(request, socketPath: socketPath))
+                    }
+                    return .single(core.handle(request, socketPath: socketPath))
+                }
+            )
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+        let decoder = JSONDecoder()
+
+        func request(_ payload: String) throws -> Data {
+            let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+            defer { Darwin.close(clientFD) }
+            try ControlHarnessSocketSupport.writeAll(Data(payload.utf8), to: clientFD)
+            guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            return try ControlHarnessSocketSupport.readAll(from: clientFD)
+        }
+
+        let beginData = try request(
+            #"{"request_id":"req-cap-input-begin","command":"gateway.pairing.begin","client":"android-cap-input","requested_scopes":["observe","mutate"]}"#
+        )
+        let begin = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessPairingBeginPayload>.self,
+            from: beginData
+        )
+        let pairingCode = try #require(begin.result?.pairingCode)
+        let exchangeData = try request(
+            #"{"request_id":"req-cap-input-exchange","command":"gateway.pairing.exchange","pairing_code":"\#(pairingCode)"}"#
+        )
+        let exchange = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessTokenIssuePayload>.self,
+            from: exchangeData
+        )
+        let token = try #require(exchange.result?.token)
+
+        let subscribeFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+        let subscribePayload = Data(
+            #"{"request_id":"req-cap-input-subscribe","command":"events.subscribe","auth_token":"\#(token)","since_sequence":0,"event_limit":2}"#.utf8
+        )
+        try ControlHarnessSocketSupport.writeAll(subscribePayload, to: subscribeFD)
+        guard Darwin.shutdown(subscribeFD, SHUT_WR) == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+        let subscribeAckLine = try ControlHarnessSocketSupport.readLine(from: subscribeFD)
+        let subscribeAck = try decoder.decode(ControlHarnessSubscriptionAckEnvelope.self, from: subscribeAckLine)
+        #expect(subscribeAck.status == "ok")
+
+        let inputResponseData = try request(
+            #"{"request_id":"req-cap-input-send","command":"send-text","auth_token":"\#(token)","terminal_id":"not-a-uuid","text":"a"}"#
+        )
+        let inputResponse = try decoder.decode(ControlHarnessResponseEnvelope.self, from: inputResponseData)
+        #expect(inputResponse.errorCode != "session_limit_exceeded")
+
+        Darwin.close(subscribeFD)
+    }
+
+    @Test func gatewayAllowsSnapshotRequestWhenSubscriptionSessionCapIsReached() async throws {
+        let bundleID = "ghdx.tests.gateway-session-cap-snapshot-bypass"
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
+        let gateway = await MainActor.run {
+            let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
+            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let core = ControlHarnessCore(
+                appDelegate: nil,
+                auditLogger: auditLogger,
+                eventHub: eventHub,
+                generations: ControlHarnessGenerationTracker(),
+                idempotencyStore: ControlHarnessIdempotencyStore(),
+                readStore: ControlHarnessTerminalReadStore(),
+                readAfterWriteStore: ControlHarnessReadAfterWriteStore(),
+                sampleStore: ControlHarnessSampleStore()
+            )
+            return ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: 0,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096,
+                    authToken: nil,
+                    maxConcurrentSessionsPerIdentity: 1
+                ),
+                authManager: ControlHarnessAuth(
+                    storageURL: storageURL,
+                    configuration: .init(pairingCodeTTLSeconds: 60, tokenTTLSeconds: 300)
+                ),
+                requestHandler: { request, socketPath in
+                    if request.command == "events.subscribe" {
+                        return .subscription(core.handleSubscription(request, socketPath: socketPath))
+                    }
+                    return .single(core.handle(request, socketPath: socketPath))
+                }
+            )
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+        let decoder = JSONDecoder()
+
+        func request(_ payload: String) throws -> Data {
+            let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+            defer { Darwin.close(clientFD) }
+            try ControlHarnessSocketSupport.writeAll(Data(payload.utf8), to: clientFD)
+            guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            return try ControlHarnessSocketSupport.readAll(from: clientFD)
+        }
+
+        let beginData = try request(
+            #"{"request_id":"req-cap-snapshot-begin","command":"gateway.pairing.begin","client":"android-cap-snapshot","requested_scopes":["observe"]}"#
+        )
+        let begin = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessPairingBeginPayload>.self,
+            from: beginData
+        )
+        let pairingCode = try #require(begin.result?.pairingCode)
+        let exchangeData = try request(
+            #"{"request_id":"req-cap-snapshot-exchange","command":"gateway.pairing.exchange","pairing_code":"\#(pairingCode)"}"#
+        )
+        let exchange = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessTokenIssuePayload>.self,
+            from: exchangeData
+        )
+        let token = try #require(exchange.result?.token)
+
+        let subscribeFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+        let subscribePayload = Data(
+            #"{"request_id":"req-cap-snapshot-subscribe","command":"events.subscribe","auth_token":"\#(token)","since_sequence":0,"event_limit":2}"#.utf8
+        )
+        try ControlHarnessSocketSupport.writeAll(subscribePayload, to: subscribeFD)
+        guard Darwin.shutdown(subscribeFD, SHUT_WR) == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+        let subscribeAckLine = try ControlHarnessSocketSupport.readLine(from: subscribeFD)
+        let subscribeAck = try decoder.decode(ControlHarnessSubscriptionAckEnvelope.self, from: subscribeAckLine)
+        #expect(subscribeAck.status == "ok")
+
+        let snapshotResponseData = try request(
+            #"{"request_id":"req-cap-snapshot-read","command":"snapshot","auth_token":"\#(token)"}"#
+        )
+        let snapshotResponse = try decoder.decode(ControlHarnessResponseEnvelope.self, from: snapshotResponseData)
+        #expect(snapshotResponse.errorCode != "session_limit_exceeded")
+
+        Darwin.close(subscribeFD)
+    }
+
     @Test func gatewayTcpRateLimitsSnapshotRequests() async throws {
-        let bundleID = makeBundleID("ghdx.tests.gateway-rate-snapshot")
+        let bundleID = "ghdx.tests.gateway-rate-snapshot"
         let callCount = CounterBox()
         let gateway = await MainActor.run {
             ControlHarnessGateway(
@@ -3546,7 +5222,7 @@ struct ControlHarnessTests {
             guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
                 throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
-            let responseData = try ControlHarnessSocketSupport.readLine(from: clientFD)
+            let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
             return try JSONDecoder().decode(ControlHarnessResponseEnvelope.self, from: responseData)
         }
 
@@ -3561,7 +5237,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayTcpRateLimitsGlobalRequests() async throws {
-        let bundleID = makeBundleID("ghdx.tests.gateway-rate-global")
+        let bundleID = "ghdx.tests.gateway-rate-global"
         let callCount = CounterBox()
         let gateway = await MainActor.run {
             ControlHarnessGateway(
@@ -3603,7 +5279,7 @@ struct ControlHarnessTests {
             guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
                 throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
-            let responseData = try ControlHarnessSocketSupport.readLine(from: clientFD)
+            let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
             return try JSONDecoder().decode(ControlHarnessResponseEnvelope.self, from: responseData)
         }
 
@@ -3617,8 +5293,310 @@ struct ControlHarnessTests {
         #expect(callCount.value() == 1)
     }
 
+    @Test func gatewayTcpInputRequestsBypassGlobalRateLimit() async throws {
+        let bundleID = "ghdx.tests.gateway-rate-input-global-bypass"
+        let callCount = CounterBox()
+        let gateway = await MainActor.run {
+            ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: 0,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096,
+                    authToken: "secret-token",
+                    maxGlobalRequestsPerMinute: 1,
+                    maxCommandsPerMinute: 10,
+                    maxInputEventsPerMinute: 10,
+                    maxSnapshotRequestsPerMinute: 10,
+                    maxResyncAttemptsPerMinute: 10
+                ),
+                requestHandler: { request, _ in
+                    callCount.increment()
+                    return .single(ControlHarnessResponse(
+                        requestID: request.requestID,
+                        status: "ok",
+                        result: AnyEncodable(["accepted": request.command]),
+                        errorCode: nil,
+                        errorMessage: nil
+                    ))
+                }
+            )
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+        let terminalID = UUID().uuidString
+
+        func send(_ requestID: String) throws -> ControlHarnessResponseEnvelope {
+            let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+            defer { Darwin.close(clientFD) }
+            let payload = Data(#"{"request_id":"\#(requestID)","command":"send-text","auth_token":"secret-token","terminal_id":"\#(terminalID)","text":"x"}"#.utf8)
+            try ControlHarnessSocketSupport.writeAll(payload, to: clientFD)
+            guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
+            return try JSONDecoder().decode(ControlHarnessResponseEnvelope.self, from: responseData)
+        }
+
+        let first = try send("req-input-global-bypass-1")
+        let second = try send("req-input-global-bypass-2")
+
+        #expect(first.status == "ok")
+        #expect(second.status == "ok")
+        #expect(callCount.value() == 2)
+    }
+
+    @Test func gatewayTcpStreamAckBypassesGlobalRateLimit() async throws {
+        let bundleID = "ghdx.tests.gateway-rate-ack-global-bypass"
+        let callCount = CounterBox()
+        let gateway = await MainActor.run {
+            ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: 0,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096,
+                    authToken: "secret-token",
+                    maxGlobalRequestsPerMinute: 1,
+                    maxCommandsPerMinute: 10,
+                    maxInputEventsPerMinute: 10,
+                    maxSnapshotRequestsPerMinute: 10,
+                    maxResyncAttemptsPerMinute: 10
+                ),
+                requestHandler: { request, _ in
+                    callCount.increment()
+                    return .single(ControlHarnessResponse(
+                        requestID: request.requestID,
+                        status: "ok",
+                        result: AnyEncodable(["accepted": request.command]),
+                        errorCode: nil,
+                        errorMessage: nil
+                    ))
+                }
+            )
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+        let terminalID = UUID().uuidString
+        let streamID = UUID().uuidString
+
+        func send(_ requestID: String) throws -> ControlHarnessResponseEnvelope {
+            let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+            defer { Darwin.close(clientFD) }
+            let payload = Data(
+                #"{"request_id":"\#(requestID)","command":"terminal.stream.ack","auth_token":"secret-token","terminal_id":"\#(terminalID)","stream_id":"\#(streamID)","ack_bytes":1}"#
+                    .utf8
+            )
+            try ControlHarnessSocketSupport.writeAll(payload, to: clientFD)
+            guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
+            return try JSONDecoder().decode(ControlHarnessResponseEnvelope.self, from: responseData)
+        }
+
+        let first = try send("req-ack-global-bypass-1")
+        let second = try send("req-ack-global-bypass-2")
+
+        #expect(first.status == "ok")
+        #expect(second.status == "ok")
+        #expect(callCount.value() == 2)
+    }
+
+    @Test func gatewayTcpReadTerminalDeltaBypassesGlobalRateLimit() async throws {
+        let bundleID = "ghdx.tests.gateway-rate-read-delta-global-bypass"
+        let callCount = CounterBox()
+        let gateway = await MainActor.run {
+            ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: 0,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096,
+                    authToken: "secret-token",
+                    maxGlobalRequestsPerMinute: 1,
+                    maxCommandsPerMinute: 10,
+                    maxInputEventsPerMinute: 10,
+                    maxSnapshotRequestsPerMinute: 10,
+                    maxResyncAttemptsPerMinute: 10
+                ),
+                requestHandler: { request, _ in
+                    callCount.increment()
+                    return .single(ControlHarnessResponse(
+                        requestID: request.requestID,
+                        status: "ok",
+                        result: AnyEncodable(["accepted": request.command]),
+                        errorCode: nil,
+                        errorMessage: nil
+                    ))
+                }
+            )
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+        let terminalID = UUID().uuidString
+
+        func send(_ requestID: String) throws -> ControlHarnessResponseEnvelope {
+            let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+            defer { Darwin.close(clientFD) }
+            let payload = Data(
+                #"{"request_id":"\#(requestID)","command":"read-terminal","auth_token":"secret-token","terminal_id":"\#(terminalID)","mode":"delta","scope":"visible"}"#
+                    .utf8
+            )
+            try ControlHarnessSocketSupport.writeAll(payload, to: clientFD)
+            guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
+            return try JSONDecoder().decode(ControlHarnessResponseEnvelope.self, from: responseData)
+        }
+
+        let first = try send("req-read-delta-global-bypass-1")
+        let second = try send("req-read-delta-global-bypass-2")
+
+        #expect(first.status == "ok")
+        #expect(second.status == "ok")
+        #expect(callCount.value() == 2)
+    }
+
+    @Test func gatewayTcpReadTerminalDeltaUsesResyncLimiter() async throws {
+        let bundleID = "ghdx.tests.gateway-rate-read-delta-resync"
+        let callCount = CounterBox()
+        let gateway = await MainActor.run {
+            ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: 0,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096,
+                    authToken: "secret-token",
+                    maxGlobalRequestsPerMinute: 10,
+                    maxCommandsPerMinute: 10,
+                    maxInputEventsPerMinute: 10,
+                    maxSnapshotRequestsPerMinute: 10,
+                    maxResyncAttemptsPerMinute: 1
+                ),
+                requestHandler: { request, _ in
+                    callCount.increment()
+                    return .single(ControlHarnessResponse(
+                        requestID: request.requestID,
+                        status: "ok",
+                        result: AnyEncodable(["accepted": request.command]),
+                        errorCode: nil,
+                        errorMessage: nil
+                    ))
+                }
+            )
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+        let terminalID = UUID().uuidString
+
+        func send(_ requestID: String) throws -> ControlHarnessResponseEnvelope {
+            let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+            defer { Darwin.close(clientFD) }
+            let payload = Data(
+                #"{"request_id":"\#(requestID)","command":"read-terminal","auth_token":"secret-token","terminal_id":"\#(terminalID)","mode":"delta","scope":"visible"}"#
+                    .utf8
+            )
+            try ControlHarnessSocketSupport.writeAll(payload, to: clientFD)
+            guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
+            return try JSONDecoder().decode(ControlHarnessResponseEnvelope.self, from: responseData)
+        }
+
+        let first = try send("req-read-delta-resync-1")
+        let second = try send("req-read-delta-resync-2")
+
+        #expect(first.status == "ok")
+        #expect(second.status == "error")
+        #expect(second.errorCode == "rate_limited")
+        #expect(second.errorMessage == "Gateway resync rate limit exceeded")
+        #expect(callCount.value() == 1)
+    }
+
+    @Test func gatewayTcpReadTerminalWithoutModeUsesSnapshotLimiter() async throws {
+        let bundleID = "ghdx.tests.gateway-rate-read-default-snapshot"
+        let callCount = CounterBox()
+        let gateway = await MainActor.run {
+            ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: 0,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096,
+                    authToken: "secret-token",
+                    maxGlobalRequestsPerMinute: 10,
+                    maxCommandsPerMinute: 10,
+                    maxInputEventsPerMinute: 10,
+                    maxSnapshotRequestsPerMinute: 1,
+                    maxResyncAttemptsPerMinute: 10
+                ),
+                requestHandler: { request, _ in
+                    callCount.increment()
+                    return .single(ControlHarnessResponse(
+                        requestID: request.requestID,
+                        status: "ok",
+                        result: AnyEncodable(["accepted": request.command]),
+                        errorCode: nil,
+                        errorMessage: nil
+                    ))
+                }
+            )
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+        let terminalID = UUID().uuidString
+
+        func send(_ requestID: String) throws -> ControlHarnessResponseEnvelope {
+            let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+            defer { Darwin.close(clientFD) }
+            let payload = Data(
+                #"{"request_id":"\#(requestID)","command":"read-terminal","auth_token":"secret-token","terminal_id":"\#(terminalID)","scope":"visible"}"#
+                    .utf8
+            )
+            try ControlHarnessSocketSupport.writeAll(payload, to: clientFD)
+            guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
+            return try JSONDecoder().decode(ControlHarnessResponseEnvelope.self, from: responseData)
+        }
+
+        let first = try send("req-read-default-snapshot-1")
+        let second = try send("req-read-default-snapshot-2")
+
+        #expect(first.status == "ok")
+        #expect(second.status == "error")
+        #expect(second.errorCode == "rate_limited")
+        #expect(second.errorMessage == "Gateway snapshot rate limit exceeded")
+        #expect(callCount.value() == 1)
+    }
+
     @Test func gatewayTcpRateLimitsCommandRequests() async throws {
-        let bundleID = makeBundleID("ghdx.tests.gateway-rate-command")
+        let bundleID = "ghdx.tests.gateway-rate-command"
         let callCount = CounterBox()
         let gateway = await MainActor.run {
             ControlHarnessGateway(
@@ -3656,12 +5634,12 @@ struct ControlHarnessTests {
         func send(_ requestID: String) throws -> ControlHarnessResponseEnvelope {
             let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
             defer { Darwin.close(clientFD) }
-            let payload = Data(#"{"request_id":"\#(requestID)","command":"send-text","auth_token":"secret-token","terminal_id":"\#(terminalID)","text":"echo hi\n"}"#.utf8)
+            let payload = Data(#"{"request_id":"\#(requestID)","command":"run-command","auth_token":"secret-token","terminal_id":"\#(terminalID)","command_text":"echo hi"}"#.utf8)
             try ControlHarnessSocketSupport.writeAll(payload, to: clientFD)
             guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
                 throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
-            let responseData = try ControlHarnessSocketSupport.readLine(from: clientFD)
+            let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
             return try JSONDecoder().decode(ControlHarnessResponseEnvelope.self, from: responseData)
         }
 
@@ -3675,8 +5653,67 @@ struct ControlHarnessTests {
         #expect(callCount.value() == 1)
     }
 
+    @Test func gatewayTcpRateLimitsInputRequests() async throws {
+        let bundleID = "ghdx.tests.gateway-rate-input"
+        let callCount = CounterBox()
+        let gateway = await MainActor.run {
+            ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(
+                    isEnabled: true,
+                    listenHost: "127.0.0.1",
+                    listenPort: 0,
+                    maxBufferedEvents: 16,
+                    maxBufferedBytes: 4096,
+                    authToken: "secret-token",
+                    maxGlobalRequestsPerMinute: 10,
+                    maxCommandsPerMinute: 10,
+                    maxInputEventsPerMinute: 1,
+                    maxSnapshotRequestsPerMinute: 10,
+                    maxResyncAttemptsPerMinute: 10
+                ),
+                requestHandler: { request, _ in
+                    callCount.increment()
+                    return .single(ControlHarnessResponse(
+                        requestID: request.requestID,
+                        status: "ok",
+                        result: AnyEncodable(["accepted": request.command]),
+                        errorCode: nil,
+                        errorMessage: nil
+                    ))
+                }
+            )
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+        let terminalID = UUID().uuidString
+
+        func send(_ requestID: String) throws -> ControlHarnessResponseEnvelope {
+            let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+            defer { Darwin.close(clientFD) }
+            let payload = Data(#"{"request_id":"\#(requestID)","command":"send-text","auth_token":"secret-token","terminal_id":"\#(terminalID)","text":"x"}"#.utf8)
+            try ControlHarnessSocketSupport.writeAll(payload, to: clientFD)
+            guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
+            return try JSONDecoder().decode(ControlHarnessResponseEnvelope.self, from: responseData)
+        }
+
+        let first = try send("req-input-1")
+        let second = try send("req-input-2")
+
+        #expect(first.status == "ok")
+        #expect(second.status == "error")
+        #expect(second.errorCode == "rate_limited")
+        #expect(second.errorMessage == "Gateway input rate limit exceeded")
+        #expect(callCount.value() == 1)
+    }
+
     @Test func gatewayTcpRateLimitsResyncRequests() async throws {
-        let bundleID = makeBundleID("ghdx.tests.gateway-rate-resync")
+        let bundleID = "ghdx.tests.gateway-rate-resync"
         let callCount = CounterBox()
         let gateway = await MainActor.run {
             ControlHarnessGateway(
@@ -3718,7 +5755,7 @@ struct ControlHarnessTests {
             guard Darwin.shutdown(clientFD, SHUT_WR) == 0 else {
                 throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
-            let responseData = try ControlHarnessSocketSupport.readLine(from: clientFD)
+            let responseData = try ControlHarnessSocketSupport.readAll(from: clientFD)
             return try JSONDecoder().decode(ControlHarnessResponseEnvelope.self, from: responseData)
         }
 
@@ -5837,13 +7874,44 @@ struct ControlHarnessTests {
                 .state
         }
         #expect(storedSessionState == .released)
+    @Test func sendKeyIsSupportedMutationCommand() {
+        #expect(ControlHarnessCore.supportedCommands.contains("send-key"))
+        let request = ControlHarnessRequest(
+            requestID: "req-send-key-kind",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "send-key",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: UUID().uuidString,
+            scope: nil,
+            text: nil,
+            terminalKey: "enter",
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil
+        )
+        #expect(request.commandKind == .mutation)
     }
 
     @Test func gatewayTcpSubscriptionStreamsReplayAndLiveEvents() async throws {
-        let bundleID = makeBundleID("ghdx.tests.gateway-tcp-subscribe")
+        let bundleID = "ghdx.tests.gateway-tcp-subscribe"
         let (eventHub, gateway) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
-            let eventHub = makeFreshEventHub(bundleID: bundleID)
+            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
             let core = ControlHarnessCore(
                 appDelegate: nil,
                 auditLogger: auditLogger,
@@ -5910,7 +7978,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayWebSocketHandshakeAndSnapshotRequest() async throws {
-        let bundleID = makeBundleID("ghdx.tests.gateway-ws-snapshot")
+        let bundleID = "ghdx.tests.gateway-ws-snapshot"
         let gateway = await MainActor.run {
             let (core, _, _) = makeCore(bundleID: bundleID)
             return ControlHarnessGateway(
@@ -5940,11 +8008,118 @@ struct ControlHarnessTests {
         #expect(envelope.requestID == "req-ws-snapshot")
     }
 
+    @Test func gatewayWebSocketHandshakeWithFragmentedVerbStillSucceeds() async throws {
+        let bundleID = "ghdx.tests.gateway-ws-fragmented-handshake"
+        let gateway = await MainActor.run {
+            let (core, _, _) = makeCore(bundleID: bundleID)
+            return ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(isEnabled: true, listenHost: "127.0.0.1", listenPort: 0, maxBufferedEvents: 16, maxBufferedBytes: 4096),
+                requestHandler: { request, socketPath in
+                    .single(core.handle(request, socketPath: socketPath))
+                }
+            )
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+
+        let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
+        defer { Darwin.close(clientFD) }
+
+        let key = Data("test-websocket-key".utf8).base64EncodedString()
+        let request = Data(
+            """
+            GET /control-harness HTTP/1.1\r
+            Host: 127.0.0.1:\(port)\r
+            Upgrade: websocket\r
+            Connection: Upgrade\r
+            Sec-WebSocket-Key: \(key)\r
+            Sec-WebSocket-Version: 13\r
+            \r
+            """.utf8
+        )
+
+        try ControlHarnessSocketSupport.writeAll(Data([request[0]]), to: clientFD)
+        usleep(2_000)
+        try ControlHarnessSocketSupport.writeAll(Data(request.dropFirst()), to: clientFD)
+
+        let handshakeResponse = try ControlHarnessSocketSupport.readHTTPHeaders(from: clientFD)
+        #expect(handshakeResponse.contains("101 Switching Protocols"))
+        let expectedAccept = Data(
+            Insecure.SHA1.hash(
+                data: Data("\(key)258EAFA5-E914-47DA-95CA-C5AB0DC85B11".utf8)
+            )
+        ).base64EncodedString()
+        #expect(handshakeResponse.contains("Sec-WebSocket-Accept: \(expectedAccept)"))
+
+        try ControlHarnessSocketSupport.writeWebSocketTextFrame(
+            Data(#"{"request_id":"req-ws-fragmented-snapshot","command":"snapshot"}"#.utf8),
+            to: clientFD
+        )
+        let responseData = try ControlHarnessSocketSupport.readWebSocketTextFrame(from: clientFD)
+        let envelope = try JSONDecoder().decode(ControlHarnessResponseEnvelope.self, from: responseData)
+        #expect(envelope.status == "ok")
+        #expect(envelope.requestID == "req-ws-fragmented-snapshot")
+    }
+
+    @Test func gatewayWebSocketSupportsSequentialMutationsOnSingleHandshake() async throws {
+        let bundleID = "ghdx.tests.gateway-ws-multi-mutation"
+        let requestCount = CounterBox()
+        let delegate = await MainActor.run { RecordingAppDelegate() }
+        let gateway = await MainActor.run {
+            let (core, _, _) = makeCore(delegate: delegate, bundleID: bundleID)
+            return ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(isEnabled: true, listenHost: "127.0.0.1", listenPort: 0, maxBufferedEvents: 16, maxBufferedBytes: 4096),
+                requestHandler: { request, socketPath in
+                    requestCount.increment()
+                    return .single(core.handle(request, socketPath: socketPath))
+                }
+            )
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+        let terminalID = UUID().uuidString
+
+        let clientFD = try ControlHarnessSocketSupport.performWebSocketHandshake(host: "127.0.0.1", port: port)
+        defer { Darwin.close(clientFD) }
+
+        try ControlHarnessSocketSupport.writeWebSocketTextFrame(
+            Data(#"{"request_id":"req-ws-send-text-1","command":"send-text","terminal_id":"\#(terminalID)","text":"hello"}"#.utf8),
+            to: clientFD
+        )
+        let responseOne = try JSONDecoder().decode(
+            ControlHarnessResponseEnvelope.self,
+            from: ControlHarnessSocketSupport.readWebSocketTextFrame(from: clientFD)
+        )
+        #expect(responseOne.status == "ok")
+        #expect(responseOne.requestID == "req-ws-send-text-1")
+
+        try ControlHarnessSocketSupport.writeWebSocketTextFrame(
+            Data(#"{"request_id":"req-ws-send-text-2","command":"send-text","terminal_id":"\#(terminalID)","text":" world"}"#.utf8),
+            to: clientFD
+        )
+        let responseTwo = try JSONDecoder().decode(
+            ControlHarnessResponseEnvelope.self,
+            from: ControlHarnessSocketSupport.readWebSocketTextFrame(from: clientFD)
+        )
+        #expect(responseTwo.status == "ok")
+        #expect(responseTwo.requestID == "req-ws-send-text-2")
+
+        #expect(requestCount.value() == 2)
+        let sentInputCount = await MainActor.run { delegate.sentInputs.count }
+        #expect(sentInputCount == 2)
+    }
+
     @Test func gatewayWebSocketSubscriptionStreamsReplayAndLiveEvents() async throws {
-        let bundleID = makeBundleID("ghdx.tests.gateway-ws-subscribe")
+        let bundleID = "ghdx.tests.gateway-ws-subscribe"
         let (eventHub, gateway) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
-            let eventHub = makeFreshEventHub(bundleID: bundleID)
+            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
             let core = ControlHarnessCore(
                 appDelegate: nil,
                 auditLogger: auditLogger,
@@ -6009,11 +8184,73 @@ struct ControlHarnessTests {
         #expect(live.requestID == "req-ws-live")
     }
 
-    @Test func gatewayStopClosesLiveTcpSubscription() async throws {
-        let bundleID = makeBundleID("ghdx.tests.gateway-stop-stream")
+    @Test func gatewayWebSocketSubscriptionSurvivesClientPingFrame() async throws {
+        let bundleID = "ghdx.tests.gateway-ws-subscribe-ping"
         let (eventHub, gateway) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
-            let eventHub = makeFreshEventHub(bundleID: bundleID)
+            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let core = ControlHarnessCore(
+                appDelegate: nil,
+                auditLogger: auditLogger,
+                eventHub: eventHub,
+                generations: ControlHarnessGenerationTracker(),
+                idempotencyStore: ControlHarnessIdempotencyStore(),
+                readStore: ControlHarnessTerminalReadStore(),
+                readAfterWriteStore: ControlHarnessReadAfterWriteStore(),
+                sampleStore: ControlHarnessSampleStore()
+            )
+            let gateway = ControlHarnessGateway(
+                bundleID: bundleID,
+                configuration: .init(isEnabled: true, listenHost: "127.0.0.1", listenPort: 0, maxBufferedEvents: 16, maxBufferedBytes: 4096),
+                requestHandler: { request, socketPath in
+                    if request.command == "events.subscribe" {
+                        return .subscription(core.handleSubscription(request, socketPath: socketPath))
+                    }
+                    return .single(core.handle(request, socketPath: socketPath))
+                }
+            )
+            return (eventHub, gateway)
+        }
+
+        defer { gateway.stop() }
+        gateway.startIfNeeded()
+        let port = try #require(gateway.listenerPort)
+
+        let clientFD = try ControlHarnessSocketSupport.performWebSocketHandshake(host: "127.0.0.1", port: port)
+        defer { Darwin.close(clientFD) }
+
+        try ControlHarnessSocketSupport.writeWebSocketTextFrame(
+            Data(#"{"request_id":"req-ws-subscribe-ping","command":"events.subscribe","since_sequence":0,"event_limit":2}"#.utf8),
+            to: clientFD
+        )
+
+        let decoder = JSONDecoder()
+        let ackData = try ControlHarnessSocketSupport.readWebSocketTextFrame(from: clientFD)
+        let ack = try decoder.decode(ControlHarnessSubscriptionAckEnvelope.self, from: ackData)
+        #expect(ack.status == "ok")
+        #expect(ack.requestID == "req-ws-subscribe-ping")
+
+        // This reproduces the former MSG_PEEK bug surface: readable client bytes
+        // must not be treated as disconnect for active websocket subscriptions.
+        try ControlHarnessSocketSupport.writeWebSocketPingFrame(Data("ping".utf8), to: clientFD)
+
+        _ = eventHub.emit(
+            event: "terminal.input.sent",
+            requestID: "req-ws-after-ping",
+            resource: .init(type: "terminal", id: "terminal-1", generation: 2),
+            payload: AnyEncodable(["text_length": 1])
+        )
+
+        let liveData = try ControlHarnessSocketSupport.readWebSocketTextFrame(from: clientFD)
+        let live = try decoder.decode(ControlHarnessDecodedEventRecord.self, from: liveData)
+        #expect(live.requestID == "req-ws-after-ping")
+    }
+
+    @Test func gatewayStopClosesLiveTcpSubscription() async throws {
+        let bundleID = "ghdx.tests.gateway-stop-stream"
+        let (eventHub, gateway) = await MainActor.run {
+            let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
+            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
             let core = ControlHarnessCore(
                 appDelegate: nil,
                 auditLogger: auditLogger,
@@ -6061,17 +8298,18 @@ struct ControlHarnessTests {
             payload: AnyEncodable(["text_length": 1])
         )
 
-        #expect(ControlHarnessSocketSupport.waitForDisconnect(from: clientFD, timeoutSeconds: 2.0))
+        let postStopRead = try ControlHarnessSocketSupport.readLine(from: clientFD)
+        #expect(postStopRead.isEmpty)
     }
 
     @Test func eventsSubscribeStreamsReplayAndLiveEvents() async throws {
         let suffix = UUID().uuidString
             .replacingOccurrences(of: "-", with: "")
             .prefix(8)
-        let bundleID = makeBundleID("ghdx.tests.\(suffix)")
+        let bundleID = "ghdx.tests.\(suffix)"
         let (eventHub, core) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
-            let eventHub = makeFreshEventHub(bundleID: bundleID)
+            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
             let core = ControlHarnessCore(
                 appDelegate: nil,
                 auditLogger: auditLogger,
@@ -6159,10 +8397,10 @@ struct ControlHarnessTests {
         let suffix = UUID().uuidString
             .replacingOccurrences(of: "-", with: "")
             .prefix(8)
-        let bundleID = makeBundleID("ghdx.tests.\(suffix)")
+        let bundleID = "ghdx.tests.\(suffix)"
         let (eventHub, core) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
-            let eventHub = makeFreshEventHub(bundleID: bundleID)
+            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
             let core = ControlHarnessCore(
                 appDelegate: nil,
                 auditLogger: auditLogger,
@@ -6223,29 +8461,17 @@ struct ControlHarnessTests {
         let replayEvent = try decoder.decode(ControlHarnessDecodedEventRecord.self, from: replayLine)
         #expect(replayEvent.requestID == "req-replay")
 
-        func requestHandshakeEnvelope() throws -> ControlHarnessHandshakeEnvelope {
-            let handshakeFD = try ControlHarnessSocketSupport.connect(to: service.socketURL.path)
-            defer { Darwin.close(handshakeFD) }
+        let handshakeFD = try ControlHarnessSocketSupport.connect(to: service.socketURL.path)
+        defer { Darwin.close(handshakeFD) }
 
-            let handshakeRequest = Data(#"{"request_id":"req-handshake-open","command":"handshake"}"#.utf8)
-            try ControlHarnessSocketSupport.writeAll(handshakeRequest, to: handshakeFD)
-            guard Darwin.shutdown(handshakeFD, SHUT_WR) == 0 else {
-                throw POSIXError(.init(rawValue: errno) ?? .EIO)
-            }
-
-            let handshakeData = try ControlHarnessSocketSupport.readAll(from: handshakeFD)
-            guard handshakeData.isEmpty == false else {
-                throw POSIXError(.EIO)
-            }
-            return try decoder.decode(ControlHarnessHandshakeEnvelope.self, from: handshakeData)
+        let handshakeRequest = Data(#"{"request_id":"req-handshake-open","command":"handshake"}"#.utf8)
+        try ControlHarnessSocketSupport.writeAll(handshakeRequest, to: handshakeFD)
+        guard Darwin.shutdown(handshakeFD, SHUT_WR) == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
 
-        let handshake: ControlHarnessHandshakeEnvelope
-        do {
-            handshake = try requestHandshakeEnvelope()
-        } catch {
-            handshake = try requestHandshakeEnvelope()
-        }
+        let handshakeData = try ControlHarnessSocketSupport.readAll(from: handshakeFD)
+        let handshake = try decoder.decode(ControlHarnessHandshakeEnvelope.self, from: handshakeData)
         #expect(handshake.status == "ok")
         #expect(handshake.requestID == "req-handshake-open")
         #expect(handshake.result?.protocolVersion == ControlHarnessCore.protocolVersion)

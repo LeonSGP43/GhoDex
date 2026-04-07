@@ -8,6 +8,7 @@ interface GatewayTransportConfig {
     transportMode: GatewayTransportModeInput;
     host: string;
     port: number;
+    desktopId?: string | null;
     publicEndpoint?: string | null;
     transportSharedSecret?: string | null;
 }
@@ -45,6 +46,11 @@ function normalizePublicEndpoint(publicEndpoint?: string | null): string | null 
     return trimmed.startsWith('wss://') ? trimmed : null;
 }
 
+function normalizeDesktopId(desktopId?: string | null): string | null {
+    const trimmed = desktopId?.trim();
+    return trimmed ? trimmed : null;
+}
+
 function encodeGatewayPayload(payload: Record<string, unknown>): Uint8Array {
     return new TextEncoder().encode(JSON.stringify(payload));
 }
@@ -65,10 +71,25 @@ function buildLanSocketUrl(host: string, port: number): string {
     return `ws://${normalizedHost}:${port}`;
 }
 
+function buildRelaySocketUrl(publicEndpoint: string, desktopId?: string | null): string {
+    const routingDesktopID = normalizeDesktopId(desktopId);
+    if (!routingDesktopID) {
+        return publicEndpoint;
+    }
+
+    try {
+        const endpoint = new URL(publicEndpoint);
+        endpoint.searchParams.set('desktop_id', routingDesktopID);
+        return endpoint.toString();
+    } catch {
+        return publicEndpoint;
+    }
+}
+
 export function resolveGatewaySocketUrl(config: GatewayTransportConfig): string {
     const publicEndpoint = normalizePublicEndpoint(config.publicEndpoint);
     if (config.transportMode === 'relay' && publicEndpoint) {
-        return publicEndpoint;
+        return buildRelaySocketUrl(publicEndpoint, config.desktopId);
     }
     return buildLanSocketUrl(config.host, config.port);
 }

@@ -7,6 +7,7 @@ import type { StoredSession, StoredTransportMode } from './sessionTypes';
 const STORAGE_KEY = 'ghodex.gateway.session.v1';
 const STORED_SESSION_TIMEOUT_MS = 1500;
 const DEFAULT_DEVICE_LABEL = 'This phone';
+const MIN_POLL_INTERVAL_MS = 50;
 
 const DEFAULT_DEVICE_ID = randomUUID();
 
@@ -93,7 +94,7 @@ function sanitizeStoredSession(value: unknown): StoredSession {
             : [...DEFAULT_SESSION.requestedScopes],
         liveUpdatesEnabled: object.liveUpdatesEnabled !== false,
         pollIntervalMs: typeof object.pollIntervalMs === 'number' && Number.isFinite(object.pollIntervalMs)
-            ? Math.max(30, Math.min(Math.trunc(object.pollIntervalMs), 2000))
+            ? Math.max(MIN_POLL_INTERVAL_MS, Math.min(Math.trunc(object.pollIntervalMs), 2000))
             : DEFAULT_SESSION.pollIntervalMs,
     };
 }
@@ -116,7 +117,12 @@ async function setStoredValue(value: string): Promise<void> {
         localStorage.setItem(STORAGE_KEY, value);
         return;
     }
-    await SecureStore.setItemAsync(STORAGE_KEY, value);
+    await Promise.race([
+        SecureStore.setItemAsync(STORAGE_KEY, value),
+        delay(STORED_SESSION_TIMEOUT_MS).then(() => {
+            console.warn(`Timed out persisting stored GhoDex session after ${STORED_SESSION_TIMEOUT_MS}ms`);
+        }),
+    ]);
 }
 
 function clearStoredSessionBinding(session: StoredSession): StoredSession {
@@ -149,7 +155,10 @@ export async function loadStoredSession(): Promise<StoredSession> {
         const nextSession = stored ? sanitizeStoredSession(JSON.parse(stored)) : cloneDefaultSession();
         cachedSession = cloneStoredSession(nextSession);
         if (!stored) {
-            await setStoredValue(JSON.stringify(nextSession));
+            // Never block app bootstrap on first-write persistence.
+            void setStoredValue(JSON.stringify(nextSession)).catch((error) => {
+                console.warn('Failed to persist default GhoDex session state', error);
+            });
         }
         return cloneStoredSession(nextSession);
     } catch (error) {

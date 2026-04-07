@@ -5,13 +5,14 @@ vi.mock('@/encryption/aes', () => ({
     decryptAESGCM: async (data: Uint8Array) => data,
 }));
 
-import { pairingBegin, pairingExchange } from './gateway';
+import { pairingBegin, pairingExchange, sendTerminalKey } from './gateway';
 
 type MessageHandler = ((event: { data?: string }) => void) | null;
 type EventHandler = (() => void) | null;
 
 class MockWebSocket {
     static sentPayloads: Array<Record<string, unknown>> = [];
+    static openedUrls: string[] = [];
     static responseFactory: ((payload: Record<string, unknown>) => Record<string, unknown>) | null = null;
     static failOnOpen = false;
 
@@ -21,6 +22,7 @@ class MockWebSocket {
     onclose: ((event: { code: number; reason: string }) => void) | null = null;
 
     constructor(public readonly url: string) {
+        MockWebSocket.openedUrls.push(url);
         queueMicrotask(() => {
             if (MockWebSocket.failOnOpen) {
                 this.onerror?.();
@@ -34,9 +36,49 @@ class MockWebSocket {
         const parsed = JSON.parse(payload) as Record<string, unknown>;
         MockWebSocket.sentPayloads.push(parsed);
         queueMicrotask(() => {
-            const response = MockWebSocket.responseFactory
-                ? MockWebSocket.responseFactory(parsed)
-                : {
+            if (parsed.command === 'send-key') {
+                this.onmessage?.({
+                    data: JSON.stringify({
+                        request_id: parsed.request_id,
+                        status: 'ok',
+                        result: {
+                            terminal_id: parsed.terminal_id,
+                            generation: 9,
+                            sequence: 101,
+                            operation: 'send-key',
+                            acknowledged: true,
+                            write_id: 'wr_101',
+                        },
+                    }),
+                });
+                return;
+            }
+            if (parsed.command === 'gateway.pairing.exchange') {
+                const response = MockWebSocket.responseFactory
+                    ? MockWebSocket.responseFactory(parsed)
+                    : {
+                        request_id: parsed.request_id,
+                        status: 'ok',
+                        result: {
+                            token: 'token-1',
+                            token_id: 'token-id-1',
+                            auth_token: 'TOKEN-123',
+                            scopes: ['observe', 'mutate'],
+                            desktop_id: 'desktop-1',
+                            desktop_label: 'Desk 1',
+                            preferred_desktop_id: 'desktop-preferred',
+                            transport_mode: 'relay',
+                            public_endpoint: 'wss://edge.example.test/gateway',
+                            transport_shared_secret: 'relay-secret',
+                        },
+                    };
+                this.onmessage?.({
+                    data: JSON.stringify(response),
+                });
+                return;
+            }
+            this.onmessage?.({
+                data: JSON.stringify({
                     request_id: parsed.request_id,
                     status: 'ok',
                     result: {
@@ -44,10 +86,9 @@ class MockWebSocket {
                         client: parsed.client,
                         scopes: ['observe', 'mutate'],
                     },
-                };
-            this.onmessage?.({
-                data: JSON.stringify(response),
+                }),
             });
+            return;
         });
     }
 
@@ -59,6 +100,7 @@ describe('ghodex gateway pairing', () => {
 
     afterEach(() => {
         MockWebSocket.sentPayloads = [];
+        MockWebSocket.openedUrls = [];
         MockWebSocket.responseFactory = null;
         MockWebSocket.failOnOpen = false;
         globalThis.WebSocket = originalWebSocket;
@@ -81,6 +123,49 @@ describe('ghodex gateway pairing', () => {
             client: 'ghodex-remote-client',
             device_id: 'device-alpha',
             device_label: 'Alpha phone',
+        });
+    });
+
+    it('uses relay websocket endpoint for pairing exchange when relay metadata is provided', async () => {
+        globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+
+        await pairingExchange({
+            host: '10.0.0.7',
+            port: 29527,
+            pairingCode: 'PAIR-RELAY',
+            desktopId: 'desktop-relay-qr',
+            transportMode: 'relay',
+            publicEndpoint: 'wss://edge.example.test/gateway',
+        });
+
+        expect(MockWebSocket.openedUrls).toEqual(['wss://edge.example.test/gateway?desktop_id=desktop-relay-qr']);
+        expect(MockWebSocket.sentPayloads).toHaveLength(1);
+        expect(MockWebSocket.sentPayloads[0]).toMatchObject({
+            command: 'gateway.pairing.exchange',
+            pairing_code: 'PAIR-RELAY',
+            desktop_id: 'desktop-relay-qr',
+        });
+    });
+
+    it('sends terminal_key for send-key control mutations', async () => {
+        globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+
+        await sendTerminalKey({
+            host: '127.0.0.1',
+            port: 29527,
+            authToken: 'TOKEN-123',
+            desktopId: 'desktop-send-key-1',
+            terminalId: 'terminal-xyz',
+            terminalKey: 'enter',
+        });
+
+        expect(MockWebSocket.sentPayloads).toHaveLength(1);
+        expect(MockWebSocket.sentPayloads[0]).toMatchObject({
+            command: 'send-key',
+            auth_token: 'TOKEN-123',
+            desktop_id: 'desktop-send-key-1',
+            terminal_id: 'terminal-xyz',
+            terminal_key: 'enter',
         });
     });
 

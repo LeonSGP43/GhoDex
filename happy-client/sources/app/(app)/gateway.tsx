@@ -15,9 +15,8 @@ import { CameraView } from 'expo-camera';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { pairingBegin, pairingExchange } from '@/ghodex/gateway';
 import { recordScreenReady, recordScreenStarted } from '@/ghodex/observability';
-import { parseGatewayPairingQrPayload } from '@/ghodex/pairingQr';
+import { buildGatewayPairingExchangeAttempts, parseGatewayPairingQrPayload } from '@/ghodex/pairingQr';
 import {
-    applyGatewayConnectionSettings,
     applyPairingExchangeToSession,
     INITIAL_GATEWAY_SESSION,
     POLL_INTERVAL_OPTIONS,
@@ -189,18 +188,14 @@ export default function GhoDexGatewayScreen() {
     const resolvedPort = sanitizePort(portText);
     const sanitizedPollIntervalMs = sanitizePollInterval(pollIntervalMs);
     const paired = !!session.authToken.trim();
-    const buildSession = React.useCallback((base: StoredSession, delta?: Partial<StoredSession>): StoredSession => (
-        applyGatewayConnectionSettings(
-            base,
-            {
-                host: resolvedHost,
-                port: resolvedPort,
-                liveUpdatesEnabled,
-                pollIntervalMs: sanitizedPollIntervalMs,
-            },
-            delta,
-        )
-    ), [liveUpdatesEnabled, resolvedHost, resolvedPort, sanitizedPollIntervalMs]);
+    const buildSession = React.useCallback((base: StoredSession, delta?: Partial<StoredSession>): StoredSession => ({
+        ...base,
+        host: resolvedHost,
+        port: resolvedPort,
+        liveUpdatesEnabled,
+        pollIntervalMs: sanitizedPollIntervalMs,
+        ...delta,
+    }), [liveUpdatesEnabled, resolvedHost, resolvedPort, sanitizedPollIntervalMs]);
 
     const runAction = React.useCallback(async (action: BusyAction, task: () => Promise<void>) => {
         setBusyAction(action);
@@ -268,6 +263,7 @@ export default function GhoDexGatewayScreen() {
                 host: resolvedHost,
                 port: resolvedPort,
                 pairingCode: session.pairingCode,
+                desktopId: session.desktopId || undefined,
             });
 
             const nextSession = buildSession(
@@ -299,29 +295,80 @@ export default function GhoDexGatewayScreen() {
         }
 
         void runAction('scan', async () => {
-            const exchange = await pairingExchange({
+            const attempts = buildGatewayPairingExchangeAttempts(payload);
+            let exchange: Awaited<ReturnType<typeof pairingExchange>> | null = null;
+            let selectedAttempt = attempts[0] ?? {
                 host: payload.host,
                 port: payload.port,
-                pairingCode: payload.pairingCode,
-            });
+                desktopId: payload.desktopId,
+                transportMode: 'lan' as const,
+                publicEndpoint: undefined,
+            };
+            let lastError: unknown = null;
+
+            for (const attempt of attempts) {
+                try {
+                    exchange = await pairingExchange({
+                        host: attempt.host,
+                        port: attempt.port,
+                        pairingCode: payload.pairingCode,
+                        desktopId: attempt.desktopId,
+                        transportMode: attempt.transportMode,
+                        publicEndpoint: attempt.publicEndpoint,
+                    });
+                    selectedAttempt = attempt;
+                    break;
+                } catch (error) {
+                    lastError = error;
+                }
+            }
+
+            if (!exchange) {
+                if (lastError instanceof Error) {
+                    throw lastError;
+                }
+                throw new Error('Unable to exchange pairing code');
+            }
+
+            const resolvedPublicEndpoint = exchange.publicEndpoint ?? payload.publicEndpoint ?? session.publicEndpoint;
+            const resolvedDesktopId = exchange.desktopId
+                ?? exchange.preferredDesktopId
+                ?? selectedAttempt.desktopId
+                ?? payload.desktopId
+                ?? session.desktopId
+                ?? null;
+            const resolvedTransportMode = exchange.transportMode === 'relay'
+                ? 'relay'
+                : (selectedAttempt.transportMode === 'relay' && !!resolvedPublicEndpoint)
+                    ? 'relay'
+                    : session.transportMode;
+            const resolvedHost = selectedAttempt.host;
+            const resolvedPort = selectedAttempt.port;
 
             const nextSession = buildSession(
                 applyPairingExchangeToSession(
                     session,
                     {
-                        host: payload.host,
-                        port: payload.port,
+                        host: resolvedHost,
+                        port: resolvedPort,
                         pairingCode: payload.pairingCode,
                     },
-                    exchange,
+                    {
+                        ...exchange,
+                        desktopId: resolvedDesktopId,
+                        preferredDesktopId: exchange.preferredDesktopId ?? resolvedDesktopId,
+                        transportMode: resolvedTransportMode,
+                        publicEndpoint: resolvedPublicEndpoint,
+                        transportSharedSecret: exchange.transportSharedSecret ?? session.transportSharedSecret,
+                    },
                 ),
                 {
-                    host: payload.host,
-                    port: payload.port,
+                    host: resolvedHost,
+                    port: resolvedPort,
                 },
             );
-            setHost(payload.host);
-            setPortText(String(payload.port));
+            setHost(resolvedHost);
+            setPortText(String(resolvedPort));
             await saveStoredSession(nextSession);
             setSession(nextSession);
             router.replace('/');

@@ -34,13 +34,24 @@ describe('ghodex transport', () => {
             transportMode: 'relay',
             host: '192.168.1.5',
             port: 19527,
+            desktopId: 'desktop-1',
             publicEndpoint: 'wss://edge.example.test/gateway',
-        })).toBe('wss://edge.example.test/gateway');
+        })).toBe('wss://edge.example.test/gateway?desktop_id=desktop-1');
         expect(usesEncryptedGatewayTransport({
             transportMode: 'relay',
             publicEndpoint: 'wss://edge.example.test/gateway',
             transportSharedSecret: sharedSecret,
         })).toBe(true);
+    });
+
+    it('appends desktop_id when relay endpoint already has query params', () => {
+        expect(resolveGatewaySocketUrl({
+            transportMode: 'relay',
+            host: '192.168.1.5',
+            port: 19527,
+            desktopId: 'desktop-2',
+            publicEndpoint: 'wss://edge.example.test/gateway?region=asia',
+        })).toBe('wss://edge.example.test/gateway?region=asia&desktop_id=desktop-2');
     });
 
     it('falls back to lan url when relay endpoint is missing', () => {
