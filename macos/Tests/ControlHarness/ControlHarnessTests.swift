@@ -288,14 +288,14 @@ private struct ControlHarnessProbePayload: Decodable {
 }
 
 private enum ControlHarnessSocketSupport {
-    static func connect(to path: String) throws -> Int32 {
+    static func connect(to path: String, timeoutSeconds: Int = 2) throws -> Int32 {
         let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else {
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
 
         do {
-            var timeout = timeval(tv_sec: 2, tv_usec: 0)
+            var timeout = timeval(tv_sec: timeoutSeconds, tv_usec: 0)
             let timeoutSize = socklen_t(MemoryLayout<timeval>.size)
             guard setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, timeoutSize) == 0 else {
                 throw POSIXError(.init(rawValue: errno) ?? .EIO)
@@ -7884,7 +7884,13 @@ struct ControlHarnessTests {
         }
 
         func send(_ payload: String) throws -> Data {
-            let clientFD = try ControlHarnessSocketSupport.connect(to: service.socketURL.path)
+            // This path does three request/response cycles against a MainActor-backed
+            // handler during the wider suite, so a slightly longer socket timeout
+            // avoids false EAGAIN failures under test load.
+            let clientFD = try ControlHarnessSocketSupport.connect(
+                to: service.socketURL.path,
+                timeoutSeconds: 5
+            )
             defer { Darwin.close(clientFD) }
 
             try ControlHarnessSocketSupport.writeAll(Data(payload.utf8), to: clientFD)
