@@ -364,6 +364,7 @@ final class ControlHarnessGateway {
     private var activeStreamIDsByIdentity: [String: Set<UUID>] = [:]
     private var desktopRoutesByID: [String: DesktopRoute] = [:]
     private var passiveRegistration: PassiveGatewayRegistration?
+    private var pendingPassiveRegistration: PassiveGatewayRegistration?
 
     init(
         bundleID: String,
@@ -458,6 +459,7 @@ final class ControlHarnessGateway {
             }
             source.resume()
             acceptSource = source
+            registerPendingPassiveRouteIfNeeded()
             if requestedPort > 0, listener.port != requestedPort {
                 if let passive = passiveRegistration {
                     logger.notice(
@@ -491,6 +493,7 @@ final class ControlHarnessGateway {
     }
 
     func stop() {
+        pendingPassiveRegistration = nil
         unregisterPassiveRouteIfNeeded()
 
         let activeStreams = lifecycleQueue.sync {
@@ -560,7 +563,10 @@ final class ControlHarnessGateway {
         }
 
         let ownerHost = Self.localProbeHost(from: host)
-        let supportsRouting = try gatewayOwnerSupportsDesktopRouting(host: ownerHost, port: requestedPort)
+        let supportsRouting = try waitForGatewayOwnerRoutingSupport(
+            host: ownerHost,
+            port: requestedPort
+        )
         guard supportsRouting else {
             return nil
         }
@@ -575,15 +581,8 @@ final class ControlHarnessGateway {
             upstreamPort: listener.port
         )
 
-        do {
-            try registerPassiveRoute(registration)
-            passiveRegistration = registration
-            return listener
-        } catch {
-            Darwin.close(listener.fd)
-            logger.error("failed to register passive desktop route: \(error.localizedDescription, privacy: .public)")
-            return nil
-        }
+        pendingPassiveRegistration = registration
+        return listener
     }
 
     private func gatewayOwnerSupportsDesktopRouting(
@@ -592,6 +591,31 @@ final class ControlHarnessGateway {
     ) throws -> Bool {
         let payload = try queryGatewayPingPayload(host: host, port: port)
         return payload.supportsDesktopRouting
+    }
+
+    private func waitForGatewayOwnerRoutingSupport(
+        host: String,
+        port: UInt16
+    ) throws -> Bool {
+        let deadline = Date().addingTimeInterval(0.5)
+        var lastError: Error?
+
+        repeat {
+            do {
+                return try gatewayOwnerSupportsDesktopRouting(host: host, port: port)
+            } catch {
+                guard Self.shouldRetryLocalGatewayCommand(error) else {
+                    throw error
+                }
+                lastError = error
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+        } while Date() < deadline
+
+        if let lastError {
+            throw lastError
+        }
+        return false
     }
 
     private func queryGatewayPingPayload(
@@ -634,6 +658,43 @@ final class ControlHarnessGateway {
         )
         guard envelope.status == "ok" else {
             throw POSIXError(.ECONNREFUSED)
+        }
+    }
+
+    private func registerPassiveRouteWithRetry(_ registration: PassiveGatewayRegistration) throws {
+        let deadline = Date().addingTimeInterval(0.5)
+        var lastError: Error?
+
+        repeat {
+            do {
+                try registerPassiveRoute(registration)
+                return
+            } catch {
+                guard Self.shouldRetryLocalGatewayCommand(error) else {
+                    throw error
+                }
+                lastError = error
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+        } while Date() < deadline
+
+        if let lastError {
+            throw lastError
+        }
+    }
+
+    private func registerPendingPassiveRouteIfNeeded() {
+        guard let registration = pendingPassiveRegistration else {
+            return
+        }
+
+        do {
+            try registerPassiveRouteWithRetry(registration)
+            passiveRegistration = registration
+            pendingPassiveRegistration = nil
+        } catch {
+            pendingPassiveRegistration = nil
+            logger.error("failed to register passive desktop route: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -746,12 +807,20 @@ final class ControlHarnessGateway {
         var requestRecorded = false
 
         do {
-            if try Self.looksLikeWebSocketHandshake(clientFD) {
-                try handleWebSocketClient(clientFD, peerDescription: peerDescription)
+            try Self.setBlocking(clientFD)
+            try? Self.setNoDelay(clientFD)
+            let initialData = try Self.readInitialClientData(from: clientFD)
+            if Self.looksLikeWebSocketHandshake(initialData) {
+                try handleWebSocketClient(
+                    clientFD,
+                    peerDescription: peerDescription,
+                    initialData: initialData
+                )
                 return
             }
 
-            let requestData = try Self.readAll(from: clientFD)
+            var requestData = initialData
+            requestData.append(try Self.readAll(from: clientFD))
             if let proxied = try proxyRawRequestIfNeeded(requestData) {
                 requestCommand = proxied.command
                 try Self.writeAll(proxied.responseData, to: clientFD)
@@ -838,9 +907,10 @@ final class ControlHarnessGateway {
 
     private func handleWebSocketClient(
         _ clientFD: Int32,
-        peerDescription: String
+        peerDescription: String,
+        initialData: Data = Data()
     ) throws {
-        let handshake = try Self.readHTTPHeaders(from: clientFD)
+        let handshake = try Self.readHTTPHeaders(from: clientFD, initialData: initialData)
         if let requestedDesktopID = Self.parseRequestedDesktopID(fromWebSocketHandshake: handshake.headers) {
             switch resolveRouteDecision(for: requestedDesktopID) {
             case .local:
@@ -2452,6 +2522,24 @@ final class ControlHarnessGateway {
         return trimmed
     }
 
+    private static func shouldRetryLocalGatewayCommand(_ error: Error) -> Bool {
+        if let posixError = error as? POSIXError {
+            switch posixError.code {
+            case .EAGAIN, .ECONNREFUSED, .ETIMEDOUT, .EHOSTDOWN, .EHOSTUNREACH, .ENETDOWN, .ENETUNREACH:
+                return true
+            default:
+                return false
+            }
+        }
+
+        if let routeError = error as? ControlHarnessGatewayRouteRegistryError,
+           routeError == .upstreamProbeFailed {
+            return true
+        }
+
+        return false
+    }
+
     private static func isLoopbackHost(_ host: String) -> Bool {
         let normalized = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return normalized == "127.0.0.1"
@@ -2523,19 +2611,26 @@ final class ControlHarnessGateway {
         }
     }
 
-    private static func looksLikeWebSocketHandshake(_ fd: Int32) throws -> Bool {
+    private static func readInitialClientData(from fd: Int32) throws -> Data {
+        var data = Data()
         var buffer = [UInt8](repeating: 0, count: 4)
-        let deadline = DispatchTime.now().uptimeNanoseconds + 250_000_000
+        let deadline = DispatchTime.now().uptimeNanoseconds + 2_000_000_000
 
         while true {
-            let count = Darwin.recv(fd, &buffer, buffer.count, MSG_PEEK | MSG_DONTWAIT)
+            if !data.isEmpty {
+                if data.count >= 4 || httpHeaderBoundary(in: data) != nil {
+                    return data
+                }
+            }
+
+            let count = Darwin.read(fd, &buffer, buffer.count)
             if count == -1 {
                 if errno == EINTR {
                     continue
                 }
                 if errno == EAGAIN || errno == EWOULDBLOCK {
                     if DispatchTime.now().uptimeNanoseconds >= deadline {
-                        return false
+                        return data
                     }
                     usleep(1_000)
                     continue
@@ -2543,43 +2638,47 @@ final class ControlHarnessGateway {
                 throw POSIXError(.init(rawValue: errno) ?? .EIO)
             }
             if count == 0 {
-                return false
+                return data
             }
-
-            let prefix = String(decoding: buffer.prefix(count), as: UTF8.self)
-            if prefix.hasPrefix("GET ") {
-                return true
-            }
-
-            // Reverse tunnels can fragment the handshake verb and initially
-            // deliver only "G", "GE", or "GET". Wait briefly before falling
-            // back to the raw JSON request path to avoid false negatives.
-            if (prefix == "G" || prefix == "GE" || prefix == "GET"),
-               DispatchTime.now().uptimeNanoseconds < deadline {
-                usleep(1_000)
-                continue
-            }
-
-            return false
+            data.append(buffer, count: count)
         }
-
-
     }
 
-    private static func readHTTPHeaders(from fd: Int32) throws -> (headers: Data, remainder: Data) {
-        var data = Data()
+    private static func looksLikeWebSocketHandshake(_ data: Data) -> Bool {
+        let prefix = String(bytes: data.prefix(4), encoding: .utf8) ?? ""
+        if prefix.hasPrefix("GET ") {
+            return true
+        }
+
+        // Reverse tunnels can fragment the handshake verb and initially
+        // deliver only "G", "GE", or "GET". These prefixes are still
+        // unambiguously HTTP/WebSocket traffic for this socket.
+        return prefix == "G" || prefix == "GE" || prefix == "GET"
+    }
+
+    private static func readHTTPHeaders(
+        from fd: Int32,
+        initialData: Data = Data()
+    ) throws -> (headers: Data, remainder: Data) {
+        var data = initialData
         var buffer = [UInt8](repeating: 0, count: 1024)
-        let terminator = Data("\r\n\r\n".utf8)
+        let deadline = DispatchTime.now().uptimeNanoseconds + 2_000_000_000
 
         while true {
+            if let headerEnd = httpHeaderBoundary(in: data) {
+                return (
+                    headers: Data(data[..<headerEnd]),
+                    remainder: Data(data[headerEnd...])
+                )
+            }
+
             let count = Darwin.read(fd, &buffer, buffer.count)
             if count > 0 {
                 data.append(buffer, count: count)
                 if data.count > 16_384 {
                     throw ControlHarnessGatewayError.invalidWebSocketHandshake
                 }
-                if let range = data.range(of: terminator) {
-                    let headerEnd = range.upperBound
+                if let headerEnd = httpHeaderBoundary(in: data) {
                     return (
                         headers: Data(data[..<headerEnd]),
                         remainder: Data(data[headerEnd...])
@@ -2593,9 +2692,30 @@ final class ControlHarnessGateway {
             if errno == EINTR {
                 continue
             }
+            if errno == EAGAIN || errno == EWOULDBLOCK {
+                if DispatchTime.now().uptimeNanoseconds >= deadline {
+                    throw ControlHarnessGatewayError.invalidWebSocketHandshake
+                }
+                usleep(1_000)
+                continue
+            }
             throw POSIXError(.init(rawValue: errno) ?? .EIO)
         }
 
+    }
+
+    private static func httpHeaderBoundary(in data: Data) -> Data.Index? {
+        if let range = data.range(of: Data("\r\n\r\n".utf8)) {
+            return range.upperBound
+        }
+        if let range = data.range(of: Data("\n\n".utf8)) {
+            return range.upperBound
+        }
+        let truncatedCRLF = Data("\r\n\r".utf8)
+        if data.count >= truncatedCRLF.count && Data(data.suffix(truncatedCRLF.count)) == truncatedCRLF {
+            return data.endIndex
+        }
+        return nil
     }
 
     private static func parseWebSocketKey(from handshake: Data) throws -> String {

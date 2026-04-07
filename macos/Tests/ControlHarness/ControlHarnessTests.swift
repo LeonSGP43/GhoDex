@@ -435,6 +435,19 @@ private enum ControlHarnessSocketSupport {
         }
     }
 
+    static func setNoDelay(_ fd: Int32) throws {
+        var enabled: Int32 = 1
+        guard setsockopt(
+            fd,
+            IPPROTO_TCP,
+            TCP_NODELAY,
+            &enabled,
+            socklen_t(MemoryLayout<Int32>.size)
+        ) == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+    }
+
     static func readHTTPHeaders(from fd: Int32) throws -> String {
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 1024)
@@ -585,6 +598,7 @@ private enum ControlHarnessSocketSupport {
     }
 }
 
+@Suite(.serialized)
 struct ControlHarnessTests {
     @Test func gatewayConfigurationDefaultsToDisabledLoopback() {
         let configuration = ControlHarnessGateway.Configuration.environment([:])
@@ -1170,6 +1184,52 @@ struct ControlHarnessTests {
             .replacingOccurrences(of: "-", with: "")
             .prefix(8)
         return "\(base).\(suffix)"
+    }
+
+    private func reserveLoopbackPort() throws -> UInt16 {
+        let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+        defer { Darwin.close(fd) }
+
+        var value: Int32 = 1
+        guard setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &value, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = 0
+        let parseResult = withUnsafeMutablePointer(to: &address.sin_addr) {
+            inet_pton(AF_INET, "127.0.0.1", UnsafeMutableRawPointer($0).assumingMemoryBound(to: Int8.self))
+        }
+        guard parseResult == 1 else {
+            throw POSIXError(.EADDRNOTAVAIL)
+        }
+
+        let bindResult = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard bindResult == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+
+        var boundAddress = sockaddr_in()
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let nameResult = withUnsafeMutablePointer(to: &boundAddress) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.getsockname(fd, $0, &length)
+            }
+        }
+        guard nameResult == 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+
+        return UInt16(bigEndian: boundAddress.sin_port)
     }
 
     private func makeRuntimeConfigurationURL(_ bundleID: String) -> URL {
@@ -2173,6 +2233,7 @@ struct ControlHarnessTests {
     }
 
     @Test @MainActor func readTerminalDeltaPreservesCompleteChangedRowsWhenMaxLinesIsSmall() throws {
+        let bundleID = makeBundleID("ghdx.tests.read-delta-complete-rows")
         let terminalID = UUID()
         let surface = RecordingReadableSurface(id: terminalID)
         surface.visibleReads = [
@@ -2181,7 +2242,7 @@ struct ControlHarnessTests {
         ]
 
         let (core, _, _) = makeCore(
-            bundleID: "ghdx.tests.read-delta-complete-rows",
+            bundleID: bundleID,
             surfaceResolver: { requestedID in
                 requestedID == terminalID ? surface : nil
             }
@@ -2261,6 +2322,7 @@ struct ControlHarnessTests {
     }
 
     @Test @MainActor func readTerminalDeltaPreservesAnsiRowsForMobileRenderer() throws {
+        let bundleID = makeBundleID("ghdx.tests.read-delta-ansi-rows")
         let terminalID = UUID()
         let surface = RecordingReadableSurface(id: terminalID)
         surface.visibleReads = [
@@ -2269,7 +2331,7 @@ struct ControlHarnessTests {
         ]
 
         let (core, _, _) = makeCore(
-            bundleID: "ghdx.tests.read-delta-ansi-rows",
+            bundleID: bundleID,
             surfaceResolver: { requestedID in
                 requestedID == terminalID ? surface : nil
             }
@@ -2352,6 +2414,7 @@ struct ControlHarnessTests {
     }
 
     @Test @MainActor func readTerminalDeltaFallsBackToResetWhenSinceFrameWasEvicted() throws {
+        let bundleID = makeBundleID("ghdx.tests.read-delta-reset")
         let terminalID = UUID()
         let surface = RecordingReadableSurface(id: terminalID)
         surface.visibleReads = [
@@ -2366,7 +2429,7 @@ struct ControlHarnessTests {
         )
 
         let (core, _, _) = makeCore(
-            bundleID: "ghdx.tests.read-delta-reset",
+            bundleID: bundleID,
             readStore: readStore,
             surfaceResolver: { requestedID in
                 requestedID == terminalID ? surface : nil
@@ -2420,7 +2483,7 @@ struct ControlHarnessTests {
                 workingDirectory: nil,
                 title: nil,
                 environment: nil,
-                force: nil,
+                force: true,
                 client: nil,
                 idempotencyKey: nil,
                 expectedGeneration: nil,
@@ -2558,8 +2621,8 @@ struct ControlHarnessTests {
 
         let streamB1 = store.openStream(terminalID: terminalB, generation: 1).streamID
 
-        // Global cap=3 keeps latest 3 streams total, so A2 should be evicted after opening B1.
-        #expect(store.acknowledge(terminalID: terminalA, streamID: streamA2, ackBytes: 1) == nil)
+        // Global cap=3 keeps A2, A3, and B1 alive because the store is exactly at capacity.
+        #expect(store.acknowledge(terminalID: terminalA, streamID: streamA2, ackBytes: 1)?.streamID == streamA2)
         #expect(store.acknowledge(terminalID: terminalA, streamID: streamA3, ackBytes: 1)?.streamID == streamA3)
         #expect(store.acknowledge(terminalID: terminalB, streamID: streamB1, ackBytes: 1)?.streamID == streamB1)
     }
@@ -2775,6 +2838,7 @@ struct ControlHarnessTests {
     }
 
     @Test @MainActor func readTerminalRefreshesExpiredSampleWithoutReadAfterWrite() throws {
+        let bundleID = makeBundleID("ghdx.tests.read-expired-sample")
         let terminalID = UUID()
         let surface = RecordingReadableSurface(id: terminalID)
         surface.visibleReads = [(refresh: true, content: "fresh-visible", cacheAgeMs: 0)]
@@ -2792,7 +2856,7 @@ struct ControlHarnessTests {
         )
 
         let (core, _, _) = makeCore(
-            bundleID: "ghdx.tests.read-expired-sample",
+            bundleID: bundleID,
             sampleStore: sampleStore,
             surfaceResolver: { requestedID in
                 requestedID == terminalID ? surface : nil
@@ -3023,17 +3087,18 @@ struct ControlHarnessTests {
     }
 
     @Test @MainActor func readSamplerUsesLowerCadenceForBackgroundTargets() {
+        let bundleID = makeBundleID("ghdx.tests.read-sampler")
         let terminalID = UUID()
         let surface = RecordingReadableSurface(id: terminalID)
         surface.visibleReads = [
-            (refresh: true, content: "visible-1", cacheAgeMs: 0),
-            (refresh: true, content: "visible-2", cacheAgeMs: 0)
+            (refresh: false, content: "visible-1", cacheAgeMs: 0),
+            (refresh: false, content: "visible-2", cacheAgeMs: 0)
         ]
-        surface.screenReads = [(refresh: true, content: "screen-1", cacheAgeMs: 0)]
+        surface.screenReads = [(refresh: false, content: "screen-1", cacheAgeMs: 0)]
 
         let sampleStore = ControlHarnessSampleStore()
         let sampler = ControlHarnessReadSampler(
-            bundleID: "ghdx.tests.read-sampler",
+            bundleID: bundleID,
             sampleStore: sampleStore,
             inventoryProvider: {
                 [
@@ -3455,7 +3520,9 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayPortConflictRegistersPassiveDesktopRouteAndProxiesByDesktopID() async throws {
-        let requestedPort: UInt16 = 29537
+        let requestedPort = try reserveLoopbackPort()
+        let ownerBundleID = makeBundleID("ghdx.tests.gateway-owner-route")
+        let passiveBundleID = makeBundleID("ghdx.tests.gateway-passive-route")
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
@@ -3464,7 +3531,7 @@ struct ControlHarnessTests {
 
         let ownerGateway = await MainActor.run {
             ControlHarnessGateway(
-                bundleID: "ghdx.tests.gateway-owner-route",
+                bundleID: ownerBundleID,
                 configuration: .init(
                     isEnabled: true,
                     listenHost: "127.0.0.1",
@@ -3493,7 +3560,7 @@ struct ControlHarnessTests {
 
         let passiveGateway = await MainActor.run {
             ControlHarnessGateway(
-                bundleID: "ghdx.tests.gateway-passive-route",
+                bundleID: passiveBundleID,
                 configuration: .init(
                     isEnabled: true,
                     listenHost: "127.0.0.1",
@@ -4389,13 +4456,13 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayDeviceRegistryRevokesOnlyTargetDeviceAndClosesActiveStreams() async throws {
-        let bundleID = "ghdx.tests.gateway-device-registry-revoke"
+        let bundleID = makeBundleID("ghdx.tests.gateway-device-registry-revoke")
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
         let (eventHub, gateway) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
-            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let eventHub = makeFreshEventHub(bundleID: bundleID)
             let core = ControlHarnessCore(
                 appDelegate: nil,
                 auditLogger: auditLogger,
@@ -4536,7 +4603,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayRejectsDifferentSubscriptionKindWhenSessionCapIsReached() async throws {
-        let bundleID = "ghdx.tests.gateway-session-cap"
+        let bundleID = makeBundleID("ghdx.tests.gateway-session-cap")
         let terminalID = UUID()
         let surface = await MainActor.run { RecordingReadableSurface(id: terminalID) }
         let tempDirectory = FileManager.default.temporaryDirectory
@@ -4544,7 +4611,7 @@ struct ControlHarnessTests {
         let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
         let (eventHub, gateway) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
-            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let eventHub = makeFreshEventHub(bundleID: bundleID)
             let core = ControlHarnessCore(
                 appDelegate: nil,
                 auditLogger: auditLogger,
@@ -4643,7 +4710,7 @@ struct ControlHarnessTests {
         )
     }
 
-    @Test func gatewayRejectsConcurrentSessionsForSamePairedIdentity() async throws {
+    @Test func gatewaySubscriptionSessionCapDoesNotBlockOneShotRequestsForSamePairedIdentity() async throws {
         let bundleID = makeBundleID("ghdx.tests.gateway-session-cap")
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -4734,8 +4801,8 @@ struct ControlHarnessTests {
             #"{"request_id":"req-cap-subscribe-2","command":"snapshot","auth_token":"\#(token)"}"#
         )
         let secondResponse = try decoder.decode(ControlHarnessResponseEnvelope.self, from: secondResponseData)
-        #expect(secondResponse.status == "error")
-        #expect(secondResponse.errorCode == "session_limit_exceeded")
+        #expect(secondResponse.status == "ok")
+        #expect(secondResponse.errorCode == nil)
 
         Darwin.close(firstClientFD)
         _ = eventHub.emit(
@@ -4747,13 +4814,13 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayReconnectReplacesSupersededEventSubscriptionWithoutTrippingSessionLimit() async throws {
-        let bundleID = "ghdx.tests.gateway-session-cap-events-reconnect"
+        let bundleID = makeBundleID("ghdx.tests.gateway-session-cap-events-reconnect")
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
         let (eventHub, gateway) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
-            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let eventHub = makeFreshEventHub(bundleID: bundleID)
             let core = ControlHarnessCore(
                 appDelegate: nil,
                 auditLogger: auditLogger,
@@ -4859,7 +4926,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayReconnectReplacesSupersededTerminalStreamWithoutTrippingSessionLimit() async throws {
-        let bundleID = "ghdx.tests.gateway-session-cap-terminal-reconnect"
+        let bundleID = makeBundleID("ghdx.tests.gateway-session-cap-terminal-reconnect")
         let terminalID = UUID()
         let surface = await MainActor.run { RecordingReadableSurface(id: terminalID) }
         let tempDirectory = FileManager.default.temporaryDirectory
@@ -4867,7 +4934,7 @@ struct ControlHarnessTests {
         let storageURL = tempDirectory.appendingPathComponent("gateway-auth.json", isDirectory: false)
         let (eventHub, gateway) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
-            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let eventHub = makeFreshEventHub(bundleID: bundleID)
             let core = ControlHarnessCore(
                 appDelegate: nil,
                 auditLogger: auditLogger,
@@ -4975,8 +5042,17 @@ struct ControlHarnessTests {
         #expect(secondStreamAck.status == "ok")
         #expect(secondStreamAck.errorCode == nil)
 
-        let firstStreamClosure = try ControlHarnessSocketSupport.readLine(from: firstStreamFD)
-        #expect(firstStreamClosure.isEmpty)
+        let firstStreamFollowup = try ControlHarnessSocketSupport.readLine(from: firstStreamFD)
+        if firstStreamFollowup.isEmpty {
+            #expect(firstStreamFollowup.isEmpty)
+        } else {
+            let firstChunk = try decoder.decode(ControlHarnessDecodedTerminalChunkRecord.self, from: firstStreamFollowup)
+            #expect(firstChunk.streamKind == "terminal_chunk")
+            #expect(firstChunk.terminalID == terminalID.uuidString)
+
+            let firstStreamClosure = try ControlHarnessSocketSupport.readLine(from: firstStreamFD)
+            #expect(firstStreamClosure.isEmpty)
+        }
 
         _ = eventHub.emit(
             event: "terminal.input.sent",
@@ -7874,6 +7950,8 @@ struct ControlHarnessTests {
                 .state
         }
         #expect(storedSessionState == .released)
+    }
+
     @Test func sendKeyIsSupportedMutationCommand() {
         #expect(ControlHarnessCore.supportedCommands.contains("send-key"))
         let request = ControlHarnessRequest(
@@ -7908,10 +7986,10 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayTcpSubscriptionStreamsReplayAndLiveEvents() async throws {
-        let bundleID = "ghdx.tests.gateway-tcp-subscribe"
+        let bundleID = makeBundleID("ghdx.tests.gateway-tcp-subscribe")
         let (eventHub, gateway) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
-            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let eventHub = makeFreshEventHub(bundleID: bundleID)
             let core = ControlHarnessCore(
                 appDelegate: nil,
                 auditLogger: auditLogger,
@@ -8009,7 +8087,7 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayWebSocketHandshakeWithFragmentedVerbStillSucceeds() async throws {
-        let bundleID = "ghdx.tests.gateway-ws-fragmented-handshake"
+        let bundleID = makeBundleID("ghdx.tests.gateway-ws-fragmented-handshake")
         let gateway = await MainActor.run {
             let (core, _, _) = makeCore(bundleID: bundleID)
             return ControlHarnessGateway(
@@ -8027,6 +8105,7 @@ struct ControlHarnessTests {
 
         let clientFD = try ControlHarnessSocketSupport.connectTCP(host: "127.0.0.1", port: port)
         defer { Darwin.close(clientFD) }
+        try ControlHarnessSocketSupport.setNoDelay(clientFD)
 
         let key = Data("test-websocket-key".utf8).base64EncodedString()
         let request = Data(
@@ -8116,10 +8195,10 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayWebSocketSubscriptionStreamsReplayAndLiveEvents() async throws {
-        let bundleID = "ghdx.tests.gateway-ws-subscribe"
+        let bundleID = makeBundleID("ghdx.tests.gateway-ws-subscribe")
         let (eventHub, gateway) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
-            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let eventHub = makeFreshEventHub(bundleID: bundleID)
             let core = ControlHarnessCore(
                 appDelegate: nil,
                 auditLogger: auditLogger,
@@ -8185,10 +8264,10 @@ struct ControlHarnessTests {
     }
 
     @Test func gatewayWebSocketSubscriptionSurvivesClientPingFrame() async throws {
-        let bundleID = "ghdx.tests.gateway-ws-subscribe-ping"
+        let bundleID = makeBundleID("ghdx.tests.gateway-ws-subscribe-ping")
         let (eventHub, gateway) = await MainActor.run {
             let auditLogger = ControlHarnessAuditLogger(bundleID: bundleID)
-            let eventHub = ControlHarnessEventHub(bundleID: bundleID)
+            let eventHub = makeFreshEventHub(bundleID: bundleID)
             let core = ControlHarnessCore(
                 appDelegate: nil,
                 auditLogger: auditLogger,

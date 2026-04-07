@@ -122,11 +122,10 @@ final class ControlHarnessReadSampler {
     func refreshAllNow(now: Date = Date()) {
         let started = DispatchTime.now()
         let targets = inventoryProvider()
-        let samplingTargets = targets.filter { $0.activityClass != .background }
-        reconfigureTimerIfNeeded(for: samplingTargets)
+        reconfigureTimerIfNeeded(for: targets)
         var refreshedCount = 0
 
-        for target in samplingTargets {
+        for target in targets {
             if refreshIfDue(target: target, scope: "visible", now: now) {
                 refreshedCount += 1
             }
@@ -136,7 +135,7 @@ final class ControlHarnessReadSampler {
         }
 
         performanceMonitor?.recordSamplerTick(
-            targetCount: samplingTargets.count,
+            targetCount: targets.count,
             refreshedCount: refreshedCount,
             durationMs: Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000,
             at: now

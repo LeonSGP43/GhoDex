@@ -3346,7 +3346,8 @@ final class ControlHarnessCore {
         }
 
         let observedWriteID = request.readAfterWriteID?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let forceFreshRead = observedWriteID?.isEmpty == false
+        let forceFreshRead = request.force == true
+            || observedWriteID?.isEmpty == false
             || mode == "delta"
             || request.sinceFrameID != nil
         let snapshot = try captureTerminalSnapshot(
@@ -3369,20 +3370,18 @@ final class ControlHarnessCore {
             ? delta.changedRows
             : Self.applyChangedRowBudget(delta.changedRows, maxLines: request.maxLines)
 
-        let responseContent: String
         let contentKind: String
         switch mode {
         case "snapshot":
-            responseContent = window.text
             contentKind = "snapshot"
         case "delta":
-            responseContent = Self.applyTextBudget(
-                delta.text,
-                maxChars: request.maxChars
-            )
-            contentKind = "delta"
+            switch delta.kind {
+            case "append", "rows", "none":
+                contentKind = "delta"
+            default:
+                contentKind = "snapshot"
+            }
         default:
-            responseContent = window.text
             contentKind = "snapshot"
         }
 
@@ -3424,7 +3423,9 @@ final class ControlHarnessCore {
             nextCursor: mode == "snapshot" ? window.nextCursor : nil,
             observedWriteID: observedWriteID,
             readAfterReady: readAfterReady,
-            content: responseContent
+            // Keep `content` authoritative so delta consumers can fall back to
+            // a full replace when row-level merge is unsafe or lineage resets.
+            content: window.text
         )
     }
 
@@ -3619,10 +3620,14 @@ final class ControlHarnessCore {
         let activityClass = samplingActivityResolver(terminalUUID)
             ?? sampleStore.sample(for: terminalID, scope: scope)?.activityClass
             ?? .observed
+        let existingSample = sampleStore.sample(for: terminalID, scope: scope)
+        let sampleIsFresh = existingSample.map {
+            sampleStore.isFresh($0, activityClass: activityClass, now: currentTime)
+        } ?? false
 
         if !forceFresh,
-           let sample = sampleStore.sample(for: terminalID, scope: scope),
-           sampleStore.isFresh(sample, activityClass: activityClass, now: currentTime) {
+           let sample = existingSample,
+           sampleIsFresh {
             return TerminalReadResolution(
                 content: sample.content,
                 consistency: sample.consistency,
@@ -3632,7 +3637,7 @@ final class ControlHarnessCore {
         }
 
         let shouldForceRefresh = shouldForceFreshRead(
-            requested: forceFresh,
+            requested: forceFresh || !sampleIsFresh,
             terminalID: terminalID,
             scope: scope,
             activityClass: activityClass,
