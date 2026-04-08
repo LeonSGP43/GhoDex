@@ -1721,6 +1721,7 @@ struct ControlHarnessTerminalStreamPollChunk {
     let payload: Data
 }
 
+// swiftlint:disable:next type_name
 final class ControlHarnessTerminalStreamSubscriptionSession: ControlHarnessSubscriptionSession {
     typealias PollChunk = (_ sinceFrameID: String?) -> ControlHarnessTerminalStreamPollChunk?
 

@@ -16,6 +16,25 @@ struct AnyEncodable: Encodable {
     }
 }
 
+private struct ControlTerminalSnapshotCapture {
+    let content: String
+    let consistency: String
+    let cacheAgeMs: Int
+    let capturedAt: Date
+    let frame: ControlHarnessReadFrameSnapshot
+}
+
+private struct ControlTerminalStreamChunkPayload {
+    let streamID: String
+    let terminalID: String
+    let generation: Int
+    let frameID: String
+    let parentFrameID: String?
+    let deltaKind: String
+    let content: String
+    let changedRows: [ControlHarnessReadChangedRow]
+}
+
 private struct RuntimeDiagnosticsRecord: Encodable {
     let timestamp: String
     let component: String
@@ -1983,7 +2002,7 @@ final class ControlHarnessAuditLogger {
 @MainActor
 final class ControlHarnessCore {
     nonisolated static let protocolVersion = "1.0"
-    static let supportedCommands = [
+    nonisolated static let supportedCommands = [
         "handshake",
         "snapshot",
         "agent.runtime.snapshot",
@@ -2054,9 +2073,9 @@ final class ControlHarnessCore {
     private static let readMemoryPressureProbeIntervalSeconds: TimeInterval = 1.0
     private static let readMemoryThrottleLogIntervalSeconds: TimeInterval = 10.0
 #if DEBUG
-    private static let readMemoryPressureFootprintThresholdBytes: UInt64 = 2 * 1024 * 1024 * 1024
+    private static let readPressureFootprintLimitBytes: UInt64 = 2 * 1024 * 1024 * 1024
 #else
-    private static let readMemoryPressureFootprintThresholdBytes: UInt64 = 3 * 1024 * 1024 * 1024
+    private static let readPressureFootprintLimitBytes: UInt64 = 3 * 1024 * 1024 * 1024
 #endif
 
     @MainActor
@@ -2115,7 +2134,9 @@ final class ControlHarnessCore {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            self?.handleTerminalWindowBellDidChange(notification)
+            Task { @MainActor [weak self] in
+                self?.handleTerminalWindowBellDidChange(notification)
+            }
         }
     }
 
@@ -3534,13 +3555,7 @@ final class ControlHarnessCore {
         terminalIDString: String,
         scope: String,
         forceFresh: Bool
-    ) throws -> (
-        content: String,
-        consistency: String,
-        cacheAgeMs: Int,
-        capturedAt: Date,
-        frame: ControlHarnessReadFrameSnapshot
-    ) {
+    ) throws -> ControlTerminalSnapshotCapture {
         guard let surface = surfaceResolver(terminalID) else {
             if appDelegate == nil {
                 throw ControlHarnessCoreError.appUnavailable
@@ -3556,7 +3571,7 @@ final class ControlHarnessCore {
             forceFresh: forceFresh
         )
         let frame = readStore.capture(terminalID: terminalIDString, scope: scope, content: read.content)
-        return (
+        return .init(
             content: read.content,
             consistency: read.consistency,
             cacheAgeMs: read.cacheAgeMs,
@@ -3684,7 +3699,7 @@ final class ControlHarnessCore {
         guard let footprintBytes = currentReadPhysicalFootprintBytes(now: now) else {
             return true
         }
-        guard footprintBytes >= Self.readMemoryPressureFootprintThresholdBytes else {
+        guard footprintBytes >= Self.readPressureFootprintLimitBytes else {
             return true
         }
 
@@ -3744,7 +3759,7 @@ final class ControlHarnessCore {
                 "terminal_id": terminalID,
                 "scope": scope,
                 "activity_class": activityClass.rawValue,
-                "threshold_bytes": "\(Self.readMemoryPressureFootprintThresholdBytes)",
+                "threshold_bytes": "\(Self.readPressureFootprintLimitBytes)",
                 "physical_footprint_bytes": "\(footprintBytes)",
             ]
         )
@@ -3965,26 +3980,17 @@ final class ControlHarnessCore {
         )
     }
 
-    private func encodeTerminalStreamChunk(
-        streamID: String,
-        terminalID: String,
-        generation: Int,
-        frameID: String,
-        parentFrameID: String?,
-        deltaKind: String,
-        content: String,
-        changedRows: [ControlHarnessReadChangedRow]
-    ) throws -> Data {
+    private func encodeTerminalStreamChunk(_ payload: ControlTerminalStreamChunkPayload) throws -> Data {
         let record = ControlTerminalStreamChunkRecord(
-            streamID: streamID,
-            terminalID: terminalID,
-            generation: generation,
-            frameID: frameID,
-            parentFrameID: parentFrameID,
-            deltaKind: deltaKind,
-            content: content,
-            contentLength: content.utf8.count,
-            changedRows: changedRows
+            streamID: payload.streamID,
+            terminalID: payload.terminalID,
+            generation: payload.generation,
+            frameID: payload.frameID,
+            parentFrameID: payload.parentFrameID,
+            deltaKind: payload.deltaKind,
+            content: payload.content,
+            contentLength: payload.content.utf8.count,
+            changedRows: payload.changedRows
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -4029,14 +4035,16 @@ final class ControlHarnessCore {
         let payload: Data
         do {
             payload = try encodeTerminalStreamChunk(
-                streamID: streamID,
-                terminalID: terminalID,
-                generation: generation,
-                frameID: delta.frameID,
-                parentFrameID: delta.parentFrameID,
-                deltaKind: delta.deltaKind,
-                content: delta.content,
-                changedRows: delta.changedRows
+                .init(
+                    streamID: streamID,
+                    terminalID: terminalID,
+                    generation: generation,
+                    frameID: delta.frameID,
+                    parentFrameID: delta.parentFrameID,
+                    deltaKind: delta.deltaKind,
+                    content: delta.content,
+                    changedRows: delta.changedRows
+                )
             )
         } catch {
             return nil
@@ -4107,14 +4115,16 @@ final class ControlHarnessCore {
                 sinceFrameID: nil
             )
             let seedPayload = try encodeTerminalStreamChunk(
-                streamID: streamState.streamID,
-                terminalID: terminalIDString,
-                generation: generation,
-                frameID: seedDelta.frameID,
-                parentFrameID: seedDelta.parentFrameID,
-                deltaKind: "reset",
-                content: seedDelta.content,
-                changedRows: seedDelta.changedRows
+                .init(
+                    streamID: streamState.streamID,
+                    terminalID: terminalIDString,
+                    generation: generation,
+                    frameID: seedDelta.frameID,
+                    parentFrameID: seedDelta.parentFrameID,
+                    deltaKind: "reset",
+                    content: seedDelta.content,
+                    changedRows: seedDelta.changedRows
+                )
             )
             let streamStore = self.streamStore
             let streamID = streamState.streamID

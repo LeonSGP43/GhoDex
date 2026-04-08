@@ -47,10 +47,12 @@ private struct ControlHarnessGatewayDesktopRoutePayload: Encodable {
     }
 }
 
+// swiftlint:disable:next type_name
 private struct ControlHarnessGatewayDesktopRouteListPayload: Encodable {
     let desktops: [ControlHarnessGatewayDesktopRoutePayload]
 }
 
+// swiftlint:disable:next type_name
 private struct ControlHarnessGatewayRouteRegistrationPayload: Encodable {
     let desktopID: String
     let desktopLabel: String
@@ -83,6 +85,7 @@ private struct ControlHarnessGatewayPingPayload: Codable {
     }
 }
 
+// swiftlint:disable:next type_name
 private struct ControlHarnessGatewayLocalCommandEnvelope: Decodable {
     let status: String
     let errorCode: String?
@@ -95,6 +98,7 @@ private struct ControlHarnessGatewayLocalCommandEnvelope: Decodable {
     }
 }
 
+// swiftlint:disable:next type_name
 private struct ControlHarnessGatewayLocalCommandResultEnvelope<Result: Decodable>: Decodable {
     let status: String
     let errorCode: String?
@@ -1451,7 +1455,7 @@ final class ControlHarnessGateway {
                 }
                 return AnyEncodable(try await authManager.revoke(token: token))
             case .devicesList:
-                let devices = try await authManager.listDevices()
+                let devices = await authManager.listDevices()
                 return AnyEncodable(makeRegisteredDeviceListPayload(devices))
             case .devicesRevoke:
                 guard let deviceID = request.deviceID?.trimmingCharacters(in: .whitespacesAndNewlines),

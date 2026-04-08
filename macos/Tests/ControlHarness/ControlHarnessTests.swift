@@ -1481,7 +1481,7 @@ struct ControlHarnessTests {
             scope: "visible",
             content: "before close"
         )
-        sampleStore.store(
+        _ = sampleStore.store(
             terminalID: terminalID.uuidString,
             scope: "visible",
             content: "sample",
