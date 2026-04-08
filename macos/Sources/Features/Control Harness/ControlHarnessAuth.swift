@@ -236,13 +236,35 @@ actor ControlHarnessAuth {
     init(
         storageURL: URL,
         configuration: Configuration = .environment(),
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.storageURL = storageURL
         self.configuration = configuration
         self.now = now
-        self.desktopIdentity = Self.makeDefaultDesktopIdentity()
-        loadPersistedState()
+        let persistedState = Self.loadPersistedState(from: storageURL)
+        if let restoredIdentity = persistedState?.desktopIdentity,
+           restoredIdentity.desktopID.isEmpty == false,
+           restoredIdentity.desktopLabel.isEmpty == false {
+            self.desktopIdentity = restoredIdentity
+        } else {
+            self.desktopIdentity = Self.makeDefaultDesktopIdentity()
+        }
+        let restoredTokensByValue = Dictionary(
+            uniqueKeysWithValues: (persistedState?.tokens ?? []).map { ($0.token, $0) }
+        )
+        let restoredDevicesByID = Dictionary(
+            uniqueKeysWithValues: (persistedState?.devices ?? []).map { ($0.deviceID, $0) }
+        )
+        let referenceDate = now()
+        self.pairingRecords = [:]
+        self.tokensByValue = Self.prunedTokens(
+            from: restoredTokensByValue,
+            referenceDate: referenceDate
+        )
+        self.devicesByID = Self.backfilledDevices(
+            from: self.tokensByValue,
+            existingDevices: restoredDevicesByID
+        )
     }
 
     func beginPairing(
@@ -535,20 +557,9 @@ actor ControlHarnessAuth {
         )
     }
 
-    private func loadPersistedState() {
-        guard let data = try? Data(contentsOf: storageURL) else { return }
-        guard let state = try? JSONDecoder().decode(PersistedState.self, from: data) else { return }
-        if let restoredIdentity = state.desktopIdentity,
-           restoredIdentity.desktopID.isEmpty == false,
-           restoredIdentity.desktopLabel.isEmpty == false {
-            desktopIdentity = restoredIdentity
-        }
-        tokensByValue = Dictionary(uniqueKeysWithValues: state.tokens.map { ($0.token, $0) })
-        devicesByID = Dictionary(
-            uniqueKeysWithValues: (state.devices ?? []).map { ($0.deviceID, $0) }
-        )
-        backfillDevicesFromTokens()
-        pruneExpiredState(referenceDate: now())
+    private static func loadPersistedState(from storageURL: URL) -> PersistedState? {
+        guard let data = try? Data(contentsOf: storageURL) else { return nil }
+        return try? JSONDecoder().decode(PersistedState.self, from: data)
     }
 
     private func persist() throws {
@@ -576,15 +587,7 @@ actor ControlHarnessAuth {
         pairingRecords = pairingRecords.filter { _, record in
             record.expiresAt > referenceDate
         }
-        tokensByValue = tokensByValue.filter { _, token in
-            if token.expiresAt <= referenceDate {
-                return false
-            }
-            if let revokedAt = token.revokedAt, revokedAt <= referenceDate {
-                return false
-            }
-            return true
-        }
+        tokensByValue = Self.prunedTokens(from: tokensByValue, referenceDate: referenceDate)
         backfillDevicesFromTokens()
     }
 
@@ -664,16 +667,44 @@ actor ControlHarnessAuth {
     }
 
     private func backfillDevicesFromTokens() {
+        devicesByID = Self.backfilledDevices(from: tokensByValue, existingDevices: devicesByID)
+    }
+
+    private static func prunedTokens(
+        from tokensByValue: [String: StoredToken],
+        referenceDate: Date
+    ) -> [String: StoredToken] {
+        tokensByValue.filter { _, token in
+            if token.expiresAt <= referenceDate {
+                return false
+            }
+            if let revokedAt = token.revokedAt, revokedAt <= referenceDate {
+                return false
+            }
+            return true
+        }
+    }
+
+    private static func backfilledDevices(
+        from tokensByValue: [String: StoredToken],
+        existingDevices: [String: StoredDevice]
+    ) -> [String: StoredDevice] {
+        var devicesByID = existingDevices
         for token in tokensByValue.values {
-            ensureDeviceExists(
+            let existing = devicesByID[token.subjectID]
+            let normalizedLabel = Self.normalizedDeviceLabel(
+                existing?.displayLabel ?? token.client
+            ) ?? "Unknown device"
+            devicesByID[token.subjectID] = StoredDevice(
                 deviceID: token.subjectID,
-                displayLabel: devicesByID[token.subjectID]?.displayLabel ?? token.client,
-                trustState: devicesByID[token.subjectID]?.trustState ?? .trusted,
-                lastSeenAt: devicesByID[token.subjectID]?.lastSeenAt ?? token.issuedAt,
-                transportMode: devicesByID[token.subjectID]?.transportMode ?? "lan",
-                capabilityFlags: devicesByID[token.subjectID]?.capabilityFlags ?? []
+                displayLabel: normalizedLabel,
+                trustState: existing?.trustState ?? .trusted,
+                lastSeenAt: existing?.lastSeenAt ?? token.issuedAt,
+                transportMode: Self.sanitizeTransportMode(existing?.transportMode),
+                capabilityFlags: existing?.capabilityFlags ?? []
             )
         }
+        return devicesByID
     }
 
     private static func sortedScopeStrings(_ scopes: Set<ControlHarnessAuthScope>) -> [String] {
