@@ -120,6 +120,10 @@ def extract_result_json(response: dict) -> dict | list:
     return json.loads(raw)
 
 
+def command_timeout_seconds(timeout_ms: int, *, minimum_seconds: float = 125.0, buffer_seconds: float = 5.0) -> float:
+    return max(minimum_seconds, timeout_ms / 1000.0 + buffer_seconds)
+
+
 def wait_for_socket_ready(socket_path: str, timeout_ms: int) -> dict:
     deadline = time.monotonic() + (timeout_ms / 1000.0)
     last_error: str | None = None
@@ -187,52 +191,31 @@ def wait_for_context_absent(socket_path: str, context_id: str, timeout_ms: int) 
     raise RuntimeError(f"Timed out waiting for Browser context {context_id} to disappear. Last contexts: {json.dumps(last_contexts, sort_keys=True)}")
 
 
-def wait_for_page_bridge_ready(
+def wait_for_selector(
     socket_path: str,
     *,
-    browser_context_id: str,
-    page_id: str,
+    version: str,
+    selector: str,
     timeout_ms: int,
+    browser_context_id: str | None = None,
+    browser_tab_id: str | None = None,
+    page_id: str | None = None,
 ) -> dict:
-    deadline = time.monotonic() + (timeout_ms / 1000.0)
-    last_response: dict | None = None
-    while time.monotonic() < deadline:
-        remaining = max(1.0, deadline - time.monotonic())
-        try:
-            probe = send_request(
-                socket_path,
-                "listFrames",
-                version="browser.context.v2",
-                browser_context_id=browser_context_id,
-                page_id=page_id,
-                timeout=min(remaining, 20.0),
-            )
-        except TimeoutError:
-            last_response = {
-                "timed_out": True,
-                "browserContextID": browser_context_id,
-                "pageID": page_id,
-            }
-            time.sleep(0.25)
-            continue
-
-        last_response = probe
-        response = probe["response"]
-        if response.get("ok") is True:
-            return probe
-
-        error = response.get("error") or {}
-        if error.get("code") not in {"bridgeUnavailable", "requestTimedOut"}:
-            raise RuntimeError(
-                "Unexpected page bridge readiness failure: "
-                f"{json.dumps(response, sort_keys=True)}"
-            )
-        time.sleep(0.25)
-
-    raise RuntimeError(
-        "Timed out waiting for page bridge readiness. "
-        f"context={browser_context_id} page={page_id} last={json.dumps(last_response or {}, sort_keys=True)}"
+    response = send_request(
+        socket_path,
+        "waitForSelector",
+        version=version,
+        browser_context_id=browser_context_id,
+        browser_tab_id=browser_tab_id,
+        page_id=page_id,
+        payload={
+            "selector": selector,
+            "state": "present",
+            "timeoutMS": str(timeout_ms),
+        },
+        timeout=command_timeout_seconds(timeout_ms),
     )
+    return extract_result_json(response["response"])
 
 
 def launch_app(
@@ -407,11 +390,13 @@ def main() -> int:
             v2_active_page_id = str(v2_context["activePageID"])
             result["v2_create_context"] = create_v2
             result["v2_context_summary"] = v2_context
-            result["v2_initial_page_bridge_ready"] = wait_for_page_bridge_ready(
+            result["v2_initial_page_bridge_ready"] = wait_for_selector(
                 str(socket_path),
+                version="browser.context.v2",
+                selector="#route",
+                timeout_ms=args.page_timeout_ms,
                 browser_context_id=v2_context_id,
                 page_id=v2_active_page_id,
-                timeout_ms=args.page_timeout_ms,
             )
 
             result["v2_get_context"] = send_request(
@@ -482,11 +467,13 @@ def main() -> int:
             assert isinstance(new_page_summary, dict)
             new_page_id = str(new_page_summary["id"])
             result["v2_new_page"] = new_page
-            result["v2_new_page_bridge_ready"] = wait_for_page_bridge_ready(
+            result["v2_new_page_bridge_ready"] = wait_for_selector(
                 str(socket_path),
+                version="browser.context.v2",
+                selector="#route",
+                timeout_ms=args.page_timeout_ms,
                 browser_context_id=v2_context_id,
                 page_id=new_page_id,
-                timeout_ms=args.page_timeout_ms,
             )
             result["v2_activate_page"] = send_request(
                 str(socket_path),
@@ -544,11 +531,13 @@ def main() -> int:
             v1_active_page_id = str(v1_context_summary["activePageID"])
             result["v1_new_tab"] = create_v1
             result["v1_context_summary"] = v1_context_summary
-            result["v1_initial_page_bridge_ready"] = wait_for_page_bridge_ready(
+            result["v1_initial_page_bridge_ready"] = wait_for_selector(
                 str(socket_path),
-                browser_context_id=v1_context_id,
-                page_id=v1_active_page_id,
+                version="browser.tab.v1",
+                selector="#route",
                 timeout_ms=args.page_timeout_ms,
+                browser_tab_id=v1_context_id,
+                page_id=v1_active_page_id,
             )
             result["v2_list_contexts_after_v1_new_tab"] = send_request(
                 str(socket_path),
