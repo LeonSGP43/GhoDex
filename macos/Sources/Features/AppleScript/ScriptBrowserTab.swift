@@ -554,14 +554,9 @@ final class ScriptBrowserTab: NSObject {
                 finish(result)
             }
 
-            timeoutTask = Task { @MainActor in
-                let deadline = Date().addingTimeInterval(timeout)
-                while Date() < deadline {
-                    if Task.isCancelled { return }
-                    RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01))
-                    await Task.yield()
-                }
-
+            timeoutTask = Task {
+                try? await Task.sleep(for: .seconds(timeout))
+                guard !Task.isCancelled else { return }
                 finish(.failure(timeoutError))
             }
         }
@@ -635,8 +630,7 @@ final class ScriptBrowserTab: NSObject {
                         finish(.failure(.bridgeUnavailable(initializationError)))
                         return
                     }
-                    RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
-                    await Task.yield()
+                    try? await Task.sleep(for: .milliseconds(50))
                 }
 
                 finish(.failure(.bridgeUnavailable("The browser page bridge did not become ready in time.")))
@@ -914,7 +908,11 @@ extension ScriptBrowserTab {
 
         let closedContextID = stableID
         let closedPageCount = controller.model.pages.count
-        controller.closeContextImmediately()
+        // Defer the actual close until after the control response has had a chance
+        // to flush back over the socket.
+        DispatchQueue.main.async {
+            controller.closeContextImmediately()
+        }
         return .success(
             BrowserExternalContextCloseResult(
                 closedContextID: closedContextID,
@@ -1142,6 +1140,8 @@ extension ScriptBrowserTab {
             return .failure(.invalidRequest("The browserContextID/browserTabID does not resolve to a live Browser context."))
         }
 
+        let requestedPageIDWasSpecified =
+            request.pageID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         let requestedPageID: UUID?
         switch parseRequestedPageID(from: request) {
         case let .success(pageID):
@@ -1151,7 +1151,7 @@ extension ScriptBrowserTab {
         }
 
         guard let page = browserTab.requestedPage(requestedPageID) else {
-            if let requestedPageID {
+            if requestedPageIDWasSpecified {
                 return .failure(.invalidRequest("The pageID does not resolve to a live browser page in this Browser context."))
             }
             return .failure(.internalFailure("No active browser page is available."))

@@ -29,6 +29,7 @@ struct BrowserRestorableSnapshot: Codable {
     }
 }
 
+@MainActor
 protocol BrowserRestorable: Codable {
     static var selfKey: String { get }
     static var versionKey: String { get }
@@ -36,6 +37,7 @@ protocol BrowserRestorable: Codable {
     init(copy other: Self)
 }
 
+@MainActor
 extension BrowserRestorable {
     static var selfKey: String { "state" }
     static var versionKey: String { "version" }

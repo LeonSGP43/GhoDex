@@ -305,6 +305,7 @@ def local_browser_server() -> dict[str, str]:
 
     class ThreadedTCPServer(socketserver.ThreadingTCPServer):
         allow_reuse_address = True
+        daemon_threads = True
 
     handler = lambda *args, **kwargs: QuietHandler(*args, directory=str(webroot), **kwargs)
     server = ThreadedTCPServer(("127.0.0.1", 0), handler)

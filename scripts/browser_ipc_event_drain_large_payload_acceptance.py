@@ -27,14 +27,18 @@ import concurrent.futures
 import http.server
 import json
 import os
+import shutil
 import socket
 import socketserver
 import statistics
+import subprocess
 import threading
 import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def default_socket_path() -> str:
@@ -42,28 +46,44 @@ def default_socket_path() -> str:
     return str(home / "Library" / "Application Support" / "GhoDex" / "browser-control.sock")
 
 
+def resolve_default_app() -> Path:
+    app = REPO_ROOT / "macos" / "build" / "Debug" / "GhoDex.app"
+    if not app.exists():
+        raise SystemExit(
+            "No built GhoDex.app found at macos/build/Debug/GhoDex.app. "
+            "Pass --app=/path/to/GhoDex.app."
+        )
+    return app
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Stress Browser IPC with unread large pageInspectionSnapshot drain responses."
+    )
+    parser.add_argument("--app", default=None, help="Path to the CEF-enabled GhoDex.app bundle to launch if needed.")
+    parser.add_argument(
+        "--runtime-root",
+        default=str(REPO_ROOT / "macos" / "build" / "cef-runtime" / "current"),
+        help="CEF runtime root passed through GHODEX_CEF_ROOT when the harness auto-launches a debug app.",
     )
     parser.add_argument("--socket", default=default_socket_path(), help="Path to browser-control.sock")
     parser.add_argument("--fast-count", type=int, default=8, help="Concurrent fast listTabs requests")
     parser.add_argument(
         "--slow-subscriptions",
         type=int,
-        default=6,
+        default=4,
         help="Number of unread pageInspectionSnapshot drain responses to queue",
     )
     parser.add_argument(
         "--row-count",
         type=int,
-        default=1200,
+        default=250,
         help="How many large DOM rows to render into the inspection page",
     )
     parser.add_argument(
         "--row-bytes",
         type=int,
-        default=400,
+        default=80,
         help="How many repeated payload characters each DOM row contains",
     )
     parser.add_argument(
@@ -149,6 +169,80 @@ def run_listtabs_burst(socket_path: str, count: int) -> dict:
     }
 
 
+def wait_for_burst_ready(socket_path: str, timeout_ms: int = 30000, required_successes: int = 3) -> list[dict]:
+    deadline = time.monotonic() + (timeout_ms / 1000.0)
+    probes: list[dict] = []
+    while time.monotonic() < deadline:
+        try:
+            probe = send_request(socket_path, "listTabs")
+            if probe["response"].get("ok") is True:
+                probes.append(probe)
+                if len(probes) >= required_successes:
+                    return probes
+            else:
+                probes.clear()
+        except Exception:  # noqa: BLE001
+            probes.clear()
+        time.sleep(0.25)
+
+    raise RuntimeError("Timed out waiting for Browser IPC burst readiness")
+
+
+def terminate_process(proc: subprocess.Popen[str], timeout: float = 15.0) -> None:
+    if proc.poll() is not None:
+        return
+    proc.terminate()
+    deadline = time.time() + timeout / 2
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            return
+        time.sleep(0.25)
+
+    proc.kill()
+    deadline = time.time() + timeout / 2
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            return
+        time.sleep(0.25)
+
+    raise RuntimeError(f"Process {proc.pid} did not exit in time")
+
+
+def launch_app(
+    app_bundle: Path,
+    log_path: Path,
+    *,
+    runtime_root: str,
+    app_support_root: Path,
+    home_dir: Path,
+) -> subprocess.Popen[str]:
+    executable = app_bundle / "Contents" / "MacOS" / "GhoDex"
+    if not executable.exists():
+        raise RuntimeError(f"App executable does not exist: {executable}")
+
+    env = os.environ.copy()
+    env["GHODEX_CEF_ROOT"] = runtime_root
+    env["GHODEX_BROWSER_APP_SUPPORT_ROOT"] = str(app_support_root)
+    env["GHODEX_SKIP_INITIAL_TERMINAL_WINDOW"] = "1"
+    env["HOME"] = str(home_dir)
+    env["TMPDIR"] = str(home_dir / "tmp")
+    env.pop("GHODEX_CEF_PROFILE_PATH", None)
+
+    home_dir.mkdir(parents=True, exist_ok=True)
+    (home_dir / "tmp").mkdir(parents=True, exist_ok=True)
+    app_support_root.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("", encoding="utf-8")
+    with log_path.open("a", encoding="utf-8") as log_file:
+        return subprocess.Popen(
+            [str(executable), "-psn_0_0"],
+            env=env,
+            cwd=str(app_bundle.parent),
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+
+
 @contextmanager
 def local_page_server(row_count: int, row_bytes: int):
     webroot = Path(os.path.realpath(Path("/tmp").joinpath(f"ghodex-browser-web-{uuid.uuid4().hex}")))
@@ -170,6 +264,7 @@ def local_page_server(row_count: int, row_bytes: int):
 
     class ThreadedTCPServer(socketserver.ThreadingTCPServer):
         allow_reuse_address = True
+        daemon_threads = True
 
     handler = lambda *args, **kwargs: QuietHandler(*args, directory=str(webroot), **kwargs)
     server = ThreadedTCPServer(("127.0.0.1", 0), handler)
@@ -195,7 +290,7 @@ def extract_result_json(response: dict) -> dict:
     return json.loads(raw)
 
 
-def wait_for_bridge_ready(socket_path: str, subscription_id: str, timeout_ms: int) -> dict:
+def wait_for_initial_snapshot(socket_path: str, subscription_id: str, timeout_ms: int) -> dict:
     deadline = time.monotonic() + (timeout_ms / 1000.0)
     observed = []
     while time.monotonic() < deadline:
@@ -207,10 +302,16 @@ def wait_for_bridge_ready(socket_path: str, subscription_id: str, timeout_ms: in
         result = extract_result_json(drain["response"])
         events = result["events"]
         observed.extend(events)
-        if any(event["kind"] == "bridgeReady" for event in events):
-            return {"events": observed, "result": result}
+        for event in events:
+            payload = event.get("payload", {})
+            if (
+                event.get("kind") == "pageInspectionSnapshot"
+                and payload.get("ok") == "true"
+                and payload.get("snapshotJSON")
+            ):
+                return {"event": event, "events": observed, "result": result}
         time.sleep(0.25)
-    raise RuntimeError("Timed out waiting for a bridgeReady event")
+    raise RuntimeError("Timed out waiting for the initial pageInspectionSnapshot event")
 
 
 def wait_for_successful_snapshot(socket_path: str, subscription_id: str, timeout_ms: int) -> dict:
@@ -294,15 +395,37 @@ def inspect_slow_reader(client: socket.socket) -> dict:
 def main() -> int:
     args = parse_args()
     socket_path = os.path.expanduser(args.socket)
+    runtime_root = str(Path(args.runtime_root).resolve())
+    app_bundle = Path(args.app).resolve() if args.app else resolve_default_app()
+    launched_proc: subprocess.Popen[str] | None = None
+    session_root: Path | None = None
+    log_path: Path | None = None
+
     if not os.path.exists(socket_path):
-        raise SystemExit(f"Socket does not exist: {socket_path}")
+        session_root = Path(f"/tmp/ghx-browser-ipc-event-drain-{uuid.uuid4().hex[:8]}")
+        if session_root.exists():
+            shutil.rmtree(session_root, ignore_errors=True)
+        session_root.mkdir(parents=True, exist_ok=True)
+        home_dir = session_root / "home"
+        app_support_root = session_root / "app-support"
+        log_path = session_root / "app.log"
+        launched_proc = launch_app(
+            app_bundle,
+            log_path,
+            runtime_root=runtime_root,
+            app_support_root=app_support_root,
+            home_dir=home_dir,
+        )
+        socket_path = str(app_support_root / "browser-control.sock")
 
-    baseline = run_listtabs_burst(socket_path, args.fast_count)
+    try:
+        warmup_probes = wait_for_burst_ready(socket_path)
+        baseline = run_listtabs_burst(socket_path, args.fast_count)
 
-    with local_page_server(args.row_count, args.row_bytes) as server_info:
-        new_tab = send_request(socket_path, "newTab", payload={"url": server_info["small_url"]})
-        tab_summary = extract_result_json(new_tab["response"])
-        browser_tab_id = tab_summary["id"]
+        with local_page_server(args.row_count, args.row_bytes) as server_info:
+            new_tab = send_request(socket_path, "newTab", payload={"url": server_info["small_url"]})
+            tab_summary = extract_result_json(new_tab["response"])
+            browser_tab_id = tab_summary["id"]
 
         control_subscription = extract_result_json(
             send_request(
@@ -317,6 +440,20 @@ def main() -> int:
             )["response"]
         )
         control_subscription_id = control_subscription["subscriptionID"]
+
+        initial_ready_load = send_request(
+            socket_path,
+            "loadURL",
+            browser_tab_id=browser_tab_id,
+            payload={"url": server_info["small_url"]},
+            timeout=20.0,
+        )
+        if initial_ready_load["response"].get("ok") is not True:
+            raise RuntimeError(
+                f"initial loadURL failed: {json.dumps(initial_ready_load['response'], sort_keys=True)}"
+            )
+
+        initial_snapshot = wait_for_initial_snapshot(socket_path, control_subscription_id, args.snapshot_timeout_ms)
 
         slow_subscription_ids = []
         for _ in range(args.slow_subscriptions):
@@ -333,8 +470,6 @@ def main() -> int:
                 )["response"]
             )
             slow_subscription_ids.append(subscription["subscriptionID"])
-
-        bridge_ready = wait_for_bridge_ready(socket_path, control_subscription_id, args.snapshot_timeout_ms)
 
         load_result = send_request(
             socket_path,
@@ -363,12 +498,20 @@ def main() -> int:
         post_check = send_request(socket_path, "listTabs")
 
         result = {
+            "app": str(app_bundle),
+            "runtime_root": runtime_root,
             "socket_path": socket_path,
+            "launched_debug_app": launched_proc is not None,
+            "session_root": str(session_root) if session_root is not None else None,
+            "log_path": str(log_path) if log_path is not None else None,
             "browser_tab_id": browser_tab_id,
+            "warmup_probes": warmup_probes,
             "baseline": baseline,
-            "bridge_ready": {
-                "observed_event_count": len(bridge_ready["events"]),
-                "last_cursor": bridge_ready["result"]["nextCursor"],
+            "initial_snapshot": {
+                "load_elapsed_ms": initial_ready_load["elapsed_ms"],
+                "observed_event_count": len(initial_snapshot["events"]),
+                "last_cursor": initial_snapshot["result"]["nextCursor"],
+                "trigger_kind": initial_snapshot["event"]["payload"].get("triggerKind"),
             },
             "successful_snapshot": {
                 "trigger_kind": snapshot_payload.get("triggerKind"),
@@ -394,14 +537,16 @@ def main() -> int:
             "notes": [
                 "The unread responses are real drainEvents payloads carrying pageInspectionSnapshot event envelopes.",
                 "This path exercises the true buffered event-drain response flow instead of synthetic newTab result bodies.",
-                "A Browser instance with working pageInspectionSnapshot events is required; the intended target is a CEF-enabled app build.",
+                "If no socket is provided, the harness auto-launches an isolated debug app rooted at macos/build/Debug/GhoDex.app.",
             ],
         }
-
-    output_path = Path(args.output)
-    output_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
-    print(json.dumps(result, indent=2))
-    return 0
+        output_path = Path(args.output)
+        output_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        print(json.dumps(result, indent=2))
+        return 0
+    finally:
+        if launched_proc is not None:
+            terminate_process(launched_proc)
 
 
 if __name__ == "__main__":

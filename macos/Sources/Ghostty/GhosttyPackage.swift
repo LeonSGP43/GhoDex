@@ -9,7 +9,6 @@ extension ghostty_command_s: @unchecked @retroactive Sendable {}
 
 /// A surface is sendable because it is just a reference type. Using the surface in parameters
 /// may be unsafe but the value itself is safe to send across threads.
-extension ghostty_surface_t: @unchecked @retroactive Sendable {}
 
 extension Ghostty {
     // The user notification category identifier

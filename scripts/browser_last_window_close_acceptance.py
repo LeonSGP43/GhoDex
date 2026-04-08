@@ -15,6 +15,7 @@ import http.server
 import json
 import os
 import plistlib
+import re
 import shutil
 import socket
 import socketserver
@@ -28,6 +29,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = "/tmp/ghx-browser-last-window-close-acceptance.json"
+HARNESS_SOCKET_RE = re.compile(r"(?P<path>/Users/.*/ControlHarness/harness\.sock)$")
 
 
 def resolve_default_app() -> Path:
@@ -195,6 +197,7 @@ def wait_for_page_bridge_ready(
     *,
     browser_context_id: str,
     page_id: str,
+    selector: str,
     timeout_ms: int,
 ) -> dict:
     deadline = time.monotonic() + (timeout_ms / 1000.0)
@@ -204,9 +207,10 @@ def wait_for_page_bridge_ready(
         try:
             probe = send_request(
                 socket_path,
-                "listFrames",
+                "waitForSelector",
                 browser_context_id=browser_context_id,
                 page_id=page_id,
+                payload={"selector": selector},
                 timeout=min(remaining, 20.0),
             )
         except TimeoutError:
@@ -214,6 +218,7 @@ def wait_for_page_bridge_ready(
                 "timed_out": True,
                 "browserContextID": browser_context_id,
                 "pageID": page_id,
+                "selector": selector,
             }
             time.sleep(0.25)
             continue
@@ -235,6 +240,90 @@ def wait_for_page_bridge_ready(
         "Timed out waiting for page bridge readiness. "
         f"context={browser_context_id} page={page_id} "
         f"last={json.dumps(last_response or {}, sort_keys=True)}"
+    )
+
+
+def discover_harness_socket(pid: int, timeout_ms: int) -> str:
+    deadline = time.monotonic() + (timeout_ms / 1000.0)
+    last_lsof = ""
+    while time.monotonic() < deadline:
+        completed = subprocess.run(
+            ["lsof", "-Pan", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+        )
+        last_lsof = completed.stdout
+        for line in completed.stdout.splitlines():
+            match = HARNESS_SOCKET_RE.search(line)
+            if match:
+                return match.group("path")
+        time.sleep(0.25)
+
+    raise RuntimeError(
+        f"Timed out waiting for Control Harness socket for pid {pid}. "
+        f"Last lsof sample: {last_lsof[-400:]}"
+    )
+
+
+def run_control_command(app_bundle: Path, socket_path: str, *control_args: str) -> dict:
+    executable = app_bundle / "Contents" / "MacOS" / "GhoDex"
+    completed = subprocess.run(
+        [str(executable), "+control", *control_args, f"--socket={socket_path}"],
+        capture_output=True,
+        text=True,
+        timeout=20.0,
+        check=True,
+    )
+    return json.loads(completed.stdout)
+
+
+def terminal_snapshot_summary(snapshot: dict) -> dict[str, object]:
+    result = snapshot.get("result") or {}
+    tabs = result.get("tabs") or []
+    terminals = [terminal for tab in tabs for terminal in tab.get("terminals") or []]
+    return {
+        "tab_count": len(tabs),
+        "terminal_count": len(terminals),
+        "tabs": tabs,
+        "terminals": terminals,
+    }
+
+
+def close_only_terminal_window_via_harness(app_bundle: Path, harness_socket: str) -> dict[str, object]:
+    before = run_control_command(app_bundle, harness_socket, "snapshot")
+    before_summary = terminal_snapshot_summary(before)
+    if before_summary["terminal_count"] != 1:
+        raise RuntimeError(
+            "Expected exactly one terminal before closing it, got "
+            f"{before_summary['terminal_count']}"
+        )
+
+    terminals = before_summary["terminals"]
+    terminal_id = str(terminals[0]["terminal_id"])
+    close_result = run_control_command(
+        app_bundle,
+        harness_socket,
+        "close-terminal",
+        f"--terminal-id={terminal_id}",
+    )
+    deadline = time.monotonic() + 15.0
+    after = None
+    while time.monotonic() < deadline:
+        after = run_control_command(app_bundle, harness_socket, "snapshot")
+        after_summary = terminal_snapshot_summary(after)
+        if after_summary["terminal_count"] == 0:
+            return {
+                "terminal_id": terminal_id,
+                "before": before_summary,
+                "close_result": close_result,
+                "after": after_summary,
+            }
+        time.sleep(0.25)
+
+    raise RuntimeError(
+        "Timed out waiting for the initial terminal window to close. "
+        f"Last snapshot: {json.dumps(terminal_snapshot_summary(after or {}), sort_keys=True)}"
     )
 
 
@@ -489,8 +578,9 @@ def main() -> int:
             result["socket_ready_probe"] = wait_for_socket_ready(
                 str(socket_path), args.page_timeout_ms
             )
-            result["initial_terminal_window_count"] = wait_for_terminal_window_count(
-                app_bundle, 1, args.page_timeout_ms
+            result["harness_socket"] = discover_harness_socket(proc.pid, args.page_timeout_ms)
+            result["initial_terminal_snapshot"] = terminal_snapshot_summary(
+                run_control_command(app_bundle, result["harness_socket"], "snapshot")
             )
             contexts_before = extract_result_json(
                 send_request(str(socket_path), "listContexts", timeout=10.0)["response"]
@@ -529,10 +619,11 @@ def main() -> int:
                 str(socket_path),
                 browser_context_id=context_id,
                 page_id=page_id,
+                selector="#browser-last-window-close",
                 timeout_ms=args.page_timeout_ms,
             )
-            result["browser_tab_count_after_create"] = wait_for_browser_tab_count(
-                app_bundle, 1, args.page_timeout_ms
+            result["contexts_after_create"] = extract_result_json(
+                send_request(str(socket_path), "listContexts", timeout=10.0)["response"]
             )
             result["activate_context"] = send_request(
                 str(socket_path),
@@ -540,8 +631,8 @@ def main() -> int:
                 browser_context_id=context_id,
                 timeout=command_timeout,
             )
-            result["close_terminal_window"] = close_only_terminal_window(
-                app_bundle, args.page_timeout_ms
+            result["close_terminal_window"] = close_only_terminal_window_via_harness(
+                app_bundle, result["harness_socket"]
             )
             wait_for_process_alive(proc, 1000)
 
@@ -571,13 +662,13 @@ def main() -> int:
 
             result["acceptance"] = {
                 "started_with_single_terminal_window": (
-                    result["initial_terminal_window_count"] == 1
+                    result["initial_terminal_snapshot"]["terminal_count"] == 1
                 ),
                 "created_single_browser_tab": (
-                    result["browser_tab_count_after_create"] == 1
+                    len(result["contexts_after_create"]) == 1
                 ),
                 "terminal_window_closed_before_browser_close": (
-                    result["close_terminal_window"]["terminal_windows_after_close"] == 0
+                    result["close_terminal_window"]["after"]["terminal_count"] == 0
                 ),
                 "browser_context_closed": all(
                     context.get("id") != context_id for context in result["contexts_after_close"]

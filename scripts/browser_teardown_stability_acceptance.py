@@ -154,14 +154,23 @@ def wait_for_socket_ready(socket_path: str, timeout_ms: int) -> dict:
 def wait_for_context_absent(socket_path: str, context_id: str, timeout_ms: int) -> list[dict]:
     deadline = time.monotonic() + (timeout_ms / 1000.0)
     last_contexts: list[dict] = []
+    last_error: str | None = None
     while time.monotonic() < deadline:
-        list_result = extract_result_json(send_request(socket_path, "listContexts", timeout=5.0)["response"])
+        try:
+            list_result = extract_result_json(send_request(socket_path, "listContexts", timeout=5.0)["response"])
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)
+            time.sleep(0.1)
+            continue
         assert isinstance(list_result, list)
         last_contexts = list_result
         if all(context.get("id") != context_id for context in list_result):
             return list_result
         time.sleep(0.1)
-    raise RuntimeError(f"Timed out waiting for Browser context {context_id} to disappear. Last contexts: {json.dumps(last_contexts, sort_keys=True)}")
+    raise RuntimeError(
+        f"Timed out waiting for Browser context {context_id} to disappear. "
+        f"last_error={last_error!r} last_contexts={json.dumps(last_contexts, sort_keys=True)}"
+    )
 
 
 def wait_for_new_context(
@@ -191,6 +200,7 @@ def wait_for_page_bridge_ready(
     *,
     browser_context_id: str,
     page_id: str,
+    selector: str,
     timeout_ms: int,
 ) -> dict:
     deadline = time.monotonic() + (timeout_ms / 1000.0)
@@ -200,9 +210,10 @@ def wait_for_page_bridge_ready(
         try:
             probe = send_request(
                 socket_path,
-                "listFrames",
+                "waitForSelector",
                 browser_context_id=browser_context_id,
                 page_id=page_id,
+                payload={"selector": selector},
                 timeout=min(remaining, 20.0),
             )
         except TimeoutError:
@@ -210,6 +221,7 @@ def wait_for_page_bridge_ready(
                 "timed_out": True,
                 "browserContextID": browser_context_id,
                 "pageID": page_id,
+                "selector": selector,
             }
             time.sleep(0.25)
             continue
@@ -230,6 +242,37 @@ def wait_for_page_bridge_ready(
     raise RuntimeError(
         "Timed out waiting for page bridge readiness. "
         f"context={browser_context_id} page={page_id} last={json.dumps(last_response or {}, sort_keys=True)}"
+    )
+
+
+def wait_for_context_responsive(
+    socket_path: str,
+    context_id: str,
+    timeout_ms: int,
+) -> dict:
+    deadline = time.monotonic() + (timeout_ms / 1000.0)
+    last_response: dict | None = None
+    while time.monotonic() < deadline:
+        try:
+            probe = send_request(
+                socket_path,
+                "getActivePage",
+                browser_context_id=context_id,
+                timeout=5.0,
+            )
+        except Exception as exc:  # noqa: BLE001
+            last_response = {"error": str(exc)}
+            time.sleep(0.1)
+            continue
+
+        last_response = probe
+        if probe["response"].get("ok") is True:
+            return probe
+        time.sleep(0.1)
+
+    raise RuntimeError(
+        "Timed out waiting for Browser control responsiveness after closePage. "
+        f"context={context_id} last={json.dumps(last_response or {}, sort_keys=True)}"
     )
 
 
@@ -286,6 +329,7 @@ def launch_app(
     env = os.environ.copy()
     env["GHODEX_CEF_ROOT"] = runtime_root
     env["GHODEX_BROWSER_APP_SUPPORT_ROOT"] = str(app_support_root)
+    env["GHODEX_SKIP_INITIAL_TERMINAL_WINDOW"] = "1"
     env["HOME"] = str(home_dir)
     env["TMPDIR"] = str(home_dir / "tmp")
     env.pop("GHODEX_CEF_PROFILE_PATH", None)
@@ -334,6 +378,7 @@ def local_browser_server() -> dict[str, str]:
 
     class ThreadedTCPServer(socketserver.ThreadingTCPServer):
         allow_reuse_address = True
+        daemon_threads = True
 
     handler = lambda *args, **kwargs: QuietHandler(*args, directory=str(webroot), **kwargs)
     server = ThreadedTCPServer(("127.0.0.1", 0), handler)
@@ -430,6 +475,7 @@ def main() -> int:
                     str(socket_path),
                     browser_context_id=context_id,
                     page_id=active_page_id,
+                    selector="#teardown-root",
                     timeout_ms=args.page_timeout_ms,
                 )
 
@@ -448,6 +494,7 @@ def main() -> int:
                     str(socket_path),
                     browser_context_id=context_id,
                     page_id=page_id,
+                    selector="#teardown-root",
                     timeout_ms=args.page_timeout_ms,
                 )
 
@@ -457,6 +504,11 @@ def main() -> int:
                     browser_context_id=context_id,
                     page_id=page_id,
                     timeout=command_timeout,
+                )
+                cycle["post_close_page_responsive_probe"] = wait_for_context_responsive(
+                    str(socket_path),
+                    context_id,
+                    args.page_timeout_ms,
                 )
 
                 cycle["close_context"] = send_request(

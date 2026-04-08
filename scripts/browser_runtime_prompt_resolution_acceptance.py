@@ -255,6 +255,36 @@ def wait_for_page_bridge_ready(
     )
 
 
+def wait_for_initial_snapshot(
+    socket_path: str,
+    subscription_id: str,
+    timeout_ms: int,
+) -> dict:
+    deadline = time.monotonic() + (timeout_ms / 1000.0)
+    observed = []
+    while time.monotonic() < deadline:
+        drain = send_request(
+            socket_path,
+            "drainEvents",
+            payload={"subscriptionID": subscription_id, "limit": "128"},
+            timeout=20.0,
+        )
+        result = extract_result_json(drain["response"])
+        events = result["events"]
+        observed.extend(events)
+        for event in events:
+            payload = event.get("payload", {})
+            if (
+                event.get("kind") == "pageInspectionSnapshot"
+                and payload.get("ok") == "true"
+                and payload.get("snapshotJSON")
+            ):
+                return {"event": event, "events": observed, "result": result}
+        time.sleep(0.25)
+
+    raise RuntimeError("Timed out waiting for the initial pageInspectionSnapshot event")
+
+
 def terminate_process(proc: subprocess.Popen[str], timeout: float = 15.0) -> None:
     if proc.poll() is not None:
         return
@@ -559,18 +589,26 @@ def wait_for_selector(
     last_response: dict | None = None
     while time.monotonic() < deadline:
         remaining_ms = max(1000, int((deadline - time.monotonic()) * 1000))
-        response = send_request(
-            socket_path,
-            "waitForSelector",
-            browser_tab_id=browser_tab_id,
-            page_id=page_id,
-            payload={
+        try:
+            response = send_request(
+                socket_path,
+                "waitForSelector",
+                browser_tab_id=browser_tab_id,
+                page_id=page_id,
+                payload={
+                    "selector": selector,
+                    "state": "present",
+                    "timeoutMS": str(min(remaining_ms, 5000)),
+                },
+                timeout=max(20.0, min(remaining_ms, 5000) / 1000.0 + 5.0),
+            )
+        except TimeoutError:
+            last_response = {
                 "selector": selector,
-                "state": "present",
-                "timeoutMS": str(min(remaining_ms, 5000)),
-            },
-            timeout=max(20.0, min(remaining_ms, 5000) / 1000.0 + 5.0),
-        )
+                "socketTimedOut": True,
+            }
+            time.sleep(0.25)
+            continue
         last_response = response["response"]
         if last_response.get("ok") is True:
             return extract_result_json(last_response)
@@ -583,6 +621,40 @@ def wait_for_selector(
     raise RuntimeError(
         f"Timed out waiting for selector {selector!r}; last={json.dumps(last_response or {}, sort_keys=True)}"
     )
+
+
+def wait_for_browser_control_responsive(
+    socket_path: str,
+    browser_context_id: str,
+    *,
+    timeout_ms: int,
+    required_successes: int = 3,
+) -> list[dict]:
+    deadline = time.monotonic() + (timeout_ms / 1000.0)
+    probes: list[dict] = []
+    while time.monotonic() < deadline:
+        try:
+            probe = send_request(
+                socket_path,
+                "getActivePage",
+                version="browser.context.v2",
+                browser_context_id=browser_context_id,
+                timeout=5.0,
+            )
+        except Exception:  # noqa: BLE001
+            probes.clear()
+            time.sleep(0.25)
+            continue
+
+        if probe["response"].get("ok") is True:
+            probes.append(probe)
+            if len(probes) >= required_successes:
+                return probes
+        else:
+            probes.clear()
+        time.sleep(0.25)
+
+    raise RuntimeError("Timed out waiting for Browser control responsiveness after runtime prompt resolution.")
 
 
 def evaluate_json_string(
@@ -783,7 +855,7 @@ def main() -> int:
                     str(socket_path),
                     "newContext",
                     version="browser.context.v2",
-                    payload={"url": permission_server["blank_url"]},
+                    payload={"url": permission_server["index_url"]},
                     timeout=command_timeout,
                 )
             except TimeoutError as exc:
@@ -792,7 +864,7 @@ def main() -> int:
                     "request": {
                         "version": "browser.context.v2",
                         "command": "newContext",
-                        "payload": {"url": permission_server["blank_url"]},
+                        "payload": {"url": permission_server["index_url"]},
                     },
                     "response": {
                         "ok": False,
@@ -822,27 +894,6 @@ def main() -> int:
             page_id = str(context_summary["activePageID"])
             result["createContext"] = create_context
             result["contextSummary"] = context_summary
-            result["initialPageBridgeReady"] = wait_for_page_bridge_ready(
-                str(socket_path),
-                browser_context_id=browser_context_id,
-                page_id=page_id,
-                timeout_ms=args.page_timeout_ms,
-            )
-            result["initialPermissionLoad"] = load_url(
-                str(socket_path),
-                browser_context_id,
-                page_id,
-                permission_server["index_url"],
-                timeout=command_timeout,
-            )
-            result["initialPermissionReady"] = wait_for_selector(
-                str(socket_path),
-                browser_tab_id,
-                page_id,
-                "#permission-ready",
-                args.page_timeout_ms,
-            )
-
             subscription = extract_result_json(
                 send_request(
                     str(socket_path),
@@ -851,6 +902,8 @@ def main() -> int:
                     payload={
                         "kindsJSON": json.dumps(
                             [
+                                "pageInspectionSnapshot",
+                                "navigationStateChanged",
                                 "permissionRequest",
                                 "authenticationRequest",
                                 "certificateWarning",
@@ -863,6 +916,13 @@ def main() -> int:
                 raise RuntimeError(f"Expected subscribeEvents result to be an object, got {subscription!r}")
             subscription_id = str(subscription["subscriptionID"])
             result["subscription"] = subscription
+            result["initialPermissionReady"] = wait_for_selector(
+                str(socket_path),
+                browser_tab_id,
+                page_id,
+                "#permission-ready",
+                args.page_timeout_ms,
+            )
 
             permission_state_before = evaluate_json_string(
                 str(socket_path),
@@ -986,6 +1046,11 @@ def main() -> int:
                 request_id=auth_request_id,
                 timeout_ms=args.page_timeout_ms,
             )
+            auth_post_resolve_probes = wait_for_browser_control_responsive(
+                str(socket_path),
+                browser_context_id,
+                timeout_ms=args.page_timeout_ms,
+            )
             auth_ready = wait_for_selector(
                 str(socket_path),
                 browser_tab_id,
@@ -1024,6 +1089,7 @@ def main() -> int:
                 "resolve": auth_resolve,
                 "resolveAck": auth_resolve_ack,
                 "resolved": auth_resolved,
+                "postResolveReadyProbes": auth_post_resolve_probes,
                 "ready": auth_ready,
                 "marker": auth_marker,
                 "staleRetry": stale_auth_retry,
@@ -1066,6 +1132,11 @@ def main() -> int:
                 request_id=certificate_request_id,
                 timeout_ms=args.page_timeout_ms,
             )
+            certificate_post_resolve_probes = wait_for_browser_control_responsive(
+                str(socket_path),
+                browser_context_id,
+                timeout_ms=args.page_timeout_ms,
+            )
             certificate_ready = wait_for_selector(
                 str(socket_path),
                 browser_tab_id,
@@ -1102,6 +1173,7 @@ def main() -> int:
                 "resolve": certificate_resolve,
                 "resolveAck": certificate_resolve_ack,
                 "resolved": certificate_resolved,
+                "postResolveReadyProbes": certificate_post_resolve_probes,
                 "ready": certificate_ready,
                 "marker": certificate_marker,
                 "staleRetry": stale_certificate_retry,

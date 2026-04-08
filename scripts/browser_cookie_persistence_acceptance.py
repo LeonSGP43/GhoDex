@@ -54,14 +54,22 @@ def default_shared_socket_path() -> str:
 
 
 def resolve_default_app() -> Path:
+    candidates: list[Path] = []
+    candidates.extend(REPO_ROOT.glob("macos/build-managed-cef*/Debug/GhoDex.app"))
+
+    default_debug_app = REPO_ROOT / "macos/build/Debug/GhoDex.app"
+    if default_debug_app.exists():
+        candidates.append(default_debug_app)
+
     candidates = sorted(
-        REPO_ROOT.glob("macos/build-managed-cef*/Debug/GhoDex.app"),
+        candidates,
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
     if not candidates:
         raise SystemExit(
-            "No built GhoDex.app found under macos/build-managed-cef*/Debug. "
+            "No built GhoDex.app found under macos/build-managed-cef*/Debug "
+            "or macos/build/Debug/GhoDex.app. "
             "Pass --app=/path/to/GhoDex.app."
         )
     return candidates[0]
@@ -74,7 +82,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--app",
         default=None,
-        help="Path to the CEF-enabled GhoDex.app bundle to launch; defaults to the newest macos/build-managed-cef*/Debug/GhoDex.app",
+        help=(
+            "Path to the CEF-enabled GhoDex.app bundle to launch; defaults to the "
+            "newest macos/build-managed-cef*/Debug/GhoDex.app or "
+            "macos/build/Debug/GhoDex.app"
+        ),
     )
     parser.add_argument(
         "--runtime-root",
@@ -198,6 +210,18 @@ def wait_for_socket_gone(socket_path: str, timeout_ms: int) -> None:
         if not os.path.exists(socket_path):
             return
         time.sleep(0.25)
+
+    if os.path.exists(socket_path):
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(1.0)
+        try:
+            client.connect(socket_path)
+        except OSError:
+            os.unlink(socket_path)
+            return
+        finally:
+            client.close()
+
     raise RuntimeError(f"Timed out waiting for Browser IPC socket removal at {socket_path}")
 
 
@@ -416,6 +440,7 @@ def local_cookie_server() -> dict[str, str]:
 
     class ThreadedTCPServer(socketserver.ThreadingTCPServer):
         allow_reuse_address = True
+        daemon_threads = True
 
     handler = lambda *args, **kwargs: QuietHandler(*args, directory=str(webroot), **kwargs)
     server = ThreadedTCPServer(("127.0.0.1", 0), handler)
