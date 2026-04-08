@@ -215,6 +215,110 @@ def command_timeout_seconds(timeout_ms: int, *, minimum_seconds: float = 125.0, 
     return max(minimum_seconds, timeout_ms / 1000.0 + buffer_seconds)
 
 
+def wait_for_context_list(
+    socket_path: str,
+    timeout_ms: int,
+) -> list[dict]:
+    deadline = time.monotonic() + (timeout_ms / 1000.0)
+    last_error: str | None = None
+    while time.monotonic() < deadline:
+        try:
+            result = extract_result_json(
+                send_request(
+                    socket_path,
+                    "listContexts",
+                    version="browser.context.v2",
+                    payload={},
+                    timeout=10.0,
+                )["response"]
+            )
+            if not isinstance(result, list):
+                raise RuntimeError(f"Expected listContexts to return a list, got {result!r}")
+            return result
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)
+            time.sleep(0.5)
+    raise RuntimeError(f"Timed out waiting for listContexts readiness: {last_error or 'unknown error'}")
+
+
+def wait_for_new_context(
+    socket_path: str,
+    previous_ids: set[str],
+    timeout_ms: int,
+) -> dict:
+    deadline = time.monotonic() + (timeout_ms / 1000.0)
+    last_contexts: list[dict] = []
+    while time.monotonic() < deadline:
+        list_result = extract_result_json(
+            send_request(
+                socket_path,
+                "listContexts",
+                version="browser.context.v2",
+                payload={},
+                timeout=10.0,
+            )["response"]
+        )
+        if not isinstance(list_result, list):
+            raise RuntimeError(f"Expected listContexts to return a list, got {list_result!r}")
+        last_contexts = list_result
+        for context in list_result:
+            context_id = str(context.get("id", ""))
+            if context_id and context_id not in previous_ids:
+                return context
+        time.sleep(0.1)
+    raise RuntimeError(
+        "Timed out waiting for a new Browser context to appear. "
+        f"Last contexts: {json.dumps(last_contexts, sort_keys=True)}"
+    )
+
+
+def create_context_with_retry(
+    socket_path: str,
+    *,
+    page_url: str,
+    timeout_ms: int,
+) -> tuple[dict, dict]:
+    previous_context_ids = {
+        str(context.get("id", ""))
+        for context in wait_for_context_list(socket_path, timeout_ms)
+        if str(context.get("id", ""))
+    }
+    deadline = time.monotonic() + (timeout_ms / 1000.0)
+    last_error: str | None = None
+
+    while time.monotonic() < deadline:
+        remaining = max(10.0, deadline - time.monotonic())
+        try:
+            create_context = send_request(
+                socket_path,
+                "newContext",
+                version="browser.context.v2",
+                payload={"url": page_url},
+                timeout=max(command_timeout_seconds(timeout_ms), remaining + 5.0),
+            )
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)
+            time.sleep(0.5)
+            continue
+
+        if create_context["response"].get("ok") is True:
+            context_summary = extract_result_json(create_context["response"])
+            if not isinstance(context_summary, dict):
+                raise RuntimeError(f"Expected newContext to return an object, got {context_summary!r}")
+            return create_context, context_summary
+
+        error = create_context["response"].get("error") or {}
+        if error.get("code") not in {"bridgeUnavailable", "requestTimedOut"}:
+            raise RuntimeError(
+                f"newContext failed unexpectedly: {json.dumps(create_context['response'], sort_keys=True)}"
+            )
+
+        context_summary = wait_for_new_context(socket_path, previous_context_ids, timeout_ms)
+        return create_context, context_summary
+
+    raise RuntimeError(f"Timed out waiting for newContext response: {last_error or 'unknown error'}")
+
+
 def parse_single_cef_init_log(text: str) -> dict:
     matches = list(CEF_INIT_RE.finditer(text))
     if len(matches) != 1:
@@ -258,6 +362,7 @@ def launch_app(
     runtime_root: str,
     app_support_root: Path,
     profile_path: str | None,
+    home_dir: Path,
 ) -> subprocess.Popen[str]:
     executable = app_bundle / "Contents" / "MacOS" / "GhoDex"
     if not executable.exists():
@@ -267,11 +372,15 @@ def launch_app(
     env["GHODEX_CEF_ROOT"] = runtime_root
     env["GHODEX_BROWSER_APP_SUPPORT_ROOT"] = str(app_support_root)
     env["GHODEX_SKIP_INITIAL_TERMINAL_WINDOW"] = "1"
+    env["HOME"] = str(home_dir)
+    env["TMPDIR"] = str(home_dir / "tmp")
     if profile_path is not None:
         env["GHODEX_CEF_PROFILE_PATH"] = profile_path
     else:
         env.pop("GHODEX_CEF_PROFILE_PATH", None)
 
+    home_dir.mkdir(parents=True, exist_ok=True)
+    (home_dir / "tmp").mkdir(parents=True, exist_ok=True)
     app_support_root.mkdir(parents=True, exist_ok=True)
     log_path.write_text("", encoding="utf-8")
     with log_path.open("a", encoding="utf-8") as log_file:
@@ -325,7 +434,8 @@ def local_cookie_server() -> dict[str, str]:
 
 def wait_for_page_ready(socket_path: str, browser_tab_id: str, expected_url: str, timeout_ms: int) -> dict:
     deadline = time.monotonic() + (timeout_ms / 1000.0)
-    command_timeout = command_timeout_seconds(timeout_ms)
+    last_error: str | None = None
+    last_response: dict | None = None
     script = """
 (() => ({
   href: location.href,
@@ -335,13 +445,21 @@ def wait_for_page_ready(socket_path: str, browser_tab_id: str, expected_url: str
 }))()
 """.strip()
     while time.monotonic() < deadline:
-        response = send_request(
-            socket_path,
-            "evaluateJavaScript",
-            browser_tab_id=browser_tab_id,
-            payload={"script": script},
-            timeout=command_timeout,
-        )
+        remaining_ms = max(1000, int((deadline - time.monotonic()) * 1000))
+        try:
+            response = send_request(
+                socket_path,
+                "evaluateJavaScript",
+                browser_tab_id=browser_tab_id,
+                payload={"script": script},
+                timeout=max(20.0, min(remaining_ms, 5000) / 1000.0 + 5.0),
+            )
+        except TimeoutError as exc:
+            last_error = str(exc)
+            time.sleep(0.25)
+            continue
+
+        last_response = response["response"]
         if response["response"].get("ok") is True:
             result = extract_result_json(response["response"])
             if (
@@ -352,7 +470,10 @@ def wait_for_page_ready(socket_path: str, browser_tab_id: str, expected_url: str
             ):
                 return result
         time.sleep(0.25)
-    raise RuntimeError(f"Timed out waiting for page readiness for {expected_url}")
+    raise RuntimeError(
+        f"Timed out waiting for page readiness for {expected_url}; "
+        f"last_error={last_error!r}; last_response={json.dumps(last_response or {}, sort_keys=True)}"
+    )
 
 
 def cookie_value_from_header(cookie_header: str, cookie_name: str) -> str | None:
@@ -463,14 +584,11 @@ def exercise_cookie_roundtrip(
     cookie_value: str,
     timeout_ms: int,
 ) -> dict:
-    new_context = send_request(
+    new_context, context_summary = create_context_with_retry(
         socket_path,
-        "newContext",
-        version="browser.context.v2",
-        payload={"url": page_url},
-        timeout=command_timeout_seconds(timeout_ms),
+        page_url=page_url,
+        timeout_ms=timeout_ms,
     )
-    context_summary = extract_result_json(new_context["response"])
     browser_tab_id = context_summary["id"]
     first_ready = wait_for_page_ready(socket_path, browser_tab_id, page_url, timeout_ms)
     write_result = set_cookie(socket_path, browser_tab_id, cookie_name, cookie_value, timeout_ms)
@@ -490,14 +608,11 @@ def cleanup_cookie(
     cookie_name: str,
     timeout_ms: int,
 ) -> dict:
-    new_context = send_request(
+    new_context, context_summary = create_context_with_retry(
         socket_path,
-        "newContext",
-        version="browser.context.v2",
-        payload={"url": page_url},
-        timeout=command_timeout_seconds(timeout_ms),
+        page_url=page_url,
+        timeout_ms=timeout_ms,
     )
-    context_summary = extract_result_json(new_context["response"])
     browser_tab_id = context_summary["id"]
     wait_for_page_ready(socket_path, browser_tab_id, page_url, timeout_ms)
     clear_result = clear_cookie(socket_path, browser_tab_id, cookie_name, timeout_ms)
@@ -522,6 +637,7 @@ def run_mode(
     mode_workspace = workspace / mode
     mode_workspace.mkdir(parents=True, exist_ok=True)
     app_support_root = mode_workspace / "app-support"
+    home_dir = mode_workspace / "home"
     socket_path = str(app_support_root / "browser-control.sock")
     log_first = mode_workspace / "launch-1.log"
     log_second = mode_workspace / "launch-2.log"
@@ -543,6 +659,7 @@ def run_mode(
         runtime_root=runtime_root,
         app_support_root=app_support_root,
         profile_path=configured_profile,
+        home_dir=home_dir,
     )
     try:
         socket_ready = wait_for_socket_ready(socket_path, timeout_ms)
@@ -565,6 +682,7 @@ def run_mode(
         runtime_root=runtime_root,
         app_support_root=app_support_root,
         profile_path=configured_profile,
+        home_dir=home_dir,
     )
     try:
         second_socket_ready = wait_for_socket_ready(socket_path, timeout_ms)

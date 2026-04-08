@@ -201,21 +201,45 @@ def wait_for_selector(
     browser_tab_id: str | None = None,
     page_id: str | None = None,
 ) -> dict:
-    response = send_request(
-        socket_path,
-        "waitForSelector",
-        version=version,
-        browser_context_id=browser_context_id,
-        browser_tab_id=browser_tab_id,
-        page_id=page_id,
-        payload={
-            "selector": selector,
-            "state": "present",
-            "timeoutMS": str(timeout_ms),
-        },
-        timeout=command_timeout_seconds(timeout_ms),
+    deadline = time.monotonic() + (timeout_ms / 1000.0)
+    last_response: dict | None = None
+    last_error: str | None = None
+
+    while time.monotonic() < deadline:
+        remaining_ms = max(1000, int((deadline - time.monotonic()) * 1000))
+        try:
+            response = send_request(
+                socket_path,
+                "waitForSelector",
+                version=version,
+                browser_context_id=browser_context_id,
+                browser_tab_id=browser_tab_id,
+                page_id=page_id,
+                payload={
+                    "selector": selector,
+                    "state": "present",
+                    "timeoutMS": str(min(remaining_ms, 5000)),
+                },
+                timeout=max(20.0, min(remaining_ms, 5000) / 1000.0 + 5.0),
+            )
+        except TimeoutError as exc:
+            last_error = str(exc)
+            time.sleep(0.25)
+            continue
+
+        last_response = response["response"]
+        if last_response.get("ok") is True:
+            return extract_result_json(last_response)
+
+        error = last_response.get("error") or {}
+        if error.get("code") not in {"bridgeUnavailable", "requestTimedOut"}:
+            raise RuntimeError(f"request failed: {json.dumps(last_response, sort_keys=True)}")
+        time.sleep(0.25)
+
+    raise RuntimeError(
+        f"Timed out waiting for selector {selector!r}; "
+        f"last_error={last_error!r}; last_response={json.dumps(last_response or {}, sort_keys=True)}"
     )
-    return extract_result_json(response["response"])
 
 
 def launch_app(
@@ -369,21 +393,42 @@ def main() -> int:
             assert isinstance(contexts_before, list)
             previous_context_ids = {str(context["id"]) for context in contexts_before}
 
-            create_v2 = send_request(
-                str(socket_path),
-                "newContext",
-                version="browser.context.v2",
-                payload={"url": server_info["index_url"]},
-                timeout=command_timeout,
-            )
-            if create_v2["response"].get("ok") is True:
-                v2_context = extract_result_json(create_v2["response"])
-                assert isinstance(v2_context, dict)
-            else:
-                error = create_v2["response"].get("error") or {}
-                if error.get("code") != "bridgeUnavailable":
-                    raise RuntimeError(f"newContext failed unexpectedly: {json.dumps(create_v2['response'], sort_keys=True)}")
+            try:
+                create_v2 = send_request(
+                    str(socket_path),
+                    "newContext",
+                    version="browser.context.v2",
+                    payload={"url": server_info["index_url"]},
+                    timeout=command_timeout,
+                )
+            except TimeoutError as exc:
+                create_v2 = {
+                    "elapsed_ms": round(command_timeout * 1000, 2),
+                    "request": {
+                        "version": "browser.context.v2",
+                        "command": "newContext",
+                        "payload": {"url": server_info["index_url"]},
+                    },
+                    "response": {
+                        "ok": False,
+                        "error": {
+                            "code": "requestTimedOut",
+                            "message": str(exc),
+                        },
+                    },
+                }
                 v2_context = wait_for_new_context(str(socket_path), previous_context_ids, args.page_timeout_ms)
+            else:
+                if create_v2["response"].get("ok") is True:
+                    v2_context = extract_result_json(create_v2["response"])
+                    assert isinstance(v2_context, dict)
+                else:
+                    error = create_v2["response"].get("error") or {}
+                    if error.get("code") not in {"bridgeUnavailable", "requestTimedOut"}:
+                        raise RuntimeError(
+                            f"newContext failed unexpectedly: {json.dumps(create_v2['response'], sort_keys=True)}"
+                        )
+                    v2_context = wait_for_new_context(str(socket_path), previous_context_ids, args.page_timeout_ms)
 
             assert isinstance(v2_context, dict)
             v2_context_id = str(v2_context["id"])
@@ -514,17 +559,35 @@ def main() -> int:
             assert isinstance(contexts_before_v1_new_tab, list)
             previous_v1_ids = {str(context["id"]) for context in contexts_before_v1_new_tab}
 
-            create_v1 = send_request(
-                str(socket_path),
-                "newTab",
-                version="browser.tab.v1",
-                payload={"url": server_info["index_url"]},
-                timeout=command_timeout,
-            )
-            if create_v1["response"].get("ok") is not True:
-                error = create_v1["response"].get("error") or {}
-                if error.get("code") != "bridgeUnavailable":
-                    raise RuntimeError(f"newTab failed unexpectedly: {json.dumps(create_v1['response'], sort_keys=True)}")
+            try:
+                create_v1 = send_request(
+                    str(socket_path),
+                    "newTab",
+                    version="browser.tab.v1",
+                    payload={"url": server_info["index_url"]},
+                    timeout=command_timeout,
+                )
+            except TimeoutError as exc:
+                create_v1 = {
+                    "elapsed_ms": round(command_timeout * 1000, 2),
+                    "request": {
+                        "version": "browser.tab.v1",
+                        "command": "newTab",
+                        "payload": {"url": server_info["index_url"]},
+                    },
+                    "response": {
+                        "ok": False,
+                        "error": {
+                            "code": "requestTimedOut",
+                            "message": str(exc),
+                        },
+                    },
+                }
+            else:
+                if create_v1["response"].get("ok") is not True:
+                    error = create_v1["response"].get("error") or {}
+                    if error.get("code") not in {"bridgeUnavailable", "requestTimedOut"}:
+                        raise RuntimeError(f"newTab failed unexpectedly: {json.dumps(create_v1['response'], sort_keys=True)}")
 
             v1_context_summary = wait_for_new_context(str(socket_path), previous_v1_ids, args.page_timeout_ms)
             v1_context_id = str(v1_context_summary["id"])

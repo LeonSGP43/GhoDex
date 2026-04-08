@@ -232,6 +232,8 @@ def local_dialog_server() -> dict[str, str]:
   <body>
     <h1 id="ready-marker">js-dialog-resolution-main</h1>
     <script>
+      const dialogScheduleDelayMS = 100;
+
       window.__ghodexDialogHarness = {
         alertDone: false,
         confirmResult: null,
@@ -242,19 +244,19 @@ def local_dialog_server() -> dict[str, str]:
         setTimeout(() => {
           alert("alert from harness");
           window.__ghodexDialogHarness.alertDone = true;
-        }, 0);
+        }, dialogScheduleDelayMS);
       };
 
       window.__ghodexScheduleConfirm = function() {
         setTimeout(() => {
           window.__ghodexDialogHarness.confirmResult = confirm("confirm from harness");
-        }, 0);
+        }, dialogScheduleDelayMS);
       };
 
       window.__ghodexSchedulePrompt = function() {
         setTimeout(() => {
           window.__ghodexDialogHarness.promptResult = prompt("prompt from harness", "anon");
-        }, 0);
+        }, dialogScheduleDelayMS);
       };
     </script>
   </body>
@@ -426,13 +428,20 @@ def wait_for_dialog_event(
 ) -> dict:
     deadline = time.monotonic() + (timeout_ms / 1000.0)
     observed = []
+    last_error: str | None = None
     while time.monotonic() < deadline:
-        drain = send_request(
-            socket_path,
-            "drainEvents",
-            payload={"subscriptionID": subscription_id, "limit": "128"},
-            timeout=20.0,
-        )
+        remaining = max(1.0, deadline - time.monotonic())
+        try:
+            drain = send_request(
+                socket_path,
+                "drainEvents",
+                payload={"subscriptionID": subscription_id, "limit": "128"},
+                timeout=min(20.0, max(2.0, remaining + 1.0)),
+            )
+        except TimeoutError as exc:
+            last_error = str(exc)
+            time.sleep(0.25)
+            continue
         result = extract_result_json(drain["response"])
         events = result["events"]
         observed.extend(events)
@@ -455,7 +464,8 @@ def wait_for_dialog_event(
             }
         time.sleep(0.25)
     raise RuntimeError(
-        f"Timed out waiting for javaScriptDialog phase={phase} dialogType={dialog_type} requestID={request_id!r}"
+        f"Timed out waiting for javaScriptDialog phase={phase} dialogType={dialog_type} "
+        f"requestID={request_id!r}; last error was {last_error!r}"
     )
 
 
@@ -470,19 +480,28 @@ def wait_for_harness_state(
 ):
     deadline = time.monotonic() + (timeout_ms / 1000.0)
     last_value = None
+    last_error: str | None = None
     while time.monotonic() < deadline:
-        state = evaluate_json_string(
-            socket_path,
-            browser_tab_id,
-            page_id,
-            "JSON.stringify(window.__ghodexDialogHarness)",
-        )
+        remaining = max(1.0, deadline - time.monotonic())
+        try:
+            state = evaluate_json_string(
+                socket_path,
+                browser_tab_id,
+                page_id,
+                "JSON.stringify(window.__ghodexDialogHarness)",
+                timeout=min(20.0, max(2.0, remaining + 1.0)),
+            )
+        except TimeoutError as exc:
+            last_error = str(exc)
+            time.sleep(0.25)
+            continue
         last_value = state.get(field)
         if last_value == expected_value:
             return state
         time.sleep(0.25)
     raise RuntimeError(
-        f"Timed out waiting for dialog harness field {field} == {expected_value!r}; last value was {last_value!r}"
+        f"Timed out waiting for dialog harness field {field} == {expected_value!r}; "
+        f"last value was {last_value!r}; last error was {last_error!r}"
     )
 
 
@@ -582,6 +601,7 @@ def run_acceptance(args: argparse.Namespace) -> dict:
             )
             subscription_id = subscription["subscriptionID"]
             ready_result = initial_bridge_ready
+            time.sleep(0.25)
 
             alert_schedule = schedule_dialog(
                 str(socket_path),
@@ -622,6 +642,7 @@ def run_acceptance(args: argparse.Namespace) -> dict:
                 expected_value=True,
                 timeout_ms=args.page_timeout_ms,
             )
+            time.sleep(0.25)
 
             stale_alert_retry = send_request(
                 str(socket_path),
@@ -677,6 +698,7 @@ def run_acceptance(args: argparse.Namespace) -> dict:
                 expected_value=False,
                 timeout_ms=args.page_timeout_ms,
             )
+            time.sleep(0.25)
 
             prompt_schedule = schedule_dialog(
                 str(socket_path),
