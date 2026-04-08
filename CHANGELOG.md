@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(signing): harden staged helper app codesigning
+
+- What changed: Reworked `scripts/stage_cef_helper_app.sh` to strip stale signatures and extended attributes before re-signing, added reusable `sign_with_retry` / `verify_code_path` helpers, and switched helper staging from one-shot `codesign --deep` calls to nested-code-first signing for helper apps plus the parent app bundle.
+- Why: The staged CEF helper path could inherit stale signing artifacts or fail intermittently on nested code, which made helper-app staging and local bundle verification less reliable.
+- Impact: Helper-app staging now re-signs nested frameworks, XPC services, helper executables, and the top-level app bundle more deterministically, reducing flaky post-stage signing failures in local CEF-enabled app flows.
+- Verification: `bash scripts/stage_cef_helper_app.sh /tmp/ghodex-stage-helper-verify-1969/GhoDex.app`; `codesign --verify --deep --strict --verbose=2 /tmp/ghodex-stage-helper-verify-1969/GhoDex.app`
+- Files: `scripts/stage_cef_helper_app.sh`, `CHANGELOG.md`
+- Decision trail: Keep signing hardening inside the staging script rather than adding another outer wrapper, and replace the old broad `--deep` pass with explicit nested verification plus one bounded retry so failures stay local and diagnosable.
+
+### fix(macos): preserve cmd+t new tab shortcut outside terminals
+
+- What changed: Updated `AppDelegate` shortcut syncing so the shared `New Tab` menu item now receives the configured `new_tab` key binding instead of being cleared, and exposed `applyMenuShortcut` for targeted verification in `AppDelegateStartupPolicyTests`.
+- Why: Non-terminal surfaces such as the Settings Panel still rely on the shared menu item to open the top-level new-tab picker, but clearing that shortcut removed `Cmd+T` whenever no terminal surface was focused.
+- Impact: The configured new-tab shortcut remains available from non-terminal windows and tabs, so users can keep opening top-level tabs without first focusing a terminal surface.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath macos/build/DerivedData SYMROOT=macos/build GHODEX_CEF_ENABLED=1 GHODEX_CEF_ROOT=macos/build/cef-runtime/current GHODEX_CEF_OTHER_LDFLAGS=-lsqlite3 GHODEX_CEF_WRAPPER_LIB=macos/build/cef-runtime/current/lib/Debug/libcef_dll_wrapper.a -only-testing:GhosttyTests/AppDelegateStartupPolicyTests test`
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Tests/AppDelegateStartupPolicyTests.swift`, `CHANGELOG.md`
+- Decision trail: Keep the shortcut repair at the shared menu-sync layer instead of teaching each non-terminal surface to special-case `Cmd+T`, so terminal and non-terminal tabs continue to share one top-level new-tab command path.
+
 ### fix(macos): restore lifecycle diagnostics wiring after main sync
 
 - What changed: Restored the `AppDelegate` lifecycle diagnostics plumbing that the runtime-diagnostics feature depends on: startup session initialization, stable signal/system reason-code helpers, signal registration for `SIGTERM` / `SIGINT` / `SIGHUP`, and terminate accept/cancel bookkeeping that writes the intended lifecycle records. Also restored the missing `ControlHarnessTests` helper methods (`makeFreshEventHub`, `makeBundleID`) so the merged gateway session-cap regressions compile cleanly.
