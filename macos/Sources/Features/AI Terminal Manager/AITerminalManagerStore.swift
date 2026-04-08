@@ -3960,7 +3960,9 @@ final class AITerminalManagerStore: ObservableObject {
             timeInterval: resolvedInterval,
             repeats: false
         ) { [weak self] _ in
-            self?.runSSHPasswordAutomationTick()
+            Task { @MainActor [weak self] in
+                self?.runSSHPasswordAutomationTick()
+            }
         }
         timer.tolerance = min(max(resolvedInterval * 0.25, 0.05), 0.25)
         RunLoop.main.add(timer, forMode: .common)
@@ -4219,8 +4221,10 @@ final class AITerminalManagerStore: ObservableObject {
             timeInterval: interval,
             repeats: true
         ) { [weak self] _ in
-            guard let self else { return }
-            _ = self.expireStaleAgentRuntimeSessions(now: .now)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                _ = self.expireStaleAgentRuntimeSessions(now: .now)
+            }
         }
         timer.tolerance = min(max(interval * 0.2, 0.1), 1)
         RunLoop.main.add(timer, forMode: .common)
@@ -4251,8 +4255,9 @@ final class AITerminalManagerStore: ObservableObject {
 
         let delay = max(0, nextDate.timeIntervalSince(now))
         let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
-            guard let self else { return }
-            self.syncAgentRuntimeSchedules()
+            Task { @MainActor [weak self] in
+                self?.syncAgentRuntimeSchedules()
+            }
         }
         timer.tolerance = min(max(delay * 0.1, 0.05), 1)
         RunLoop.main.add(timer, forMode: .common)
@@ -4390,8 +4395,9 @@ final class AITerminalManagerStore: ObservableObject {
             timeInterval: interval,
             repeats: true
         ) { [weak self] _ in
-            guard let self else { return }
-            self.processHeartbeatTick(now: .now)
+            Task { @MainActor [weak self] in
+                self?.processHeartbeatTick(now: .now)
+            }
         }
         timer.tolerance = min(max(interval * 0.1, 0.05), 1)
         RunLoop.main.add(timer, forMode: .common)
@@ -4431,7 +4437,9 @@ final class AITerminalManagerStore: ObservableObject {
 
         let delay = max(0, nextDate.timeIntervalSinceNow)
         let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
-            self?.runDueHeartbeatTasksIfNeeded()
+            Task { @MainActor [weak self] in
+                self?.runDueHeartbeatTasksIfNeeded()
+            }
         }
         RunLoop.main.add(timer, forMode: .common)
         heartbeatSchedulerTimer = timer
