@@ -161,6 +161,10 @@ def wait_for_socket_gone(socket_path: str, timeout_ms: int) -> None:
     raise RuntimeError(f"Timed out waiting for Browser IPC socket removal at {socket_path}")
 
 
+def command_timeout_seconds(timeout_ms: int, *, minimum_seconds: float = 125.0, buffer_seconds: float = 5.0) -> float:
+    return max(minimum_seconds, timeout_ms / 1000.0 + buffer_seconds)
+
+
 def terminate_process(proc: subprocess.Popen[str], timeout: float = 15.0) -> None:
     if proc.poll() is not None:
         return
@@ -301,7 +305,7 @@ def wait_for_selector(
             "state": "present",
             "timeoutMS": str(timeout_ms),
         },
-        timeout=max(20.0, timeout_ms / 1000.0 + 5.0),
+        timeout=command_timeout_seconds(timeout_ms),
     )
     return extract_result_json(response["response"])
 
@@ -379,59 +383,12 @@ def create_context_with_retry(
                 "newContext",
                 version="browser.context.v2",
                 payload={"url": url},
-                timeout=min(max(remaining, 30.0), 120.0),
+                timeout=max(command_timeout_seconds(timeout_ms), remaining + 5.0),
             )
         except Exception as exc:  # noqa: BLE001
             last_error = str(exc)
             time.sleep(0.5)
     raise RuntimeError(f"Timed out waiting for newContext response: {last_error or 'unknown error'}")
-
-
-def wait_for_page_bridge_ready(
-    socket_path: str,
-    *,
-    browser_context_id: str,
-    page_id: str,
-    timeout_ms: int,
-) -> dict:
-    deadline = time.monotonic() + (timeout_ms / 1000.0)
-    last_response: dict | None = None
-    while time.monotonic() < deadline:
-        remaining = max(1.0, deadline - time.monotonic())
-        try:
-            probe = send_request(
-                socket_path,
-                "listFrames",
-                browser_tab_id=browser_context_id,
-                page_id=page_id,
-                timeout=min(remaining, 20.0),
-            )
-        except TimeoutError:
-            last_response = {
-                "timed_out": True,
-                "browserContextID": browser_context_id,
-                "pageID": page_id,
-            }
-            time.sleep(0.25)
-            continue
-
-        last_response = probe
-        response = probe["response"]
-        if response.get("ok") is True:
-            return probe
-
-        error = response.get("error") or {}
-        if error.get("code") not in {"bridgeUnavailable", "requestTimedOut"}:
-            raise RuntimeError(
-                "Unexpected page bridge readiness failure: "
-                f"{json.dumps(response, sort_keys=True)}"
-            )
-        time.sleep(0.25)
-
-    raise RuntimeError(
-        "Timed out waiting for page bridge readiness. "
-        f"context={browser_context_id} page={page_id} last={json.dumps(last_response or {}, sort_keys=True)}"
-    )
 
 
 def evaluate_json_string(
@@ -607,11 +564,12 @@ def run_acceptance(args: argparse.Namespace) -> dict:
 
             browser_tab_id = str(context_summary["id"])
             page_id = str(context_summary["activePageID"])
-            initial_bridge_ready = wait_for_page_bridge_ready(
+            initial_bridge_ready = wait_for_selector(
                 str(socket_path),
-                browser_context_id=browser_tab_id,
-                page_id=page_id,
-                timeout_ms=args.page_timeout_ms,
+                browser_tab_id,
+                page_id,
+                "#ready-marker",
+                args.page_timeout_ms,
             )
 
             subscription = extract_result_json(
@@ -623,13 +581,7 @@ def run_acceptance(args: argparse.Namespace) -> dict:
                 )["response"]
             )
             subscription_id = subscription["subscriptionID"]
-            ready_result = wait_for_selector(
-                str(socket_path),
-                browser_tab_id,
-                page_id,
-                "#ready-marker",
-                args.page_timeout_ms,
-            )
+            ready_result = initial_bridge_ready
 
             alert_schedule = schedule_dialog(
                 str(socket_path),

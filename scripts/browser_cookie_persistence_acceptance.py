@@ -127,13 +127,14 @@ def send_request(
     socket_path: str,
     command: str,
     *,
+    version: str = "browser.tab.v1",
     browser_tab_id: str | None = None,
     payload: dict[str, str] | None = None,
     timeout: float = 10.0,
 ) -> dict:
     body = {
         "id": str(uuid.uuid4()),
-        "version": "browser.tab.v1",
+        "version": version,
         "command": command,
         "payload": payload or {},
     }
@@ -210,6 +211,10 @@ def wait_for_log_substring(log_path: Path, needle: str, timeout_ms: int) -> str:
     raise RuntimeError(f"Timed out waiting for {needle!r} in {log_path}")
 
 
+def command_timeout_seconds(timeout_ms: int, *, minimum_seconds: float = 125.0, buffer_seconds: float = 5.0) -> float:
+    return max(minimum_seconds, timeout_ms / 1000.0 + buffer_seconds)
+
+
 def parse_single_cef_init_log(text: str) -> dict:
     matches = list(CEF_INIT_RE.finditer(text))
     if len(matches) != 1:
@@ -261,6 +266,7 @@ def launch_app(
     env = os.environ.copy()
     env["GHODEX_CEF_ROOT"] = runtime_root
     env["GHODEX_BROWSER_APP_SUPPORT_ROOT"] = str(app_support_root)
+    env["GHODEX_SKIP_INITIAL_TERMINAL_WINDOW"] = "1"
     if profile_path is not None:
         env["GHODEX_CEF_PROFILE_PATH"] = profile_path
     else:
@@ -319,6 +325,7 @@ def local_cookie_server() -> dict[str, str]:
 
 def wait_for_page_ready(socket_path: str, browser_tab_id: str, expected_url: str, timeout_ms: int) -> dict:
     deadline = time.monotonic() + (timeout_ms / 1000.0)
+    command_timeout = command_timeout_seconds(timeout_ms)
     script = """
 (() => ({
   href: location.href,
@@ -333,7 +340,7 @@ def wait_for_page_ready(socket_path: str, browser_tab_id: str, expected_url: str
             "evaluateJavaScript",
             browser_tab_id=browser_tab_id,
             payload={"script": script},
-            timeout=5.0,
+            timeout=command_timeout,
         )
         if response["response"].get("ok") is True:
             result = extract_result_json(response["response"])
@@ -356,7 +363,14 @@ def cookie_value_from_header(cookie_header: str, cookie_name: str) -> str | None
     return None
 
 
-def set_cookie(socket_path: str, browser_tab_id: str, cookie_name: str, cookie_value: str) -> dict:
+def set_cookie(
+    socket_path: str,
+    browser_tab_id: str,
+    cookie_name: str,
+    cookie_value: str,
+    timeout_ms: int,
+) -> dict:
+    command_timeout = command_timeout_seconds(timeout_ms)
     script = f"""
 (() => {{
   document.cookie = {json.dumps(cookie_name + "=" + cookie_value + "; path=/; max-age=86400; SameSite=Lax")};
@@ -378,12 +392,18 @@ def set_cookie(socket_path: str, browser_tab_id: str, cookie_name: str, cookie_v
         "evaluateJavaScript",
         browser_tab_id=browser_tab_id,
         payload={"script": script},
-        timeout=5.0,
+        timeout=command_timeout,
     )
     return extract_result_json(response["response"])
 
 
-def read_cookie(socket_path: str, browser_tab_id: str, cookie_name: str) -> dict:
+def read_cookie(
+    socket_path: str,
+    browser_tab_id: str,
+    cookie_name: str,
+    timeout_ms: int,
+) -> dict:
+    command_timeout = command_timeout_seconds(timeout_ms)
     script = f"""
 (() => {{
   const prefix = {json.dumps(cookie_name + "=")};
@@ -406,12 +426,18 @@ def read_cookie(socket_path: str, browser_tab_id: str, cookie_name: str) -> dict
         "evaluateJavaScript",
         browser_tab_id=browser_tab_id,
         payload={"script": script},
-        timeout=5.0,
+        timeout=command_timeout,
     )
     return extract_result_json(response["response"])
 
 
-def clear_cookie(socket_path: str, browser_tab_id: str, cookie_name: str) -> dict:
+def clear_cookie(
+    socket_path: str,
+    browser_tab_id: str,
+    cookie_name: str,
+    timeout_ms: int,
+) -> dict:
+    command_timeout = command_timeout_seconds(timeout_ms)
     script = f"""
 (() => {{
   document.cookie = {json.dumps(cookie_name + '=; path=/; max-age=0; SameSite=Lax')};
@@ -425,7 +451,7 @@ def clear_cookie(socket_path: str, browser_tab_id: str, cookie_name: str) -> dic
         "evaluateJavaScript",
         browser_tab_id=browser_tab_id,
         payload={"script": script},
-        timeout=5.0,
+        timeout=command_timeout,
     )
     return extract_result_json(response["response"])
 
@@ -437,14 +463,21 @@ def exercise_cookie_roundtrip(
     cookie_value: str,
     timeout_ms: int,
 ) -> dict:
-    new_tab = send_request(socket_path, "newTab", payload={"url": page_url})
-    tab_summary = extract_result_json(new_tab["response"])
-    browser_tab_id = tab_summary["id"]
+    new_context = send_request(
+        socket_path,
+        "newContext",
+        version="browser.context.v2",
+        payload={"url": page_url},
+        timeout=command_timeout_seconds(timeout_ms),
+    )
+    context_summary = extract_result_json(new_context["response"])
+    browser_tab_id = context_summary["id"]
     first_ready = wait_for_page_ready(socket_path, browser_tab_id, page_url, timeout_ms)
-    write_result = set_cookie(socket_path, browser_tab_id, cookie_name, cookie_value)
-    read_back = read_cookie(socket_path, browser_tab_id, cookie_name)
+    write_result = set_cookie(socket_path, browser_tab_id, cookie_name, cookie_value, timeout_ms)
+    read_back = read_cookie(socket_path, browser_tab_id, cookie_name, timeout_ms)
     return {
         "browser_tab_id": browser_tab_id,
+        "create_context": context_summary,
         "initial_page": first_ready,
         "write_result": write_result,
         "read_back": read_back,
@@ -457,14 +490,21 @@ def cleanup_cookie(
     cookie_name: str,
     timeout_ms: int,
 ) -> dict:
-    new_tab = send_request(socket_path, "newTab", payload={"url": page_url})
-    tab_summary = extract_result_json(new_tab["response"])
-    browser_tab_id = tab_summary["id"]
+    new_context = send_request(
+        socket_path,
+        "newContext",
+        version="browser.context.v2",
+        payload={"url": page_url},
+        timeout=command_timeout_seconds(timeout_ms),
+    )
+    context_summary = extract_result_json(new_context["response"])
+    browser_tab_id = context_summary["id"]
     wait_for_page_ready(socket_path, browser_tab_id, page_url, timeout_ms)
-    clear_result = clear_cookie(socket_path, browser_tab_id, cookie_name)
-    after_clear = read_cookie(socket_path, browser_tab_id, cookie_name)
+    clear_result = clear_cookie(socket_path, browser_tab_id, cookie_name, timeout_ms)
+    after_clear = read_cookie(socket_path, browser_tab_id, cookie_name, timeout_ms)
     return {
         "browser_tab_id": browser_tab_id,
+        "create_context": context_summary,
         "clear_result": clear_result,
         "after_clear": after_clear,
     }

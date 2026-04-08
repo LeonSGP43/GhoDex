@@ -5401,8 +5401,18 @@ void GhoDexCEFApp::OnBeforeCommandLineProcessing(
     return;
   }
 
+  BOOL should_use_mock_keychain =
+      HasIsolatedAppSupportRootOverride() || ConfiguredExternalProfilePath().length > 0;
+  if (should_use_mock_keychain) {
+    command_line->AppendSwitch("use-mock-keychain");
+  }
+
   NSString *external_profile = ConfiguredExternalProfilePath();
   if (external_profile.length == 0) {
+    if (HasIsolatedAppSupportRootOverride()) {
+      NSLog(@"[CEF] Using mock keychain for isolated managed profile root %@",
+            ConfiguredProfileRootPath() ?: @"<none>");
+    }
     return;
   }
 
@@ -5424,7 +5434,6 @@ void GhoDexCEFApp::OnBeforeCommandLineProcessing(
   // runtime-owned profile. GhoDex builds do not ship Chrome's OAuth client
   // credentials, so browser-signin services must stay disabled even when the
   // mirrored profile contains Google web cookies and browser-account metadata.
-  command_line->AppendSwitch("use-mock-keychain");
   command_line->AppendSwitchWithValue("allow-browser-signin", "false");
   command_line->AppendSwitch("disable-background-networking");
   command_line->AppendSwitch("disable-component-update");

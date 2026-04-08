@@ -89,6 +89,7 @@ def send_request(
     socket_path: str,
     command: str,
     *,
+    version: str = "browser.tab.v1",
     browser_tab_id: str | None = None,
     page_id: str | None = None,
     payload: dict[str, str] | None = None,
@@ -96,7 +97,7 @@ def send_request(
 ) -> dict:
     body = {
         "id": str(uuid.uuid4()),
-        "version": "browser.tab.v1",
+        "version": version,
         "command": command,
         "payload": payload or {},
     }
@@ -169,6 +170,10 @@ def wait_for_log_substring(log_path: Path, needle: str, timeout_ms: int) -> str:
     raise RuntimeError(f"Timed out waiting for {needle!r} in {log_path}")
 
 
+def command_timeout_seconds(timeout_ms: int, *, minimum_seconds: float = 125.0, buffer_seconds: float = 5.0) -> float:
+    return max(minimum_seconds, timeout_ms / 1000.0 + buffer_seconds)
+
+
 def terminate_process(proc: subprocess.Popen[str], timeout: float = 15.0) -> None:
     if proc.poll() is not None:
         return
@@ -204,6 +209,7 @@ def launch_app(
     env = os.environ.copy()
     env["GHODEX_CEF_ROOT"] = runtime_root
     env["GHODEX_BROWSER_APP_SUPPORT_ROOT"] = str(app_support_root)
+    env["GHODEX_SKIP_INITIAL_TERMINAL_WINDOW"] = "1"
     env["HOME"] = str(home_dir)
     env["TMPDIR"] = str(home_dir / "tmp")
     env.pop("GHODEX_CEF_PROFILE_PATH", None)
@@ -320,7 +326,7 @@ def wait_for_selector(
             "state": "present",
             "timeoutMS": str(timeout_ms),
         },
-        timeout=max(20.0, timeout_ms / 1000.0 + 5.0),
+        timeout=command_timeout_seconds(timeout_ms),
     )
     return extract_result_json(response["response"])
 
@@ -411,30 +417,27 @@ def run_acceptance(args: argparse.Namespace) -> dict:
             )
             artifact["pid"] = proc.pid
 
+            artifact["stage"] = "wait_for_socket_ready"
             socket_ready = wait_for_socket_ready(str(socket_path), args.page_timeout_ms)
             artifact["socket_ready"] = socket_ready
-            created_tab = extract_result_json(send_request(str(socket_path), "newTab", payload={})["response"])
-            browser_tab_id = created_tab["id"]
-            source_page = get_active_page(str(socket_path), browser_tab_id)
-
-            subscription = extract_result_json(
+            artifact["stage"] = "new_context"
+            created_context = extract_result_json(
                 send_request(
                     str(socket_path),
-                    "subscribeEvents",
-                    browser_tab_id=browser_tab_id,
-                    payload={"kindsJSON": json.dumps(["bridgeReady", "navigationStateChanged", "popupRequest"])},
+                    "newContext",
+                    version="browser.context.v2",
+                    payload={"url": server_info["main_url"]},
+                    timeout=command_timeout_seconds(args.page_timeout_ms),
                 )["response"]
             )
-            subscription_id = subscription["subscriptionID"]
+            browser_tab_id = created_context["id"]
+            source_page = {
+                "id": created_context["activePageID"],
+                "url": created_context.get("url"),
+                "title": created_context.get("title"),
+            }
 
-            send_request(
-                str(socket_path),
-                "loadURL",
-                browser_tab_id=browser_tab_id,
-                page_id=source_page["id"],
-                payload={"url": server_info["main_url"]},
-            )
-
+            artifact["stage"] = "wait_for_main_selector"
             main_ready = wait_for_selector(
                 str(socket_path),
                 browser_tab_id,
@@ -450,6 +453,18 @@ def run_acceptance(args: argparse.Namespace) -> dict:
                 args.page_timeout_ms,
             )
 
+            artifact["stage"] = "subscribe_events"
+            subscription = extract_result_json(
+                send_request(
+                    str(socket_path),
+                    "subscribeEvents",
+                    browser_tab_id=browser_tab_id,
+                    payload={"kindsJSON": json.dumps(["bridgeReady", "navigationStateChanged", "popupRequest"])},
+                )["response"]
+            )
+            subscription_id = subscription["subscriptionID"]
+
+            artifact["stage"] = "click_new_tab"
             open_new_tab_result = extract_result_json(
                 send_request(
                     str(socket_path),
@@ -460,6 +475,7 @@ def run_acceptance(args: argparse.Namespace) -> dict:
                     timeout=max(20.0, args.page_timeout_ms / 1000.0),
                 )["response"]
             )
+            artifact["stage"] = "wait_for_page_tab_popup"
             page_tab_popup = wait_for_popup_event(
                 str(socket_path),
                 subscription_id,
@@ -475,6 +491,7 @@ def run_acceptance(args: argparse.Namespace) -> dict:
             if not any(page["id"] == page_tab_payload["resultPageID"] for page in page_tab_pages):
                 raise RuntimeError("popupRequest resultPageID did not resolve inside listPages")
 
+            artifact["stage"] = "wait_for_child_tab_selector"
             child_tab_ready = wait_for_selector(
                 str(socket_path),
                 browser_tab_id,
@@ -483,6 +500,7 @@ def run_acceptance(args: argparse.Namespace) -> dict:
                 args.page_timeout_ms,
             )
 
+            artifact["stage"] = "click_new_window"
             open_new_window_result = extract_result_json(
                 send_request(
                     str(socket_path),
@@ -493,6 +511,7 @@ def run_acceptance(args: argparse.Namespace) -> dict:
                     timeout=max(20.0, args.page_timeout_ms / 1000.0),
                 )["response"]
             )
+            artifact["stage"] = "wait_for_window_popup"
             window_popup = wait_for_popup_event(
                 str(socket_path),
                 subscription_id,
@@ -501,6 +520,7 @@ def run_acceptance(args: argparse.Namespace) -> dict:
             )
             window_event = window_popup["event"]
             window_payload = window_event["payload"]
+            artifact["stage"] = "list_tabs_after_popup"
             tabs_after_window_popup = extract_result_json(send_request(str(socket_path), "listTabs")["response"])
 
             if window_payload.get("routingTarget") != "popupWindowHost":
@@ -516,6 +536,7 @@ def run_acceptance(args: argparse.Namespace) -> dict:
                     "popupWindowHost flow did not expose popupWindowForeground visibility state"
                 )
 
+            artifact["stage"] = "finalize"
             final_drain = extract_result_json(
                 send_request(
                     str(socket_path),
@@ -537,6 +558,7 @@ def run_acceptance(args: argparse.Namespace) -> dict:
                 {
                     "status": "passed",
                     "browserTabID": browser_tab_id,
+                    "createContext": created_context,
                     "sourcePage": source_page,
                     "subscription": subscription,
                     "mainReady": main_ready,
