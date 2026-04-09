@@ -251,7 +251,7 @@ class AppDelegate: NSObject,
         _ request: ControlHarnessRequest,
         socketPath: String
     ) -> ControlHarnessServiceReply {
-        if request.command == "events.subscribe" {
+        if request.command == "events.subscribe" || request.command == "terminal.stream.open" {
             return .subscription(controlHarnessCore.handleSubscription(request, socketPath: socketPath))
         }
         return .single(controlHarnessCore.handle(request, socketPath: socketPath))
