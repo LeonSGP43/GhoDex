@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### test(control-harness): add live terminal v2 acceptance coverage
+
+- What changed: Added `scripts/control_harness_terminal_v2_live_acceptance.py`, which launches an isolated live app, discovers the harness socket, and proves `terminal.snapshot.v2`, `terminal.semantic.v2`, `terminal.stream.open`, and `terminal.stream.ack` against a real terminal session.
+- Why: We had unit coverage for the ControlHarness V2 terminal surface, but we did not yet have one formal live acceptance that proved the V2 snapshot/semantic/stream path together on a running app.
+- Impact: Release checks now have a concrete live proof path for the ControlHarness V2 terminal surface instead of relying only on mocked/unit coverage.
+- Verification: `python3 scripts/control_harness_terminal_v2_live_acceptance.py --app macos/build/ReleaseLocal/GhoDex.app --output /tmp/ghx-control-harness-terminal-v2-live-acceptance.json`
+- Files: `scripts/control_harness_terminal_v2_live_acceptance.py`, `CHANGELOG.md`
+- Decision trail: Keep the acceptance as one end-to-end live harness that exercises the real socket protocol, so snapshot/semantic/stream correctness is validated together on the same running app instance.
+
 ### fix(macos): ignore Finder psn launch metadata
 
 - What changed: Updated `src/os/args.zig` so the macOS process-argument iterator now drops LaunchServices/Finder-injected `-psn_*` metadata before CLI/config parsing, and added a focused regression test for the filter.
