@@ -14,6 +14,13 @@ pub fn iterator(allocator: Allocator) ArgIterator.InitError!ArgIterator {
     return .initWithAllocator(allocator);
 }
 
+fn shouldIgnoreArgument(arg: []const u8) bool {
+    // Finder/LaunchServices injects a process-serial-number argument when
+    // opening app bundles on macOS. Treat it as transport metadata, not a
+    // user-facing CLI flag.
+    return std.mem.startsWith(u8, arg, "-psn_");
+}
+
 /// Duck-typed to std.process.ArgIterator
 pub const ArgIterator = switch (builtin.os.tag) {
     .macos => IteratorMacOS,
@@ -85,32 +92,35 @@ const IteratorMacOS = struct {
     }
 
     pub fn next(self: *IteratorMacOS) ?[:0]const u8 {
-        if (self.index == self.count) return null;
+        while (self.index < self.count) {
+            // NSString. No release because not a copy.
+            const nsstr = self.args.msgSend(
+                objc.Object,
+                objc.sel("objectAtIndex:"),
+                .{@as(c_ulong, @intCast(self.index))},
+            );
+            self.index += 1;
 
-        // NSString. No release because not a copy.
-        const nsstr = self.args.msgSend(
-            objc.Object,
-            objc.sel("objectAtIndex:"),
-            .{@as(c_ulong, @intCast(self.index))},
-        );
-        self.index += 1;
+            // Convert to string using getCString. Our buffer should always
+            // be big enough because we precomputed the maximum length.
+            if (!nsstr.msgSend(
+                bool,
+                objc.sel("getCString:maxLength:encoding:"),
+                .{
+                    @as([*]u8, @ptrCast(self.buf.ptr)),
+                    @as(c_ulong, @intCast(self.buf.len)),
+                    @as(c_ulong, 4), // NSUTF8StringEncoding
+                },
+            )) {
+                // This should never happen... if it does, we just return empty.
+                return "";
+            }
 
-        // Convert to string using getCString. Our buffer should always
-        // be big enough because we precomputed the maximum length.
-        if (!nsstr.msgSend(
-            bool,
-            objc.sel("getCString:maxLength:encoding:"),
-            .{
-                @as([*]u8, @ptrCast(self.buf.ptr)),
-                @as(c_ulong, @intCast(self.buf.len)),
-                @as(c_ulong, 4), // NSUTF8StringEncoding
-            },
-        )) {
-            // This should never happen... if it does, we just return empty.
-            return "";
+            const arg = std.mem.sliceTo(self.buf, 0);
+            if (shouldIgnoreArgument(arg)) continue;
+            return arg;
         }
-
-        return std.mem.sliceTo(self.buf, 0);
+        return null;
     }
 
     pub fn skip(self: *IteratorMacOS) bool {
@@ -127,4 +137,11 @@ test "args" {
     var iter = try iterator(alloc);
     defer iter.deinit();
     try testing.expect(iter.next().?.len > 0);
+}
+
+test "shouldIgnoreArgument ignores macOS psn launch metadata" {
+    const testing = std.testing;
+
+    try testing.expect(shouldIgnoreArgument("-psn_0_0"));
+    try testing.expect(!shouldIgnoreArgument("--version"));
 }
