@@ -834,7 +834,7 @@ final class ControlHarnessGateway {
             let decoded = try decodeGatewayRequest(from: requestData)
             let request = decoded.request
             let transportSharedSecret = decoded.transportSharedSecret
-            requestCommand = request.command
+            requestCommand = request.normalizedCommand
 
             func recordRequestIfNeeded() {
                 guard !requestRecorded else { return }
@@ -876,7 +876,7 @@ final class ControlHarnessGateway {
                     case .subscription(let envelope):
                         try streamSubscription(
                             envelope,
-                            command: request.command,
+                            command: request.normalizedCommand,
                             to: clientFD,
                             transport: "tcp",
                             closeReason: "client_disconnect",
@@ -963,7 +963,7 @@ final class ControlHarnessGateway {
                 guard !requestRecorded else { return }
                 requestRecorded = true
                 performanceMonitor?.recordGatewayRequest(
-                    command: request.command,
+                    command: request.normalizedCommand,
                     transport: "websocket",
                     durationMs: Self.elapsedMilliseconds(since: requestStarted)
                 )
@@ -1012,7 +1012,7 @@ final class ControlHarnessGateway {
                         recordRequestIfNeeded()
                         try streamWebSocketSubscription(
                             envelope,
-                            command: request.command,
+                            command: request.normalizedCommand,
                             to: clientFD,
                             transport: "websocket",
                             closeReason: "client_disconnect",
@@ -1109,7 +1109,7 @@ final class ControlHarnessGateway {
             )
         }
 
-        if request.command == "handshake" {
+        if request.normalizedCommand == "handshake" {
             return .allow(sessionIdentity: nil)
         }
 
@@ -1750,7 +1750,7 @@ final class ControlHarnessGateway {
         case .proxy(let route):
             do {
                 let responseData = try proxyUnaryRequest(requestData, route: route)
-                return (request.command, responseData)
+                return (request.normalizedCommand, responseData)
             } catch {
                 evictDesktopRoute(
                     route.desktopID,
@@ -1763,7 +1763,7 @@ final class ControlHarnessGateway {
                     errorCode: "desktop_route_unreachable",
                     errorMessage: "Desktop route is unreachable; reconnect and rebind this desktop"
                 )
-                return (request.command, try encodeResponse(response))
+                return (request.normalizedCommand, try encodeResponse(response))
             }
         }
     }
@@ -1895,7 +1895,12 @@ final class ControlHarnessGateway {
     }
 
     private func requiredScope(for request: ControlHarnessRequest) -> ControlHarnessAuthScope? {
-        switch request.command {
+        let command = request.normalizedCommand
+        if ControlHarnessBrowserCommandAdapter.isBrowserCommand(command) {
+            return ControlHarnessBrowserCommandAdapter.isMutation(command) ? .mutate : .observe
+        }
+
+        switch command {
         case "snapshot",
             "agent.runtime.snapshot",
             "read-terminal",
@@ -1996,7 +2001,7 @@ final class ControlHarnessGateway {
         }
         guard sessionRegistry.acquire(identity: sessionIdentity) else {
             if shouldReplaceSupersededSubscription(for: request),
-               closeOldestActiveSubscription(identity: sessionIdentity, command: request.command) {
+               closeOldestActiveSubscription(identity: sessionIdentity, command: request.normalizedCommand) {
                 let deadline = Date().addingTimeInterval(0.35)
                 repeat {
                     if sessionRegistry.acquire(identity: sessionIdentity) {
@@ -2027,7 +2032,7 @@ final class ControlHarnessGateway {
     }
 
     private func shouldReplaceSupersededSubscription(for request: ControlHarnessRequest) -> Bool {
-        switch request.command {
+        switch request.normalizedCommand {
         case "events.subscribe", "terminal.stream.open":
             return true
         default:
@@ -3087,10 +3092,11 @@ private final class ControlHarnessGatewayRateLimiter {
         for request: ControlHarnessRequest,
         category: Category?
     ) -> Bool {
+        let command = request.normalizedCommand
         // terminal.stream.ack is a high-frequency flow-control signal. Applying
         // the global low-frequency guard to ACK traffic causes false positives
         // in realtime sessions under healthy throughput.
-        if request.command == "terminal.stream.ack" {
+        if command == "terminal.stream.ack" {
             return false
         }
 
@@ -3151,10 +3157,21 @@ private final class ControlHarnessGatewayRateLimiter {
     }
 
     private func category(for request: ControlHarnessRequest) -> Category? {
+        let command = request.normalizedCommand
         let readMode = request.mode?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
-        switch request.command {
+        if ControlHarnessBrowserCommandAdapter.isInput(command) {
+            return .input
+        }
+        if ControlHarnessBrowserCommandAdapter.isResync(command) {
+            return .resync
+        }
+        if ControlHarnessBrowserCommandAdapter.isBrowserCommand(command) {
+            return ControlHarnessBrowserCommandAdapter.isMutation(command) ? .command : .snapshot
+        }
+
+        switch command {
         case "send-text", "send-key":
             return .input
         case "run-command", "close-terminal", "new-tab", "close-tab", "rename-tab":
@@ -3167,7 +3184,11 @@ private final class ControlHarnessGatewayRateLimiter {
             // read-terminal defaults to snapshot mode when mode is omitted, so
             // limiter categorization must mirror core read semantics.
             return .snapshot
-        case "events.subscribe", "terminal.stream.open":
+        case "events.subscribe",
+            "events.stream.subscribe",
+            "events.stream.drain",
+            "events.stream.unsubscribe",
+            "terminal.stream.open":
             return .resync
         default:
             return nil

@@ -1141,6 +1141,14 @@ struct ControlHarnessRequest: Codable {
     let desktopLabel: String?
     let upstreamHost: String?
     let upstreamPort: UInt16?
+    let browserTabID: String?
+    let browserContextID: String?
+    let pageID: String?
+    let frameName: String?
+    let documentRevision: Int?
+    let payload: [String: String]?
+    let target: ControlHarnessRequestTarget?
+    let options: ControlHarnessRequestOptions?
 
     enum CodingKeys: String, CodingKey {
         case requestID = "request_id"
@@ -1205,6 +1213,14 @@ struct ControlHarnessRequest: Codable {
         case desktopLabel = "desktop_label"
         case upstreamHost = "upstream_host"
         case upstreamPort = "upstream_port"
+        case browserTabID = "browser_tab_id"
+        case browserContextID = "browser_context_id"
+        case pageID = "page_id"
+        case frameName = "frame_name"
+        case documentRevision = "document_revision"
+        case payload
+        case target
+        case options
     }
 
     init(
@@ -1269,7 +1285,15 @@ struct ControlHarnessRequest: Codable {
         reason: String? = nil,
         desktopLabel: String? = nil,
         upstreamHost: String? = nil,
-        upstreamPort: UInt16? = nil
+        upstreamPort: UInt16? = nil,
+        browserTabID: String? = nil,
+        browserContextID: String? = nil,
+        pageID: String? = nil,
+        frameName: String? = nil,
+        documentRevision: Int? = nil,
+        payload: [String: String]? = nil,
+        target: ControlHarnessRequestTarget? = nil,
+        options: ControlHarnessRequestOptions? = nil
     ) {
         self.requestID = requestID
         self.protocolVersion = protocolVersion
@@ -1333,6 +1357,14 @@ struct ControlHarnessRequest: Codable {
         self.desktopLabel = desktopLabel
         self.upstreamHost = upstreamHost
         self.upstreamPort = upstreamPort
+        self.browserTabID = browserTabID
+        self.browserContextID = browserContextID
+        self.pageID = pageID
+        self.frameName = frameName
+        self.documentRevision = documentRevision
+        self.payload = payload
+        self.target = target
+        self.options = options
     }
 }
 
@@ -1373,6 +1405,46 @@ private struct ControlHandshakeResult: Encodable {
         case protocolVersion = "protocol_version"
         case socketPath = "socket_path"
         case commands
+        case lastSequence = "last_sequence"
+    }
+}
+
+private struct ControlResolvedInstanceRecord: Encodable {
+    let socketPath: String
+    let processID: Int32
+    let bundleID: String
+    let executablePath: String?
+
+    enum CodingKeys: String, CodingKey {
+        case socketPath = "socket_path"
+        case processID = "process_id"
+        case bundleID = "bundle_id"
+        case executablePath = "executable_path"
+    }
+}
+
+private struct ControlTargetResolveResult: Encodable {
+    let protocolVersion: String
+    let instance: ControlResolvedInstanceRecord
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case instance
+    }
+}
+
+private struct ControlCapabilitiesResult: Encodable {
+    let protocolVersion: String
+    let commands: [String]
+    let backends: [String]
+    let features: [String]
+    let lastSequence: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case commands
+        case backends
+        case features
         case lastSequence = "last_sequence"
     }
 }
@@ -1653,6 +1725,7 @@ private struct ControlTodoMutationResult: Encodable {
 private struct ControlEventSubscriptionResult: Encodable {
     let protocolVersion: String
     let subscribed: Bool
+    let streamID: String?
     let lastSequence: Int64
     let sinceSequence: Int64?
     let eventLimit: Int?
@@ -1662,10 +1735,49 @@ private struct ControlEventSubscriptionResult: Encodable {
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol_version"
         case subscribed
+        case streamID = "stream_id"
         case lastSequence = "last_sequence"
         case sinceSequence = "since_sequence"
         case eventLimit = "event_limit"
         case replayedEventCount = "replayed_event_count"
+        case liveStreamOpen = "live_stream_open"
+    }
+}
+
+private struct ControlBufferedEventStreamDrainResult: Encodable {
+    let protocolVersion: String
+    let streamID: String
+    let lastSequence: Int64
+    let eventLimit: Int?
+    let drainedEventCount: Int
+    let requiresSnapshotResync: Bool
+    let droppedEvents: Int
+    let liveStreamOpen: Bool
+    let events: [ControlHarnessJSONValue]
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case streamID = "stream_id"
+        case lastSequence = "last_sequence"
+        case eventLimit = "event_limit"
+        case drainedEventCount = "drained_event_count"
+        case requiresSnapshotResync = "requires_snapshot_resync"
+        case droppedEvents = "dropped_events"
+        case liveStreamOpen = "live_stream_open"
+        case events
+    }
+}
+
+private struct ControlEventStreamUnsubscribeResult: Encodable {
+    let protocolVersion: String
+    let streamID: String
+    let unsubscribed: Bool
+    let liveStreamOpen: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case streamID = "stream_id"
+        case unsubscribed
         case liveStreamOpen = "live_stream_open"
     }
 }
@@ -1849,6 +1961,12 @@ private struct ControlHarnessMutationFingerprint: Encodable {
     let scheduleState: String?
     let errorSummary: String?
     let reason: String?
+    let browserTabID: String?
+    let browserContextID: String?
+    let pageID: String?
+    let frameName: String?
+    let documentRevision: Int?
+    let payload: [String: String]?
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol_version"
@@ -1887,6 +2005,12 @@ private struct ControlHarnessMutationFingerprint: Encodable {
         case scheduleState = "schedule_state"
         case errorSummary = "error_summary"
         case reason
+        case browserTabID = "browser_tab_id"
+        case browserContextID = "browser_context_id"
+        case pageID = "page_id"
+        case frameName = "frame_name"
+        case documentRevision = "document_revision"
+        case payload
     }
 }
 
@@ -2002,42 +2126,7 @@ final class ControlHarnessAuditLogger {
 @MainActor
 final class ControlHarnessCore {
     nonisolated static let protocolVersion = "1.0"
-    nonisolated static let supportedCommands = [
-        "handshake",
-        "snapshot",
-        "agent.runtime.snapshot",
-        "agent.runtime.session.register",
-        "agent.runtime.session.heartbeat",
-        "agent.runtime.session.release",
-        "agent.runtime.task.enqueue",
-        "agent.runtime.task.claim",
-        "agent.runtime.task.claim_next",
-        "agent.runtime.task.update",
-        "agent.runtime.task.approve",
-        "agent.runtime.task.cancel",
-        "agent.runtime.schedule.enqueue",
-        "agent.runtime.schedule.update",
-        "agent.runtime.schedule.cancel",
-        "new-tab",
-        "close-tab",
-        "rename-tab",
-        "send-text",
-        "send-key",
-        "run-command",
-        "read-terminal",
-        "terminal.stream.open",
-        "terminal.stream.ack",
-        "terminal.snapshot.v2",
-        "terminal.semantic.v2",
-        "close-terminal",
-        "todo-snapshot",
-        "todo-add",
-        "todo-update",
-        "todo-complete",
-        "todo-assign",
-        "todo-sync-stale",
-        "events.subscribe"
-    ]
+    nonisolated static let supportedCommands = ControlHarnessCommandAliases.allSupportedCommands
     static let supportedTerminalKeys: Set<String> = [
         "backspace",
         "enter",
@@ -2052,6 +2141,7 @@ final class ControlHarnessCore {
     private weak var appDelegate: AppDelegate?
     private let auditLogger: ControlHarnessAuditLogger
     private let eventHub: ControlHarnessEventHub
+    private let eventStreamRegistry: ControlEventStreamRegistry
     private let generations: ControlHarnessGenerationTracker
     private let idempotencyStore: ControlHarnessIdempotencyStore
     private let readStore: ControlHarnessTerminalReadStore
@@ -2115,6 +2205,7 @@ final class ControlHarnessCore {
         self.appDelegate = appDelegate
         self.auditLogger = auditLogger
         self.eventHub = eventHub
+        self.eventStreamRegistry = ControlEventStreamRegistry(eventHub: eventHub)
         self.generations = generations
         self.idempotencyStore = idempotencyStore
         self.readStore = readStore
@@ -2150,6 +2241,7 @@ final class ControlHarnessCore {
         _ request: ControlHarnessRequest,
         socketPath: String
     ) -> ControlHarnessSubscriptionEnvelope {
+        let request = request.normalized()
         let started = DispatchTime.now()
         let response: ControlHarnessResponse
         let session: (any ControlHarnessSubscriptionSession)?
@@ -2206,6 +2298,7 @@ final class ControlHarnessCore {
     }
 
     func handle(_ request: ControlHarnessRequest, socketPath: String) -> ControlHarnessResponse {
+        let request = request.normalized()
         let started = DispatchTime.now()
         let response: ControlHarnessResponse
         var responseSequence: Int64?
@@ -2410,6 +2503,10 @@ final class ControlHarnessCore {
            !date.isEmpty,
            AITerminalTodoSettings.date(fromDayString: date) == nil {
             throw ControlHarnessCoreError.invalidArgument("Invalid todo date: \(date)")
+        }
+
+        if request.command == "events.stream.drain" || request.command == "events.stream.unsubscribe" {
+            _ = try parseRequiredStreamID(request.streamID)
         }
 
         switch request.command {
@@ -2666,7 +2763,13 @@ final class ControlHarnessCore {
             taskState: request.taskState,
             scheduleState: request.scheduleState,
             errorSummary: request.errorSummary,
-            reason: request.reason
+            reason: request.reason,
+            browserTabID: request.browserTabID,
+            browserContextID: request.browserContextID,
+            pageID: request.pageID,
+            frameName: request.frameName,
+            documentRevision: request.documentRevision,
+            payload: request.payload
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -2677,6 +2780,10 @@ final class ControlHarnessCore {
         _ request: ControlHarnessRequest,
         socketPath: String
     ) throws -> (payload: AnyEncodable, sequence: Int64?) {
+        if ControlHarnessBrowserCommandAdapter.isBrowserCommand(request.command) {
+            return (try ControlHarnessBrowserCommandAdapter.execute(request), nil)
+        }
+
         switch request.command {
         case "handshake":
             return (
@@ -2688,6 +2795,12 @@ final class ControlHarnessCore {
                 )),
                 nil
             )
+
+        case "system.target.resolve":
+            return (AnyEncodable(makeTargetResolveResult(socketPath: socketPath)), nil)
+
+        case "system.capabilities.get":
+            return (AnyEncodable(makeCapabilitiesResult()), nil)
 
         case "snapshot":
             return (AnyEncodable(makeSnapshot()), nil)
@@ -2795,6 +2908,15 @@ final class ControlHarnessCore {
                 nil
             )
 
+        case "events.stream.subscribe":
+            return (AnyEncodable(try subscribeToBufferedEvents(from: request)), nil)
+
+        case "events.stream.drain":
+            return (AnyEncodable(try drainBufferedEvents(from: request)), nil)
+
+        case "events.stream.unsubscribe":
+            return (AnyEncodable(try unsubscribeBufferedEvents(from: request)), nil)
+
         default:
             throw ControlHarnessCoreError.unsupportedCommand(request.command)
         }
@@ -2832,6 +2954,41 @@ final class ControlHarnessCore {
             generatedAt: Self.iso8601(Date()),
             lastSequence: eventHub.currentSequence(),
             tabs: tabs
+        )
+    }
+
+    private func makeTargetResolveResult(socketPath: String) -> ControlTargetResolveResult {
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.leongong.ghodex"
+        let executablePath = Bundle.main.executableURL?.path ?? ProcessInfo.processInfo.arguments.first
+        return .init(
+            protocolVersion: Self.protocolVersion,
+            instance: .init(
+                socketPath: socketPath,
+                processID: ProcessInfo.processInfo.processIdentifier,
+                bundleID: bundleID,
+                executablePath: executablePath
+            )
+        )
+    }
+
+    private func makeCapabilitiesResult() -> ControlCapabilitiesResult {
+        .init(
+            protocolVersion: Self.protocolVersion,
+            commands: Self.supportedCommands,
+            backends: [
+                "harness_local",
+                "browser_ipc",
+                "compat_legacy",
+            ],
+            features: [
+                "workspace",
+                "terminal",
+                "todo",
+                "runtime",
+                "browser",
+                "events",
+            ],
+            lastSequence: eventHub.currentSequence()
         )
     }
 
@@ -4189,18 +4346,105 @@ final class ControlHarnessCore {
 
     private func makeEventSubscriptionResult(
         _ request: ControlHarnessRequest,
+        streamID: String? = nil,
         replayedEventCount: Int,
         liveStreamOpen: Bool
     ) -> ControlEventSubscriptionResult {
         .init(
             protocolVersion: Self.protocolVersion,
             subscribed: true,
+            streamID: streamID,
             lastSequence: eventHub.currentSequence(),
             sinceSequence: request.sinceSequence,
             eventLimit: request.eventLimit,
             replayedEventCount: replayedEventCount,
             liveStreamOpen: liveStreamOpen
         )
+    }
+
+    private func subscribeToBufferedEvents(
+        from request: ControlHarnessRequest
+    ) throws -> ControlEventSubscriptionResult {
+        let kinds = normalizedBufferedEventKinds(from: request)
+        let subscription = eventStreamRegistry.subscribe(
+            sinceSequence: request.sinceSequence,
+            eventLimit: request.eventLimit,
+            kinds: kinds
+        )
+        return makeEventSubscriptionResult(
+            request,
+            streamID: subscription.streamID,
+            replayedEventCount: subscription.replayedEventCount,
+            liveStreamOpen: subscription.liveStreamOpen
+        )
+    }
+
+    private func drainBufferedEvents(
+        from request: ControlHarnessRequest
+    ) throws -> ControlBufferedEventStreamDrainResult {
+        let streamID = try parseRequiredStreamID(request.streamID)
+        guard let drained = eventStreamRegistry.drain(streamID: streamID, limit: request.eventLimit) else {
+            throw ControlHarnessCoreError.invalidArgument(
+                "No active event stream exists for stream_id=\(streamID)"
+            )
+        }
+
+        return .init(
+            protocolVersion: Self.protocolVersion,
+            streamID: drained.streamID,
+            lastSequence: eventHub.currentSequence(),
+            eventLimit: request.eventLimit,
+            drainedEventCount: drained.payloads.count,
+            requiresSnapshotResync: drained.requiresSnapshotResync,
+            droppedEvents: drained.droppedEvents,
+            liveStreamOpen: drained.liveStreamOpen,
+            events: try drained.payloads.map(Self.decodeBufferedEventPayload)
+        )
+    }
+
+    private func unsubscribeBufferedEvents(
+        from request: ControlHarnessRequest
+    ) throws -> ControlEventStreamUnsubscribeResult {
+        let streamID = try parseRequiredStreamID(request.streamID)
+        guard eventStreamRegistry.unsubscribe(streamID: streamID) else {
+            throw ControlHarnessCoreError.invalidArgument(
+                "No active event stream exists for stream_id=\(streamID)"
+            )
+        }
+
+        return .init(
+            protocolVersion: Self.protocolVersion,
+            streamID: streamID,
+            unsubscribed: true,
+            liveStreamOpen: false
+        )
+    }
+
+    private func normalizedBufferedEventKinds(from request: ControlHarnessRequest) -> Set<String> {
+        guard let rawKinds = request.payload?["kinds"]?
+            .split(separator: ",")
+            .map({
+                $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            })
+            .filter({ !$0.isEmpty }),
+              rawKinds.isEmpty == false else {
+            return []
+        }
+        return Set(rawKinds)
+    }
+
+    private func parseRequiredStreamID(_ rawValue: String?) throws -> String {
+        try parseRequiredUUID(rawValue, field: "stream_id").uuidString
+    }
+
+    private static func decodeBufferedEventPayload(_ payload: Data) throws -> ControlHarnessJSONValue {
+        let trimmedPayload: Data
+        if payload.last == 0x0A {
+            trimmedPayload = Data(payload.dropLast())
+        } else {
+            trimmedPayload = payload
+        }
+        return try JSONDecoder().decode(ControlHarnessJSONValue.self, from: trimmedPayload)
     }
 
     private func resolveParentWindow(parentTabID: String?) throws -> NSWindow? {

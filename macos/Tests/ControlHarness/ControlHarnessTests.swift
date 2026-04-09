@@ -19,6 +19,7 @@ private struct ControlHarnessSubscriptionAckEnvelope: Decodable {
 private struct ControlHarnessSubscriptionAckResult: Decodable {
     let protocolVersion: String
     let subscribed: Bool
+    let streamID: String?
     let lastSequence: Int64
     let sinceSequence: Int64?
     let eventLimit: Int?
@@ -28,10 +29,49 @@ private struct ControlHarnessSubscriptionAckResult: Decodable {
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol_version"
         case subscribed
+        case streamID = "stream_id"
         case lastSequence = "last_sequence"
         case sinceSequence = "since_sequence"
         case eventLimit = "event_limit"
         case replayedEventCount = "replayed_event_count"
+        case liveStreamOpen = "live_stream_open"
+    }
+}
+
+private struct ControlHarnessBufferedEventDrainPayload: Decodable {
+    let protocolVersion: String
+    let streamID: String
+    let lastSequence: Int64
+    let eventLimit: Int?
+    let drainedEventCount: Int
+    let requiresSnapshotResync: Bool
+    let droppedEvents: Int
+    let liveStreamOpen: Bool
+    let events: [ControlHarnessDecodedEventRecord]
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case streamID = "stream_id"
+        case lastSequence = "last_sequence"
+        case eventLimit = "event_limit"
+        case drainedEventCount = "drained_event_count"
+        case requiresSnapshotResync = "requires_snapshot_resync"
+        case droppedEvents = "dropped_events"
+        case liveStreamOpen = "live_stream_open"
+        case events
+    }
+}
+
+private struct ControlHarnessEventUnsubscribePayload: Decodable {
+    let protocolVersion: String
+    let streamID: String
+    let unsubscribed: Bool
+    let liveStreamOpen: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case streamID = "stream_id"
+        case unsubscribed
         case liveStreamOpen = "live_stream_open"
     }
 }
@@ -6028,6 +6068,378 @@ struct ControlHarnessTests {
         }
     }
 
+    @Test func namespacedRequestsNormalizeTargetsAndOptions() {
+        let terminalID = UUID().uuidString
+        let request = ControlHarnessRequest(
+            requestID: "req-terminal-write-alias",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "terminal.write",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: "echo hi",
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            target: ControlHarnessRequestTarget(
+                workspaceID: nil,
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: terminalID,
+                todoID: nil,
+                subscriptionID: nil,
+                browserTabID: nil,
+                browserContextID: nil,
+                pageID: nil,
+                frameName: nil,
+                taskID: nil,
+                scheduleID: nil,
+                documentRevision: nil
+            ),
+            options: ControlHarnessRequestOptions(
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: "write-1",
+                timeoutMS: 5_000
+            )
+        )
+
+        let normalized = request.normalized()
+
+        #expect(normalized.command == "send-text")
+        #expect(normalized.terminalID == terminalID)
+        #expect(normalized.readAfterWriteID == "write-1")
+        #expect(normalized.payload?["timeoutMS"] == "5000")
+    }
+
+    @Test @MainActor func namespacedEventStreamLifecycleBuffersDrainAndUnsubscribe() throws {
+        let (core, eventHub, _) = makeCore(bundleID: "ghdx.tests.events.stream.lifecycle")
+
+        _ = eventHub.emit(
+            event: "terminal.command.sent",
+            requestID: "req-replay",
+            resource: .init(type: "terminal", id: "terminal-1", generation: 1),
+            payload: AnyEncodable(["command_length": 3])
+        )
+
+        let subscribeResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-events-stream-subscribe",
+                protocolVersion: nil,
+                authToken: nil,
+                command: "events.stream.subscribe",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: nil,
+                scope: nil,
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: "tests",
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: 0,
+                eventLimit: 3,
+                mode: nil,
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil,
+                payload: ["kinds": "terminal.command.sent,terminal.input.sent"]
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        )
+
+        #expect(subscribeResponse.status == "ok")
+        let subscribeData = try JSONEncoder().encode(subscribeResponse)
+        let subscribeEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessSubscriptionAckResult>.self,
+            from: subscribeData
+        )
+        let streamID = try #require(subscribeEnvelope.result?.streamID)
+        #expect(subscribeEnvelope.result?.replayedEventCount == 1)
+        #expect(subscribeEnvelope.result?.liveStreamOpen == true)
+
+        _ = eventHub.emit(
+            event: "tab.updated",
+            requestID: "req-ignored",
+            resource: .init(type: "tab", id: "tab-1", generation: 1),
+            payload: AnyEncodable(["title": "ignored"])
+        )
+        _ = eventHub.emit(
+            event: "terminal.input.sent",
+            requestID: "req-live",
+            resource: .init(type: "terminal", id: "terminal-1", generation: 2),
+            payload: AnyEncodable(["text_length": 1])
+        )
+
+        let drainResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-events-stream-drain",
+                protocolVersion: nil,
+                authToken: nil,
+                command: "events.stream.drain",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: nil,
+                scope: nil,
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: "tests",
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: 3,
+                mode: nil,
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil,
+                streamID: streamID
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        )
+
+        #expect(drainResponse.status == "ok")
+        let drainData = try JSONEncoder().encode(drainResponse)
+        let drainEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessBufferedEventDrainPayload>.self,
+            from: drainData
+        )
+        let drained = try #require(drainEnvelope.result)
+        #expect(drained.streamID == streamID)
+        #expect(drained.drainedEventCount == 2)
+        #expect(drained.requiresSnapshotResync == false)
+        #expect(drained.droppedEvents == 0)
+        #expect(drained.liveStreamOpen == true)
+        #expect(drained.events.map(\.requestID) == ["req-replay", "req-live"])
+        #expect(drained.events.map(\.event) == ["terminal.command.sent", "terminal.input.sent"])
+
+        let unsubscribeResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-events-stream-unsubscribe",
+                protocolVersion: nil,
+                authToken: nil,
+                command: "events.stream.unsubscribe",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: nil,
+                scope: nil,
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: "tests",
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: nil,
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil,
+                streamID: streamID
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        )
+
+        #expect(unsubscribeResponse.status == "ok")
+        let unsubscribeData = try JSONEncoder().encode(unsubscribeResponse)
+        let unsubscribeEnvelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessEventUnsubscribePayload>.self,
+            from: unsubscribeData
+        )
+        #expect(unsubscribeEnvelope.result?.streamID == streamID)
+        #expect(unsubscribeEnvelope.result?.unsubscribed == true)
+        #expect(unsubscribeEnvelope.result?.liveStreamOpen == false)
+
+        let drainAfterCloseResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-events-stream-drain-after-close",
+                protocolVersion: nil,
+                authToken: nil,
+                command: "events.stream.drain",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: nil,
+                scope: nil,
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: "tests",
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: nil,
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil,
+                streamID: streamID
+            ),
+            socketPath: "/tmp/control-harness-test.sock"
+        )
+
+        #expect(drainAfterCloseResponse.status == "error")
+        #expect(drainAfterCloseResponse.errorCode == ControlHarnessCoreError.invalidArgument("").code)
+    }
+
+    @Test func browserCommandsMapThroughControlHarnessRouting() throws {
+        let request = ControlHarnessRequest(
+            requestID: "req-browser-page-load",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "browser.page.load",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            browserContextID: "context-1",
+            pageID: UUID().uuidString,
+            payload: ["url": "https://example.com"]
+        )
+
+        let browserRequest = try ControlHarnessBrowserCommandAdapter.makeRequest(from: request)
+
+        #expect(browserRequest.version == BrowserCommandProtocolVersion.v2)
+        #expect(browserRequest.command == .loadURL)
+        #expect(browserRequest.browserContextID == "context-1")
+        #expect(browserRequest.pageID == request.pageID)
+        #expect(browserRequest.payload["url"] == "https://example.com")
+        #expect(request.commandKind == .mutation)
+
+        let subscriptionLikeRequest = ControlHarnessRequest(
+            requestID: "req-browser-event-subscribe",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "browser.event.subscribe",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            payload: ["eventKinds": "popupRequest"]
+        )
+        #expect(subscriptionLikeRequest.commandKind == .query)
+    }
+
+    @Test func gatewayPolicyNormalizesNamespacedTerminalMutationCommands() async throws {
+        let terminalID = UUID()
+        let delegate = await MainActor.run {
+            let delegate = RecordingAppDelegate()
+            delegate.managedStates[terminalID] = .managedWaitingApproval
+            return delegate
+        }
+
+        let decision = await MainActor.run {
+            delegate.controlHarnessGatewayAccessDecision(ControlHarnessRequest(
+                requestID: "req-terminal-write-alias-policy",
+                protocolVersion: nil,
+                authToken: nil,
+                command: "terminal.write",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: terminalID.uuidString,
+                scope: nil,
+                text: "hello",
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: nil,
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil
+            ))
+        }
+
+        switch decision {
+        case .allow:
+            Issue.record("namespaced terminal.write should still require approval-aware gateway policy")
+        case .deny(let errorCode, let errorMessage):
+            #expect(errorCode == "approval_required")
+            #expect(errorMessage.contains("terminal.write") || errorMessage.contains("send-text"))
+        }
+    }
+
     @Test func renameTabIsSupportedMutationCommand() {
         #expect(ControlHarnessCore.supportedCommands.contains("rename-tab"))
         let request = ControlHarnessRequest(
@@ -6061,6 +6473,12 @@ struct ControlHarnessTests {
     }
 
     @Test func runtimeCommandsExposeExpectedSupportAndKinds() {
+        #expect(ControlHarnessCore.supportedCommands.contains("system.handshake"))
+        #expect(ControlHarnessCore.supportedCommands.contains("state.snapshot"))
+        #expect(ControlHarnessCore.supportedCommands.contains("terminal.write"))
+        #expect(ControlHarnessCore.supportedCommands.contains("runtime.snapshot"))
+        #expect(ControlHarnessCore.supportedCommands.contains("browser.tab.list"))
+        #expect(ControlHarnessCore.supportedCommands.contains("browser.page.load"))
         #expect(ControlHarnessCore.supportedCommands.contains("agent.runtime.snapshot"))
         #expect(ControlHarnessCore.supportedCommands.contains("agent.runtime.session.register"))
         #expect(ControlHarnessCore.supportedCommands.contains("agent.runtime.session.heartbeat"))
@@ -7844,6 +8262,10 @@ struct ControlHarnessTests {
         let handshake = try #require(envelope.result)
 
         #expect(envelope.status == "ok")
+        #expect(handshake.commands.contains("system.handshake"))
+        #expect(handshake.commands.contains("state.snapshot"))
+        #expect(handshake.commands.contains("browser.tab.list"))
+        #expect(handshake.commands.contains("browser.page.load"))
         #expect(handshake.commands.contains("agent.runtime.snapshot"))
         #expect(handshake.commands.contains("agent.runtime.session.register"))
         #expect(handshake.commands.contains("agent.runtime.session.heartbeat"))

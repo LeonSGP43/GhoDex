@@ -9,6 +9,14 @@ enum ControlHarnessCommandKind {
 
 extension ControlHarnessRequest {
     var commandKind: ControlHarnessCommandKind {
+        let command = normalizedCommand
+        if ControlHarnessBrowserCommandAdapter.isSubscription(command) {
+            return .subscription
+        }
+        if ControlHarnessBrowserCommandAdapter.isMutation(command) {
+            return .mutation
+        }
+
         switch command {
         case "new-tab",
             "close-tab",
@@ -1524,6 +1532,187 @@ final class ControlHarnessEventHub {
             return sequence.int64Value
         }
         return nil
+    }
+}
+
+final class ControlEventStreamRegistry {
+    struct DrainResult {
+        let streamID: String
+        let payloads: [Data]
+        let requiresSnapshotResync: Bool
+        let droppedEvents: Int
+        let liveStreamOpen: Bool
+    }
+
+    private struct SubscriptionState {
+        let streamID: UUID
+        let kinds: Set<String>
+        var bufferedPayloads: [Data]
+        var bufferedBytes: Int
+        var droppedEvents: Int
+        var requiresSnapshotResync: Bool
+        var remainingLiveEvents: Int?
+        var subscriberID: UUID?
+    }
+
+    private let eventHub: ControlHarnessEventHub
+    private let maxBufferedEvents: Int
+    private let maxBufferedBytes: Int
+    private let queue = DispatchQueue(
+        label: "com.leongong.ghodex.control-harness.event-stream-registry",
+        qos: .utility
+    )
+    private var subscriptions: [UUID: SubscriptionState] = [:]
+
+    init(
+        eventHub: ControlHarnessEventHub,
+        maxBufferedEvents: Int = 512,
+        maxBufferedBytes: Int = 8 * 1024 * 1024
+    ) {
+        self.eventHub = eventHub
+        self.maxBufferedEvents = max(1, maxBufferedEvents)
+        self.maxBufferedBytes = max(1_024, maxBufferedBytes)
+    }
+
+    func subscribe(
+        sinceSequence: Int64?,
+        eventLimit: Int?,
+        kinds: Set<String>
+    ) -> (streamID: String, replayedEventCount: Int, liveStreamOpen: Bool) {
+        let filteredReplay = eventHub.replay(afterSequence: sinceSequence, limit: eventLimit).filter { data in
+            Self.matchesKinds(data, kinds: kinds)
+        }
+        let streamID = UUID()
+        let remainingLiveEvents = eventLimit.map { max($0 - filteredReplay.count, 0) }
+
+        var state = SubscriptionState(
+            streamID: streamID,
+            kinds: kinds,
+            bufferedPayloads: [],
+            bufferedBytes: 0,
+            droppedEvents: 0,
+            requiresSnapshotResync: false,
+            remainingLiveEvents: remainingLiveEvents,
+            subscriberID: nil
+        )
+        for payload in filteredReplay {
+            append(payload, to: &state)
+        }
+
+        if remainingLiveEvents != 0 {
+            state.subscriberID = eventHub.addSubscriber { [weak self] data in
+                self?.consumeLiveEvent(streamID: streamID, payload: data) ?? false
+            }
+        }
+
+        queue.sync {
+            subscriptions[streamID] = state
+        }
+
+        return (
+            streamID.uuidString,
+            filteredReplay.count,
+            state.subscriberID != nil
+        )
+    }
+
+    func drain(streamID: String, limit: Int?) -> DrainResult? {
+        guard let uuid = UUID(uuidString: streamID) else { return nil }
+        return queue.sync {
+            guard var state = subscriptions[uuid] else { return nil }
+            let requestedCount = limit.map { max($0, 0) } ?? state.bufferedPayloads.count
+            let drainedCount = min(requestedCount, state.bufferedPayloads.count)
+            let drainedPayloads = Array(state.bufferedPayloads.prefix(drainedCount))
+            let requiresSnapshotResync = state.requiresSnapshotResync
+            let droppedEvents = state.droppedEvents
+            if drainedCount > 0 {
+                state.bufferedPayloads.removeFirst(drainedCount)
+                state.bufferedBytes = state.bufferedPayloads.reduce(0) { $0 + $1.count }
+            }
+            state.requiresSnapshotResync = false
+            state.droppedEvents = 0
+            subscriptions[uuid] = state
+            return DrainResult(
+                streamID: state.streamID.uuidString,
+                payloads: drainedPayloads,
+                requiresSnapshotResync: requiresSnapshotResync,
+                droppedEvents: droppedEvents,
+                liveStreamOpen: state.subscriberID != nil
+            )
+        }
+    }
+
+    @discardableResult
+    func unsubscribe(streamID: String) -> Bool {
+        guard let uuid = UUID(uuidString: streamID) else { return false }
+        let removedState = queue.sync {
+            subscriptions.removeValue(forKey: uuid)
+        }
+        if let subscriberID = removedState?.subscriberID {
+            eventHub.removeSubscriber(subscriberID)
+        }
+        return removedState != nil
+    }
+
+    private func consumeLiveEvent(streamID: UUID, payload: Data) -> Bool {
+        queue.sync {
+            guard var state = subscriptions[streamID] else {
+                return false
+            }
+            guard Self.matchesKinds(payload, kinds: state.kinds) else {
+                subscriptions[streamID] = state
+                return true
+            }
+
+            append(payload, to: &state)
+            if let remainingLiveEvents = state.remainingLiveEvents {
+                let next = remainingLiveEvents - 1
+                state.remainingLiveEvents = next
+                if next <= 0 {
+                    state.subscriberID = nil
+                    subscriptions[streamID] = state
+                    return false
+                }
+            }
+
+            subscriptions[streamID] = state
+            return true
+        }
+    }
+
+    private func append(_ payload: Data, to state: inout SubscriptionState) {
+        if state.requiresSnapshotResync {
+            state.droppedEvents += 1
+            return
+        }
+        if state.bufferedPayloads.count >= maxBufferedEvents ||
+            state.bufferedBytes + payload.count > maxBufferedBytes {
+            state.droppedEvents += state.bufferedPayloads.count + 1
+            state.bufferedPayloads.removeAll(keepingCapacity: false)
+            state.bufferedBytes = 0
+            state.requiresSnapshotResync = true
+            return
+        }
+        state.bufferedPayloads.append(payload)
+        state.bufferedBytes += payload.count
+    }
+
+    private static func matchesKinds(_ payload: Data, kinds: Set<String>) -> Bool {
+        guard kinds.isEmpty == false else { return true }
+        return eventName(from: payload).map(kinds.contains) ?? false
+    }
+
+    private static func eventName(from payload: Data) -> String? {
+        let trimmedPayload: Data
+        if payload.last == 0x0A {
+            trimmedPayload = payload.dropLast()
+        } else {
+            trimmedPayload = payload
+        }
+        guard let object = try? JSONSerialization.jsonObject(with: trimmedPayload) as? [String: Any] else {
+            return nil
+        }
+        return object["event"] as? String
     }
 }
 

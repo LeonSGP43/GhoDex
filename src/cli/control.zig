@@ -38,6 +38,7 @@ const Request = struct {
     todo_id: ?[]const u8 = null,
     scope: ?[]const u8 = null,
     text: ?[]const u8 = null,
+    terminal_key: ?[]const u8 = null,
     command_text: ?[]const u8 = null,
     working_directory: ?[]const u8 = null,
     title: ?[]const u8 = null,
@@ -57,6 +58,13 @@ const Request = struct {
     max_lines: ?u32 = null,
     cursor: ?[]const u8 = null,
     read_after_write_id: ?[]const u8 = null,
+    stream_id: ?[]const u8 = null,
+    browser_tab_id: ?[]const u8 = null,
+    browser_context_id: ?[]const u8 = null,
+    page_id: ?[]const u8 = null,
+    frame_name: ?[]const u8 = null,
+    document_revision: ?u32 = null,
+    payload: ?std.json.Value = null,
 };
 
 const ResponseStatus = struct {
@@ -88,6 +96,11 @@ const ParsedCommand = struct {
 ///   * `todo-assign --todo-id=<uuid> [--workspace-id=<uuid>] [--date=YYYY-MM-DD]`
 ///   * `todo-sync-stale [--date=YYYY-MM-DD]`
 ///   * `events.subscribe [--since-sequence=<n>] [--event-limit=<n>]`
+///   * `events.stream.subscribe [--since-sequence=<n>] [--event-limit=<n>]`
+///   * `events.stream.drain --stream-id=<uuid> [--event-limit=<n>]`
+///   * `events.stream.unsubscribe --stream-id=<uuid>`
+///   * namespaced aliases such as `system.handshake`, `state.snapshot`, `tab.new`, `terminal.write`
+///   * browser commands such as `browser.tab.list`, `browser.page.load --payload-json='{"url":"https://example.com"}'`
 ///
 /// The command prints the control harness response JSON to stdout.
 ///
@@ -138,7 +151,6 @@ fn runArgs(
             return 1;
         },
     };
-
     const request_json = try std.fmt.allocPrint(alloc, "{f}", .{std.json.fmt(parsed.request, .{})});
     const socket_path = resolveSocketPath(alloc, parsed.socket_path) catch |err| {
         const client_error = clientErrorForControlFailure(err);
@@ -166,12 +178,7 @@ fn runArgs(
         try stdout.writeByte('\n');
     }
 
-    const status_source = if (std.mem.eql(u8, parsed.request.command, "events.subscribe"))
-        firstResponseLine(response)
-    else
-        response;
-
-    const parsed_status = try std.json.parseFromSlice(ResponseStatus, alloc, status_source, .{
+    const parsed_status = try std.json.parseFromSlice(ResponseStatus, alloc, response, .{
         .ignore_unknown_fields = true,
     });
     defer parsed_status.deinit();
@@ -233,6 +240,8 @@ fn parseCommand(alloc: Allocator, args_list: []const [:0]const u8) !ParsedComman
             result.request.scope = try alloc.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "text")) {
             result.request.text = try alloc.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "terminal-key")) {
+            result.request.terminal_key = try alloc.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "command")) {
             result.request.command_text = try alloc.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "working-directory")) {
@@ -269,6 +278,20 @@ fn parseCommand(alloc: Allocator, args_list: []const [:0]const u8) !ParsedComman
             result.request.cursor = try alloc.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "read-after-write-id")) {
             result.request.read_after_write_id = try alloc.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "stream-id") or std.mem.eql(u8, key, "subscription-id")) {
+            result.request.stream_id = try alloc.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "browser-tab-id")) {
+            result.request.browser_tab_id = try alloc.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "browser-context-id")) {
+            result.request.browser_context_id = try alloc.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "page-id")) {
+            result.request.page_id = try alloc.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "frame-name")) {
+            result.request.frame_name = try alloc.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "document-revision")) {
+            result.request.document_revision = try parseUnsignedInt(value);
+        } else if (std.mem.eql(u8, key, "payload-json")) {
+            result.request.payload = try parsePayloadJSON(alloc, value);
         } else {
             return error.UnknownFlag;
         }
@@ -290,62 +313,163 @@ fn splitFlag(arg: []const u8, args_list: []const [:0]const u8, index: *usize) !s
 }
 
 fn validateCommand(request: Request) !void {
-    if (std.mem.eql(u8, request.command, "handshake") or
-        std.mem.eql(u8, request.command, "snapshot") or
-        std.mem.eql(u8, request.command, "events.subscribe"))
+    const command = normalizeCommand(request.command);
+
+    if (std.mem.eql(u8, command, "handshake") or
+        std.mem.eql(u8, command, "snapshot") or
+        std.mem.eql(u8, command, "system.target.resolve") or
+        std.mem.eql(u8, command, "system.capabilities.get") or
+        std.mem.eql(u8, command, "events.subscribe") or
+        std.mem.eql(u8, command, "events.stream.subscribe"))
     {
         return;
     }
-    if (std.mem.eql(u8, request.command, "new-tab")) {
+    if (std.mem.startsWith(u8, command, "browser.")) {
         return;
     }
-    if (std.mem.eql(u8, request.command, "close-tab")) {
+    if (std.mem.eql(u8, command, "new-tab")) {
+        return;
+    }
+    if (std.mem.eql(u8, command, "close-tab")) {
         if (request.tab_id == null) return error.MissingTabId;
         return;
     }
-    if (std.mem.eql(u8, request.command, "send-text")) {
+    if (std.mem.eql(u8, command, "rename-tab")) {
+        if (request.tab_id == null) return error.MissingTabId;
+        if (request.title == null) return error.MissingTitle;
+        return;
+    }
+    if (std.mem.eql(u8, command, "send-text")) {
         if (request.terminal_id == null) return error.MissingTerminalId;
         if (request.text == null) return error.MissingText;
         return;
     }
-    if (std.mem.eql(u8, request.command, "run-command")) {
+    if (std.mem.eql(u8, command, "send-key")) {
+        if (request.terminal_id == null) return error.MissingTerminalId;
+        if (request.terminal_key == null) return error.MissingText;
+        return;
+    }
+    if (std.mem.eql(u8, command, "run-command")) {
         if (request.terminal_id == null) return error.MissingTerminalId;
         if (request.command_text == null) return error.MissingCommand;
         return;
     }
-    if (std.mem.eql(u8, request.command, "read-terminal")) {
+    if (std.mem.eql(u8, command, "read-terminal")) {
         if (request.terminal_id == null) return error.MissingTerminalId;
         return;
     }
-    if (std.mem.eql(u8, request.command, "close-terminal")) {
+    if (std.mem.eql(u8, command, "events.stream.drain")) {
+        if (request.stream_id == null) return error.MissingStreamId;
+        return;
+    }
+    if (std.mem.eql(u8, command, "events.stream.unsubscribe")) {
+        if (request.stream_id == null) return error.MissingStreamId;
+        return;
+    }
+    if (std.mem.eql(u8, command, "terminal.stream.open") or
+        std.mem.eql(u8, command, "terminal.stream.ack") or
+        std.mem.eql(u8, command, "terminal.snapshot.v2") or
+        std.mem.eql(u8, command, "terminal.semantic.v2") or
+        std.mem.eql(u8, command, "close-terminal"))
+    {
         if (request.terminal_id == null) return error.MissingTerminalId;
         return;
     }
-    if (std.mem.eql(u8, request.command, "todo-snapshot")) {
+    if (std.mem.eql(u8, command, "agent.runtime.snapshot")) {
         return;
     }
-    if (std.mem.eql(u8, request.command, "todo-add")) {
+    if (std.mem.eql(u8, command, "agent.runtime.session.register") or
+        std.mem.eql(u8, command, "agent.runtime.session.heartbeat") or
+        std.mem.eql(u8, command, "agent.runtime.session.release") or
+        std.mem.eql(u8, command, "agent.runtime.task.enqueue") or
+        std.mem.eql(u8, command, "agent.runtime.task.claim") or
+        std.mem.eql(u8, command, "agent.runtime.task.claim_next") or
+        std.mem.eql(u8, command, "agent.runtime.task.update") or
+        std.mem.eql(u8, command, "agent.runtime.task.approve") or
+        std.mem.eql(u8, command, "agent.runtime.task.cancel") or
+        std.mem.eql(u8, command, "agent.runtime.schedule.enqueue") or
+        std.mem.eql(u8, command, "agent.runtime.schedule.update") or
+        std.mem.eql(u8, command, "agent.runtime.schedule.cancel"))
+    {
+        return;
+    }
+    if (std.mem.eql(u8, command, "todo-snapshot")) {
+        return;
+    }
+    if (std.mem.eql(u8, command, "todo-add")) {
         if (request.title == null) return error.MissingTitle;
         return;
     }
-    if (std.mem.eql(u8, request.command, "todo-update")) {
+    if (std.mem.eql(u8, command, "todo-update")) {
         if (request.todo_id == null) return error.MissingTodoId;
         if (request.title == null and request.notes == null) return error.MissingTodoPatch;
         return;
     }
-    if (std.mem.eql(u8, request.command, "todo-complete")) {
+    if (std.mem.eql(u8, command, "todo-complete")) {
         if (request.todo_id == null) return error.MissingTodoId;
         if (request.completed == null) return error.MissingCompletedState;
         return;
     }
-    if (std.mem.eql(u8, request.command, "todo-assign")) {
+    if (std.mem.eql(u8, command, "todo-assign")) {
         if (request.todo_id == null) return error.MissingTodoId;
         return;
     }
-    if (std.mem.eql(u8, request.command, "todo-sync-stale")) {
+    if (std.mem.eql(u8, command, "todo-sync-stale")) {
         return;
     }
     return error.UnknownSubcommand;
+}
+
+fn normalizeCommand(command: []const u8) []const u8 {
+    if (std.mem.eql(u8, command, "system.handshake")) return "handshake";
+    if (std.mem.eql(u8, command, "state.snapshot")) return "snapshot";
+    if (std.mem.eql(u8, command, "system.target.resolve")) return "system.target.resolve";
+    if (std.mem.eql(u8, command, "system.capabilities.get")) return "system.capabilities.get";
+    if (std.mem.eql(u8, command, "workspace.snapshot")) return "snapshot";
+    if (std.mem.eql(u8, command, "workspace.tab.snapshot")) return "snapshot";
+    if (std.mem.eql(u8, command, "tab.new")) return "new-tab";
+    if (std.mem.eql(u8, command, "workspace.tab.create")) return "new-tab";
+    if (std.mem.eql(u8, command, "tab.close")) return "close-tab";
+    if (std.mem.eql(u8, command, "workspace.tab.close")) return "close-tab";
+    if (std.mem.eql(u8, command, "tab.rename")) return "rename-tab";
+    if (std.mem.eql(u8, command, "terminal.write")) return "send-text";
+    if (std.mem.eql(u8, command, "terminal.input.send")) return "send-text";
+    if (std.mem.eql(u8, command, "terminal.key")) return "send-key";
+    if (std.mem.eql(u8, command, "terminal.run")) return "run-command";
+    if (std.mem.eql(u8, command, "terminal.command.run")) return "run-command";
+    if (std.mem.eql(u8, command, "terminal.read")) return "read-terminal";
+    if (std.mem.eql(u8, command, "terminal.output.read")) return "read-terminal";
+    if (std.mem.eql(u8, command, "terminal.close")) return "close-terminal";
+    if (std.mem.eql(u8, command, "terminal.session.close")) return "close-terminal";
+    if (std.mem.eql(u8, command, "terminal.snapshot")) return "terminal.snapshot.v2";
+    if (std.mem.eql(u8, command, "terminal.semantic")) return "terminal.semantic.v2";
+    if (std.mem.eql(u8, command, "runtime.snapshot")) return "agent.runtime.snapshot";
+    if (std.mem.eql(u8, command, "runtime.session.register")) return "agent.runtime.session.register";
+    if (std.mem.eql(u8, command, "runtime.session.heartbeat")) return "agent.runtime.session.heartbeat";
+    if (std.mem.eql(u8, command, "runtime.session.release")) return "agent.runtime.session.release";
+    if (std.mem.eql(u8, command, "runtime.task.enqueue")) return "agent.runtime.task.enqueue";
+    if (std.mem.eql(u8, command, "runtime.task.claim")) return "agent.runtime.task.claim";
+    if (std.mem.eql(u8, command, "runtime.task.claimNext")) return "agent.runtime.task.claim_next";
+    if (std.mem.eql(u8, command, "runtime.task.claim_next")) return "agent.runtime.task.claim_next";
+    if (std.mem.eql(u8, command, "runtime.task.update")) return "agent.runtime.task.update";
+    if (std.mem.eql(u8, command, "runtime.task.approve")) return "agent.runtime.task.approve";
+    if (std.mem.eql(u8, command, "runtime.task.cancel")) return "agent.runtime.task.cancel";
+    if (std.mem.eql(u8, command, "runtime.schedule.enqueue")) return "agent.runtime.schedule.enqueue";
+    if (std.mem.eql(u8, command, "runtime.schedule.update")) return "agent.runtime.schedule.update";
+    if (std.mem.eql(u8, command, "runtime.schedule.cancel")) return "agent.runtime.schedule.cancel";
+    if (std.mem.eql(u8, command, "todo.snapshot")) return "todo-snapshot";
+    if (std.mem.eql(u8, command, "todo.item.list")) return "todo-snapshot";
+    if (std.mem.eql(u8, command, "todo.add")) return "todo-add";
+    if (std.mem.eql(u8, command, "todo.item.create")) return "todo-add";
+    if (std.mem.eql(u8, command, "todo.update")) return "todo-update";
+    if (std.mem.eql(u8, command, "todo.item.update")) return "todo-update";
+    if (std.mem.eql(u8, command, "todo.complete")) return "todo-complete";
+    if (std.mem.eql(u8, command, "todo.item.complete")) return "todo-complete";
+    if (std.mem.eql(u8, command, "todo.assign")) return "todo-assign";
+    if (std.mem.eql(u8, command, "todo.item.assign")) return "todo-assign";
+    if (std.mem.eql(u8, command, "todo.syncStale")) return "todo-sync-stale";
+    if (std.mem.eql(u8, command, "todo.item.sync_stale")) return "todo-sync-stale";
+    return command;
 }
 
 fn parseSignedInt(value: []const u8) !i64 {
@@ -360,6 +484,11 @@ fn parseBool(value: []const u8) !bool {
     if (std.ascii.eqlIgnoreCase(value, "true")) return true;
     if (std.ascii.eqlIgnoreCase(value, "false")) return false;
     return error.InvalidBoolean;
+}
+
+fn parsePayloadJSON(alloc: Allocator, value: []const u8) !std.json.Value {
+    const parsed = try std.json.parseFromSlice(std.json.Value, alloc, value, .{});
+    return parsed.value;
 }
 
 fn resolveSocketPath(alloc: Allocator, override_path: ?[]const u8) ![]const u8 {
@@ -627,6 +756,48 @@ test "parse control handshake command" {
     try testing.expect(parsed.request.terminal_id == null);
 }
 
+test "parse control workspace tab snapshot alias" {
+    const testing = std.testing;
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const argv = [_][:0]const u8{
+        "workspace.tab.snapshot",
+    };
+
+    const parsed = try parseCommand(alloc, &argv);
+    try testing.expectEqualStrings("workspace.tab.snapshot", parsed.request.command);
+}
+
+test "parse control system target resolve alias" {
+    const testing = std.testing;
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const argv = [_][:0]const u8{
+        "system.target.resolve",
+    };
+
+    const parsed = try parseCommand(alloc, &argv);
+    try testing.expectEqualStrings("system.target.resolve", parsed.request.command);
+}
+
+test "parse control system capabilities get alias" {
+    const testing = std.testing;
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const argv = [_][:0]const u8{
+        "system.capabilities.get",
+    };
+
+    const parsed = try parseCommand(alloc, &argv);
+    try testing.expectEqualStrings("system.capabilities.get", parsed.request.command);
+}
+
 test "parse control run-command arguments" {
     const testing = std.testing;
     var arena = ArenaAllocator.init(testing.allocator);
@@ -650,6 +821,28 @@ test "parse control run-command arguments" {
     );
     try testing.expectEqualStrings("git status", parsed.request.command_text.?);
     try testing.expectEqualStrings("automation-test", parsed.request.client);
+}
+
+test "parse control terminal command run alias arguments" {
+    const testing = std.testing;
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const argv = [_][:0]const u8{
+        "terminal.command.run",
+        "--terminal-id=01234567-89AB-CDEF-0123-456789ABCDEF",
+        "--command",
+        "pwd",
+    };
+
+    const parsed = try parseCommand(alloc, &argv);
+    try testing.expectEqualStrings("terminal.command.run", parsed.request.command);
+    try testing.expectEqualStrings(
+        "01234567-89AB-CDEF-0123-456789ABCDEF",
+        parsed.request.terminal_id.?,
+    );
+    try testing.expectEqualStrings("pwd", parsed.request.command_text.?);
 }
 
 test "parse control read-terminal requires terminal id" {
@@ -685,6 +878,47 @@ test "parse control events subscribe arguments" {
     try testing.expectEqual(@as(?i64, 41), parsed.request.since_sequence);
     try testing.expectEqual(@as(?u32, 20), parsed.request.event_limit);
     try testing.expectEqualStrings("1.0", parsed.request.protocol_version.?);
+}
+
+test "parse control events stream drain arguments" {
+    const testing = std.testing;
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const argv = [_][:0]const u8{
+        "events.stream.drain",
+        "--stream-id=01234567-89AB-CDEF-0123-456789ABCDEF",
+        "--event-limit=5",
+    };
+
+    const parsed = try parseCommand(alloc, &argv);
+    try testing.expectEqualStrings("events.stream.drain", parsed.request.command);
+    try testing.expectEqualStrings(
+        "01234567-89AB-CDEF-0123-456789ABCDEF",
+        parsed.request.stream_id.?,
+    );
+    try testing.expectEqual(@as(?u32, 5), parsed.request.event_limit);
+}
+
+test "parse control events stream unsubscribe accepts subscription id alias" {
+    const testing = std.testing;
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const argv = [_][:0]const u8{
+        "events.stream.unsubscribe",
+        "--subscription-id",
+        "01234567-89AB-CDEF-0123-456789ABCDEF",
+    };
+
+    const parsed = try parseCommand(alloc, &argv);
+    try testing.expectEqualStrings("events.stream.unsubscribe", parsed.request.command);
+    try testing.expectEqualStrings(
+        "01234567-89AB-CDEF-0123-456789ABCDEF",
+        parsed.request.stream_id.?,
+    );
 }
 
 test "parse control read-terminal delta arguments" {
@@ -885,7 +1119,7 @@ const StreamingSubscriptionTestServer = struct {
     event: ?[]const u8 = null,
     writer_seen: ?*std.atomic.Value(bool) = null,
     writer_seen_before_event: bool = false,
-    request_bytes: [512]u8 = undefined,
+    request_bytes: [4096]u8 = undefined,
     request_len: usize = 0,
     failure: ?anyerror = null,
 
@@ -967,11 +1201,14 @@ const OneShotResponseTestServer = struct {
 
 fn readIntoFixedBuffer(fd: std.posix.fd_t, buffer: []u8) !usize {
     var used: usize = 0;
+    var overflow: [256]u8 = undefined;
     while (true) {
-        const amount = try std.posix.read(fd, buffer[used..]);
+        const target = if (used < buffer.len) buffer[used..] else overflow[0..];
+        const amount = try std.posix.read(fd, target);
         if (amount == 0) break;
-        used += amount;
-        if (used == buffer.len) return error.NoSpaceLeft;
+        if (used < buffer.len) {
+            used += amount;
+        }
     }
     return used;
 }
@@ -1084,6 +1321,75 @@ test "events.subscribe streams ack before live event when replay is empty" {
         stdout.buffered(),
     );
     try testing.expectEqualStrings("", stderr.buffered());
+}
+
+test "events.stream.subscribe streams ack before live event when replay is empty" {
+    const testing = std.testing;
+    const socket_path = try makeTestSocketPath(testing.allocator);
+    defer testing.allocator.free(socket_path);
+    defer std.fs.deleteFileAbsolute(socket_path) catch {};
+
+    var stdout = RecordingTestWriter{};
+    var stderr = RecordingTestWriter{};
+    var server = OneShotResponseTestServer{
+        .socket_path = socket_path,
+        .response = "{\"request_id\":\"req-v2-subscribe\",\"status\":\"ok\",\"result\":{\"subscribed\":true,\"stream_id\":\"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE\",\"replayed_event_count\":0,\"live_stream_open\":true}}\n",
+    };
+    const thread = try std.Thread.spawn(.{}, OneShotResponseTestServer.run, .{&server});
+    defer thread.join();
+    try testing.expect(try waitForSocketReady(socket_path));
+
+    const argv = [_][]const u8{
+        "events.stream.subscribe",
+        "--socket",
+        socket_path,
+    };
+    var iter = args.sliceIterator(&argv);
+    const exit_code = try runArgs(testing.allocator, &iter, &stdout.writer, &stderr.writer);
+
+    try testing.expectEqual(@as(u8, 0), exit_code);
+    try testing.expectEqual(@as(?anyerror, null), server.failure);
+    try testing.expectEqualStrings("", stderr.buffered());
+    try testing.expectEqualStrings(
+        "{\"request_id\":\"req-v2-subscribe\",\"status\":\"ok\",\"result\":{\"subscribed\":true,\"stream_id\":\"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE\",\"replayed_event_count\":0,\"live_stream_open\":true}}\n",
+        stdout.buffered(),
+    );
+    try testing.expect(std.mem.indexOf(u8, server.request_bytes[0..server.request_len], "\"command\":\"events.stream.subscribe\"") != null);
+}
+
+test "events.stream.drain sends a one-shot request" {
+    const testing = std.testing;
+    const socket_path = try makeTestSocketPath(testing.allocator);
+    defer testing.allocator.free(socket_path);
+    defer std.fs.deleteFileAbsolute(socket_path) catch {};
+
+    var stdout = RecordingTestWriter{};
+    var stderr = RecordingTestWriter{};
+    var server = OneShotResponseTestServer{
+        .socket_path = socket_path,
+        .response = "{\"request_id\":\"req-v2-drain\",\"status\":\"ok\",\"result\":{\"stream_id\":\"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE\",\"drained_event_count\":1,\"events\":[{\"event_id\":\"evt_42\",\"sequence\":42,\"event\":\"terminal.output.delta\"}]}}\n",
+    };
+    const thread = try std.Thread.spawn(.{}, OneShotResponseTestServer.run, .{&server});
+    defer thread.join();
+    try testing.expect(try waitForSocketReady(socket_path));
+
+    const argv = [_][]const u8{
+        "events.stream.drain",
+        "--socket",
+        socket_path,
+        "--stream-id=AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+        "--event-limit=1",
+    };
+    var iter = args.sliceIterator(&argv);
+    const exit_code = try runArgs(testing.allocator, &iter, &stdout.writer, &stderr.writer);
+
+    try testing.expectEqual(@as(u8, 0), exit_code);
+    try testing.expectEqual(@as(?anyerror, null), server.failure);
+    try testing.expectEqualStrings("", stderr.buffered());
+    try testing.expect(std.mem.indexOf(u8, server.request_bytes[0..server.request_len], "\"command\":\"events.stream.drain\"") != null);
+    try testing.expect(std.mem.indexOf(u8, server.request_bytes[0..server.request_len], "\"stream_id\":\"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE\"") != null);
+    try testing.expect(std.mem.indexOf(u8, server.request_bytes[0..server.request_len], "\"event_limit\":1") != null);
+    try testing.expect(std.mem.indexOf(u8, stdout.buffered(), "\"drained_event_count\":1") != null);
 }
 
 test "events.subscribe streams a live event when event_limit is one" {
@@ -1268,8 +1574,7 @@ test "read-terminal forwards invalid read_after_write_id server errors" {
     var stderr = RecordingTestWriter{};
     var server = OneShotResponseTestServer{
         .socket_path = socket_path,
-        .response =
-            "{\"request_id\":\"req-read-invalid-write\",\"status\":\"error\",\"error_code\":\"invalid_argument\",\"error_message\":\"Invalid read_after_write_id: bad_write\"}\n",
+        .response = "{\"request_id\":\"req-read-invalid-write\",\"status\":\"error\",\"error_code\":\"invalid_argument\",\"error_message\":\"Invalid read_after_write_id: bad_write\"}\n",
     };
 
     const thread = try std.Thread.spawn(.{}, OneShotResponseTestServer.run, .{&server});
@@ -1306,8 +1611,7 @@ test "read-terminal forwards cursor and since-frame validation errors" {
     var stderr = RecordingTestWriter{};
     var server = OneShotResponseTestServer{
         .socket_path = socket_path,
-        .response =
-            "{\"request_id\":\"req-read-cursor-since\",\"status\":\"error\",\"error_code\":\"invalid_argument\",\"error_message\":\"cursor cannot be combined with since_frame_id in delta mode\"}\n",
+        .response = "{\"request_id\":\"req-read-cursor-since\",\"status\":\"error\",\"error_code\":\"invalid_argument\",\"error_message\":\"cursor cannot be combined with since_frame_id in delta mode\"}\n",
     };
 
     const thread = try std.Thread.spawn(.{}, OneShotResponseTestServer.run, .{&server});
@@ -1391,8 +1695,7 @@ test "run-command forwards terminal not found errors" {
     var stderr = RecordingTestWriter{};
     var server = OneShotResponseTestServer{
         .socket_path = socket_path,
-        .response =
-            "{\"request_id\":\"req-run-missing-terminal\",\"status\":\"error\",\"error_code\":\"terminal_not_found\",\"error_message\":\"No terminal exists for terminal_id=01234567-89AB-CDEF-0123-456789ABCDEF\"}\n",
+        .response = "{\"request_id\":\"req-run-missing-terminal\",\"status\":\"error\",\"error_code\":\"terminal_not_found\",\"error_message\":\"No terminal exists for terminal_id=01234567-89AB-CDEF-0123-456789ABCDEF\"}\n",
     };
 
     const thread = try std.Thread.spawn(.{}, OneShotResponseTestServer.run, .{&server});

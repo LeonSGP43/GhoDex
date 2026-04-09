@@ -251,10 +251,11 @@ class AppDelegate: NSObject,
         _ request: ControlHarnessRequest,
         socketPath: String
     ) -> ControlHarnessServiceReply {
-        if request.command == "events.subscribe" || request.command == "terminal.stream.open" {
-            return .subscription(controlHarnessCore.handleSubscription(request, socketPath: socketPath))
+        let normalizedRequest = request.normalized()
+        if normalizedRequest.command == "events.subscribe" || normalizedRequest.command == "terminal.stream.open" {
+            return .subscription(controlHarnessCore.handleSubscription(normalizedRequest, socketPath: socketPath))
         }
-        return .single(controlHarnessCore.handle(request, socketPath: socketPath))
+        return .single(controlHarnessCore.handle(normalizedRequest, socketPath: socketPath))
     }
 
     @MainActor
@@ -283,6 +284,7 @@ class AppDelegate: NSObject,
     func controlHarnessGatewayAccessDecision(
         _ request: ControlHarnessRequest
     ) -> ControlHarnessGateway.RequestAuthorization {
+        let request = request.normalized()
         switch request.command {
         case "handshake", "snapshot", "read-terminal", "events.subscribe":
             return .allow
