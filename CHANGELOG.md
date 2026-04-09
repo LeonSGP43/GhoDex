@@ -4,6 +4,42 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(macos): ignore Finder psn launch metadata
+
+- What changed: Updated `src/os/args.zig` so the macOS process-argument iterator now drops LaunchServices/Finder-injected `-psn_*` metadata before CLI/config parsing, and added a focused regression test for the filter.
+- Why: Opening the app bundle could surface `-psn_0_0: invalid field` because Finder launch metadata was being treated as a user config flag.
+- Impact: Normal app launches no longer raise the bogus configuration error, and Browser/control-harness startup keeps working when the app is launched through the app bundle path.
+- Verification: `nu macos/build.nu --configuration ReleaseLocal --action build`; `python3 scripts/browser_ipc_startup_readiness_acceptance.py --app /Applications/GhoDex.app --output /tmp/ghx-browser-startup-installed-20260409a.json`; `rg -n -- 'invalid field|Configuration Errors|psn_' /tmp/ghx-browser-ipc-start-b7ce2dd5/app.log`
+- Files: `src/os/args.zig`, `CHANGELOG.md`
+- Decision trail: Fix the macOS argument source directly instead of papering over the error in individual launchers, so Finder launches, acceptance runs, and other app-bundle entry points all share one consistent filter.
+
+### test(browser): harden ipc acceptance stability probes
+
+- What changed: Strengthened the Browser IPC acceptance scripts with clearer startup/readiness polling, better event synchronization, and more resilient teardown/cookie/popup verification in the isolated harness flows.
+- Why: The acceptance suite still had slow-start and event-order flakes that could hide real Browser IPC regressions behind harness timing noise.
+- Impact: Browser acceptance now fails later and more honestly on real regressions while staying stable across slower startup paths.
+- Verification: `python3 scripts/browser_ipc_startup_readiness_acceptance.py --app macos/build/ReleaseLocal/GhoDex.app --output /tmp/ghx-browser-startup-postinstall-20260409c.json`; `python3 scripts/browser_popup_event_acceptance.py`; `python3 scripts/browser_teardown_stability_acceptance.py`; `python3 scripts/browser_cookie_persistence_acceptance.py`
+- Files: `scripts/browser_cookie_persistence_acceptance.py`, `scripts/browser_ipc_startup_readiness_acceptance.py`, `scripts/browser_popup_event_acceptance.py`, `scripts/browser_teardown_stability_acceptance.py`, `CHANGELOG.md`
+- Decision trail: Keep the hardening in the test harness layer rather than loosening production timeouts further, so the suite remains a trustworthy release gate for Browser IPC readiness.
+
+### fix(browser-ipc): keep async responses alive through teardown
+
+- What changed: Updated Browser IPC teardown handling so externally-driven DOM/dialog/popup commands keep their pending async response path alive until the Browser service can resolve or cancel them cleanly, instead of being dropped during shutdown races.
+- Why: Slow startup and teardown windows could orphan pending Browser IPC replies, which showed up as flaky popup/js-dialog/cookie acceptance failures even when the underlying Browser action succeeded.
+- Impact: Browser command callers now see deterministic completion/cancellation behavior through teardown, which stabilizes external Browser automation against app lifecycle churn.
+- Verification: `python3 scripts/browser_popup_event_acceptance.py`; `python3 scripts/browser_js_dialog_resolution_acceptance.py`; `python3 scripts/browser_cookie_persistence_acceptance.py`; `python3 scripts/browser_teardown_stability_acceptance.py`
+- Files: `macos/Sources/Features/AppleScript/ScriptBrowserTab.swift`, `macos/Sources/Features/Browser/BrowserControlIPCService.swift`, `CHANGELOG.md`
+- Decision trail: Preserve the async response lifecycle at the IPC boundary instead of adding more fixed waits in callers, so teardown correctness is owned where the reply state actually lives.
+
+### chore(macos): clear remaining build and test warning noise
+
+- What changed: Cleaned the remaining Swift/Xcode warning hotspots in the macOS app and test targets, including the lingering control-flow/test-build noise in `AppDelegate`, `SurfaceView_AppKit`, `Ghostty.App`, `UpdateViewModel`, `SplitTreeTests`, and the related project settings.
+- Why: ReleaseLocal and test-build logs still carried avoidable warning noise, which made real regressions and release-gate failures harder to spot.
+- Impact: The macOS build/test path is now quieter and easier to audit before release and push.
+- Verification: `nu macos/build.nu --configuration ReleaseLocal --action build`; `grep -c '^warning:' /tmp/ghodex-releaselocal-build-20260409h.log`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' test -only-testing:GhosttyTests`
+- Files: `macos/GhoDex.xcodeproj/project.pbxproj`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Features/Update/UpdateViewModel.swift`, `macos/Sources/Ghostty/Ghostty.App.swift`, `macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift`, `macos/Tests/Splits/SplitTreeTests.swift`, `CHANGELOG.md`
+- Decision trail: Remove the remaining local warning sources in-place instead of suppressing them globally, so future release gates stay strict and warning-free.
+
 ### fix(signing): harden staged helper app codesigning
 
 - What changed: Reworked `scripts/stage_cef_helper_app.sh` to strip stale signatures and extended attributes before re-signing, added reusable `sign_with_retry` / `verify_code_path` helpers, and switched helper staging from one-shot `codesign --deep` calls to nested-code-first signing for helper apps plus the parent app bundle.
