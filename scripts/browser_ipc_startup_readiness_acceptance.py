@@ -126,6 +126,36 @@ def wait_for_successful_probe(
     )
 
 
+def send_request_with_retry(
+    socket_path: str,
+    *,
+    version: str,
+    command: str,
+    timeout_ms: int,
+    request_timeout: float,
+) -> dict:
+    deadline = time.monotonic() + (timeout_ms / 1000.0)
+    last_error: str | None = None
+
+    while time.monotonic() < deadline:
+        remaining = max(0.5, deadline - time.monotonic())
+        try:
+            return send_request(
+                socket_path,
+                command,
+                version=version,
+                timeout=min(request_timeout, remaining),
+            )
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)
+            time.sleep(0.25)
+
+    raise RuntimeError(
+        f"Timed out waiting for stable {version} {command} response at {socket_path}: "
+        f"{last_error or 'no response'}"
+    )
+
+
 def terminate_process(proc: subprocess.Popen[str], timeout: float = 15.0) -> None:
     if proc.poll() is not None:
         return
@@ -227,20 +257,26 @@ def run_acceptance(args: argparse.Namespace) -> dict:
             timeout_ms=args.startup_timeout_ms,
             request_timeout=args.request_timeout,
         )
+        follow_up_probe_timeout_ms = max(
+            args.startup_timeout_ms // 2,
+            int(args.request_timeout * 3000),
+        )
         follow_up_context_probes = [
-            send_request(
+            send_request_with_retry(
                 str(socket_path),
-                "listContexts",
+                command="listContexts",
                 version="browser.context.v2",
-                timeout=args.request_timeout,
+                timeout_ms=follow_up_probe_timeout_ms,
+                request_timeout=args.request_timeout,
             )
             for _ in range(3)
         ]
-        legacy_tab_probe = send_request(
+        legacy_tab_probe = send_request_with_retry(
             str(socket_path),
-            "listTabs",
+            command="listTabs",
             version="browser.tab.v1",
-            timeout=args.request_timeout,
+            timeout_ms=follow_up_probe_timeout_ms,
+            request_timeout=args.request_timeout,
         )
 
         artifact["initial_context_probe"] = initial_probe

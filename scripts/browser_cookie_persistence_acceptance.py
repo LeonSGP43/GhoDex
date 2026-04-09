@@ -509,6 +509,47 @@ def cookie_value_from_header(cookie_header: str, cookie_name: str) -> str | None
     return None
 
 
+def evaluate_javascript_with_retry(
+    socket_path: str,
+    *,
+    browser_tab_id: str,
+    script: str,
+    timeout_ms: int,
+) -> dict:
+    deadline = time.monotonic() + (timeout_ms / 1000.0)
+    last_response: dict | None = None
+    last_error: str | None = None
+
+    while time.monotonic() < deadline:
+        remaining_ms = max(1000, int((deadline - time.monotonic()) * 1000))
+        try:
+            response = send_request(
+                socket_path,
+                "evaluateJavaScript",
+                browser_tab_id=browser_tab_id,
+                payload={"script": script},
+                timeout=max(20.0, min(remaining_ms, 5000) / 1000.0 + 5.0),
+            )
+        except TimeoutError as exc:
+            last_error = str(exc)
+            time.sleep(0.25)
+            continue
+
+        last_response = response["response"]
+        if last_response.get("ok") is True:
+            return extract_result_json(last_response)
+
+        error = last_response.get("error") or {}
+        if error.get("code") not in {"bridgeUnavailable", "requestTimedOut"}:
+            raise RuntimeError(f"request failed: {json.dumps(last_response, sort_keys=True)}")
+        time.sleep(0.25)
+
+    raise RuntimeError(
+        "Timed out waiting for evaluateJavaScript response; "
+        f"last_error={last_error!r}; last_response={json.dumps(last_response or {}, sort_keys=True)}"
+    )
+
+
 def set_cookie(
     socket_path: str,
     browser_tab_id: str,
@@ -516,7 +557,6 @@ def set_cookie(
     cookie_value: str,
     timeout_ms: int,
 ) -> dict:
-    command_timeout = command_timeout_seconds(timeout_ms)
     script = f"""
 (() => {{
   document.cookie = {json.dumps(cookie_name + "=" + cookie_value + "; path=/; max-age=86400; SameSite=Lax")};
@@ -533,14 +573,12 @@ def set_cookie(
   }};
 }})()
 """.strip()
-    response = send_request(
+    return evaluate_javascript_with_retry(
         socket_path,
-        "evaluateJavaScript",
         browser_tab_id=browser_tab_id,
-        payload={"script": script},
-        timeout=command_timeout,
+        script=script,
+        timeout_ms=timeout_ms,
     )
-    return extract_result_json(response["response"])
 
 
 def read_cookie(
@@ -549,7 +587,6 @@ def read_cookie(
     cookie_name: str,
     timeout_ms: int,
 ) -> dict:
-    command_timeout = command_timeout_seconds(timeout_ms)
     script = f"""
 (() => {{
   const prefix = {json.dumps(cookie_name + "=")};
@@ -567,14 +604,12 @@ def read_cookie(
   }};
 }})()
 """.strip()
-    response = send_request(
+    return evaluate_javascript_with_retry(
         socket_path,
-        "evaluateJavaScript",
         browser_tab_id=browser_tab_id,
-        payload={"script": script},
-        timeout=command_timeout,
+        script=script,
+        timeout_ms=timeout_ms,
     )
-    return extract_result_json(response["response"])
 
 
 def clear_cookie(
@@ -583,7 +618,6 @@ def clear_cookie(
     cookie_name: str,
     timeout_ms: int,
 ) -> dict:
-    command_timeout = command_timeout_seconds(timeout_ms)
     script = f"""
 (() => {{
   document.cookie = {json.dumps(cookie_name + '=; path=/; max-age=0; SameSite=Lax')};
@@ -592,14 +626,12 @@ def clear_cookie(
   }};
 }})()
 """.strip()
-    response = send_request(
+    return evaluate_javascript_with_retry(
         socket_path,
-        "evaluateJavaScript",
         browser_tab_id=browser_tab_id,
-        payload={"script": script},
-        timeout=command_timeout,
+        script=script,
+        timeout_ms=timeout_ms,
     )
-    return extract_result_json(response["response"])
 
 
 def exercise_cookie_roundtrip(

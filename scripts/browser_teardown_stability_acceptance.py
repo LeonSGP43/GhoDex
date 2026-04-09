@@ -195,6 +195,90 @@ def wait_for_new_context(
     )
 
 
+def create_context_with_recovery(
+    socket_path: str,
+    *,
+    url: str,
+    previous_context_ids: set[str],
+    timeout_ms: int,
+) -> tuple[dict, dict, str | None]:
+    command_timeout = max(45.0, timeout_ms / 1000.0)
+
+    try:
+        create_context = send_request(
+            socket_path,
+            "newContext",
+            payload={"url": url},
+            timeout=command_timeout,
+        )
+    except Exception as exc:  # noqa: BLE001
+        context_summary = wait_for_new_context(socket_path, previous_context_ids, timeout_ms)
+        return (
+            {
+                "transportRecovered": True,
+                "transportError": str(exc),
+                "response": None,
+            },
+            context_summary,
+            "transport",
+        )
+
+    if create_context["response"].get("ok") is True:
+        context_summary = extract_result_json(create_context["response"])
+        if not isinstance(context_summary, dict):
+            raise RuntimeError(f"Expected newContext to return an object, got {context_summary!r}")
+        return create_context, context_summary, None
+
+    error = create_context["response"].get("error") or {}
+    if error.get("code") not in {"bridgeUnavailable", "requestTimedOut"}:
+        raise RuntimeError(
+            f"newContext failed unexpectedly: {json.dumps(create_context['response'], sort_keys=True)}"
+        )
+
+    context_summary = wait_for_new_context(socket_path, previous_context_ids, timeout_ms)
+    return create_context, context_summary, "bridge"
+
+
+def close_context_with_recovery(
+    socket_path: str,
+    *,
+    context_id: str,
+    timeout_seconds: float,
+    timeout_ms: int,
+) -> tuple[dict, list[dict], str | None]:
+    try:
+        close_context = send_request(
+            socket_path,
+            "closeContext",
+            browser_context_id=context_id,
+            timeout=timeout_seconds,
+        )
+    except Exception as exc:  # noqa: BLE001
+        contexts_after_close = wait_for_context_absent(socket_path, context_id, timeout_ms)
+        return (
+            {
+                "transportRecovered": True,
+                "transportError": str(exc),
+                "response": None,
+            },
+            contexts_after_close,
+            "transport",
+        )
+
+    if close_context["response"].get("ok") is True:
+        contexts_after_close = wait_for_context_absent(socket_path, context_id, timeout_ms)
+        return close_context, contexts_after_close, None
+
+    error = close_context["response"].get("error") or {}
+    if error.get("code") != "requestTimedOut":
+        raise RuntimeError(
+            f"closeContext failed unexpectedly: {json.dumps(close_context['response'], sort_keys=True)}"
+        )
+
+    contexts_after_close = wait_for_context_absent(socket_path, context_id, timeout_ms)
+    return close_context, contexts_after_close, "timeout"
+
+
 def wait_for_page_bridge_ready(
     socket_path: str,
     *,
@@ -446,31 +530,20 @@ def main() -> int:
                 assert isinstance(contexts_before, list)
                 previous_context_ids = {str(context["id"]) for context in contexts_before}
 
-                new_context = send_request(
+                new_context, context_summary, new_context_recovery = create_context_with_recovery(
                     str(socket_path),
-                    "newContext",
-                    payload={"url": context_url},
-                    timeout=command_timeout,
+                    url=context_url,
+                    previous_context_ids=previous_context_ids,
+                    timeout_ms=args.page_timeout_ms,
                 )
-                if new_context["response"].get("ok") is True:
-                    context_summary = extract_result_json(new_context["response"])
-                    assert isinstance(context_summary, dict)
-                else:
-                    error = new_context["response"].get("error") or {}
-                    if error.get("code") != "bridgeUnavailable":
-                        raise RuntimeError(
-                            f"newContext failed unexpectedly: {json.dumps(new_context['response'], sort_keys=True)}"
-                        )
-                    context_summary = wait_for_new_context(
-                        str(socket_path),
-                        previous_context_ids,
-                        args.page_timeout_ms,
-                    )
-                    cycle["new_context_recovered_after_bridge_timeout"] = True
                 context_id = str(context_summary["id"])
                 active_page_id = str(context_summary["activePageID"])
                 cycle["new_context"] = new_context
                 cycle["resolved_context_summary"] = context_summary
+                if new_context_recovery == "bridge":
+                    cycle["new_context_recovered_after_bridge_timeout"] = True
+                elif new_context_recovery == "transport":
+                    cycle["new_context_recovered_after_transport_failure"] = True
                 cycle["initial_page_bridge_ready"] = wait_for_page_bridge_ready(
                     str(socket_path),
                     browser_context_id=context_id,
@@ -511,18 +584,18 @@ def main() -> int:
                     args.page_timeout_ms,
                 )
 
-                cycle["close_context"] = send_request(
+                close_context, contexts_after_close, close_context_recovery = close_context_with_recovery(
                     str(socket_path),
-                    "closeContext",
-                    browser_context_id=context_id,
-                    timeout=command_timeout,
+                    context_id=context_id,
+                    timeout_seconds=command_timeout,
+                    timeout_ms=args.page_timeout_ms,
                 )
-
-                cycle["contexts_after_close"] = wait_for_context_absent(
-                    str(socket_path),
-                    context_id,
-                    args.page_timeout_ms,
-                )
+                cycle["close_context"] = close_context
+                cycle["contexts_after_close"] = contexts_after_close
+                if close_context_recovery == "timeout":
+                    cycle["close_context_recovered_after_timeout"] = True
+                elif close_context_recovery == "transport":
+                    cycle["close_context_recovered_after_transport_failure"] = True
                 if args.settle_ms > 0:
                     time.sleep(args.settle_ms / 1000.0)
                 wait_for_process_alive(proc, 1000)

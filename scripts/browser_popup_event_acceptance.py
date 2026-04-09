@@ -317,19 +317,90 @@ def wait_for_selector(
     selector: str,
     timeout_ms: int,
 ) -> dict:
-    response = send_request(
-        socket_path,
-        "waitForSelector",
-        browser_tab_id=browser_tab_id,
-        page_id=page_id,
-        payload={
-            "selector": selector,
-            "state": "present",
-            "timeoutMS": str(timeout_ms),
-        },
-        timeout=command_timeout_seconds(timeout_ms),
+    deadline = time.monotonic() + (timeout_ms / 1000.0)
+    last_response: dict | None = None
+    last_error: str | None = None
+
+    while time.monotonic() < deadline:
+        remaining_ms = max(1000, int((deadline - time.monotonic()) * 1000))
+        try:
+            response = send_request(
+                socket_path,
+                "waitForSelector",
+                browser_tab_id=browser_tab_id,
+                page_id=page_id,
+                payload={
+                    "selector": selector,
+                    "state": "present",
+                    "timeoutMS": str(min(remaining_ms, 5000)),
+                },
+                timeout=max(20.0, min(remaining_ms, 5000) / 1000.0 + 5.0),
+            )
+        except TimeoutError as exc:
+            last_error = str(exc)
+            time.sleep(0.25)
+            continue
+
+        last_response = response["response"]
+        if last_response.get("ok") is True:
+            return extract_result_json(last_response)
+
+        error = last_response.get("error") or {}
+        if error.get("code") not in {"bridgeUnavailable", "requestTimedOut"}:
+            raise RuntimeError(f"request failed: {json.dumps(last_response, sort_keys=True)}")
+        time.sleep(0.25)
+
+    raise RuntimeError(
+        f"Timed out waiting for selector {selector!r}; "
+        f"last_error={last_error!r}; last_response={json.dumps(last_response or {}, sort_keys=True)}"
     )
-    return extract_result_json(response["response"])
+
+
+def wait_for_page_bridge_ready(
+    socket_path: str,
+    browser_tab_id: str,
+    page_id: str,
+    timeout_ms: int,
+) -> dict:
+    deadline = time.monotonic() + (timeout_ms / 1000.0)
+    last_response: dict | None = None
+    while time.monotonic() < deadline:
+        remaining = max(1.0, deadline - time.monotonic())
+        try:
+            probe = send_request(
+                socket_path,
+                "listFrames",
+                browser_tab_id=browser_tab_id,
+                page_id=page_id,
+                timeout=min(remaining, 20.0),
+            )
+        except TimeoutError:
+            last_response = {
+                "timed_out": True,
+                "browserTabID": browser_tab_id,
+                "pageID": page_id,
+            }
+            time.sleep(0.25)
+            continue
+
+        last_response = probe
+        response = probe["response"]
+        if response.get("ok") is True:
+            return probe
+
+        error = response.get("error") or {}
+        if error.get("code") not in {"bridgeUnavailable", "requestTimedOut"}:
+            raise RuntimeError(
+                "Unexpected page bridge readiness failure: "
+                f"{json.dumps(response, sort_keys=True)}"
+            )
+        time.sleep(0.25)
+
+    raise RuntimeError(
+        "Timed out waiting for page bridge readiness. "
+        f"browserTabID={browser_tab_id} pageID={page_id} "
+        f"last={json.dumps(last_response or {}, sort_keys=True)}"
+    )
 
 
 def wait_for_popup_event(
@@ -360,6 +431,41 @@ def wait_for_popup_event(
                 }
         time.sleep(0.25)
     raise RuntimeError(f"Timed out waiting for popupRequest event for {requested_url}")
+
+
+def best_effort_event_request(
+    socket_path: str,
+    command: str,
+    *,
+    browser_tab_id: str,
+    payload: dict[str, str],
+    timeout_seconds: float,
+) -> dict:
+    try:
+        response = send_request(
+            socket_path,
+            command,
+            browser_tab_id=browser_tab_id,
+            payload=payload,
+            timeout=timeout_seconds,
+        )
+    except TimeoutError as exc:
+        return {
+            "ok": False,
+            "timedOut": True,
+            "error": str(exc),
+            "command": command,
+            "payload": payload,
+        }
+
+    parsed = extract_result_json(response["response"])
+    if isinstance(parsed, dict):
+        result = dict(parsed)
+    else:
+        result = {"value": parsed}
+    result["ok"] = True
+    result["timedOut"] = False
+    return result
 
 
 def browser_tab_summary(socket_path: str, browser_tab_id: str) -> dict:
@@ -492,6 +598,14 @@ def run_acceptance(args: argparse.Namespace) -> dict:
             if not any(page["id"] == page_tab_payload["resultPageID"] for page in page_tab_pages):
                 raise RuntimeError("popupRequest resultPageID did not resolve inside listPages")
 
+            artifact["stage"] = "wait_for_child_tab_bridge_ready"
+            child_tab_bridge_ready = wait_for_page_bridge_ready(
+                str(socket_path),
+                browser_tab_id,
+                page_tab_payload["resultPageID"],
+                args.page_timeout_ms,
+            )
+
             artifact["stage"] = "wait_for_child_tab_selector"
             child_tab_ready = wait_for_selector(
                 str(socket_path),
@@ -538,21 +652,19 @@ def run_acceptance(args: argparse.Namespace) -> dict:
                 )
 
             artifact["stage"] = "finalize"
-            final_drain = extract_result_json(
-                send_request(
-                    str(socket_path),
-                    "drainEvents",
-                    payload={"subscriptionID": subscription_id, "limit": "128"},
-                    timeout=20.0,
-                )["response"]
+            final_drain = best_effort_event_request(
+                str(socket_path),
+                "drainEvents",
+                browser_tab_id=browser_tab_id,
+                payload={"subscriptionID": subscription_id, "limit": "128"},
+                timeout_seconds=max(20.0, args.page_timeout_ms / 1000.0),
             )
-            unsubscribe_result = extract_result_json(
-                send_request(
-                    str(socket_path),
-                    "unsubscribeEvents",
-                    browser_tab_id=browser_tab_id,
-                    payload={"subscriptionID": subscription_id},
-                )["response"]
+            unsubscribe_result = best_effort_event_request(
+                str(socket_path),
+                "unsubscribeEvents",
+                browser_tab_id=browser_tab_id,
+                payload={"subscriptionID": subscription_id},
+                timeout_seconds=max(20.0, args.page_timeout_ms / 1000.0),
             )
 
             artifact.update(
@@ -567,6 +679,7 @@ def run_acceptance(args: argparse.Namespace) -> dict:
                         "openResult": open_new_tab_result,
                         "popupEvent": page_tab_event,
                         "pages": page_tab_pages,
+                        "bridgeReady": child_tab_bridge_ready,
                         "childReady": child_tab_ready,
                     },
                     "browserWindowFlow": {
