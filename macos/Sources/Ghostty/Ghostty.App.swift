@@ -730,11 +730,6 @@ extension Ghostty {
             }()
 
             let workingDirectory = sourceSurface?.pwd
-            let url = MarkdownDocumentTarget.resolveURL(
-                rawValue: action.url,
-                workingDirectory: workingDirectory
-            )
-
             if let markdownTarget = MarkdownDocumentTarget.resolve(
                 rawValue: action.url,
                 kind: action.kind,

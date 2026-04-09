@@ -413,7 +413,6 @@ class AppDelegate: NSObject,
 
     private var remotePairingQRMenuItem: NSMenuItem?
     private var remotePairingQRCodeWindow: NSWindow?
-    private var remotePairingQRCodeWindowCloseObserver: NSObjectProtocol?
     private var remotePairingQRCodePayloadJSON: String?
     private var remotePairingQRCodePairingCode: String?
     private var topLevelWindowCloseObserver: NSObjectProtocol?
@@ -1118,22 +1117,12 @@ class AppDelegate: NSObject,
             payload: payload
         )
 
-        remotePairingQRCodeWindowCloseObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification,
-            object: window,
-            queue: .main
-        ) { [weak self, weak window] _ in
-            guard let self else { return }
-            if self.remotePairingQRCodeWindow === window {
-                self.remotePairingQRCodeWindow = nil
-                self.remotePairingQRCodePayloadJSON = nil
-                self.remotePairingQRCodePairingCode = nil
-            }
-            if let observer = self.remotePairingQRCodeWindowCloseObserver {
-                NotificationCenter.default.removeObserver(observer)
-                self.remotePairingQRCodeWindowCloseObserver = nil
-            }
-        }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleRemotePairingQRCodeWindowWillClose(_:)),
+            name: NSWindow.willCloseNotification,
+            object: window
+        )
 
         remotePairingQRCodeWindow = window
         NSApp.activate(ignoringOtherApps: true)
@@ -1228,14 +1217,33 @@ class AppDelegate: NSObject,
     @MainActor
     @objc
     private func closeRemotePairingQRCodeWindow(_ sender: Any?) {
-        if let observer = remotePairingQRCodeWindowCloseObserver {
-            NotificationCenter.default.removeObserver(observer)
-            remotePairingQRCodeWindowCloseObserver = nil
+        if let window = remotePairingQRCodeWindow {
+            NotificationCenter.default.removeObserver(
+                self,
+                name: NSWindow.willCloseNotification,
+                object: window
+            )
         }
         remotePairingQRCodeWindow?.close()
         remotePairingQRCodeWindow = nil
         remotePairingQRCodePayloadJSON = nil
         remotePairingQRCodePairingCode = nil
+    }
+
+    @MainActor
+    @objc
+    private func handleRemotePairingQRCodeWindowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        NotificationCenter.default.removeObserver(
+            self,
+            name: NSWindow.willCloseNotification,
+            object: window
+        )
+        if remotePairingQRCodeWindow === window {
+            remotePairingQRCodeWindow = nil
+            remotePairingQRCodePayloadJSON = nil
+            remotePairingQRCodePairingCode = nil
+        }
     }
 
     @MainActor

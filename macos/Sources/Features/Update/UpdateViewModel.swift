@@ -305,7 +305,6 @@ enum UpdateState: Equatable {
 
             // Check for semantic version (x.y.z)
             if let semver = Self.extractSemanticVersion(from: version) {
-                let slug = semver.replacingOccurrences(of: ".", with: "-")
                 if let url = URL(string: "https://github.com/LeonSGP43/GhoDex/releases/tag/\(semver)") {
                     self = .tagged(url)
                     return
