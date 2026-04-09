@@ -185,9 +185,12 @@ final class BrowserControlIPCService {
         _ requestJSON: String,
         completion: @escaping (String) -> Void
     ) {
-        Task { @MainActor in
+        Task {
             let responseJSON: String
             do {
+                // Resolve Browser commands on the main actor, but hop back off it
+                // before invoking the transport completion so socket writes are not
+                // serialized behind Browser/CEF startup work.
                 responseJSON = try await ScriptBrowserTab.runExternalCommandProtocol(requestJSON: requestJSON)
             } catch let error as BrowserExternalCommandError {
                 responseJSON = encodeFailureResponse(error)

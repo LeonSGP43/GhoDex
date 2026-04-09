@@ -232,7 +232,9 @@ def local_dialog_server() -> dict[str, str]:
   <body>
     <h1 id="ready-marker">js-dialog-resolution-main</h1>
     <script>
-      const dialogScheduleDelayMS = 100;
+      // Leave enough time for the evaluateJavaScript request that schedules the
+      // dialog to fully unwind before the blocking prompt is raised.
+      const dialogScheduleDelayMS = 1000;
 
       window.__ghodexDialogHarness = {
         alertDone: false,

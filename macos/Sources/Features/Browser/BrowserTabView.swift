@@ -394,8 +394,13 @@ private struct BrowserCEFDeckView: NSViewRepresentable {
                         ))
                         return
                     }
-                    view.loadURLString(url)
                     completion(.success(for: request))
+                    // Schedule navigation after the IPC reply is released so
+                    // reentrant auth/certificate prompts cannot strand the
+                    // original loadURL request on the control socket.
+                    DispatchQueue.main.async {
+                        view.loadURLString(url)
+                    }
                 case .goBack:
                     view.goBack()
                     completion(.success(for: request))

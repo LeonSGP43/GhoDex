@@ -738,6 +738,16 @@ final class ScriptBrowserTab: NSObject {
         NSApp.activate(ignoringOtherApps: true)
         controller?.model.ensureRuntimeActivationForExternalControl()
     }
+
+    private func scheduleExternalControlStartup() {
+        guard let controller else { return }
+        DispatchQueue.main.async { [weak controller] in
+            controller?.showWindow(nil)
+            controller?.window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            controller?.model.ensureRuntimeActivationForExternalControl()
+        }
+    }
 }
 
 private final class BrowserControlAwaitGate {
@@ -1217,7 +1227,7 @@ extension ScriptBrowserTab {
 
             switch browserTab.newPage(initialURL: request.payload["url"]) {
             case let .success(summary):
-                browserTab.prepareForExternalControlStartup()
+                browserTab.scheduleExternalControlStartup()
                 do {
                     return .success(for: request, resultJSON: try jsonString(from: summary))
                 } catch {
@@ -1314,7 +1324,7 @@ extension ScriptBrowserTab {
                 contextPolicy: contextPolicy
             )
             let browserTab = ScriptBrowserTab(controller: controller)
-            browserTab.prepareForExternalControlStartup()
+            browserTab.scheduleExternalControlStartup()
 
             do {
                 return .success(for: request, resultJSON: try jsonString(from: browserTab.contextSummary))
@@ -1529,7 +1539,7 @@ extension ScriptBrowserTab {
                 contextPolicy: contextPolicy
             )
             let browserTab = ScriptBrowserTab(controller: controller)
-            controller.model.ensureRuntimeActivationForExternalControl()
+            browserTab.scheduleExternalControlStartup()
 
             do {
                 return .success(for: request, resultJSON: try jsonString(from: browserTab.contextSummary))
@@ -1559,6 +1569,7 @@ extension ScriptBrowserTab {
 
             switch browserTab.newPage(initialURL: request.payload["url"]) {
             case let .success(summary):
+                browserTab.scheduleExternalControlStartup()
                 do {
                     return .success(for: request, resultJSON: try jsonString(from: summary))
                 } catch {

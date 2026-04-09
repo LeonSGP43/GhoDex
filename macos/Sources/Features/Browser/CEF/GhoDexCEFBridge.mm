@@ -97,7 +97,10 @@ constexpr int64_t kIdleShutdownDelayMs = 5000;
 constexpr int64_t kRuntimeDiagnosticsMaxFileBytes = 4LL * 1024LL * 1024LL;
 constexpr char kEvaluateRequestMessageName[] = "ghodex.browser.evaluate";
 constexpr char kEvaluateResultMessageName[] = "ghodex.browser.evaluate.result";
-constexpr double kRuntimePromptExternalResolutionGraceSeconds = 0.75;
+// Give the external Browser control plane enough time to observe runtime
+// prompt events and respond before falling back to a blocking native alert.
+// Shorter windows can race under load and strand Browser IPC behind modal UI.
+constexpr double kRuntimePromptExternalResolutionGraceSeconds = 5.0;
 
 constexpr size_t kEvaluateRequestIDIndex = 0;
 constexpr size_t kEvaluateScriptIndex = 1;
@@ -1847,9 +1850,15 @@ typedef void (^GhoDexCEFRuntimePromptContinuation)(
 - (void)notifyRuntimeEventKind:(NSString *)kind
                        payload:(NSDictionary<NSString *, NSString *> *)payload {
   NSDictionary<NSString *, NSString *> *captured_payload = payload ?: @{};
-  dispatch_async(dispatch_get_main_queue(), ^{
+  auto emit = ^{
     [self.delegate cefView:self didEmitRuntimeEventKind:kind payload:captured_payload];
-  });
+  };
+  if ([NSThread isMainThread]) {
+    emit();
+    return;
+  }
+
+  dispatch_async(dispatch_get_main_queue(), emit);
 }
 
 - (NSString *)registerEvaluationCompletion:(GhoDexCEFJavaScriptEvaluationCompletion)completion {
