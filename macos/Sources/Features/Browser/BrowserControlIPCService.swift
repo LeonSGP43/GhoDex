@@ -244,6 +244,8 @@ private final class Connection {
     private var activeWrite = Data()
     private var activeWriteOffset = 0
     private var bufferedResponseBytes = 0
+    private var peerClosedInput = false
+    private var inFlightRequestCount = 0
     private var didClose = false
 
     init(
@@ -311,7 +313,11 @@ private final class Connection {
             }
 
             if readCount == 0 {
-                closeLocked()
+                peerClosedInput = true
+                readSource?.cancel()
+                readSource = nil
+                processBufferedEOFIfNeeded()
+                closeIfIdle()
                 return
             }
 
@@ -331,33 +337,23 @@ private final class Connection {
 
             guard !lineData.isEmpty else { continue }
             guard let line = String(data: lineData, encoding: .utf8) else {
-                enqueueResponse(BrowserControlIPCService.encodeInvalidRequestResponse())
+                enqueueResponseLocked(BrowserControlIPCService.encodeInvalidRequestResponse())
                 continue
             }
 
-            processRequest(line.trimmingCharacters(in: .newlines)) { [weak self] response in
-                self?.enqueueResponse(response)
-            }
+            processRequestLine(line.trimmingCharacters(in: .newlines))
         }
     }
 
     private func enqueueResponse(_ response: String) {
+        if DispatchQueue.getSpecific(key: queueKey) != nil {
+            enqueueResponseLocked(response)
+            return
+        }
+
         queue.async { [weak self] in
             guard let self, !self.didClose else { return }
-
-            let responseData = Data((response + "\n").utf8)
-            let nextBufferedByteCount = self.bufferedResponseBytes + responseData.count
-            guard nextBufferedByteCount <= Self.maxBufferedResponseBytes else {
-                AppDelegate.logger.error(
-                    "Closing browser IPC connection due to response backpressure: fd=\(self.fileDescriptor) queued_bytes=\(nextBufferedByteCount)"
-                )
-                self.closeLocked()
-                return
-            }
-
-            self.bufferedResponseBytes = nextBufferedByteCount
-            self.pendingWrites.append(responseData)
-            self.flushWritableBytes()
+            self.enqueueResponseLocked(response)
         }
     }
 
@@ -370,6 +366,7 @@ private final class Connection {
                     pendingWrites.removeAll(keepingCapacity: false)
                     pendingWriteIndex = 0
                     disarmWriteSource()
+                    closeIfIdle()
                     return
                 }
 
@@ -410,6 +407,57 @@ private final class Connection {
             closeLocked()
             return
         }
+    }
+
+    private func processBufferedEOFIfNeeded() {
+        guard !inputBuffer.isEmpty else { return }
+        let lineData = inputBuffer
+        inputBuffer.removeAll(keepingCapacity: false)
+
+        guard let line = String(data: lineData, encoding: .utf8) else {
+            enqueueResponseLocked(BrowserControlIPCService.encodeInvalidRequestResponse())
+            return
+        }
+
+        let trimmed = line.trimmingCharacters(in: .newlines)
+        guard !trimmed.isEmpty else { return }
+        processRequestLine(trimmed)
+    }
+
+    private func processRequestLine(_ line: String) {
+        inFlightRequestCount += 1
+        processRequest(line) { [weak self] response in
+            self?.queue.async { [weak self] in
+                guard let self, !self.didClose else { return }
+                self.inFlightRequestCount = max(0, self.inFlightRequestCount - 1)
+                self.enqueueResponseLocked(response)
+            }
+        }
+    }
+
+    private func enqueueResponseLocked(_ response: String) {
+        guard !didClose else { return }
+
+        let responseData = Data((response + "\n").utf8)
+        let nextBufferedByteCount = bufferedResponseBytes + responseData.count
+        guard nextBufferedByteCount <= Self.maxBufferedResponseBytes else {
+            AppDelegate.logger.error(
+                "Closing browser IPC connection due to response backpressure: fd=\(self.fileDescriptor) queued_bytes=\(nextBufferedByteCount)"
+            )
+            closeLocked()
+            return
+        }
+
+        bufferedResponseBytes = nextBufferedByteCount
+        pendingWrites.append(responseData)
+        flushWritableBytes()
+    }
+
+    private func closeIfIdle() {
+        guard peerClosedInput, !didClose else { return }
+        guard inFlightRequestCount == 0 else { return }
+        guard inputBuffer.isEmpty, pendingWrites.isEmpty, activeWrite.isEmpty else { return }
+        closeLocked()
     }
 
     private func armWriteSource() {

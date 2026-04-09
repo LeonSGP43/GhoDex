@@ -908,10 +908,10 @@ extension ScriptBrowserTab {
 
         let closedContextID = stableID
         let closedPageCount = controller.model.pages.count
-        // Defer the actual close until after the control response has had a chance
-        // to flush back over the socket.
-        DispatchQueue.main.async {
-            controller.closeContextImmediately()
+        // Give the IPC service a short window to enqueue and flush the JSON
+        // response before the Browser window teardown starts mutating view state.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak controller] in
+            controller?.closeContextImmediately()
         }
         return .success(
             BrowserExternalContextCloseResult(
