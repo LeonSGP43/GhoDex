@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### test(control-harness): add live gateway transport acceptance coverage
+
+- What changed: Added `scripts/control_harness_gateway_transport_live_acceptance.py`, which launches an isolated live app and proves local harness `events.subscribe`, gateway TCP handshake/pairing, authenticated TCP `terminal.snapshot.v2` / `terminal.semantic.v2` / `events.subscribe`, and authenticated WebSocket `terminal.snapshot.v2` / `terminal.semantic.v2` / `events.subscribe` against a real running GhoDex instance.
+- Why: We already had live proof for the terminal V2 surface, but we still lacked one same-grade acceptance that exercised the event stream and both remote gateway transports end to end on a real app.
+- Impact: Release verification now has concrete live evidence that Unix-socket, TCP, and WebSocket control-harness transport paths all work for replay/live events and V2 terminal reads, instead of relying only on unit coverage.
+- Verification: `python3 scripts/control_harness_gateway_transport_live_acceptance.py --app macos/build/ReleaseLocal/GhoDex.app --output /tmp/ghx-control-harness-gateway-transport-live-acceptance.json`
+- Files: `scripts/control_harness_gateway_transport_live_acceptance.py`, `CHANGELOG.md`
+- Decision trail: Keep the transport proof in one isolated live harness so gateway auth, event replay/live delivery, and V2 terminal reads are validated together on the same app instance.
+
+### fix(control-harness): route terminal stream subscriptions through the subscription reply path
+
+- What changed: Updated `macos/Sources/App/macOS/AppDelegate.swift` so `terminal.stream.open` uses the same subscription reply path as `events.subscribe` instead of being treated like a one-shot control request.
+- Why: The ControlHarness V2 terminal stream open flow is a long-lived subscription surface, so routing it as a single reply could break or mis-handle stream lifecycle behavior on the local harness socket.
+- Impact: Local ControlHarness stream clients now get the correct subscription semantics for `terminal.stream.open`, which keeps terminal streaming aligned with the rest of the harness subscription model.
+- Verification: `python3 scripts/control_harness_terminal_v2_live_acceptance.py --app macos/build/ReleaseLocal/GhoDex.app --output /tmp/ghx-control-harness-terminal-v2-live-acceptance.json`
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `CHANGELOG.md`
+- Decision trail: Fix the reply classification at the app delegate control-harness boundary so long-lived terminal stream behavior is correct before requests enter deeper transport handling.
+
 ### test(control-harness): add live terminal v2 acceptance coverage
 
 - What changed: Added `scripts/control_harness_terminal_v2_live_acceptance.py`, which launches an isolated live app, discovers the harness socket, and proves `terminal.snapshot.v2`, `terminal.semantic.v2`, `terminal.stream.open`, and `terminal.stream.ack` against a real terminal session.
