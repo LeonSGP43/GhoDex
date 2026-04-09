@@ -448,6 +448,11 @@ def open_websocket(host: str, port: int, *, timeout: float) -> tuple[WebSocketCo
     }
 
 
+def websocket_request(websocket: WebSocketConnection, body: dict, *, timeout: float) -> dict:
+    websocket.send_text(body)
+    return websocket.read_json(timeout=timeout)
+
+
 def run_control_command(app_bundle: Path, socket_path: str, *control_args: str) -> dict:
     executable = app_bundle / "Contents" / "MacOS" / "GhoDex"
     completed = subprocess.run(
@@ -630,25 +635,69 @@ def issue_observe_token(host: str, port: int, *, timeout: float) -> dict:
     }
 
 
-def assert_snapshot_v2(response: dict, marker: str, *, label: str) -> None:
+def snapshot_v2_has_marker(response: dict, marker: str) -> bool:
     result = response.get("result") or {}
-    if response.get("status") != "ok":
-        raise RuntimeError(f"{label} failed: {json.dumps(response, sort_keys=True)}")
-    if result.get("snapshot_format") != "ansi_text":
-        raise RuntimeError(f"{label} returned unexpected format: {json.dumps(response, sort_keys=True)}")
-    if marker not in (result.get("content") or ""):
-        raise RuntimeError(f"{label} content did not include marker: {json.dumps(response, sort_keys=True)}")
+    return (
+        response.get("status") == "ok"
+        and result.get("snapshot_format") == "ansi_text"
+        and marker in (result.get("content") or "")
+    )
 
 
-def assert_semantic_v2(response: dict, marker: str, *, label: str) -> None:
+def semantic_v2_has_marker(response: dict, marker: str) -> bool:
     result = response.get("result") or {}
-    if response.get("status") != "ok":
-        raise RuntimeError(f"{label} failed: {json.dumps(response, sort_keys=True)}")
-    if marker not in (result.get("exact_text") or ""):
-        raise RuntimeError(f"{label} exact_text did not include marker: {json.dumps(response, sort_keys=True)}")
     logical_lines = result.get("logical_lines") or []
-    if not any(marker in line for line in logical_lines):
-        raise RuntimeError(f"{label} logical_lines did not include marker: {json.dumps(response, sort_keys=True)}")
+    return (
+        response.get("status") == "ok"
+        and marker in (result.get("exact_text") or "")
+        and any(marker in line for line in logical_lines)
+    )
+
+
+def wait_for_snapshot_v2(
+    *,
+    label: str,
+    marker: str,
+    timeout: float,
+    fetch: Callable[[float], dict],
+) -> dict:
+    deadline = time.monotonic() + timeout
+    last_response: dict | None = None
+    while time.monotonic() < deadline:
+        remaining = max(0.5, deadline - time.monotonic())
+        response = fetch(remaining)
+        last_response = response
+        if snapshot_v2_has_marker(response, marker):
+            return response
+        time.sleep(0.25)
+
+    raise RuntimeError(
+        f"{label} content did not include marker before timeout: "
+        f"{json.dumps(last_response or {}, sort_keys=True)}"
+    )
+
+
+def wait_for_semantic_v2(
+    *,
+    label: str,
+    marker: str,
+    timeout: float,
+    fetch: Callable[[float], dict],
+) -> dict:
+    deadline = time.monotonic() + timeout
+    last_response: dict | None = None
+    while time.monotonic() < deadline:
+        remaining = max(0.5, deadline - time.monotonic())
+        response = fetch(remaining)
+        last_response = response
+        if semantic_v2_has_marker(response, marker):
+            return response
+        time.sleep(0.25)
+
+    raise RuntimeError(
+        f"{label} semantic payload did not include marker before timeout: "
+        f"{json.dumps(last_response or {}, sort_keys=True)}"
+    )
 
 
 def run_acceptance(args: argparse.Namespace) -> dict:
@@ -782,13 +831,17 @@ def run_acceptance(args: argparse.Namespace) -> dict:
             "scope": "screen",
             "mode": "snapshot",
         }
-        tcp_snapshot = send_single_request_tcp(
-            gateway_host,
-            gateway_port,
-            tcp_snapshot_request,
+        tcp_snapshot = wait_for_snapshot_v2(
+            label="gateway TCP terminal.snapshot.v2",
+            marker=tcp_snapshot_seed["marker"],
             timeout=args.request_timeout,
+            fetch=lambda remaining: send_single_request_tcp(
+                gateway_host,
+                gateway_port,
+                tcp_snapshot_request,
+                timeout=min(args.request_timeout, remaining),
+            ),
         )
-        assert_snapshot_v2(tcp_snapshot, tcp_snapshot_seed["marker"], label="gateway TCP terminal.snapshot.v2")
         result["gateway_tcp_snapshot_v2"] = tcp_snapshot
 
         tcp_semantic_seed = issue_run_command(
@@ -807,13 +860,17 @@ def run_acceptance(args: argparse.Namespace) -> dict:
             "scope": "screen",
             "mode": "snapshot",
         }
-        tcp_semantic = send_single_request_tcp(
-            gateway_host,
-            gateway_port,
-            tcp_semantic_request,
+        tcp_semantic = wait_for_semantic_v2(
+            label="gateway TCP terminal.semantic.v2",
+            marker=tcp_semantic_seed["marker"],
             timeout=args.request_timeout,
+            fetch=lambda remaining: send_single_request_tcp(
+                gateway_host,
+                gateway_port,
+                tcp_semantic_request,
+                timeout=min(args.request_timeout, remaining),
+            ),
         )
-        assert_semantic_v2(tcp_semantic, tcp_semantic_seed["marker"], label="gateway TCP terminal.semantic.v2")
         result["gateway_tcp_semantic_v2"] = tcp_semantic
 
         tcp_seed = issue_run_command(
@@ -879,21 +936,22 @@ def run_acceptance(args: argparse.Namespace) -> dict:
             timeout_ms=args.startup_timeout_ms,
         )
         result["gateway_websocket_snapshot_seed"] = ws_snapshot_seed
-        ws_snapshot.send_text(
-            {
-                "request_id": f"req-{uuid.uuid4().hex[:12]}",
-                "command": "terminal.snapshot.v2",
-                "auth_token": auth_token,
-                "terminal_id": terminal_id,
-                "scope": "screen",
-                "mode": "snapshot",
-            }
-        )
-        ws_snapshot_response = ws_snapshot.read_json(timeout=args.request_timeout)
-        assert_snapshot_v2(
-            ws_snapshot_response,
-            ws_snapshot_seed["marker"],
+        ws_snapshot_response = wait_for_snapshot_v2(
             label="gateway WebSocket terminal.snapshot.v2",
+            marker=ws_snapshot_seed["marker"],
+            timeout=args.request_timeout,
+            fetch=lambda remaining: websocket_request(
+                ws_snapshot,
+                {
+                    "request_id": f"req-{uuid.uuid4().hex[:12]}",
+                    "command": "terminal.snapshot.v2",
+                    "auth_token": auth_token,
+                    "terminal_id": terminal_id,
+                    "scope": "screen",
+                    "mode": "snapshot",
+                },
+                timeout=remaining,
+            ),
         )
         result["gateway_websocket_snapshot_v2"] = ws_snapshot_response
 
@@ -905,21 +963,22 @@ def run_acceptance(args: argparse.Namespace) -> dict:
             timeout_ms=args.startup_timeout_ms,
         )
         result["gateway_websocket_semantic_seed"] = ws_semantic_seed
-        ws_snapshot.send_text(
-            {
-                "request_id": f"req-{uuid.uuid4().hex[:12]}",
-                "command": "terminal.semantic.v2",
-                "auth_token": auth_token,
-                "terminal_id": terminal_id,
-                "scope": "screen",
-                "mode": "snapshot",
-            }
-        )
-        ws_semantic_response = ws_snapshot.read_json(timeout=args.request_timeout)
-        assert_semantic_v2(
-            ws_semantic_response,
-            ws_semantic_seed["marker"],
+        ws_semantic_response = wait_for_semantic_v2(
             label="gateway WebSocket terminal.semantic.v2",
+            marker=ws_semantic_seed["marker"],
+            timeout=args.request_timeout,
+            fetch=lambda remaining: websocket_request(
+                ws_snapshot,
+                {
+                    "request_id": f"req-{uuid.uuid4().hex[:12]}",
+                    "command": "terminal.semantic.v2",
+                    "auth_token": auth_token,
+                    "terminal_id": terminal_id,
+                    "scope": "screen",
+                    "mode": "snapshot",
+                },
+                timeout=remaining,
+            ),
         )
         result["gateway_websocket_semantic_v2"] = ws_semantic_response
 
