@@ -121,6 +121,16 @@ function readStringArray(object: Record<string, unknown>, key: string): string[]
     return value.filter((item): item is string => typeof item === 'string');
 }
 
+function readObjectArray(object: Record<string, unknown>, key: string): Record<string, unknown>[] {
+    const value = object[key];
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    return value.filter((item): item is Record<string, unknown> => (
+        Boolean(item) && typeof item === 'object' && !Array.isArray(item)
+    ));
+}
+
 function readChangedRows(object: Record<string, unknown>, key: string): TerminalChangedRow[] {
     const value = object[key];
     if (!Array.isArray(value)) {
@@ -1515,136 +1525,165 @@ export function subscribeToGatewayEvents(input: GatewayConnection & {
     if (!authToken) {
         throw new GatewayProtocolError('Auth token is empty');
     }
-
-    const openVariant = (connection: GatewayConnection) => {
-        const socket = new WebSocket(resolveGatewaySocketUrl({
-            transportMode: connection.transportMode === 'relay' ? 'relay' : 'lan',
-            host: connection.host,
-            port: connection.port,
-            desktopId: connection.desktopId,
-            publicEndpoint: connection.publicEndpoint,
-            transportSharedSecret: connection.transportSharedSecret,
-        }));
-        return socket;
-    };
     let closedByClient = false;
     let settled = false;
-    let attemptedRelayFallback = false;
-    let socket = openVariant(input);
     let activeConnection: GatewayConnection = input;
+    let activeStreamId: string | null = null;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
+    const relayConnection = relayFallbackConnection(input);
+    const eventLimit = input.eventLimit ?? 128;
+    const normalizedSinceSequence = Math.max(0, Math.trunc(input.sinceSequence));
+
+    const clearPollTimer = () => {
+        if (!pollTimer) {
+            return;
+        }
+        clearTimeout(pollTimer);
+        pollTimer = null;
+    };
+
+    const normalizeGatewayError = (error: unknown, fallbackMessage: string): GatewayProtocolError => {
+        if (error instanceof GatewayProtocolError) {
+            return error;
+        }
+        if (error instanceof Error) {
+            return new GatewayProtocolError(error.message);
+        }
+        return new GatewayProtocolError(fallbackMessage);
+    };
 
     const finalizeWithError = (error: GatewayProtocolError) => {
         if (closedByClient || settled) {
             return;
         }
         settled = true;
+        clearPollTimer();
         input.onError?.(error);
     };
 
-    const bindSocket = (connection: GatewayConnection) => {
-        const boundSocket = socket;
+    const emitEnvelope = (envelope: GatewayEnvelope) => {
+        if (closedByClient || settled) {
+            return;
+        }
+        input.onEnvelope(envelope);
+    };
 
-        socket.onopen = () => {
-            if (boundSocket !== socket) {
-                return;
+    const sendSubscriptionRequest = async (request: GatewayRequest): Promise<GatewayEnvelope> => {
+        try {
+            return await sendRequestOnce(activeConnection, request);
+        } catch (error) {
+            if (activeConnection.transportMode === 'relay' || !relayConnection) {
+                throw error;
             }
-            const request: GatewayRequest = {
-                request_id: nextRequestId('subscribe'),
-                command: 'events.subscribe',
+            activeConnection = relayConnection;
+            return sendRequestOnce(activeConnection, request);
+        }
+    };
+
+    const schedulePoll = (delayMs: number) => {
+        if (closedByClient || settled || !activeStreamId) {
+            return;
+        }
+        clearPollTimer();
+        pollTimer = setTimeout(() => {
+            pollTimer = null;
+            void pollEvents();
+        }, delayMs);
+    };
+
+    const maybeEmitSyntheticResync = (
+        result: Record<string, unknown>,
+        events: GatewayEnvelope[],
+    ) => {
+        if (!readBoolean(result, 'requires_snapshot_resync')) {
+            return;
+        }
+        const alreadyMarkedGap = events.some((event) => event.requires_snapshot_resync || event.gap);
+        if (alreadyMarkedGap) {
+            return;
+        }
+        emitEnvelope({
+            event: 'overflow',
+            gap: true,
+            requires_snapshot_resync: true,
+            sequence: readNumber(result, 'last_sequence'),
+            payload: {
+                dropped_events: readNumber(result, 'dropped_events'),
+            },
+        });
+    };
+
+    const pollEvents = async () => {
+        if (closedByClient || settled || !activeStreamId) {
+            return;
+        }
+
+        try {
+            const envelope = await sendSubscriptionRequest({
+                request_id: nextRequestId('events-stream-drain'),
+                command: 'events.stream.drain',
                 auth_token: authToken,
-                since_sequence: Math.max(0, Math.trunc(input.sinceSequence)),
-                event_limit: input.eventLimit ?? 128,
-            };
-            const routedRequest = applyDesktopRouting(request, connection);
-            if (usesEncryptedGatewayTransport(connection)) {
-                void encodeEncryptedGatewayRequest({
-                    request: routedRequest as unknown as Record<string, unknown>,
-                    authToken,
-                    transportSharedSecret: connection.transportSharedSecret!.trim(),
-                }).then((encryptedRequest) => {
-                    socket.send(JSON.stringify(encryptedRequest));
-                }).catch((error) => {
-                    finalizeWithError(error instanceof Error ? error : new GatewayProtocolError('Failed to encrypt gateway subscription request'));
-                    socket.close();
-                });
-                return;
-            }
-            socket.send(JSON.stringify(routedRequest));
-        };
-
-        socket.onmessage = async (event) => {
-            if (boundSocket !== socket) {
-                return;
-            }
-            try {
-                const rawText = typeof event.data === 'string' ? event.data : String(event.data ?? '');
-                const envelope = await parseReceivedEnvelope(rawText, connection);
-                if (envelope.status === 'error') {
-                    const error = new GatewayProtocolError(
-                        envelope.error_message ?? envelope.error_code ?? 'Gateway rejected subscription',
-                        envelope.error_code,
-                    );
-                    finalizeWithError(error);
-                    socket.close();
-                    return;
-                }
-                input.onEnvelope(envelope);
-            } catch (error) {
-                finalizeWithError(
-                    error instanceof GatewayProtocolError
-                        ? error
-                        : new GatewayProtocolError(
-                            error instanceof Error ? error.message : 'Invalid subscription payload',
-                        ),
-                );
-                socket.close();
-            }
-        };
-
-        socket.onerror = () => {
-            if (boundSocket !== socket) {
-                return;
-            }
-            const relayConnection = !attemptedRelayFallback ? relayFallbackConnection(activeConnection) : null;
-            if (relayConnection) {
-                attemptedRelayFallback = true;
-                activeConnection = relayConnection;
-                socket = openVariant(relayConnection);
-                bindSocket(relayConnection);
-                return;
-            }
-            finalizeWithError(new GatewayProtocolError('Gateway subscription socket failed'));
-        };
-
-        socket.onclose = (event) => {
-            if (boundSocket !== socket) {
-                return;
-            }
+                stream_id: activeStreamId,
+            });
             if (closedByClient || settled) {
                 return;
             }
-            if (event.code === 1000) {
-                return;
+
+            emitEnvelope(envelope);
+            const result = ensureObject(envelope.result, 'event stream drain result');
+            const events = readObjectArray(result, 'events').map((event) => event as GatewayEnvelope);
+            for (const event of events) {
+                emitEnvelope(event);
             }
-            const relayConnection = !attemptedRelayFallback ? relayFallbackConnection(activeConnection) : null;
-            if (relayConnection) {
-                attemptedRelayFallback = true;
-                activeConnection = relayConnection;
-                socket = openVariant(relayConnection);
-                bindSocket(relayConnection);
-                return;
-            }
-            finalizeWithError(new GatewayProtocolError(
-                event.reason || `Gateway subscription closed unexpectedly (code ${event.code})`,
-            ));
-        };
+            maybeEmitSyntheticResync(result, events);
+
+            const drainedEventCount = readNumber(result, 'drained_event_count');
+            schedulePoll(drainedEventCount > 0 ? 0 : 150);
+        } catch (error) {
+            finalizeWithError(normalizeGatewayError(error, 'Failed to drain gateway event stream'));
+        }
     };
 
-    bindSocket(activeConnection);
+    void (async () => {
+        try {
+            const subscribeEnvelope = await sendSubscriptionRequest({
+                request_id: nextRequestId('events-stream-subscribe'),
+                command: 'events.stream.subscribe',
+                auth_token: authToken,
+                since_sequence: normalizedSinceSequence,
+                event_limit: eventLimit,
+            });
+            if (closedByClient || settled) {
+                return;
+            }
+
+            emitEnvelope(subscribeEnvelope);
+            const result = ensureObject(subscribeEnvelope.result, 'event stream subscribe result');
+            const streamId = readString(result, 'stream_id');
+            if (!streamId) {
+                throw new GatewayProtocolError('Gateway event stream subscribe response is missing stream_id');
+            }
+            activeStreamId = streamId;
+            schedulePoll(0);
+        } catch (error) {
+            finalizeWithError(normalizeGatewayError(error, 'Failed to subscribe to gateway event stream'));
+        }
+    })();
 
     return () => {
         closedByClient = true;
         settled = true;
-        socket.close();
+        clearPollTimer();
+        const streamId = activeStreamId;
+        activeStreamId = null;
+        if (!streamId) {
+            return;
+        }
+        void sendSubscriptionRequest({
+            request_id: nextRequestId('events-stream-unsubscribe'),
+            command: 'events.stream.unsubscribe',
+            auth_token: authToken,
+            stream_id: streamId,
+        }).catch(() => undefined);
     };
 }

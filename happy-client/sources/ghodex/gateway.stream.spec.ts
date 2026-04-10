@@ -5,7 +5,7 @@ vi.mock('@/encryption/aes', () => ({
     decryptAESGCM: async (data: Uint8Array) => data,
 }));
 
-import { ackTerminalStream, createTerminalMutationChannel, subscribeToTerminalStream } from './gateway';
+import { ackTerminalStream, createTerminalMutationChannel, subscribeToGatewayEvents, subscribeToTerminalStream } from './gateway';
 import { decodeEncryptedGatewayEnvelope, encodeEncryptedGatewayRequest } from './transport';
 
 type MessageHandler = ((event: { data?: string }) => void) | null;
@@ -21,6 +21,7 @@ class MockWebSocket {
     static closeBeforeReplyCommands = new Set<string>();
     static failOnOpen = false;
     static holdOpen = false;
+    static eventStreamDrainCount = 0;
 
     onopen: EventHandler = null;
     onmessage: MessageHandler = null;
@@ -178,6 +179,75 @@ class MockWebSocket {
                 return;
             }
 
+            if (parsed.command === 'events.stream.subscribe') {
+                this.onmessage?.({
+                    data: JSON.stringify({
+                        request_id: parsed.request_id,
+                        status: 'ok',
+                        result: {
+                            protocol_version: '1.0',
+                            subscribed: true,
+                            stream_id: 'evt_strm_1',
+                            last_sequence: parsed.since_sequence ?? 0,
+                            since_sequence: parsed.since_sequence ?? 0,
+                            event_limit: parsed.event_limit ?? 128,
+                            replayed_event_count: 0,
+                            live_stream_open: true,
+                        },
+                    }),
+                });
+                return;
+            }
+
+            if (parsed.command === 'events.stream.drain') {
+                MockWebSocket.eventStreamDrainCount += 1;
+                const firstDrain = MockWebSocket.eventStreamDrainCount === 1;
+                this.onmessage?.({
+                    data: JSON.stringify({
+                        request_id: parsed.request_id,
+                        status: 'ok',
+                        result: {
+                            protocol_version: '1.0',
+                            stream_id: parsed.stream_id,
+                            last_sequence: firstDrain ? 105 : 105,
+                            event_limit: 128,
+                            drained_event_count: firstDrain ? 1 : 0,
+                            requires_snapshot_resync: false,
+                            dropped_events: 0,
+                            live_stream_open: true,
+                            events: firstDrain ? [{
+                                event: 'terminal.input.sent',
+                                sequence: 105,
+                                resource: {
+                                    type: 'terminal',
+                                    id: 'terminal-1',
+                                    generation: 7,
+                                },
+                                payload: {
+                                    write_id: 'wr_123',
+                                },
+                            }] : [],
+                        },
+                    }),
+                });
+                return;
+            }
+
+            if (parsed.command === 'events.stream.unsubscribe') {
+                this.onmessage?.({
+                    data: JSON.stringify({
+                        request_id: parsed.request_id,
+                        status: 'ok',
+                        result: {
+                            protocol_version: '1.0',
+                            stream_id: parsed.stream_id,
+                            unsubscribed: true,
+                        },
+                    }),
+                });
+                return;
+            }
+
             if (parsed.command === 'send-text' || parsed.command === 'send-key') {
                 const missingRequestID = MockWebSocket.missingRequestIDCommands.has(command);
                 const requestID = MockWebSocket.mismatchRequestIDCommands.has(command)
@@ -223,6 +293,7 @@ describe('gateway terminal stream APIs', () => {
         MockWebSocket.closeBeforeReplyCommands.clear();
         MockWebSocket.failOnOpen = false;
         MockWebSocket.holdOpen = false;
+        MockWebSocket.eventStreamDrainCount = 0;
         vi.useRealTimers();
         globalThis.WebSocket = originalWebSocket;
     });
@@ -311,6 +382,61 @@ describe('gateway terminal stream APIs', () => {
             stream_id: 'strm_abc',
             ack_bytes: 512,
         });
+    });
+
+    it('uses buffered events.stream flow for gateway events', async () => {
+        globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+
+        const receivedEnvelopes: Array<Record<string, unknown>> = [];
+        const unsubscribe = subscribeToGatewayEvents({
+            host: '127.0.0.1',
+            port: 29527,
+            authToken: 'TOKEN-123',
+            sinceSequence: 99,
+            eventLimit: 64,
+            onEnvelope: (envelope) => {
+                receivedEnvelopes.push(envelope as unknown as Record<string, unknown>);
+            },
+        });
+
+        await vi.waitFor(() => {
+            expect(MockWebSocket.sentPayloads.map((payload) => payload.command)).toContain('events.stream.drain');
+            expect(receivedEnvelopes).toEqual(expect.arrayContaining([
+                expect.objectContaining({
+                    request_id: expect.any(String),
+                    status: 'ok',
+                    result: expect.objectContaining({
+                        stream_id: 'evt_strm_1',
+                    }),
+                }),
+                expect.objectContaining({
+                    event: 'terminal.input.sent',
+                    sequence: 105,
+                    resource: expect.objectContaining({
+                        type: 'terminal',
+                        id: 'terminal-1',
+                    }),
+                }),
+            ]));
+        });
+
+        unsubscribe();
+
+        await vi.waitFor(() => {
+            expect(MockWebSocket.sentPayloads.map((payload) => payload.command)).toContain('events.stream.unsubscribe');
+        });
+
+        expect(MockWebSocket.sentPayloads[0]).toMatchObject({
+            command: 'events.stream.subscribe',
+            auth_token: 'TOKEN-123',
+            since_sequence: 99,
+            event_limit: 64,
+        });
+        expect(MockWebSocket.sentPayloads.map((payload) => payload.command)).toEqual(expect.arrayContaining([
+            'events.stream.subscribe',
+            'events.stream.drain',
+            'events.stream.unsubscribe',
+        ]));
     });
 
     it('reuses one websocket connection for sequential terminal mutations', async () => {
