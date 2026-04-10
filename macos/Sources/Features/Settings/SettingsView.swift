@@ -130,7 +130,7 @@ struct SettingsView: View {
         .onReceive(appDelegate.$appIconSettings) { _ in
             syncIconForm(clearFeedback: false)
         }
-        .onChange(of: selectedTabBinding.wrappedValue) { _, newValue in
+        .onChange(of: selectedTabBinding.wrappedValue) { newValue in
             onSelectedTabChange?(newValue)
         }
     }

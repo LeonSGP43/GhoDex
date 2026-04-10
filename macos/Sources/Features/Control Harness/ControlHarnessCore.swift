@@ -3739,7 +3739,7 @@ final class ControlHarnessCore {
             nextValues = settingsDraftValues ?? current
         }
         let entries = changedSettingKeys(from: current, to: nextValues).map { key in
-            .init(
+            ControlSettingsDiffEntry(
                 key: key,
                 currentValue: current[key] ?? "",
                 nextValue: nextValues[key] ?? ""

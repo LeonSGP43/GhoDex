@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(macos): restore ReleaseLocal control-harness build compatibility
+
+- What changed: Replaced an ambiguous `.init` call in `ControlHarnessCore.swift` with explicit `ControlSettingsDiffEntry(...)` construction so ReleaseLocal compilation no longer trips over contextual type inference, and downgraded the Settings tab-change observer in `SettingsView.swift` to the deployment-target-compatible `onChange(of:)` form.
+- Why: The MVP verification loop was blocked because the current app target no longer rebuilt successfully for `ReleaseLocal`, which meant live control-harness acceptance could not run against a fresh binary.
+- Impact: `ReleaseLocal` builds succeed again on the current macOS deployment target, so the control-harness verification lane can execute against the actual shipped app bundle instead of a stale artifact.
+- Verification: `nu macos/build.nu --configuration ReleaseLocal --action build`
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `macos/Sources/Features/Settings/SettingsView.swift`, `CHANGELOG.md`
+- Decision trail: Keep the fix narrowly scoped to the two compile blockers so the build lane is restored without mixing in acceptance-script or documentation work.
+
 ### feat(control-harness): normalize namespaced commands and route browser operations
 
 - What changed: Added `ControlHarnessCommandRouting` helpers so `ControlHarnessRequest` now normalizes namespace aliases, merges `target`/`options` metadata, and exposes browser tab/context/page identifiers, then unified the app delegate, CLI, gateway, and core plumbing to always operate on the normalized command name. Introduced `ControlHarnessBrowserCommandAdapter` that maps `browser.*` requests (with raw aliases for both canonical and legacy verbs) into `ScriptBrowserTab` external commands plus dedicated mutation/observe categorization, and added the buffered `events.stream.subscribe` / `events.stream.drain` / `events.stream.unsubscribe` handle flow plus compatibility commands such as `system.target.resolve` and `system.capabilities.get`. Added regression coverage in the existing `ControlHarnessTests` fixture plus the new `ControlHarnessCommandRoutingTests` suite to prove alias normalization, browser command mapping, buffered event-stream lifecycle, and gateway approval policies behave consistently. Landed `control-harness-unification-plan.md` to lock the protocol-layer migration and acceptance model in one place.
