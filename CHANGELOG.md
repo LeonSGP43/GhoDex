@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### docs(control-harness): publish protocol reference and close in-repo migration loop
+
+- What changed: Added `docs/control-harness-protocol.md` as the in-repo operator-facing command reference for the unified `ControlHarness` protocol, linked it from `README.md`, and updated `control-harness-unification-plan.md` so its status, acceptance-gate count, and evidence snapshot match the actual repository state.
+- Why: The code and acceptance surface had already converged on the unified protocol, but the repo still lacked one formal reference document and the plan text was ahead of the evidence actually checked into the repo.
+- Impact: Operators and future client authors now have one explicit in-repo contract reference, and the plan is truthful about what is complete now versus what remains as out-of-repo follow-up.
+- Verification: `zig build test -Dtest-filter=control`; `nu macos/build.nu --configuration ReleaseLocal --action build`; `python3 scripts/control_harness_terminal_v2_live_acceptance.py --app macos/build/ReleaseLocal/GhoDex.app --runtime-root macos/build/cef-runtime/current --output /tmp/ghx-control-harness-terminal-v2-live-20260410.json`; `python3 scripts/control_harness_gateway_transport_live_acceptance.py --app macos/build/ReleaseLocal/GhoDex.app --runtime-root macos/build/cef-runtime/current --output /tmp/ghx-control-harness-gateway-live-20260410.json`; `python3 scripts/browser_last_window_close_acceptance.py --app macos/build/ReleaseLocal/GhoDex.app --runtime-root macos/build/cef-runtime/current --output /tmp/ghx-browser-last-window-close-20260410.json`
+- Files: `docs/control-harness-protocol.md`, `README.md`, `control-harness-unification-plan.md`, `CHANGELOG.md`
+- Decision trail: Keep the final closeout documentation-first: reflect the already-shipped protocol authority and acceptance reality in one reference doc and one updated plan instead of scattering the public contract across source comments and chat history.
+
 ### test(control-harness): align repo acceptance harnesses with namespaced commands
 
 - What changed: Migrated the repo-owned live acceptance scripts to the canonical namespaced control surface where semantics are equivalent, including `state.snapshot`, `terminal.read`, and `terminal.command.run`. Also normalized explicit `--app`, `--runtime-root`, and `--output` paths in `browser_last_window_close_acceptance.py` so the harness remains runnable even after it changes its launch working directory.

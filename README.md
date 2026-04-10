@@ -137,6 +137,7 @@ xcodebuild \
 
 - 中文操作文档：[`docs/OPERATIONS.zh-CN.md`](./docs/OPERATIONS.zh-CN.md)
 - English operations doc: [`docs/OPERATIONS.en.md`](./docs/OPERATIONS.en.md)
+- Control Harness 协议参考：[`docs/control-harness-protocol.md`](./docs/control-harness-protocol.md)
 
 ## 推荐配置
 

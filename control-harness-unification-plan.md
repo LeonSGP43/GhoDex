@@ -1,7 +1,7 @@
 # Control Harness Unification Plan
 
 ## Status
-- State: MVP command-surface, verification baseline, and in-repo client migration completed; remaining follow-up is out-of-repo client migration plus legacy stream deprecation planning
+- State: in-repo protocol surface, verification baseline, protocol reference docs, and in-repo client migration completed; remaining follow-up is out-of-repo client migration plus optional legacy stream deprecation planning
 - Owner surface: `ControlHarness`
 - Date locked: 2026-04-09
 - Scope: unify browser, runtime, terminal, tab, and queue/task control under one authoritative protocol layer without collapsing internal modules into one file.
@@ -14,9 +14,11 @@
 - Thin system compatibility commands `system.target.resolve` and `system.capabilities.get` are implemented so callers can inspect the resolved instance and public capability set through the same surface.
 - CLI coverage is in place for the namespaced event-stream handle flow: `events.stream.subscribe`, `events.stream.drain`, and `events.stream.unsubscribe` now round-trip as one-shot commands while legacy `events.subscribe` keeps the long-lived socket stream semantics.
 - The Android gateway client and the in-repo `happy-client` gateway adapter now consume the buffered event-stream handle flow directly: subscribe returns `stream_id`, the client polls via `events.stream.drain`, and close performs best-effort `events.stream.unsubscribe`.
+- The in-repo acceptance clients now use namespaced commands for the stable control surface where semantics are equivalent, while intentionally keeping `events.subscribe` on the legacy long-lived stream path.
 - `handshake` and `system.capabilities.get` now publish structured compatibility metadata so clients can discover the single protocol authority, the remaining legacy command surface, and the preferred migration path without relying on out-of-band docs.
-- The higher-level verification lane is now closed for the MVP surface: build, focused `ControlHarnessTests`, runtime socket coverage, the expanded desktop control contract tests, and the six documented live acceptance gates are green as of 2026-04-10.
-- The next work is not to broaden the command table again; it is out-of-repo client migration, legacy stream deprecation planning, and post-MVP cleanup under the same authority model.
+- The higher-level verification lane is now closed for the MVP surface: build, focused `ControlHarnessTests`, runtime socket coverage, the expanded desktop control contract tests, and the seven documented live acceptance gates are green as of 2026-04-10.
+- A dedicated in-repo protocol reference now exists for operators and future client implementers, so the public contract is no longer described only by source and plan notes.
+- The next work is not to broaden the command table again; it is out-of-repo client migration, optional legacy stream deprecation planning, and post-MVP cleanup under the same authority model.
 
 ### Focused Follow-up Landed
 - `events.stream.subscribe`, `events.stream.drain`, and `events.stream.unsubscribe` now share one explicit public handle shape: the subscribe acknowledgment returns `stream_id`, and follow-up drain/unsubscribe requests resolve the same buffered event-stream registry inside `ControlHarnessCore`.
@@ -35,6 +37,7 @@
   - `todo-snapshot` -> `todo.snapshot`
 - Deprecation policy means legacy aliases stay accepted until the replacement path is behaviorally equivalent for real clients and all in-repo callers have moved.
 - `events.subscribe` is explicitly not removed in this phase because it still represents the current long-lived stream contract, while `events.stream.subscribe` / `drain` / `unsubscribe` are handle-based one-shot commands with different client semantics.
+- In-repo migration is considered complete once command-line clients, acceptance harnesses, and repo-owned adapters use namespaced commands everywhere semantics are equivalent. That condition is now met.
 - The protocol now self-describes that boundary through `result.compatibility`: `authority=control_harness`, `legacy_commands=["events.subscribe"]`, and a migration record whose `replacement_commands` are `events.stream.subscribe`, `events.stream.drain`, and `events.stream.unsubscribe`.
 - Browser-specific IPC and AppleScript documents remain useful as adapter references, but they are compatibility transport docs, not a second public control authority. The official external authority remains `ControlHarness` and its namespaced `browser.*` command surface.
 
@@ -300,6 +303,10 @@ Implementation is accepted only when all of the following are true.
 - expanded capabilities advertise `app/window/panel/settings/diagnostics`
 - settings and diagnostics commands return structured protocol payloads
 
+### Operator / protocol docs
+- `docs/control-harness-protocol.md` is the operator-facing protocol reference for the unified public surface
+- `README.md` links to the protocol reference directly from the operations-docs section
+
 ### Focused control harness tests
 - `ControlHarnessTests/runtimeHandshakeAdvertisesCommandsOverControlHarnessSocket()`
 - `ControlHarnessTests/runtimeSessionLifecycleWorksOverControlHarnessSocket()`
@@ -308,6 +315,7 @@ Implementation is accepted only when all of the following are true.
 ### Live/acceptance gates to keep green
 - `scripts/control_harness_gateway_transport_live_acceptance.py`
 - `scripts/control_harness_terminal_v2_live_acceptance.py`
+- `scripts/browser_last_window_close_acceptance.py`
 - `scripts/browser_context_protocol_acceptance.py`
 - `scripts/browser_runtime_prompt_resolution_acceptance.py`
 - `scripts/browser_cookie_persistence_acceptance.py`
@@ -362,12 +370,14 @@ Status on 2026-04-10: all five gates are satisfied for the MVP lane.
 
 ## 2026-04-10 Evidence Snapshot
 - `nu macos/build.nu --scheme GhoDex --configuration Debug --action build`
+- `nu macos/build.nu --configuration ReleaseLocal --action build`
 - `git diff --check -- 'macos/Sources/Features/Control Harness/ControlHarnessSupport.swift'`
 - `xcodebuild build-for-testing -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' -only-testing:GhosttyTests/ControlHarnessTests/terminalStreamBackpressurePausesUntilAckResumesFlow CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=''`
 - `xcodebuild test-without-building -xctestrun /Users/leongong/Library/Developer/Xcode/DerivedData/GhoDex-agcunbrxnmmsbjbkneezzlhlgjed/Build/Products/GhoDex_GhoDex_macosx26.2-arm64.xctestrun -destination 'platform=macOS' -only-testing:GhosttyTests/ControlHarnessTests CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=''`
 - `/tmp/ghdx-controlharness-tests-after-fix.log` records `terminalStreamBackpressurePausesUntilAckResumesFlow()` passed after `0.758 seconds`, `Suite ControlHarnessTests passed after 2.390 seconds`, and `** TEST EXECUTE SUCCEEDED **`
-- `python3 scripts/control_harness_gateway_transport_live_acceptance.py` -> `/tmp/ghx-control-harness-gateway-transport-live-acceptance.json` (`status: passed`)
-- `python3 scripts/control_harness_terminal_v2_live_acceptance.py` -> `/tmp/ghx-control-harness-terminal-v2-live-acceptance.json` (`status: passed`)
+- `python3 scripts/control_harness_gateway_transport_live_acceptance.py --app macos/build/ReleaseLocal/GhoDex.app --runtime-root macos/build/cef-runtime/current --output /tmp/ghx-control-harness-gateway-live-20260410.json` (`status: passed`)
+- `python3 scripts/control_harness_terminal_v2_live_acceptance.py --app macos/build/ReleaseLocal/GhoDex.app --runtime-root macos/build/cef-runtime/current --output /tmp/ghx-control-harness-terminal-v2-live-20260410.json` (`status: passed`)
+- `python3 scripts/browser_last_window_close_acceptance.py --app macos/build/ReleaseLocal/GhoDex.app --runtime-root macos/build/cef-runtime/current --output /tmp/ghx-browser-last-window-close-20260410.json` (`status: passed`; closing the last Browser context after the last terminal window leaves the app and Browser IPC alive)
 - `python3 scripts/browser_context_protocol_acceptance.py` -> `/tmp/ghx-browser-context-protocol-acceptance.json` (`status: passed`)
 - `python3 scripts/browser_runtime_prompt_resolution_acceptance.py` -> `/tmp/ghx-browser-runtime-prompt-resolution-acceptance.json` (`status: passed`; permission prompt resolution and auth prompt routing completed through the browser/runtime prompt surface)
 - `python3 scripts/browser_cookie_persistence_acceptance.py` -> `/tmp/ghodex-browser-cookie-persistence-acceptance.json` (`acceptance.all_modes_persisted: true`)
