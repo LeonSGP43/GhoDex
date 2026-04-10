@@ -16,7 +16,7 @@ Build a high-performance terminal synchronization and extraction architecture th
   - `terminal.stream.ack`
   - `terminal.snapshot.v2`
   - `terminal.semantic.v2`
-- Keep compatibility with existing `read-terminal` and `events.subscribe`.
+- Keep compatibility with existing `read-terminal` and the legacy `events.subscribe` transport while moving new clients to buffered `events.stream.*`.
 - Add request fields required for V2 control:
   - `stream_id`
   - `ack_bytes`
@@ -80,11 +80,11 @@ Build a high-performance terminal synchronization and extraction architecture th
 ### SPEC
 - Update gateway auth scope and category routing for V2 commands:
   - observe-scope commands: `terminal.stream.open`, `terminal.stream.ack`, `terminal.snapshot.v2`, `terminal.semantic.v2`
-- Update app-level subscription dispatch so subscription commands are routed by command kind, not hard-coded to `events.subscribe`.
+- Update app-level subscription dispatch so structure subscriptions can route to buffered `events.stream.*` and content streams can route to `terminal.stream.open`, instead of hard-coding `events.subscribe`.
 
 ### Acceptance Strategy
 - Auth denies/permits V2 commands with expected scope behavior.
-- Subscription flow remains stable for both `events.subscribe` and `terminal.stream.open`.
+- Subscription flow remains stable for buffered `events.stream.*`, `terminal.stream.open`, and the legacy `events.subscribe` compatibility path.
 
 ### Tests
 - Gateway unit tests for scope checks and category mapping.
@@ -210,7 +210,8 @@ Build a high-performance terminal synchronization and extraction architecture th
   - send `terminal.stream.ack` with bounded batching,
   - recover from transient ack/session-limit errors with bounded retry.
 - Compatibility and safety:
-  - keep `events.subscribe` for structure-level updates (tab/terminal metadata changes),
+  - use buffered `events.stream.subscribe` / `events.stream.drain` / `events.stream.unsubscribe` for structure-level updates (tab/terminal metadata changes),
+  - keep `events.subscribe` only as a compatibility transport for older clients,
   - if stream channel is unavailable or chunk lineage cannot be applied safely, fallback to snapshot refresh path.
 
 ### Acceptance Strategy

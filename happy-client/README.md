@@ -27,7 +27,7 @@ Replace or heavily adapt these areas first:
 
 2. `sources/sync/`
    - remove Happy server session/machine/artifact sync assumptions
-   - replace with `snapshot`, `events.subscribe`, `read-terminal`, `send-text`, `run-command`
+   - replace with `snapshot`, buffered `events.stream.subscribe` / `events.stream.drain` / `events.stream.unsubscribe`, `read-terminal`, `send-text`, `run-command`
 
 3. `sources/realtime/`
    - point live updates at the GhoDex gateway transport contract

@@ -12,7 +12,7 @@
 - Browser MVP commands route through the `ControlHarness` adapter layer instead of requiring a second public control authority.
 - Thin system compatibility commands `system.target.resolve` and `system.capabilities.get` are implemented so callers can inspect the resolved instance and public capability set through the same surface.
 - CLI coverage is in place for the namespaced event-stream handle flow: `events.stream.subscribe`, `events.stream.drain`, and `events.stream.unsubscribe` now round-trip as one-shot commands while legacy `events.subscribe` keeps the long-lived socket stream semantics.
-- The Android gateway client now consumes the buffered event-stream handle flow directly: subscribe returns `stream_id`, the client polls via `events.stream.drain`, and close performs best-effort `events.stream.unsubscribe`.
+- The Android gateway client and the in-repo `happy-client` gateway adapter now consume the buffered event-stream handle flow directly: subscribe returns `stream_id`, the client polls via `events.stream.drain`, and close performs best-effort `events.stream.unsubscribe`.
 - `handshake` and `system.capabilities.get` now publish structured compatibility metadata so clients can discover the single protocol authority, the remaining legacy command surface, and the preferred migration path without relying on out-of-band docs.
 - The higher-level verification lane is now closed for the MVP surface: build, focused `ControlHarnessTests`, runtime socket coverage, and the six documented live acceptance gates are green as of 2026-04-10.
 - The next work is not to broaden the command table again; it is out-of-repo client migration, legacy stream deprecation planning, and post-MVP cleanup under the same authority model.
@@ -278,7 +278,7 @@ Implementation is accepted only when all of the following are true.
 - migrate docs and clients toward namespaced commands
 - keep legacy aliases until explicit deprecation window is announced
 - eventually retire direct public Browser socket guidance in favor of `ControlHarness`
-- Status on 2026-04-10: in-repo Android callers and protocol docs are fully migrated onto the authority model; the only remaining follow-up is legacy compatibility cleanup for out-of-repo clients and any eventual `events.subscribe` retirement window
+- Status on 2026-04-10: in-repo Android callers, the `happy-client` gateway adapter, and protocol docs are fully migrated onto the authority model; the remaining follow-up is legacy compatibility cleanup for out-of-repo clients and any eventual `events.subscribe` retirement window
 
 ## Completion Gates
 Implementation is complete only if all gates pass.
