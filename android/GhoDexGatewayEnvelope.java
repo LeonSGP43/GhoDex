@@ -79,6 +79,44 @@ public final class GhoDexGatewayEnvelope {
             .build();
     }
 
+    @SuppressWarnings("unchecked")
+    public static GhoDexGatewayEnvelope fromEventMap(Map<String, Object> eventObject) {
+        Builder builder = builder()
+            .requestId(stringValue(eventObject.get("request_id")))
+            .event(stringValue(eventObject.get("event")));
+
+        Number sequence = numberValue(eventObject.get("sequence"));
+        if (sequence != null) {
+            builder.sequence(sequence.longValue());
+        }
+
+        Map<String, Object> resource = objectValue(eventObject.get("resource"));
+        if (resource != null) {
+            builder.resource(
+                stringValue(resource.get("type")),
+                stringValue(resource.get("id")),
+                intValue(resource.get("generation"))
+            );
+        }
+
+        Boolean gap = booleanValue(eventObject.get("gap"));
+        if (gap != null) {
+            builder.gap(gap);
+        }
+
+        Boolean requiresSnapshotResync = booleanValue(eventObject.get("requires_snapshot_resync"));
+        if (requiresSnapshotResync != null) {
+            builder.requiresSnapshotResync(requiresSnapshotResync);
+        }
+
+        Map<String, Object> payload = objectValue(eventObject.get("payload"));
+        if (payload != null) {
+            builder.payload(payload);
+        }
+
+        return builder.build();
+    }
+
     public static Builder builder() {
         return new Builder();
     }
@@ -176,6 +214,28 @@ public final class GhoDexGatewayEnvelope {
             return number.longValue();
         }
         return null;
+    }
+
+    private static String stringValue(Object value) {
+        return value instanceof String ? (String) value : null;
+    }
+
+    private static Number numberValue(Object value) {
+        return value instanceof Number ? (Number) value : null;
+    }
+
+    private static Boolean booleanValue(Object value) {
+        return value instanceof Boolean ? (Boolean) value : null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> objectValue(Object value) {
+        return value instanceof Map<?, ?> ? (Map<String, Object>) value : null;
+    }
+
+    private static int intValue(Object value) {
+        Number number = numberValue(value);
+        return number == null ? 0 : number.intValue();
     }
 
     private static Map<String, Object> immutableCopy(Map<String, Object> map) {

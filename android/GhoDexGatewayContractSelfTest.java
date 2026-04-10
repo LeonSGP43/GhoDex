@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 
 public final class GhoDexGatewayContractSelfTest {
@@ -93,7 +94,7 @@ public final class GhoDexGatewayContractSelfTest {
         assertContains(sendJson, "\"auth_token\":\"token-live\"");
     }
 
-    private static void subscriptionEventsUpdateTerminalIndexAndRequireResync() {
+    private static void subscriptionEventsUpdateTerminalIndexAndRequireResync() throws Exception {
         FakeTransport transport = new FakeTransport();
         GhoDexGatewaySessionStore sessionStore = new GhoDexGatewaySessionStore();
         sessionStore.activateToken("token-live", "tok-1", List.of("observe"));
@@ -105,7 +106,7 @@ public final class GhoDexGatewayContractSelfTest {
         );
 
         stateMachine.observeTerminal("terminal-1");
-        stateMachine.openSubscription("events.subscribe", 32);
+        stateMachine.openSubscription("req-subscribe", 32);
 
         transport.emitEvent(
             GhoDexGatewayEnvelope.event(
@@ -118,6 +119,7 @@ public final class GhoDexGatewayContractSelfTest {
             )
         );
 
+        waitUntil(() -> terminalIndexStore.getTerminal("terminal-1") != null, "terminal event should arrive");
         GhoDexTerminalIndexStore.TerminalEntry terminal = terminalIndexStore.getTerminal("terminal-1");
         assertEquals("terminal.input.sent", terminal.getLastEvent());
         assertEquals(3, terminal.getGeneration());
@@ -125,6 +127,7 @@ public final class GhoDexGatewayContractSelfTest {
         assertEquals(7L, sessionStore.resumeState().getSinceSequence());
 
         transport.emitEvent(GhoDexGatewayEnvelope.overflow(8, 5));
+        waitUntil(sessionStore::isSnapshotResyncRequired, "overflow should require resync");
         assertTrue(sessionStore.isSnapshotResyncRequired(), "overflow should require resync");
         assertTrue(terminalIndexStore.isSnapshotResyncRequired(), "index store should observe resync marker");
 
@@ -211,8 +214,10 @@ public final class GhoDexGatewayContractSelfTest {
     }
 
     private static final class FakeTransport implements GhoDexGatewayTransport {
-        private EventSink sink;
         private String lastRequestJson = "";
+        private String activeStreamId;
+        private final java.util.ArrayDeque<Map<String, Object>> pendingEvents = new java.util.ArrayDeque<>();
+        private final AtomicInteger streamCounter = new AtomicInteger();
 
         @Override
         public GhoDexGatewayEnvelope send(GhoDexGatewayRequest request) {
@@ -234,6 +239,39 @@ public final class GhoDexGatewayContractSelfTest {
                     request.requestId(),
                     Map.of("protocol_version", "1.0")
                 );
+                case "events.stream.subscribe" -> {
+                    activeStreamId = "stream-" + streamCounter.incrementAndGet();
+                    yield GhoDexGatewayEnvelope.ok(
+                        request.requestId(),
+                        Map.of(
+                            "stream_id", activeStreamId,
+                            "replayed_event_count", 0,
+                            "live_stream_open", Boolean.TRUE
+                        )
+                    );
+                }
+                case "events.stream.drain" -> {
+                    List<Map<String, Object>> events = pendingEvents.isEmpty()
+                        ? List.of()
+                        : List.copyOf(pendingEvents);
+                    pendingEvents.clear();
+                    yield GhoDexGatewayEnvelope.ok(
+                        request.requestId(),
+                        Map.of(
+                            "stream_id", activeStreamId == null ? "" : activeStreamId,
+                            "drained_event_count", events.size(),
+                            "events", events
+                        )
+                    );
+                }
+                case "events.stream.unsubscribe" -> {
+                    activeStreamId = null;
+                    pendingEvents.clear();
+                    yield GhoDexGatewayEnvelope.ok(
+                        request.requestId(),
+                        Map.of("unsubscribed", Boolean.TRUE)
+                    );
+                }
                 case "terminal.write", "terminal.command.run", "terminal.read" -> GhoDexGatewayEnvelope.ok(
                     request.requestId(),
                     Map.of("accepted", Boolean.TRUE)
@@ -242,28 +280,41 @@ public final class GhoDexGatewayContractSelfTest {
             };
         }
 
-        @Override
-        public Subscription openSubscription(GhoDexGatewayRequest request, EventSink sink) {
-            this.lastRequestJson = request.toJson();
-            this.sink = sink;
-            sink.onEnvelope(
-                GhoDexGatewayEnvelope.ok(
-                    request.requestId(),
-                    Map.of("live_stream_open", Boolean.TRUE, "replayed_event_count", 0)
-                )
-            );
-            return () -> this.sink = null;
-        }
-
         public String lastRequestJson() {
             return lastRequestJson;
         }
 
         public void emitEvent(GhoDexGatewayEnvelope envelope) {
-            if (sink == null) {
+            if (activeStreamId == null) {
                 throw new AssertionError("subscription not open");
             }
-            sink.onEnvelope(envelope);
+            pendingEvents.add(toEventMap(envelope));
+        }
+
+        private static Map<String, Object> toEventMap(GhoDexGatewayEnvelope envelope) {
+            java.util.LinkedHashMap<String, Object> event = new java.util.LinkedHashMap<>();
+            event.put("sequence", envelope.getSequence());
+            event.put("event", envelope.getEvent());
+            if (envelope.getResourceType() != null || envelope.getResourceId() != null) {
+                event.put(
+                    "resource",
+                    Map.of(
+                        "type", envelope.getResourceType(),
+                        "id", envelope.getResourceId(),
+                        "generation", envelope.getResourceGeneration()
+                    )
+                );
+            }
+            if (envelope.isGap()) {
+                event.put("gap", Boolean.TRUE);
+            }
+            if (envelope.requiresSnapshotResync()) {
+                event.put("requires_snapshot_resync", Boolean.TRUE);
+            }
+            if (!envelope.getPayload().isEmpty()) {
+                event.put("payload", envelope.getPayload());
+            }
+            return event;
         }
     }
 
@@ -271,6 +322,9 @@ public final class GhoDexGatewayContractSelfTest {
         private final ServerSocket serverSocket;
         private final Thread acceptThread;
         private final AtomicBoolean running = new AtomicBoolean(true);
+        private final String streamId = "STREAM-LIVE";
+        private boolean streamOpen;
+        private boolean streamDrained;
 
         private FakeGatewayServer() throws IOException {
             this.serverSocket = new ServerSocket(0);
@@ -327,18 +381,24 @@ public final class GhoDexGatewayContractSelfTest {
                             "{\"request_id\":\"" + requestId + "\",\"status\":\"ok\",\"result\":{\"protocol_version\":\"1.0\",\"last_sequence\":6,\"tabs\":[{\"tab_id\":\"tab-live\",\"generation\":2,\"is_focused\":true,\"terminals\":[{\"terminal_id\":\"terminal-live\",\"generation\":2,\"is_focused\":true,\"is_visible\":true,\"title\":\"Live Terminal\",\"working_directory\":\"/tmp/live\"}]}]}}"
                         );
                     }
-                    case "events.subscribe" -> {
+                    case "events.stream.subscribe" -> {
+                        synchronized (this) {
+                            streamOpen = true;
+                            streamDrained = false;
+                        }
                         writeLine(
                             outputStream,
-                            "{\"request_id\":\"" + requestId + "\",\"status\":\"ok\",\"result\":{\"live_stream_open\":true,\"replayed_event_count\":0}}"
+                            "{\"request_id\":\"" + requestId + "\",\"status\":\"ok\",\"result\":{\"stream_id\":\"" + streamId + "\",\"replayed_event_count\":0,\"live_stream_open\":true}}"
                         );
+                    }
+                    case "events.stream.drain" -> writeDrainResponse(outputStream, requestId, extractField(request, "stream_id"));
+                    case "events.stream.unsubscribe" -> {
+                        synchronized (this) {
+                            streamOpen = false;
+                        }
                         writeLine(
                             outputStream,
-                            "{\"sequence\":7,\"event\":\"terminal.input.sent\",\"resource\":{\"type\":\"terminal\",\"id\":\"terminal-live\",\"generation\":3},\"payload\":{\"text_length\":4}}"
-                        );
-                        writeLine(
-                            outputStream,
-                            "{\"sequence\":8,\"event\":\"overflow\",\"gap\":true,\"requires_snapshot_resync\":true,\"payload\":{\"dropped_events\":5}}"
+                            "{\"request_id\":\"" + requestId + "\",\"status\":\"ok\",\"result\":{\"stream_id\":\"" + streamId + "\",\"unsubscribed\":true}}"
                         );
                     }
                     case "terminal.read", "terminal.write", "terminal.command.run" -> {
@@ -357,6 +417,27 @@ public final class GhoDexGatewayContractSelfTest {
             } catch (IOException e) {
                 throw new IllegalStateException("fake gateway server failed", e);
             }
+        }
+
+        private synchronized void writeDrainResponse(OutputStream outputStream, String requestId, String requestStreamId)
+            throws IOException {
+            if (!streamOpen || !streamId.equals(requestStreamId)) {
+                writeLine(
+                    outputStream,
+                    "{\"request_id\":\"" + requestId + "\",\"status\":\"error\",\"error_code\":\"stream_not_found\",\"error_message\":\"unknown stream\"}"
+                );
+                return;
+            }
+
+            String events = streamDrained
+                ? "[]"
+                : "[{\"sequence\":7,\"event\":\"terminal.input.sent\",\"resource\":{\"type\":\"terminal\",\"id\":\"terminal-live\",\"generation\":3},\"payload\":{\"text_length\":4}},{\"sequence\":8,\"event\":\"overflow\",\"gap\":true,\"requires_snapshot_resync\":true,\"payload\":{\"dropped_events\":5}}]";
+            int drainedCount = streamDrained ? 0 : 2;
+            streamDrained = true;
+            writeLine(
+                outputStream,
+                "{\"request_id\":\"" + requestId + "\",\"status\":\"ok\",\"result\":{\"stream_id\":\"" + streamId + "\",\"drained_event_count\":" + drainedCount + ",\"events\":" + events + "}}"
+            );
         }
 
         private static String extractField(String json, String key) {

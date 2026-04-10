@@ -2,6 +2,7 @@ package com.leongong.ghodex.remote;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.Objects;
 
 public final class GhoDexGatewayClientStateMachine {
@@ -13,7 +14,7 @@ public final class GhoDexGatewayClientStateMachine {
     private final GhoDexGatewaySessionStore sessionStore;
     private final GhoDexTerminalIndexStore terminalIndexStore;
     private final CopyOnWriteArrayList<StateListener> stateListeners = new CopyOnWriteArrayList<>();
-    private GhoDexGatewayTransport.Subscription subscription;
+    private BufferedEventStreamSubscription subscription;
 
     public GhoDexGatewayClientStateMachine(
         GhoDexGatewayTransport transport,
@@ -67,10 +68,19 @@ public final class GhoDexGatewayClientStateMachine {
 
     public void openSubscription(String requestId, int eventLimit) {
         closeSubscription();
-        subscription = transport.openSubscription(
-            sessionStore.resumeState().subscribeRequest(requestId, eventLimit),
+        GhoDexGatewayEnvelope envelope = transport.send(
+            sessionStore.resumeState().subscribeRequest(requestId, eventLimit)
+        );
+        requireOk(envelope, "subscribe");
+        subscription = new BufferedEventStreamSubscription(
+            transport,
+            sessionStore.getAuthToken(),
+            requireString(envelope, "stream_id"),
+            requestId,
+            eventLimit,
             this::handleEnvelope
         );
+        subscription.start();
         sessionStore.setSubscriptionOpen(true);
         notifyStateChanged();
     }
@@ -140,10 +150,6 @@ public final class GhoDexGatewayClientStateMachine {
     }
 
     private void handleEnvelope(GhoDexGatewayEnvelope envelope) {
-        if (envelope.isOk() && "events.subscribe".equals(envelope.getRequestId())) {
-            sessionStore.setSubscriptionOpen(true);
-        }
-
         if (envelope.isEvent()) {
             terminalIndexStore.applyEnvelope(envelope);
             sessionStore.resumeState().advanceSequence(envelope.getSequence());
@@ -186,5 +192,102 @@ public final class GhoDexGatewayClientStateMachine {
             return primary;
         }
         return requireString(envelope, fallbackKey);
+    }
+
+    @FunctionalInterface
+    private interface EventEnvelopeHandler {
+        void onEnvelope(GhoDexGatewayEnvelope envelope);
+    }
+
+    private static final class BufferedEventStreamSubscription implements AutoCloseable {
+        private static final long IDLE_POLL_BACKOFF_MS = 50L;
+
+        private final GhoDexGatewayTransport transport;
+        private final String authToken;
+        private final String streamId;
+        private final int eventLimit;
+        private final String requestIdPrefix;
+        private final EventEnvelopeHandler eventHandler;
+        private final AtomicBoolean closed = new AtomicBoolean(false);
+        private final Thread workerThread;
+        private int drainRequestIndex;
+
+        private BufferedEventStreamSubscription(
+            GhoDexGatewayTransport transport,
+            String authToken,
+            String streamId,
+            String requestIdPrefix,
+            int eventLimit,
+            EventEnvelopeHandler eventHandler
+        ) {
+            this.transport = transport;
+            this.authToken = authToken;
+            this.streamId = streamId;
+            this.requestIdPrefix = requestIdPrefix;
+            this.eventLimit = eventLimit;
+            this.eventHandler = eventHandler;
+            this.workerThread = new Thread(this::pollLoop, "ghodex-gateway-event-stream");
+            this.workerThread.setDaemon(true);
+        }
+
+        private void start() {
+            workerThread.start();
+        }
+
+        @Override
+        public void close() {
+            if (!closed.compareAndSet(false, true)) {
+                return;
+            }
+            workerThread.interrupt();
+            try {
+                workerThread.join(200);
+            } catch (InterruptedException interruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            try {
+                transport.send(
+                    GhoDexGatewayRequest.unsubscribeEvents(
+                        requestIdPrefix + ".unsubscribe",
+                        authToken,
+                        streamId
+                    )
+                );
+            } catch (RuntimeException ignored) {
+                // Best-effort cleanup. The local state machine still closes the subscription.
+            }
+        }
+
+        private void pollLoop() {
+            try {
+                while (!closed.get() && !Thread.currentThread().isInterrupted()) {
+                    GhoDexGatewayEnvelope drainEnvelope = transport.send(
+                        GhoDexGatewayRequest.drainEvents(
+                            nextDrainRequestId(),
+                            authToken,
+                            streamId,
+                            eventLimit
+                        )
+                    );
+                    requireOk(drainEnvelope, "event drain");
+                    List<java.util.Map<String, Object>> events = drainEnvelope.resultObjectList("events");
+                    for (java.util.Map<String, Object> event : events) {
+                        eventHandler.onEnvelope(GhoDexGatewayEnvelope.fromEventMap(event));
+                    }
+                    if (events.isEmpty()) {
+                        Thread.sleep(IDLE_POLL_BACKOFF_MS);
+                    }
+                }
+            } catch (InterruptedException interruptedException) {
+                Thread.currentThread().interrupt();
+            } catch (RuntimeException ignored) {
+                // The polling loop is best-effort. A later reconnect or resubscribe can recover.
+            }
+        }
+
+        private String nextDrainRequestId() {
+            drainRequestIndex += 1;
+            return requestIdPrefix + ".drain." + drainRequestIndex;
+        }
     }
 }

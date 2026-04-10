@@ -16,6 +16,7 @@ public final class GhoDexGatewayRequest {
     private final String commandText;
     private final Long sinceSequence;
     private final Integer eventLimit;
+    private final String streamId;
     private final String scope;
     private final String mode;
     private final Integer maxChars;
@@ -33,6 +34,7 @@ public final class GhoDexGatewayRequest {
         this.commandText = builder.commandText;
         this.sinceSequence = builder.sinceSequence;
         this.eventLimit = builder.eventLimit;
+        this.streamId = builder.streamId;
         this.scope = builder.scope;
         this.mode = builder.mode;
         this.maxChars = builder.maxChars;
@@ -71,13 +73,25 @@ public final class GhoDexGatewayRequest {
     }
 
     public static GhoDexGatewayRequest subscribe(String requestId, String authToken, long sinceSequence, int eventLimit) {
-        // Keep the long-lived subscription on the legacy command until
-        // handle-based `events.stream.*` fully replaces socket-stream semantics
-        // for Android clients.
-        return builder(requestId, "events.subscribe")
+        return builder(requestId, "events.stream.subscribe")
             .authToken(authToken)
             .sinceSequence(sinceSequence)
             .eventLimit(eventLimit)
+            .build();
+    }
+
+    public static GhoDexGatewayRequest drainEvents(String requestId, String authToken, String streamId, int eventLimit) {
+        return builder(requestId, "events.stream.drain")
+            .authToken(authToken)
+            .streamId(streamId)
+            .eventLimit(eventLimit)
+            .build();
+    }
+
+    public static GhoDexGatewayRequest unsubscribeEvents(String requestId, String authToken, String streamId) {
+        return builder(requestId, "events.stream.unsubscribe")
+            .authToken(authToken)
+            .streamId(streamId)
             .build();
     }
 
@@ -128,6 +142,7 @@ public final class GhoDexGatewayRequest {
         addString(fields, "command_text", commandText);
         addLong(fields, "since_sequence", sinceSequence);
         addInt(fields, "event_limit", eventLimit);
+        addString(fields, "stream_id", streamId);
         addString(fields, "scope", scope);
         addString(fields, "mode", mode);
         addInt(fields, "max_chars", maxChars);
@@ -225,6 +240,7 @@ public final class GhoDexGatewayRequest {
         private String commandText;
         private Long sinceSequence;
         private Integer eventLimit;
+        private String streamId;
         private String scope;
         private String mode;
         private Integer maxChars;
@@ -277,6 +293,11 @@ public final class GhoDexGatewayRequest {
 
         public Builder eventLimit(int eventLimit) {
             this.eventLimit = eventLimit;
+            return this;
+        }
+
+        public Builder streamId(String streamId) {
+            this.streamId = streamId;
             return this;
         }
 
