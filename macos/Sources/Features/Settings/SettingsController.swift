@@ -4,12 +4,16 @@ import SwiftUI
 @MainActor
 final class SettingsController: NSWindowController, NSWindowDelegate {
     private unowned let appDelegate: AppDelegate
+    private(set) var selectedTab: SettingsView.SettingsTab = .general
 
     init(appDelegate: AppDelegate) {
         self.appDelegate = appDelegate
 
         let hostingController = NSHostingController(
-            rootView: SettingsView().environmentObject(appDelegate)
+            rootView: SettingsView(
+                selection: .constant(.general),
+                onSelectedTabChange: { _ in }
+            ).environmentObject(appDelegate)
         )
         let window = NSWindow(contentViewController: hostingController)
         window.title = AppLocalization.localizedText("Settings")
@@ -27,10 +31,28 @@ final class SettingsController: NSWindowController, NSWindowDelegate {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func show() {
+    var isVisible: Bool {
+        window?.isVisible == true
+    }
+
+    func show(tab: SettingsView.SettingsTab = .general) {
+        selectedTab = tab
         guard let window else { return }
         window.contentViewController = NSHostingController(
-            rootView: SettingsView().environmentObject(appDelegate)
+            rootView: SettingsView(
+                initialTab: tab,
+                selection: Binding(
+                    get: { [weak self] in
+                        self?.selectedTab ?? tab
+                    },
+                    set: { [weak self] newValue in
+                        self?.selectedTab = newValue
+                    }
+                ),
+                onSelectedTabChange: { [weak self] newValue in
+                    self?.selectedTab = newValue
+                }
+            ).environmentObject(appDelegate)
         )
         showWindow(nil)
         window.makeKeyAndOrderFront(nil)

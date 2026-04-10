@@ -39,6 +39,14 @@ final class SSHConnectionsController: NSWindowController, NSWindowDelegate, NSMe
     private let store: AITerminalManagerStore
     private let presentationState = SSHConnectionsPresentationState()
 
+    var selectedTab: SSHConnectionsPanelTab {
+        presentationState.selectedTab
+    }
+
+    var isVisible: Bool {
+        window?.isVisible == true
+    }
+
     static func windowsAreInSameTabGroup(_ lhs: NSWindow?, _ rhs: NSWindow?) -> Bool {
         guard
             let lhsGroup = lhs?.tabGroup,

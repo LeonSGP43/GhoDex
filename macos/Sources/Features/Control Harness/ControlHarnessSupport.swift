@@ -21,6 +21,21 @@ extension ControlHarnessRequest {
         case "new-tab",
             "close-tab",
             "rename-tab",
+            "app.relaunch",
+            "window.focus",
+            "window.show",
+            "window.hide",
+            "window.close",
+            "window.tabOverview.toggle",
+            "window.floatOnTop.set",
+            "panel.open",
+            "panel.focus",
+            "panel.close",
+            "panel.tab.select",
+            "settings.values.set",
+            "settings.apply",
+            "settings.reset",
+            "diagnostics.metrics.reset",
             "agent.runtime.session.register",
             "agent.runtime.session.heartbeat",
             "agent.runtime.session.release",
@@ -1536,6 +1551,17 @@ final class ControlHarnessEventHub {
 }
 
 final class ControlEventStreamRegistry {
+    struct StatusSnapshot {
+        let subscriptionCount: Int
+        let liveSubscriptionCount: Int
+        let bufferedEventCount: Int
+        let bufferedBytes: Int
+        let subscriptionsRequiringSnapshotResync: Int
+        let droppedEvents: Int
+        let maxBufferedEvents: Int
+        let maxBufferedBytes: Int
+    }
+
     struct DrainResult {
         let streamID: String
         let payloads: [Data]
@@ -1652,6 +1678,22 @@ final class ControlEventStreamRegistry {
             eventHub.removeSubscriber(subscriberID)
         }
         return removedState != nil
+    }
+
+    func statusSnapshot() -> StatusSnapshot {
+        queue.sync {
+            let states = Array(subscriptions.values)
+            return .init(
+                subscriptionCount: states.count,
+                liveSubscriptionCount: states.filter { $0.subscriberID != nil }.count,
+                bufferedEventCount: states.reduce(0) { $0 + $1.bufferedPayloads.count },
+                bufferedBytes: states.reduce(0) { $0 + $1.bufferedBytes },
+                subscriptionsRequiringSnapshotResync: states.filter(\.requiresSnapshotResync).count,
+                droppedEvents: states.reduce(0) { $0 + $1.droppedEvents },
+                maxBufferedEvents: maxBufferedEvents,
+                maxBufferedBytes: maxBufferedBytes
+            )
+        }
     }
 
     private func consumeLiveEvent(streamID: UUID, payload: Data) -> Bool {

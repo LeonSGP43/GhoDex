@@ -16,6 +16,8 @@ struct SettingsView: View {
 
     @EnvironmentObject private var appDelegate: AppDelegate
     private let visibleTabs: [SettingsTab]
+    private let externalSelection: Binding<SettingsTab>?
+    private let onSelectedTabChange: ((SettingsTab) -> Void)?
     @AppStorage(AppLanguageSetting.storageKey)
     private var selectedLanguageRawValue: String = AppLanguageSetting.storedSelection().rawValue
     @State private var selectedTab: SettingsTab = .general
@@ -78,11 +80,16 @@ struct SettingsView: View {
 
     init(
         initialTab: SettingsTab = .general,
-        visibleTabs: [SettingsTab] = SettingsTab.allCases
+        visibleTabs: [SettingsTab] = SettingsTab.allCases,
+        selection: Binding<SettingsTab>? = nil,
+        onSelectedTabChange: ((SettingsTab) -> Void)? = nil
     ) {
         let normalizedTabs = visibleTabs.isEmpty ? SettingsTab.allCases : visibleTabs
         self.visibleTabs = normalizedTabs
-        _selectedTab = State(initialValue: normalizedTabs.contains(initialTab) ? initialTab : normalizedTabs[0])
+        self.externalSelection = selection
+        self.onSelectedTabChange = onSelectedTabChange
+        let resolvedInitialTab = normalizedTabs.contains(initialTab) ? initialTab : normalizedTabs[0]
+        _selectedTab = State(initialValue: selection?.wrappedValue ?? resolvedInitialTab)
     }
 
     var body: some View {
@@ -90,7 +97,7 @@ struct SettingsView: View {
             if visibleTabs.count == 1, let onlyTab = visibleTabs.first {
                 content(for: onlyTab)
             } else {
-                TabView(selection: $selectedTab) {
+                TabView(selection: selectedTabBinding) {
                     if visibleTabs.contains(.general) {
                         generalTab
                             .tabItem { Label(L10n.Settings.generalTab, systemImage: "gearshape") }
@@ -115,6 +122,7 @@ struct SettingsView: View {
         .onAppear {
             syncGatewayForm()
             syncIconForm(clearFeedback: true)
+            onSelectedTabChange?(selectedTabBinding.wrappedValue)
         }
         .onReceive(appDelegate.$controlHarnessGatewaySettings) { _ in
             syncGatewayForm()
@@ -122,6 +130,13 @@ struct SettingsView: View {
         .onReceive(appDelegate.$appIconSettings) { _ in
             syncIconForm(clearFeedback: false)
         }
+        .onChange(of: selectedTabBinding.wrappedValue) { _, newValue in
+            onSelectedTabChange?(newValue)
+        }
+    }
+
+    private var selectedTabBinding: Binding<SettingsTab> {
+        externalSelection ?? $selectedTab
     }
 
     @ViewBuilder
@@ -204,7 +219,7 @@ struct SettingsView: View {
                     Spacer()
 
                     Button(L10n.Settings.iconOpenEditor) {
-                        selectedTab = .appearance
+                        selectedTabBinding.wrappedValue = .appearance
                     }
                     .buttonStyle(.borderedProminent)
                 }

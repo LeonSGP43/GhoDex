@@ -1902,6 +1902,21 @@ final class ControlHarnessGateway {
 
         switch command {
         case "snapshot",
+            "system.target.resolve",
+            "system.capabilities.get",
+            "app.state.get",
+            "window.list",
+            "panel.list",
+            "panel.state.get",
+            "settings.schema.get",
+            "settings.values.get",
+            "settings.validate",
+            "settings.diff",
+            "diagnostics.metrics.get",
+            "diagnostics.logs.tail",
+            "diagnostics.errors.recent",
+            "diagnostics.audit.query",
+            "diagnostics.eventBuffer.status",
             "agent.runtime.snapshot",
             "read-terminal",
             "events.subscribe",
@@ -1913,6 +1928,21 @@ final class ControlHarnessGateway {
         case "new-tab",
             "close-tab",
             "rename-tab",
+            "app.relaunch",
+            "window.focus",
+            "window.show",
+            "window.hide",
+            "window.close",
+            "window.tabOverview.toggle",
+            "window.floatOnTop.set",
+            "panel.open",
+            "panel.focus",
+            "panel.close",
+            "panel.tab.select",
+            "settings.values.set",
+            "settings.apply",
+            "settings.reset",
+            "diagnostics.metrics.reset",
             "agent.runtime.session.register",
             "agent.runtime.session.heartbeat",
             "agent.runtime.session.release",
@@ -3174,9 +3204,15 @@ private final class ControlHarnessGatewayRateLimiter {
         switch command {
         case "send-text", "send-key":
             return .input
-        case "run-command", "close-terminal", "new-tab", "close-tab", "rename-tab":
+        case "run-command", "close-terminal", "new-tab", "close-tab", "rename-tab", "app.relaunch",
+            "window.focus", "window.show", "window.hide", "window.close", "window.tabOverview.toggle",
+            "window.floatOnTop.set", "panel.open", "panel.focus", "panel.close", "panel.tab.select",
+            "settings.values.set", "settings.apply", "settings.reset", "diagnostics.metrics.reset":
             return .command
-        case "snapshot", "terminal.snapshot.v2", "terminal.semantic.v2":
+        case "snapshot", "system.target.resolve", "system.capabilities.get", "app.state.get", "window.list",
+            "panel.list", "panel.state.get", "settings.schema.get", "settings.values.get", "settings.validate",
+            "settings.diff", "diagnostics.metrics.get", "diagnostics.logs.tail", "diagnostics.errors.recent",
+            "diagnostics.audit.query", "diagnostics.eventBuffer.status", "terminal.snapshot.v2", "terminal.semantic.v2":
             return .snapshot
         case "read-terminal" where readMode == "delta":
             return .resync

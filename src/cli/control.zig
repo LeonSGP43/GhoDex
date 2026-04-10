@@ -36,6 +36,9 @@ const Request = struct {
     parent_tab_id: ?[]const u8 = null,
     terminal_id: ?[]const u8 = null,
     todo_id: ?[]const u8 = null,
+    window_number: ?i64 = null,
+    panel_id: ?[]const u8 = null,
+    panel_tab_id: ?[]const u8 = null,
     scope: ?[]const u8 = null,
     text: ?[]const u8 = null,
     terminal_key: ?[]const u8 = null,
@@ -99,6 +102,11 @@ const ParsedCommand = struct {
 ///   * `events.stream.subscribe [--since-sequence=<n>] [--event-limit=<n>]`
 ///   * `events.stream.drain --stream-id=<uuid> [--event-limit=<n>]`
 ///   * `events.stream.unsubscribe --stream-id=<uuid>`
+///   * `app.state.get`, `app.relaunch`
+///   * `window.list`, `window.focus --window-number=<n>`, `window.floatOnTop.set --window-number=<n> --payload-json='{"enabled":"true"}'`
+///   * `panel.list`, `panel.open --panel-id=settings --panel-tab-id=gateway`
+///   * `settings.values.get`, `settings.values.set --payload-json='{"gateway.listen_port":"9527"}'`, `settings.apply`
+///   * `diagnostics.metrics.get`, `diagnostics.logs.tail --payload-json='{"source":"audit"}'`
 ///   * namespaced aliases such as `system.handshake`, `state.snapshot`, `tab.new`, `terminal.write`
 ///   * browser commands such as `browser.tab.list`, `browser.page.load --payload-json='{"url":"https://example.com"}'`
 ///
@@ -236,6 +244,12 @@ fn parseCommand(alloc: Allocator, args_list: []const [:0]const u8) !ParsedComman
             result.request.terminal_id = try alloc.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "todo-id")) {
             result.request.todo_id = try alloc.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "window-number")) {
+            result.request.window_number = try parseSignedInt(value);
+        } else if (std.mem.eql(u8, key, "panel-id")) {
+            result.request.panel_id = try alloc.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "panel-tab-id")) {
+            result.request.panel_tab_id = try alloc.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "scope")) {
             result.request.scope = try alloc.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "text")) {
@@ -319,6 +333,14 @@ fn validateCommand(request: Request) !void {
         std.mem.eql(u8, command, "snapshot") or
         std.mem.eql(u8, command, "system.target.resolve") or
         std.mem.eql(u8, command, "system.capabilities.get") or
+        std.mem.eql(u8, command, "app.state.get") or
+        std.mem.eql(u8, command, "window.list") or
+        std.mem.eql(u8, command, "panel.list") or
+        std.mem.eql(u8, command, "settings.schema.get") or
+        std.mem.eql(u8, command, "settings.values.get") or
+        std.mem.eql(u8, command, "diagnostics.metrics.get") or
+        std.mem.eql(u8, command, "diagnostics.errors.recent") or
+        std.mem.eql(u8, command, "diagnostics.eventBuffer.status") or
         std.mem.eql(u8, command, "events.subscribe") or
         std.mem.eql(u8, command, "events.stream.subscribe"))
     {
@@ -364,6 +386,47 @@ fn validateCommand(request: Request) !void {
     }
     if (std.mem.eql(u8, command, "events.stream.unsubscribe")) {
         if (request.stream_id == null) return error.MissingStreamId;
+        return;
+    }
+    if (std.mem.eql(u8, command, "app.relaunch")) {
+        return;
+    }
+    if (std.mem.eql(u8, command, "window.focus") or
+        std.mem.eql(u8, command, "window.show") or
+        std.mem.eql(u8, command, "window.hide") or
+        std.mem.eql(u8, command, "window.close") or
+        std.mem.eql(u8, command, "window.tabOverview.toggle") or
+        std.mem.eql(u8, command, "window.floatOnTop.set"))
+    {
+        if (request.window_number == null) return error.MissingWindowNumber;
+        return;
+    }
+    if (std.mem.eql(u8, command, "panel.open") or
+        std.mem.eql(u8, command, "panel.focus") or
+        std.mem.eql(u8, command, "panel.close") or
+        std.mem.eql(u8, command, "panel.state.get"))
+    {
+        if (request.panel_id == null) return error.MissingPanelId;
+        return;
+    }
+    if (std.mem.eql(u8, command, "panel.tab.select")) {
+        if (request.panel_id == null) return error.MissingPanelId;
+        if (request.panel_tab_id == null) return error.MissingPanelTabId;
+        return;
+    }
+    if (std.mem.eql(u8, command, "settings.values.set") or
+        std.mem.eql(u8, command, "settings.validate") or
+        std.mem.eql(u8, command, "settings.apply"))
+    {
+        if (request.payload == null) return error.MissingPayloadJson;
+        return;
+    }
+    if (std.mem.eql(u8, command, "settings.reset") or
+        std.mem.eql(u8, command, "settings.diff") or
+        std.mem.eql(u8, command, "diagnostics.metrics.reset") or
+        std.mem.eql(u8, command, "diagnostics.logs.tail") or
+        std.mem.eql(u8, command, "diagnostics.audit.query"))
+    {
         return;
     }
     if (std.mem.eql(u8, command, "terminal.stream.open") or
@@ -425,6 +488,34 @@ fn normalizeCommand(command: []const u8) []const u8 {
     if (std.mem.eql(u8, command, "state.snapshot")) return "snapshot";
     if (std.mem.eql(u8, command, "system.target.resolve")) return "system.target.resolve";
     if (std.mem.eql(u8, command, "system.capabilities.get")) return "system.capabilities.get";
+    if (std.mem.eql(u8, command, "app.state.get")) return "app.state.get";
+    if (std.mem.eql(u8, command, "app.relaunch")) return "app.relaunch";
+    if (std.mem.eql(u8, command, "window.list")) return "window.list";
+    if (std.mem.eql(u8, command, "window.focus")) return "window.focus";
+    if (std.mem.eql(u8, command, "window.show")) return "window.show";
+    if (std.mem.eql(u8, command, "window.hide")) return "window.hide";
+    if (std.mem.eql(u8, command, "window.close")) return "window.close";
+    if (std.mem.eql(u8, command, "window.tabOverview.toggle")) return "window.tabOverview.toggle";
+    if (std.mem.eql(u8, command, "window.floatOnTop.set")) return "window.floatOnTop.set";
+    if (std.mem.eql(u8, command, "panel.list")) return "panel.list";
+    if (std.mem.eql(u8, command, "panel.open")) return "panel.open";
+    if (std.mem.eql(u8, command, "panel.focus")) return "panel.focus";
+    if (std.mem.eql(u8, command, "panel.close")) return "panel.close";
+    if (std.mem.eql(u8, command, "panel.tab.select")) return "panel.tab.select";
+    if (std.mem.eql(u8, command, "panel.state.get")) return "panel.state.get";
+    if (std.mem.eql(u8, command, "settings.schema.get")) return "settings.schema.get";
+    if (std.mem.eql(u8, command, "settings.values.get")) return "settings.values.get";
+    if (std.mem.eql(u8, command, "settings.values.set")) return "settings.values.set";
+    if (std.mem.eql(u8, command, "settings.validate")) return "settings.validate";
+    if (std.mem.eql(u8, command, "settings.apply")) return "settings.apply";
+    if (std.mem.eql(u8, command, "settings.reset")) return "settings.reset";
+    if (std.mem.eql(u8, command, "settings.diff")) return "settings.diff";
+    if (std.mem.eql(u8, command, "diagnostics.metrics.get")) return "diagnostics.metrics.get";
+    if (std.mem.eql(u8, command, "diagnostics.metrics.reset")) return "diagnostics.metrics.reset";
+    if (std.mem.eql(u8, command, "diagnostics.logs.tail")) return "diagnostics.logs.tail";
+    if (std.mem.eql(u8, command, "diagnostics.errors.recent")) return "diagnostics.errors.recent";
+    if (std.mem.eql(u8, command, "diagnostics.audit.query")) return "diagnostics.audit.query";
+    if (std.mem.eql(u8, command, "diagnostics.eventBuffer.status")) return "diagnostics.eventBuffer.status";
     if (std.mem.eql(u8, command, "workspace.snapshot")) return "snapshot";
     if (std.mem.eql(u8, command, "workspace.tab.snapshot")) return "snapshot";
     if (std.mem.eql(u8, command, "tab.new")) return "new-tab";

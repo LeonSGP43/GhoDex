@@ -248,6 +248,35 @@ struct ControlHarnessCommandRoutingTests {
         #expect(normalized.streamID == subscriptionID)
     }
 
+    @Test func normalizedRequestPromotesWindowAndPanelTargets() {
+        let normalized = makeRoutingRequest(
+            command: "panel.tab.select",
+            target: ControlHarnessRequestTarget(
+                workspaceID: nil,
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: nil,
+                todoID: nil,
+                subscriptionID: nil,
+                windowNumber: 17,
+                panelID: "settings",
+                panelTabID: "gateway",
+                browserTabID: nil,
+                browserContextID: nil,
+                pageID: nil,
+                frameName: nil,
+                taskID: nil,
+                scheduleID: nil,
+                documentRevision: nil
+            )
+        ).normalized()
+
+        #expect(normalized.command == "panel.tab.select")
+        #expect(normalized.windowNumber == 17)
+        #expect(normalized.panelID == "settings")
+        #expect(normalized.panelTabID == "gateway")
+    }
+
     @Test func browserAdapterMapsRawAliasToBrowserRequest() throws {
         let request = makeRoutingRequest(
             command: "browser.loadURL",
@@ -299,10 +328,28 @@ struct ControlHarnessCommandRoutingTests {
         #expect(ControlHarnessBrowserCommandAdapter.isResync(eventSubscribe.command))
     }
 
+    @Test func commandKindClassifiesExpandedProtocolSurface() {
+        #expect(makeRoutingRequest(command: "app.state.get").commandKind == .query)
+        #expect(makeRoutingRequest(command: "window.list").commandKind == .query)
+        #expect(makeRoutingRequest(command: "window.focus").commandKind == .mutation)
+        #expect(makeRoutingRequest(command: "panel.list").commandKind == .query)
+        #expect(makeRoutingRequest(command: "panel.open").commandKind == .mutation)
+        #expect(makeRoutingRequest(command: "settings.schema.get").commandKind == .query)
+        #expect(makeRoutingRequest(command: "settings.values.set").commandKind == .mutation)
+        #expect(makeRoutingRequest(command: "diagnostics.metrics.get").commandKind == .query)
+        #expect(makeRoutingRequest(command: "diagnostics.metrics.reset").commandKind == .mutation)
+        #expect(makeRoutingRequest(command: "diagnostics.eventBuffer.status").commandKind == .query)
+    }
+
     @Test func supportedCommandsAdvertiseUnifiedAndBrowserEntries() {
         #expect(ControlHarnessCore.supportedCommands.contains("state.snapshot"))
         #expect(ControlHarnessCore.supportedCommands.contains("system.target.resolve"))
         #expect(ControlHarnessCore.supportedCommands.contains("system.capabilities.get"))
+        #expect(ControlHarnessCore.supportedCommands.contains("app.state.get"))
+        #expect(ControlHarnessCore.supportedCommands.contains("window.list"))
+        #expect(ControlHarnessCore.supportedCommands.contains("panel.list"))
+        #expect(ControlHarnessCore.supportedCommands.contains("settings.schema.get"))
+        #expect(ControlHarnessCore.supportedCommands.contains("diagnostics.metrics.get"))
         #expect(ControlHarnessCore.supportedCommands.contains("workspace.tab.snapshot"))
         #expect(ControlHarnessCore.supportedCommands.contains("terminal.write"))
         #expect(ControlHarnessCore.supportedCommands.contains("terminal.command.run"))

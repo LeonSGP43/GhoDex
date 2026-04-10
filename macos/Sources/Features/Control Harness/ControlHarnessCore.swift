@@ -1090,6 +1090,9 @@ struct ControlHarnessRequest: Codable {
     let parentTabID: String?
     let terminalID: String?
     let todoID: String?
+    let windowNumber: Int?
+    let panelID: String?
+    let panelTabID: String?
     let scope: String?
     let text: String?
     let terminalKey: String?
@@ -1162,6 +1165,9 @@ struct ControlHarnessRequest: Codable {
         case parentTabID = "parent_tab_id"
         case terminalID = "terminal_id"
         case todoID = "todo_id"
+        case windowNumber = "window_number"
+        case panelID = "panel_id"
+        case panelTabID = "panel_tab_id"
         case scope
         case text
         case terminalKey = "terminal_key"
@@ -1235,6 +1241,9 @@ struct ControlHarnessRequest: Codable {
         parentTabID: String?,
         terminalID: String?,
         todoID: String? = nil,
+        windowNumber: Int? = nil,
+        panelID: String? = nil,
+        panelTabID: String? = nil,
         scope: String?,
         text: String?,
         terminalKey: String? = nil,
@@ -1306,6 +1315,9 @@ struct ControlHarnessRequest: Codable {
         self.parentTabID = parentTabID
         self.terminalID = terminalID
         self.todoID = todoID
+        self.windowNumber = windowNumber
+        self.panelID = panelID
+        self.panelTabID = panelTabID
         self.scope = scope
         self.text = text
         self.terminalKey = terminalKey
@@ -1492,6 +1504,288 @@ private struct ControlSnapshotResult: Encodable {
         case generatedAt = "generated_at"
         case lastSequence = "last_sequence"
         case tabs
+    }
+}
+
+private struct ControlAppStateResult: Encodable {
+    let protocolVersion: String
+    let generatedAt: String
+    let isActive: Bool
+    let isHidden: Bool
+    let frontmostWindowNumber: Int?
+    let windowCount: Int
+    let panelCount: Int
+    let settingsDraftPending: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case generatedAt = "generated_at"
+        case isActive = "is_active"
+        case isHidden = "is_hidden"
+        case frontmostWindowNumber = "frontmost_window_number"
+        case windowCount = "window_count"
+        case panelCount = "panel_count"
+        case settingsDraftPending = "settings_draft_pending"
+    }
+}
+
+private struct ControlWindowSummary: Encodable {
+    let windowNumber: Int
+    let kind: String
+    let title: String
+    let isVisible: Bool
+    let isFocused: Bool
+    let isMainWindow: Bool
+    let isMiniaturized: Bool
+    let isFloatingOnTop: Bool
+    let tabbedWindowCount: Int
+    let tabOverviewVisible: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case windowNumber = "window_number"
+        case kind
+        case title
+        case isVisible = "is_visible"
+        case isFocused = "is_focused"
+        case isMainWindow = "is_main_window"
+        case isMiniaturized = "is_miniaturized"
+        case isFloatingOnTop = "is_floating_on_top"
+        case tabbedWindowCount = "tabbed_window_count"
+        case tabOverviewVisible = "tab_overview_visible"
+    }
+}
+
+private struct ControlWindowListResult: Encodable {
+    let protocolVersion: String
+    let windows: [ControlWindowSummary]
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case windows
+    }
+}
+
+private struct ControlWindowMutationResult: Encodable {
+    let window: ControlWindowSummary
+    let action: String
+
+    enum CodingKeys: String, CodingKey {
+        case window
+        case action
+    }
+}
+
+private struct ControlPanelSummary: Encodable {
+    let panelID: String
+    let title: String
+    let isVisible: Bool
+    let selectedTabID: String?
+    let supportedTabIDs: [String]
+    let windowNumber: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case panelID = "panel_id"
+        case title
+        case isVisible = "is_visible"
+        case selectedTabID = "selected_tab_id"
+        case supportedTabIDs = "supported_tab_ids"
+        case windowNumber = "window_number"
+    }
+}
+
+private struct ControlPanelListResult: Encodable {
+    let protocolVersion: String
+    let panels: [ControlPanelSummary]
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case panels
+    }
+}
+
+private struct ControlPanelMutationResult: Encodable {
+    let panel: ControlPanelSummary
+    let action: String
+
+    enum CodingKeys: String, CodingKey {
+        case panel
+        case action
+    }
+}
+
+private struct ControlSettingsSchemaEntry: Encodable {
+    let key: String
+    let valueType: String
+    let defaultValue: String
+    let enumValues: [String]?
+    let description: String
+
+    enum CodingKeys: String, CodingKey {
+        case key
+        case valueType = "value_type"
+        case defaultValue = "default_value"
+        case enumValues = "enum_values"
+        case description
+    }
+}
+
+private struct ControlSettingsSchemaResult: Encodable {
+    let protocolVersion: String
+    let entries: [ControlSettingsSchemaEntry]
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case entries
+    }
+}
+
+private struct ControlSettingsValuesResult: Encodable {
+    let protocolVersion: String
+    let values: [String: String]
+    let stagedValues: [String: String]?
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case values
+        case stagedValues = "staged_values"
+    }
+}
+
+private struct ControlSettingsDiffEntry: Encodable {
+    let key: String
+    let currentValue: String
+    let nextValue: String
+
+    enum CodingKeys: String, CodingKey {
+        case key
+        case currentValue = "current_value"
+        case nextValue = "next_value"
+    }
+}
+
+private struct ControlSettingsDiffResult: Encodable {
+    let protocolVersion: String
+    let entries: [ControlSettingsDiffEntry]
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case entries
+    }
+}
+
+private struct ControlSettingsMutationResult: Encodable {
+    let protocolVersion: String
+    let values: [String: String]
+    let stagedValues: [String: String]?
+    let changedKeys: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case values
+        case stagedValues = "staged_values"
+        case changedKeys = "changed_keys"
+    }
+}
+
+private struct ControlDiagnosticsMetricsResult: Encodable {
+    let protocolVersion: String
+    let metrics: ControlHarnessPerformanceSnapshot
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case metrics
+    }
+}
+
+private struct ControlDiagnosticsLogLine: Encodable {
+    let source: String
+    let lineNumber: Int
+    let raw: String
+
+    enum CodingKeys: String, CodingKey {
+        case source
+        case lineNumber = "line_number"
+        case raw
+    }
+}
+
+private struct ControlDiagnosticsLogsTailResult: Encodable {
+    let protocolVersion: String
+    let source: String
+    let lines: [ControlDiagnosticsLogLine]
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case source
+        case lines
+    }
+}
+
+private struct ControlDiagnosticsRecentError: Encodable {
+    let source: String
+    let timestamp: String?
+    let code: String?
+    let message: String
+    let command: String?
+
+    enum CodingKeys: String, CodingKey {
+        case source
+        case timestamp
+        case code
+        case message
+        case command
+    }
+}
+
+private struct ControlDiagnosticsRecentErrorsResult: Encodable {
+    let protocolVersion: String
+    let errors: [ControlDiagnosticsRecentError]
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case errors
+    }
+}
+
+private struct ControlDiagnosticsAuditQueryResult: Encodable {
+    let protocolVersion: String
+    let records: [ControlAuditRecord]
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case records
+    }
+}
+
+private struct ControlDiagnosticsEventBufferStatusResult: Encodable {
+    let protocolVersion: String
+    let status: ControlDiagnosticsEventBufferStatus
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case status
+    }
+}
+
+private struct ControlDiagnosticsEventBufferStatus: Encodable {
+    let subscriptionCount: Int
+    let liveSubscriptionCount: Int
+    let bufferedEventCount: Int
+    let bufferedBytes: Int
+    let subscriptionsRequiringSnapshotResync: Int
+    let droppedEvents: Int
+    let maxBufferedEvents: Int
+    let maxBufferedBytes: Int
+
+    enum CodingKeys: String, CodingKey {
+        case subscriptionCount = "subscription_count"
+        case liveSubscriptionCount = "live_subscription_count"
+        case bufferedEventCount = "buffered_event_count"
+        case bufferedBytes = "buffered_bytes"
+        case subscriptionsRequiringSnapshotResync = "subscriptions_requiring_snapshot_resync"
+        case droppedEvents = "dropped_events"
+        case maxBufferedEvents = "max_buffered_events"
+        case maxBufferedBytes = "max_buffered_bytes"
     }
 }
 
@@ -1964,6 +2258,9 @@ private struct ControlHarnessMutationFingerprint: Encodable {
     let parentTabID: String?
     let terminalID: String?
     let todoID: String?
+    let windowNumber: Int?
+    let panelID: String?
+    let panelTabID: String?
     let scope: String?
     let text: String?
     let terminalKey: String?
@@ -2008,6 +2305,9 @@ private struct ControlHarnessMutationFingerprint: Encodable {
         case parentTabID = "parent_tab_id"
         case terminalID = "terminal_id"
         case todoID = "todo_id"
+        case windowNumber = "window_number"
+        case panelID = "panel_id"
+        case panelTabID = "panel_tab_id"
         case scope
         case text
         case terminalKey = "terminal_key"
@@ -2069,7 +2369,7 @@ private struct ControlAgentRuntimeScheduleResult: Encodable {
     let schedule: AgentRuntimeSchedule
 }
 
-private struct ControlAuditRecord: Encodable {
+private struct ControlAuditRecord: Codable {
     let timestamp: String
     let requestID: String
     let command: String
@@ -2169,6 +2469,9 @@ final class ControlHarnessCore {
         "ctrl_c",
         "ctrl_d"
     ]
+    static let supportedPanelIDs: Set<String> = ["settings", "ssh_connections"]
+    static let supportedSettingsResetTargets: Set<String> = ["draft", "defaults"]
+    static let supportedDiagnosticsLogSources: Set<String> = ["audit", "events", "runtime"]
 
     private weak var appDelegate: AppDelegate?
     private let auditLogger: ControlHarnessAuditLogger
@@ -2188,6 +2491,7 @@ final class ControlHarnessCore {
     private var lastReadFootprintProbeDate: Date?
     private var lastReadFootprintBytes: UInt64?
     private var lastReadMemoryThrottleLogDate: Date?
+    private var settingsDraftValues: [String: String]?
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
         category: "ControlHarnessCore"
@@ -2542,6 +2846,81 @@ final class ControlHarnessCore {
         }
 
         switch request.command {
+        case "app.state.get", "window.list", "panel.list", "settings.schema.get", "settings.values.get",
+            "diagnostics.metrics.get", "diagnostics.metrics.reset", "diagnostics.errors.recent",
+            "diagnostics.eventBuffer.status":
+            break
+
+        case "app.relaunch":
+            break
+
+        case "window.focus", "window.show", "window.hide", "window.close", "window.tabOverview.toggle",
+            "window.floatOnTop.set":
+            guard request.windowNumber != nil else {
+                throw ControlHarnessCoreError.invalidArgument("\(request.command) requires window_number")
+            }
+            if request.command == "window.floatOnTop.set" {
+                guard let rawValue = normalizedOptionalString(request.payload?["enabled"]),
+                      Self.parseBooleanString(rawValue) != nil else {
+                    throw ControlHarnessCoreError.invalidArgument("window.floatOnTop.set requires payload.enabled=true|false")
+                }
+            }
+
+        case "panel.open", "panel.focus", "panel.close", "panel.state.get":
+            guard let panelID = normalizedOptionalString(request.panelID) else {
+                throw ControlHarnessCoreError.invalidArgument("\(request.command) requires panel_id")
+            }
+            guard Self.supportedPanelIDs.contains(panelID) else {
+                throw ControlHarnessCoreError.invalidArgument("Unsupported panel_id: \(panelID)")
+            }
+            if let panelTabID = normalizedOptionalString(request.panelTabID) {
+                try validatePanelTabID(panelTabID, panelID: panelID)
+            }
+
+        case "panel.tab.select":
+            guard let panelID = normalizedOptionalString(request.panelID) else {
+                throw ControlHarnessCoreError.invalidArgument("panel.tab.select requires panel_id")
+            }
+            guard Self.supportedPanelIDs.contains(panelID) else {
+                throw ControlHarnessCoreError.invalidArgument("Unsupported panel_id: \(panelID)")
+            }
+            guard let panelTabID = normalizedOptionalString(request.panelTabID) else {
+                throw ControlHarnessCoreError.invalidArgument("panel.tab.select requires panel_tab_id")
+            }
+            try validatePanelTabID(panelTabID, panelID: panelID)
+
+        case "settings.values.set", "settings.validate", "settings.apply":
+            guard let payload = request.payload, !payload.isEmpty else {
+                throw ControlHarnessCoreError.invalidArgument("\(request.command) requires a non-empty payload")
+            }
+            _ = try normalizedSettingsPatch(payload)
+
+        case "settings.reset":
+            if let resetTarget = normalizedOptionalString(request.payload?["target"]),
+               Self.supportedSettingsResetTargets.contains(resetTarget) == false {
+                throw ControlHarnessCoreError.invalidArgument("settings.reset target must be draft|defaults")
+            }
+
+        case "settings.diff":
+            if let payload = request.payload, !payload.isEmpty {
+                _ = try normalizedSettingsPatch(payload)
+            }
+
+        case "diagnostics.logs.tail":
+            if let source = normalizedOptionalString(request.payload?["source"]),
+               Self.supportedDiagnosticsLogSources.contains(source) == false {
+                throw ControlHarnessCoreError.invalidArgument("diagnostics.logs.tail source must be audit|events|runtime")
+            }
+
+        case "diagnostics.audit.query":
+            if let limit = request.maxLines, limit < 1 {
+                throw ControlHarnessCoreError.invalidArgument("max_lines must be >= 1")
+            }
+            if let status = normalizedOptionalString(request.payload?["status"]),
+               ["ok", "error"].contains(status) == false {
+                throw ControlHarnessCoreError.invalidArgument("diagnostics.audit.query payload.status must be ok|error")
+            }
+
         case "todo-snapshot", "todo-sync-stale":
             break
 
@@ -2767,6 +3146,9 @@ final class ControlHarnessCore {
             parentTabID: request.parentTabID,
             terminalID: request.terminalID,
             todoID: request.todoID,
+            windowNumber: request.windowNumber,
+            panelID: request.panelID,
+            panelTabID: request.panelTabID,
             scope: request.scope,
             text: request.text,
             terminalKey: request.terminalKey,
@@ -2835,8 +3217,74 @@ final class ControlHarnessCore {
         case "system.capabilities.get":
             return (AnyEncodable(makeCapabilitiesResult()), nil)
 
+        case "app.state.get":
+            return (AnyEncodable(makeAppStateResult()), nil)
+
+        case "app.relaunch":
+            return (AnyEncodable(try relaunchApplication()), nil)
+
         case "snapshot":
             return (AnyEncodable(makeSnapshot()), nil)
+
+        case "window.list":
+            return (AnyEncodable(makeWindowListResult()), nil)
+
+        case "window.focus":
+            return (AnyEncodable(try focusWindow(from: request)), nil)
+
+        case "window.show":
+            return (AnyEncodable(try showWindow(from: request)), nil)
+
+        case "window.hide":
+            return (AnyEncodable(try hideWindow(from: request)), nil)
+
+        case "window.close":
+            return (AnyEncodable(try closeWindow(from: request)), nil)
+
+        case "window.tabOverview.toggle":
+            return (AnyEncodable(try toggleWindowTabOverview(from: request)), nil)
+
+        case "window.floatOnTop.set":
+            return (AnyEncodable(try setWindowFloatOnTop(from: request)), nil)
+
+        case "panel.list":
+            return (AnyEncodable(makePanelListResult()), nil)
+
+        case "panel.open":
+            return (AnyEncodable(try openPanel(from: request)), nil)
+
+        case "panel.focus":
+            return (AnyEncodable(try focusPanel(from: request)), nil)
+
+        case "panel.close":
+            return (AnyEncodable(try closePanel(from: request)), nil)
+
+        case "panel.tab.select":
+            return (AnyEncodable(try selectPanelTab(from: request)), nil)
+
+        case "panel.state.get":
+            return (AnyEncodable(try panelState(from: request)), nil)
+
+        case "settings.schema.get":
+            return (AnyEncodable(settingsSchemaResult()), nil)
+
+        case "settings.values.get":
+            return (AnyEncodable(settingsValuesResult()), nil)
+
+        case "settings.values.set":
+            return (AnyEncodable(try stageSettingsValues(from: request)), nil)
+
+        case "settings.validate":
+            return (AnyEncodable(try validateSettingsValues(from: request)), nil)
+
+        case "settings.apply":
+            return (AnyEncodable(try applySettingsValues(from: request)), nil)
+
+        case "settings.reset":
+            return (AnyEncodable(try resetSettingsValues(from: request)), nil)
+
+        case "settings.diff":
+            return (AnyEncodable(try settingsDiff(from: request)), nil)
 
         case "agent.runtime.snapshot":
             return (AnyEncodable(try agentRuntimeSnapshot()), nil)
@@ -2950,6 +3398,24 @@ final class ControlHarnessCore {
         case "events.stream.unsubscribe":
             return (AnyEncodable(try unsubscribeBufferedEvents(from: request)), nil)
 
+        case "diagnostics.metrics.get":
+            return (AnyEncodable(diagnosticsMetricsResult()), nil)
+
+        case "diagnostics.metrics.reset":
+            return (AnyEncodable(resetDiagnosticsMetrics()), nil)
+
+        case "diagnostics.logs.tail":
+            return (AnyEncodable(try diagnosticsLogsTail(from: request)), nil)
+
+        case "diagnostics.errors.recent":
+            return (AnyEncodable(diagnosticsRecentErrors()), nil)
+
+        case "diagnostics.audit.query":
+            return (AnyEncodable(try diagnosticsAuditQuery(from: request)), nil)
+
+        case "diagnostics.eventBuffer.status":
+            return (AnyEncodable(diagnosticsEventBufferStatus()), nil)
+
         default:
             throw ControlHarnessCoreError.unsupportedCommand(request.command)
         }
@@ -3014,12 +3480,17 @@ final class ControlHarnessCore {
                 "compat_legacy",
             ],
             features: [
+                "app",
                 "workspace",
                 "terminal",
                 "todo",
                 "runtime",
                 "browser",
                 "events",
+                "window",
+                "panel",
+                "settings",
+                "diagnostics",
             ],
             compatibility: makeCompatibilityMetadata(),
             lastSequence: eventHub.currentSequence()
@@ -3045,6 +3516,310 @@ final class ControlHarnessCore {
                     detail: "Use the buffered events.stream handle flow for new clients. events.subscribe remains only for long-lived compatibility transports."
                 ),
             ]
+        )
+    }
+
+    private func makeAppStateResult() -> ControlAppStateResult {
+        let panels = makePanelSummaries()
+        return .init(
+            protocolVersion: Self.protocolVersion,
+            generatedAt: Self.iso8601(now()),
+            isActive: NSApp.isActive,
+            isHidden: NSApp.isHidden,
+            frontmostWindowNumber: currentTopLevelWindow()?.windowNumber,
+            windowCount: currentTopLevelWindows().count,
+            panelCount: panels.count,
+            settingsDraftPending: settingsDraftValues != nil
+        )
+    }
+
+    private func relaunchApplication() throws -> ControlAppStateResult {
+        guard let appDelegate else {
+            throw ControlHarnessCoreError.appUnavailable
+        }
+        let result = makeAppStateResult()
+        appDelegate.relaunchApplication()
+        return result
+    }
+
+    private func makeWindowListResult() -> ControlWindowListResult {
+        .init(
+            protocolVersion: Self.protocolVersion,
+            windows: currentTopLevelWindows().map(makeWindowSummary)
+        )
+    }
+
+    private func focusWindow(from request: ControlHarnessRequest) throws -> ControlWindowMutationResult {
+        let window = try resolveWindow(windowNumber: request.windowNumber)
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        return .init(window: makeWindowSummary(window), action: "focus")
+    }
+
+    private func showWindow(from request: ControlHarnessRequest) throws -> ControlWindowMutationResult {
+        let window = try resolveWindow(windowNumber: request.windowNumber)
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        return .init(window: makeWindowSummary(window), action: "show")
+    }
+
+    private func hideWindow(from request: ControlHarnessRequest) throws -> ControlWindowMutationResult {
+        let window = try resolveWindow(windowNumber: request.windowNumber)
+        window.orderOut(nil)
+        return .init(window: makeWindowSummary(window), action: "hide")
+    }
+
+    private func closeWindow(from request: ControlHarnessRequest) throws -> ControlWindowMutationResult {
+        let window = try resolveWindow(windowNumber: request.windowNumber)
+        let summaryBeforeClose = makeWindowSummary(window)
+        window.performClose(nil)
+        return .init(window: summaryBeforeClose, action: "close")
+    }
+
+    private func toggleWindowTabOverview(from request: ControlHarnessRequest) throws -> ControlWindowMutationResult {
+        let window = try resolveWindow(windowNumber: request.windowNumber)
+        window.toggleTabOverview(nil)
+        return .init(window: makeWindowSummary(window), action: "tab_overview_toggle")
+    }
+
+    private func setWindowFloatOnTop(from request: ControlHarnessRequest) throws -> ControlWindowMutationResult {
+        let window = try resolveWindow(windowNumber: request.windowNumber)
+        let enabled = try parseRequiredPayloadBoolean(request, key: "enabled")
+        window.level = enabled ? .floating : .normal
+        return .init(window: makeWindowSummary(window), action: "float_on_top_set")
+    }
+
+    private func makePanelListResult() -> ControlPanelListResult {
+        .init(protocolVersion: Self.protocolVersion, panels: makePanelSummaries())
+    }
+
+    private func openPanel(from request: ControlHarnessRequest) throws -> ControlPanelMutationResult {
+        let panel = try mutatePanel(
+            panelID: request.panelID,
+            panelTabID: request.panelTabID,
+            action: "open"
+        ) { panelID, panelTabID in
+            try openPanel(panelID: panelID, panelTabID: panelTabID)
+        }
+        return .init(panel: panel, action: "open")
+    }
+
+    private func focusPanel(from request: ControlHarnessRequest) throws -> ControlPanelMutationResult {
+        let panel = try mutatePanel(
+            panelID: request.panelID,
+            panelTabID: request.panelTabID,
+            action: "focus"
+        ) { panelID, panelTabID in
+            try openPanel(panelID: panelID, panelTabID: panelTabID)
+        }
+        return .init(panel: panel, action: "focus")
+    }
+
+    private func closePanel(from request: ControlHarnessRequest) throws -> ControlPanelMutationResult {
+        let panelID = try parsePanelID(request.panelID)
+        switch panelID {
+        case "settings":
+            appDelegate?.settingsController.close(nil)
+        case "ssh_connections":
+            appDelegate?.sshConnectionsController.close(nil)
+        default:
+            break
+        }
+        return .init(panel: panelSummary(panelID: panelID), action: "close")
+    }
+
+    private func selectPanelTab(from request: ControlHarnessRequest) throws -> ControlPanelMutationResult {
+        let panelID = try parsePanelID(request.panelID)
+        let panelTabID = try parseRequiredPanelTabID(request.panelTabID, panelID: panelID)
+        try openPanel(panelID: panelID, panelTabID: panelTabID)
+        return .init(panel: panelSummary(panelID: panelID), action: "tab_select")
+    }
+
+    private func panelState(from request: ControlHarnessRequest) throws -> ControlPanelListResult {
+        let panelID = try parsePanelID(request.panelID)
+        return .init(protocolVersion: Self.protocolVersion, panels: [panelSummary(panelID: panelID)])
+    }
+
+    private func settingsSchemaResult() -> ControlSettingsSchemaResult {
+        .init(protocolVersion: Self.protocolVersion, entries: settingsSchemaEntries())
+    }
+
+    private func settingsValuesResult() -> ControlSettingsValuesResult {
+        .init(
+            protocolVersion: Self.protocolVersion,
+            values: currentSettingsValues(),
+            stagedValues: settingsDraftValues
+        )
+    }
+
+    private func stageSettingsValues(from request: ControlHarnessRequest) throws -> ControlSettingsMutationResult {
+        let base = settingsDraftValues ?? currentSettingsValues()
+        let patch = try normalizedSettingsPatch(request.payload)
+        let nextValues = try applyingSettingsPatch(patch, to: base)
+        settingsDraftValues = nextValues
+        return .init(
+            protocolVersion: Self.protocolVersion,
+            values: currentSettingsValues(),
+            stagedValues: nextValues,
+            changedKeys: changedSettingKeys(from: base, to: nextValues)
+        )
+    }
+
+    private func validateSettingsValues(from request: ControlHarnessRequest) throws -> ControlSettingsMutationResult {
+        let base = settingsDraftValues ?? currentSettingsValues()
+        let patch = try normalizedSettingsPatch(request.payload)
+        let nextValues = try applyingSettingsPatch(patch, to: base)
+        return .init(
+            protocolVersion: Self.protocolVersion,
+            values: currentSettingsValues(),
+            stagedValues: nextValues,
+            changedKeys: changedSettingKeys(from: base, to: nextValues)
+        )
+    }
+
+    private func applySettingsValues(from request: ControlHarnessRequest) throws -> ControlSettingsMutationResult {
+        let base = settingsDraftValues ?? currentSettingsValues()
+        let patch = try normalizedSettingsPatch(request.payload)
+        let nextValues = try applyingSettingsPatch(patch, to: base)
+        try persistSettingsValues(nextValues)
+        settingsDraftValues = nil
+        let appliedValues = currentSettingsValues()
+        return .init(
+            protocolVersion: Self.protocolVersion,
+            values: appliedValues,
+            stagedValues: nil,
+            changedKeys: changedSettingKeys(from: base, to: nextValues)
+        )
+    }
+
+    private func resetSettingsValues(from request: ControlHarnessRequest) throws -> ControlSettingsMutationResult {
+        let target = normalizedOptionalString(request.payload?["target"]) ?? "draft"
+        switch target {
+        case "draft":
+            let current = currentSettingsValues()
+            let previousDraft = settingsDraftValues
+            settingsDraftValues = nil
+            return .init(
+                protocolVersion: Self.protocolVersion,
+                values: current,
+                stagedValues: nil,
+                changedKeys: changedSettingKeys(from: previousDraft ?? current, to: current)
+            )
+        case "defaults":
+            let defaults = defaultSettingsValues()
+            let current = currentSettingsValues()
+            try persistSettingsValues(defaults)
+            settingsDraftValues = nil
+            return .init(
+                protocolVersion: Self.protocolVersion,
+                values: currentSettingsValues(),
+                stagedValues: nil,
+                changedKeys: changedSettingKeys(from: current, to: defaults)
+            )
+        default:
+            throw ControlHarnessCoreError.invalidArgument("settings.reset target must be draft|defaults")
+        }
+    }
+
+    private func settingsDiff(from request: ControlHarnessRequest) throws -> ControlSettingsDiffResult {
+        let current = currentSettingsValues()
+        let nextValues: [String: String]
+        if let payload = request.payload, payload.isEmpty == false {
+            nextValues = try applyingSettingsPatch(
+                try normalizedSettingsPatch(payload),
+                to: settingsDraftValues ?? current
+            )
+        } else {
+            nextValues = settingsDraftValues ?? current
+        }
+        let entries = changedSettingKeys(from: current, to: nextValues).map { key in
+            .init(
+                key: key,
+                currentValue: current[key] ?? "",
+                nextValue: nextValues[key] ?? ""
+            )
+        }
+        return .init(protocolVersion: Self.protocolVersion, entries: entries)
+    }
+
+    private func diagnosticsMetricsResult() -> ControlDiagnosticsMetricsResult {
+        .init(
+            protocolVersion: Self.protocolVersion,
+            metrics: appDelegate?.controlHarnessPerformanceMonitor.snapshot() ?? .empty()
+        )
+    }
+
+    private func resetDiagnosticsMetrics() -> ControlDiagnosticsMetricsResult {
+        .init(
+            protocolVersion: Self.protocolVersion,
+            metrics: appDelegate?.controlHarnessPerformanceMonitor.reset() ?? .empty()
+        )
+    }
+
+    private func diagnosticsLogsTail(from request: ControlHarnessRequest) throws -> ControlDiagnosticsLogsTailResult {
+        let source = normalizedOptionalString(request.payload?["source"]) ?? "audit"
+        guard let url = diagnosticsLogURL(source: source) else {
+            return .init(protocolVersion: Self.protocolVersion, source: source, lines: [])
+        }
+        let limit = max(request.maxLines ?? 20, 1)
+        let lines = try tailLogLines(at: url, source: source, limit: limit)
+        return .init(protocolVersion: Self.protocolVersion, source: source, lines: lines)
+    }
+
+    private func diagnosticsRecentErrors() -> ControlDiagnosticsRecentErrorsResult {
+        var errors = recentAuditErrors(limit: 10)
+        if let gatewayError = appDelegate?.controlHarnessGateway.lastStartupError,
+           gatewayError.isEmpty == false {
+            errors.insert(.init(source: "gateway", timestamp: nil, code: "startup_error", message: gatewayError, command: nil), at: 0)
+        }
+        if let runtimeError = appDelegate?.aiTerminalManagerStore.lastError,
+           runtimeError.isEmpty == false {
+            errors.insert(.init(source: "runtime", timestamp: nil, code: "store_error", message: runtimeError, command: nil), at: 0)
+        }
+        return .init(protocolVersion: Self.protocolVersion, errors: Array(errors.prefix(20)))
+    }
+
+    private func diagnosticsAuditQuery(from request: ControlHarnessRequest) throws -> ControlDiagnosticsAuditQueryResult {
+        let limit = max(request.maxLines ?? 50, 1)
+        let statusFilter = normalizedOptionalString(request.payload?["status"])
+        let commandFilter = normalizedOptionalString(request.payload?["command"])
+        let errorCodeFilter = normalizedOptionalString(request.payload?["error_code"])
+        let clientFilter = normalizedOptionalString(request.payload?["client"])
+        let sourceURL = diagnosticsLogURL(source: "audit")
+        guard let sourceURL else {
+            return .init(protocolVersion: Self.protocolVersion, records: [])
+        }
+        let records = try readAuditRecords(at: sourceURL)
+            .filter { record in
+                if let statusFilter, record.status != statusFilter { return false }
+                if let commandFilter, record.command != commandFilter { return false }
+                if let errorCodeFilter, record.errorCode != errorCodeFilter { return false }
+                if let clientFilter, record.client != clientFilter { return false }
+                return true
+            }
+        return .init(protocolVersion: Self.protocolVersion, records: Array(records.suffix(limit)))
+    }
+
+    private func diagnosticsEventBufferStatus() -> ControlDiagnosticsEventBufferStatusResult {
+        let snapshot = eventStreamRegistry.statusSnapshot()
+        return .init(
+            protocolVersion: Self.protocolVersion,
+            status: .init(
+                subscriptionCount: snapshot.subscriptionCount,
+                liveSubscriptionCount: snapshot.liveSubscriptionCount,
+                bufferedEventCount: snapshot.bufferedEventCount,
+                bufferedBytes: snapshot.bufferedBytes,
+                subscriptionsRequiringSnapshotResync: snapshot.subscriptionsRequiringSnapshotResync,
+                droppedEvents: snapshot.droppedEvents,
+                maxBufferedEvents: snapshot.maxBufferedEvents,
+                maxBufferedBytes: snapshot.maxBufferedBytes
+            )
         )
     }
 
@@ -4636,6 +5411,657 @@ final class ControlHarnessCore {
             throw ControlHarnessCoreError.invalidArgument("scheduled_at must be ISO-8601")
         }
         return parsed
+    }
+
+    private func parsePanelID(_ rawValue: String?) throws -> String {
+        guard let panelID = normalizedOptionalString(rawValue) else {
+            throw ControlHarnessCoreError.invalidArgument("Missing or invalid panel_id")
+        }
+        guard Self.supportedPanelIDs.contains(panelID) else {
+            throw ControlHarnessCoreError.invalidArgument("Unsupported panel_id: \(panelID)")
+        }
+        return panelID
+    }
+
+    private func parseRequiredPanelTabID(_ rawValue: String?, panelID: String) throws -> String {
+        guard let panelTabID = normalizedOptionalString(rawValue) else {
+            throw ControlHarnessCoreError.invalidArgument("Missing or invalid panel_tab_id")
+        }
+        try validatePanelTabID(panelTabID, panelID: panelID)
+        return panelTabID
+    }
+
+    private func validatePanelTabID(_ panelTabID: String, panelID: String) throws {
+        switch panelID {
+        case "settings":
+            guard settingsTab(from: panelTabID) != nil else {
+                throw ControlHarnessCoreError.invalidArgument("Unsupported panel_tab_id \(panelTabID) for settings")
+            }
+        case "ssh_connections":
+            guard SSHConnectionsPanelTab(rawValue: panelTabID) != nil else {
+                throw ControlHarnessCoreError.invalidArgument("Unsupported panel_tab_id \(panelTabID) for ssh_connections")
+            }
+        default:
+            throw ControlHarnessCoreError.invalidArgument("Unsupported panel_id: \(panelID)")
+        }
+    }
+
+    private func parseRequiredPayloadBoolean(_ request: ControlHarnessRequest, key: String) throws -> Bool {
+        guard let rawValue = normalizedOptionalString(request.payload?[key]),
+              let parsed = Self.parseBooleanString(rawValue) else {
+            throw ControlHarnessCoreError.invalidArgument("payload.\(key) must be true|false")
+        }
+        return parsed
+    }
+
+    private func resolveWindow(windowNumber: Int?) throws -> NSWindow {
+        guard let windowNumber else {
+            throw ControlHarnessCoreError.invalidArgument("Missing or invalid window_number")
+        }
+        guard let window = currentTopLevelWindows().first(where: { $0.windowNumber == windowNumber }) else {
+            throw ControlHarnessCoreError.operationFailed("No window exists for window_number=\(windowNumber)")
+        }
+        return window
+    }
+
+    private func currentTopLevelWindow() -> NSWindow? {
+        let candidates = [
+            NSApp.keyWindow,
+            NSApp.mainWindow,
+        ].compactMap { $0?.tabGroup?.selectedWindow ?? $0 }
+        return candidates.first ?? currentTopLevelWindows().first
+    }
+
+    private func currentTopLevelWindows() -> [NSWindow] {
+        var seen: Set<Int> = []
+        return NSApp.windows.compactMap { window in
+            let topLevel = window.tabGroup?.selectedWindow ?? window
+            guard seen.insert(topLevel.windowNumber).inserted else { return nil }
+            return topLevel
+        }.sorted { lhs, rhs in
+            lhs.windowNumber < rhs.windowNumber
+        }
+    }
+
+    private func makeWindowSummary(_ window: NSWindow) -> ControlWindowSummary {
+        .init(
+            windowNumber: window.windowNumber,
+            kind: windowKind(window),
+            title: window.title,
+            isVisible: window.isVisible,
+            isFocused: window.isKeyWindow,
+            isMainWindow: window.isMainWindow,
+            isMiniaturized: window.isMiniaturized,
+            isFloatingOnTop: window.level == .floating,
+            tabbedWindowCount: window.tabGroup?.windows.count ?? 1,
+            tabOverviewVisible: window.tabGroup?.isOverviewVisible ?? false
+        )
+    }
+
+    private func windowKind(_ window: NSWindow) -> String {
+        switch window.windowController {
+        case is SettingsController:
+            return "settings"
+        case is SSHConnectionsController:
+            return "ssh_connections"
+        case is BrowserTabController:
+            return "browser"
+        case is TerminalController:
+            return "terminal"
+        default:
+            return "other"
+        }
+    }
+
+    private func makePanelSummaries() -> [ControlPanelSummary] {
+        ["settings", "ssh_connections"].map(panelSummary)
+    }
+
+    private func panelSummary(panelID: String) -> ControlPanelSummary {
+        switch panelID {
+        case "settings":
+            let selectedTab = appDelegate.map { settingsPanelTabID($0.settingsController.selectedTab) }
+            return .init(
+                panelID: panelID,
+                title: "Settings",
+                isVisible: appDelegate?.settingsController.isVisible ?? false,
+                selectedTabID: selectedTab,
+                supportedTabIDs: SettingsView.SettingsTab.allCases.map(settingsPanelTabID),
+                windowNumber: appDelegate?.settingsController.window?.windowNumber
+            )
+        case "ssh_connections":
+            return .init(
+                panelID: panelID,
+                title: L10n.SSHConnections.windowTitle,
+                isVisible: appDelegate?.sshConnectionsController.isVisible ?? false,
+                selectedTabID: appDelegate?.sshConnectionsController.selectedTab.rawValue,
+                supportedTabIDs: SSHConnectionsPanelTab.allCases.map(\.rawValue),
+                windowNumber: appDelegate?.sshConnectionsController.window?.windowNumber
+            )
+        default:
+            return .init(panelID: panelID, title: panelID, isVisible: false, selectedTabID: nil, supportedTabIDs: [], windowNumber: nil)
+        }
+    }
+
+    private func mutatePanel(
+        panelID rawPanelID: String?,
+        panelTabID rawPanelTabID: String?,
+        action _: String,
+        body: (String, String?) throws -> Void
+    ) throws -> ControlPanelSummary {
+        let panelID = try parsePanelID(rawPanelID)
+        let panelTabID = normalizedOptionalString(rawPanelTabID)
+        if let panelTabID {
+            try validatePanelTabID(panelTabID, panelID: panelID)
+        }
+        try body(panelID, panelTabID)
+        return panelSummary(panelID: panelID)
+    }
+
+    private func openPanel(panelID: String, panelTabID: String?) throws {
+        guard let appDelegate else {
+            throw ControlHarnessCoreError.appUnavailable
+        }
+        switch panelID {
+        case "settings":
+            appDelegate.settingsController.show(tab: settingsTab(from: panelTabID) ?? .general)
+        case "ssh_connections":
+            appDelegate.sshConnectionsController.show(tab: SSHConnectionsPanelTab(rawValue: panelTabID ?? "") ?? .connections)
+        default:
+            throw ControlHarnessCoreError.invalidArgument("Unsupported panel_id: \(panelID)")
+        }
+    }
+
+    private func settingsPanelTabID(_ tab: SettingsView.SettingsTab) -> String {
+        switch tab {
+        case .general:
+            return "general"
+        case .appearance:
+            return "appearance"
+        case .gateway:
+            return "gateway"
+        }
+    }
+
+    private func settingsTab(from rawValue: String?) -> SettingsView.SettingsTab? {
+        switch normalizedOptionalString(rawValue) {
+        case "general":
+            return .general
+        case "appearance":
+            return .appearance
+        case "gateway":
+            return .gateway
+        default:
+            return nil
+        }
+    }
+
+    private func settingsSchemaEntries() -> [ControlSettingsSchemaEntry] {
+        let defaults = defaultSettingsValues()
+        return [
+            .init(key: "app.language", valueType: "enum", defaultValue: defaults["app.language"] ?? "", enumValues: AppLanguageSetting.allCases.map(\.rawValue), description: "Desktop UI language override."),
+            .init(key: "appearance.icon", valueType: "enum", defaultValue: defaults["appearance.icon"] ?? "", enumValues: Ghostty.MacOSIcon.builtInOptions.map(\.rawValue) + [Ghostty.MacOSIcon.custom.rawValue, Ghostty.MacOSIcon.customStyle.rawValue], description: "App icon preset."),
+            .init(key: "appearance.icon.custom_path", valueType: "path", defaultValue: defaults["appearance.icon.custom_path"] ?? "", enumValues: nil, description: "Custom ICNS path."),
+            .init(key: "appearance.icon.frame", valueType: "enum", defaultValue: defaults["appearance.icon.frame"] ?? "", enumValues: [Ghostty.MacOSIconFrame.aluminum.rawValue, Ghostty.MacOSIconFrame.beige.rawValue, Ghostty.MacOSIconFrame.plastic.rawValue, Ghostty.MacOSIconFrame.chrome.rawValue], description: "Custom style icon frame."),
+            .init(key: "appearance.icon.ghost_color_hex", valueType: "color", defaultValue: defaults["appearance.icon.ghost_color_hex"] ?? "", enumValues: nil, description: "Ghost color hex."),
+            .init(key: "appearance.icon.screen_colors", valueType: "csv_colors", defaultValue: defaults["appearance.icon.screen_colors"] ?? "", enumValues: nil, description: "Comma separated screen colors."),
+            .init(key: "browser.profile_path", valueType: "path", defaultValue: defaults["browser.profile_path"] ?? "", enumValues: nil, description: "Browser profile override path."),
+            .init(key: "browser.runtime_path", valueType: "path", defaultValue: defaults["browser.runtime_path"] ?? "", enumValues: nil, description: "Browser runtime override path."),
+            .init(key: "gateway.enabled", valueType: "bool", defaultValue: defaults["gateway.enabled"] ?? "", enumValues: ["true", "false"], description: "Control gateway enable flag."),
+            .init(key: "gateway.listen_host", valueType: "string", defaultValue: defaults["gateway.listen_host"] ?? "", enumValues: nil, description: "Gateway listen host."),
+            .init(key: "gateway.listen_port", valueType: "u16", defaultValue: defaults["gateway.listen_port"] ?? "", enumValues: nil, description: "Gateway listen port."),
+            .init(key: "gateway.pairing_advertise_host", valueType: "string", defaultValue: defaults["gateway.pairing_advertise_host"] ?? "", enumValues: nil, description: "Gateway pairing advertise host."),
+            .init(key: "gateway.show_pairing_qr_on_launch", valueType: "bool", defaultValue: defaults["gateway.show_pairing_qr_on_launch"] ?? "", enumValues: ["true", "false"], description: "Show pairing QR after launch."),
+            .init(key: "gateway.semantic_profile", valueType: "enum", defaultValue: defaults["gateway.semantic_profile"] ?? "", enumValues: ControlHarnessSemanticProfile.allCases.map(\.rawValue), description: "Gateway semantic profile."),
+            .init(key: "todo.enabled", valueType: "bool", defaultValue: defaults["todo.enabled"] ?? "", enumValues: ["true", "false"], description: "Todo workspace enable flag."),
+            .init(key: "todo.workspace_root_path", valueType: "path", defaultValue: defaults["todo.workspace_root_path"] ?? "", enumValues: nil, description: "Todo workspace root."),
+            .init(key: "todo.show_completed_items", valueType: "bool", defaultValue: defaults["todo.show_completed_items"] ?? "", enumValues: ["true", "false"], description: "Show completed todo items."),
+            .init(key: "todo.selected_date_anchor", valueType: "date", defaultValue: defaults["todo.selected_date_anchor"] ?? "", enumValues: nil, description: "Todo anchor day."),
+            .init(key: "todo.sidebar_edge", valueType: "enum", defaultValue: defaults["todo.sidebar_edge"] ?? "", enumValues: AITerminalTodoSidebarEdge.allCases.map(\.rawValue), description: "Todo sidebar edge."),
+            .init(key: "todo.workspace_overlay_visible", valueType: "bool", defaultValue: defaults["todo.workspace_overlay_visible"] ?? "", enumValues: ["true", "false"], description: "Workspace overlay visibility."),
+            .init(key: "todo.workspace_overlay_corner", valueType: "enum", defaultValue: defaults["todo.workspace_overlay_corner"] ?? "", enumValues: AITerminalTodoOverlayCorner.allCases.map(\.rawValue), description: "Workspace overlay corner."),
+            .init(key: "learning.enabled", valueType: "bool", defaultValue: defaults["learning.enabled"] ?? "", enumValues: ["true", "false"], description: "Learning workspace enable flag."),
+            .init(key: "learning.prefer_tab_working_directory", valueType: "bool", defaultValue: defaults["learning.prefer_tab_working_directory"] ?? "", enumValues: ["true", "false"], description: "Prefer tab working directory."),
+            .init(key: "learning.default_project_path", valueType: "path", defaultValue: defaults["learning.default_project_path"] ?? "", enumValues: nil, description: "Learning project root."),
+            .init(key: "learning.notes_relative_path", valueType: "string", defaultValue: defaults["learning.notes_relative_path"] ?? "", enumValues: nil, description: "Relative notes path."),
+            .init(key: "learning.command_template", valueType: "string", defaultValue: defaults["learning.command_template"] ?? "", enumValues: nil, description: "Learning command template."),
+            .init(key: "heartbeat.enabled", valueType: "bool", defaultValue: defaults["heartbeat.enabled"] ?? "", enumValues: ["true", "false"], description: "Heartbeat queue enable flag."),
+            .init(key: "heartbeat.interval_seconds", valueType: "double", defaultValue: defaults["heartbeat.interval_seconds"] ?? "", enumValues: nil, description: "Heartbeat interval seconds."),
+            .init(key: "heartbeat.max_concurrent_tasks", valueType: "int", defaultValue: defaults["heartbeat.max_concurrent_tasks"] ?? "", enumValues: nil, description: "Heartbeat max concurrency."),
+            .init(key: "heartbeat.allow_external_inbox_mutations", valueType: "bool", defaultValue: defaults["heartbeat.allow_external_inbox_mutations"] ?? "", enumValues: ["true", "false"], description: "Allow external inbox edits."),
+            .init(key: "runtime.enabled", valueType: "bool", defaultValue: defaults["runtime.enabled"] ?? "", enumValues: ["true", "false"], description: "Agent runtime enable flag."),
+            .init(key: "runtime.default_lease_duration_seconds", valueType: "double", defaultValue: defaults["runtime.default_lease_duration_seconds"] ?? "", enumValues: nil, description: "Default runtime lease duration."),
+            .init(key: "runtime.stale_task_policy", valueType: "enum", defaultValue: defaults["runtime.stale_task_policy"] ?? "", enumValues: AgentRuntimeStaleTaskPolicy.allCases.map(\.rawValue), description: "Runtime stale task policy."),
+        ]
+    }
+
+    private func currentSettingsValues() -> [String: String] {
+        var values = defaultSettingsValues()
+        if let appDelegate {
+            values["app.language"] = AppLanguageSetting.storedSelection().rawValue
+
+            let iconSettings = appDelegate.appIconSettings.sanitized
+            values["appearance.icon"] = iconSettings.icon.rawValue
+            values["appearance.icon.custom_path"] = iconSettings.customIconPath
+            values["appearance.icon.frame"] = iconSettings.frame.rawValue
+            values["appearance.icon.ghost_color_hex"] = iconSettings.ghostColorHex
+            values["appearance.icon.screen_colors"] = iconSettings.screenColorHexes.joined(separator: ",")
+
+            values["browser.profile_path"] = appDelegate.browserProfilePathOverride ?? ""
+            values["browser.runtime_path"] = appDelegate.browserRuntimePathOverride ?? ""
+
+            let gateway = appDelegate.controlHarnessGatewaySettings.sanitized()
+            values["gateway.enabled"] = Self.booleanString(gateway.isEnabled)
+            values["gateway.listen_host"] = gateway.listenHost
+            values["gateway.listen_port"] = String(gateway.listenPort)
+            values["gateway.pairing_advertise_host"] = gateway.pairingAdvertiseHost
+            values["gateway.show_pairing_qr_on_launch"] = Self.booleanString(gateway.showPairingQrOnLaunch)
+            values["gateway.semantic_profile"] = gateway.semanticProfile
+
+            let store = appDelegate.aiTerminalManagerStore
+            let todo = store.todoSettings
+            values["todo.enabled"] = Self.booleanString(todo.enabled)
+            values["todo.workspace_root_path"] = todo.workspaceRootPath
+            values["todo.show_completed_items"] = Self.booleanString(todo.showCompletedItems)
+            values["todo.selected_date_anchor"] = todo.selectedDateAnchor
+            values["todo.sidebar_edge"] = todo.sidebarEdge.rawValue
+            values["todo.workspace_overlay_visible"] = Self.booleanString(todo.workspaceOverlayVisible)
+            values["todo.workspace_overlay_corner"] = todo.workspaceOverlayCorner.rawValue
+
+            let learning = store.learningSettings
+            values["learning.enabled"] = Self.booleanString(learning.enabled)
+            values["learning.prefer_tab_working_directory"] = Self.booleanString(learning.preferTabWorkingDirectory)
+            values["learning.default_project_path"] = learning.defaultProjectPath
+            values["learning.notes_relative_path"] = learning.notesRelativePath
+            values["learning.command_template"] = learning.commandTemplate
+
+            let heartbeat = store.heartbeatQueueSettings
+            values["heartbeat.enabled"] = Self.booleanString(heartbeat.enabled)
+            values["heartbeat.interval_seconds"] = Self.doubleString(heartbeat.heartbeatIntervalSeconds)
+            values["heartbeat.max_concurrent_tasks"] = String(heartbeat.maxConcurrentTasks)
+            values["heartbeat.allow_external_inbox_mutations"] = Self.booleanString(heartbeat.allowExternalInboxMutations)
+
+            let runtime = store.agentRuntimeSettings.sanitized()
+            values["runtime.enabled"] = Self.booleanString(runtime.enabled)
+            values["runtime.default_lease_duration_seconds"] = Self.doubleString(runtime.defaultLeaseDurationSeconds)
+            values["runtime.stale_task_policy"] = runtime.staleTaskPolicy.rawValue
+        }
+        return values
+    }
+
+    private func defaultSettingsValues() -> [String: String] {
+        let iconDefaults = AppIconSettings().sanitized
+        let gatewayDefaults = ControlHarnessGatewayAppSettings().sanitized()
+        let todoDefaults = AITerminalTodoSettings()
+        let learningDefaults = AITerminalLearningSettings()
+        let heartbeatDefaults = AITerminalHeartbeatQueueSettings()
+        let runtimeDefaults = AgentRuntimeSettings().sanitized()
+        return [
+            "app.language": AppLanguageSetting.system.rawValue,
+            "appearance.icon": iconDefaults.icon.rawValue,
+            "appearance.icon.custom_path": iconDefaults.customIconPath,
+            "appearance.icon.frame": iconDefaults.frame.rawValue,
+            "appearance.icon.ghost_color_hex": iconDefaults.ghostColorHex,
+            "appearance.icon.screen_colors": iconDefaults.screenColorHexes.joined(separator: ","),
+            "browser.profile_path": "",
+            "browser.runtime_path": "",
+            "gateway.enabled": Self.booleanString(gatewayDefaults.isEnabled),
+            "gateway.listen_host": gatewayDefaults.listenHost,
+            "gateway.listen_port": String(gatewayDefaults.listenPort),
+            "gateway.pairing_advertise_host": gatewayDefaults.pairingAdvertiseHost,
+            "gateway.show_pairing_qr_on_launch": Self.booleanString(gatewayDefaults.showPairingQrOnLaunch),
+            "gateway.semantic_profile": gatewayDefaults.semanticProfile,
+            "todo.enabled": Self.booleanString(todoDefaults.enabled),
+            "todo.workspace_root_path": todoDefaults.workspaceRootPath,
+            "todo.show_completed_items": Self.booleanString(todoDefaults.showCompletedItems),
+            "todo.selected_date_anchor": todoDefaults.selectedDateAnchor,
+            "todo.sidebar_edge": todoDefaults.sidebarEdge.rawValue,
+            "todo.workspace_overlay_visible": Self.booleanString(todoDefaults.workspaceOverlayVisible),
+            "todo.workspace_overlay_corner": todoDefaults.workspaceOverlayCorner.rawValue,
+            "learning.enabled": Self.booleanString(learningDefaults.enabled),
+            "learning.prefer_tab_working_directory": Self.booleanString(learningDefaults.preferTabWorkingDirectory),
+            "learning.default_project_path": learningDefaults.defaultProjectPath,
+            "learning.notes_relative_path": learningDefaults.notesRelativePath,
+            "learning.command_template": learningDefaults.commandTemplate,
+            "heartbeat.enabled": Self.booleanString(heartbeatDefaults.enabled),
+            "heartbeat.interval_seconds": Self.doubleString(heartbeatDefaults.heartbeatIntervalSeconds),
+            "heartbeat.max_concurrent_tasks": String(heartbeatDefaults.maxConcurrentTasks),
+            "heartbeat.allow_external_inbox_mutations": Self.booleanString(heartbeatDefaults.allowExternalInboxMutations),
+            "runtime.enabled": Self.booleanString(runtimeDefaults.enabled),
+            "runtime.default_lease_duration_seconds": Self.doubleString(runtimeDefaults.defaultLeaseDurationSeconds),
+            "runtime.stale_task_policy": runtimeDefaults.staleTaskPolicy.rawValue,
+        ]
+    }
+
+    private func normalizedSettingsPatch(_ payload: [String: String]?) throws -> [String: String] {
+        guard let payload, payload.isEmpty == false else {
+            throw ControlHarnessCoreError.invalidArgument("settings payload must not be empty")
+        }
+        var normalized: [String: String] = [:]
+        for key in payload.keys.sorted() {
+            guard let rawValue = payload[key] else { continue }
+            normalized[key] = try normalizeSettingValue(key: key, rawValue: rawValue)
+        }
+        return normalized
+    }
+
+    private func applyingSettingsPatch(_ patch: [String: String], to base: [String: String]) throws -> [String: String] {
+        var next = base
+        for key in patch.keys.sorted() {
+            next[key] = patch[key]
+        }
+        return next
+    }
+
+    private func normalizeSettingValue(key: String, rawValue: String) throws -> String {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch key {
+        case "app.language":
+            guard let value = AppLanguageSetting(rawValue: trimmed) else {
+                throw ControlHarnessCoreError.invalidArgument("Unsupported app.language value: \(rawValue)")
+            }
+            return value.rawValue
+
+        case "appearance.icon":
+            guard let value = Ghostty.MacOSIcon(rawValue: trimmed) else {
+                throw ControlHarnessCoreError.invalidArgument("Unsupported appearance.icon value: \(rawValue)")
+            }
+            return value.rawValue
+
+        case "appearance.icon.custom_path":
+            return trimmed.isEmpty ? AppIconSettings.defaultCustomIconPath : (trimmed as NSString).standardizingPath
+
+        case "appearance.icon.frame":
+            guard let value = Ghostty.MacOSIconFrame(rawValue: trimmed) else {
+                throw ControlHarnessCoreError.invalidArgument("Unsupported appearance.icon.frame value: \(rawValue)")
+            }
+            return value.rawValue
+
+        case "appearance.icon.ghost_color_hex":
+            guard let normalized = NSColor(hex: trimmed)?.hexString else {
+                throw ControlHarnessCoreError.invalidArgument("appearance.icon.ghost_color_hex must be a hex color")
+            }
+            return normalized
+
+        case "appearance.icon.screen_colors":
+            let colors = try normalizeScreenColors(trimmed)
+            return colors.joined(separator: ",")
+
+        case "browser.profile_path", "browser.runtime_path":
+            return trimmed.isEmpty ? "" : (trimmed as NSString).standardizingPath
+
+        case "gateway.enabled", "gateway.show_pairing_qr_on_launch", "todo.enabled", "todo.show_completed_items",
+            "todo.workspace_overlay_visible", "learning.enabled", "learning.prefer_tab_working_directory",
+            "heartbeat.enabled", "heartbeat.allow_external_inbox_mutations", "runtime.enabled":
+            guard let value = Self.parseBooleanString(trimmed) else {
+                throw ControlHarnessCoreError.invalidArgument("\(key) must be true|false")
+            }
+            return Self.booleanString(value)
+
+        case "gateway.listen_host":
+            return trimmed.isEmpty ? ControlHarnessGatewayAppSettings.defaultListenHost : trimmed
+
+        case "gateway.listen_port":
+            guard let port = ControlHarnessGatewayAppSettings.parseListenPort(trimmed) else {
+                throw ControlHarnessCoreError.invalidArgument("gateway.listen_port must be a valid TCP port")
+            }
+            return String(port)
+
+        case "gateway.pairing_advertise_host":
+            return trimmed
+
+        case "gateway.semantic_profile":
+            guard let value = ControlHarnessSemanticProfile(rawValue: trimmed) else {
+                throw ControlHarnessCoreError.invalidArgument("Unsupported gateway.semantic_profile value: \(rawValue)")
+            }
+            return value.rawValue
+
+        case "todo.workspace_root_path":
+            return trimmed.isEmpty ? AITerminalTodoSettings.defaultWorkspaceRootPath : (trimmed as NSString).standardizingPath
+
+        case "todo.selected_date_anchor":
+            guard AITerminalTodoSettings.date(fromDayString: trimmed) != nil else {
+                throw ControlHarnessCoreError.invalidArgument("todo.selected_date_anchor must be YYYY-MM-DD")
+            }
+            return AITerminalTodoSettings.normalizedDateAnchor(trimmed)
+
+        case "todo.sidebar_edge":
+            guard let value = AITerminalTodoSidebarEdge(rawValue: trimmed) else {
+                throw ControlHarnessCoreError.invalidArgument("Unsupported todo.sidebar_edge value: \(rawValue)")
+            }
+            return value.rawValue
+
+        case "todo.workspace_overlay_corner":
+            guard let value = AITerminalTodoOverlayCorner(rawValue: trimmed) else {
+                throw ControlHarnessCoreError.invalidArgument("Unsupported todo.workspace_overlay_corner value: \(rawValue)")
+            }
+            return value.rawValue
+
+        case "learning.default_project_path":
+            return trimmed.isEmpty ? AITerminalLearningSettings.defaultLearnWorkspacePath : (trimmed as NSString).standardizingPath
+
+        case "learning.notes_relative_path":
+            return trimmed.isEmpty ? AITerminalLearningSettings.defaultNotesRelativePath : trimmed
+
+        case "learning.command_template":
+            return AITerminalLearningSettings.normalizedCommandTemplate(trimmed)
+
+        case "heartbeat.interval_seconds", "runtime.default_lease_duration_seconds":
+            guard let value = Double(trimmed), value > 0 else {
+                throw ControlHarnessCoreError.invalidArgument("\(key) must be a positive number")
+            }
+            return Self.doubleString(value)
+
+        case "heartbeat.max_concurrent_tasks":
+            guard let value = Int(trimmed), value > 0 else {
+                throw ControlHarnessCoreError.invalidArgument("heartbeat.max_concurrent_tasks must be a positive integer")
+            }
+            return String(value)
+
+        case "runtime.stale_task_policy":
+            guard let value = AgentRuntimeStaleTaskPolicy(rawValue: trimmed) else {
+                throw ControlHarnessCoreError.invalidArgument("Unsupported runtime.stale_task_policy value: \(rawValue)")
+            }
+            return value.rawValue
+
+        default:
+            throw ControlHarnessCoreError.invalidArgument("Unsupported settings key: \(key)")
+        }
+    }
+
+    private func normalizeScreenColors(_ rawValue: String) throws -> [String] {
+        let parts = rawValue
+            .split { $0 == "," || $0 == "\n" }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if parts.isEmpty {
+            return AppIconSettings.defaultScreenColorHexes
+        }
+        let normalized = parts.compactMap { NSColor(hex: $0)?.hexString }
+        guard normalized.count == parts.count else {
+            throw ControlHarnessCoreError.invalidArgument("appearance.icon.screen_colors must be comma-separated hex colors")
+        }
+        return Array(normalized.prefix(AppIconSettings.maxScreenColorCount))
+    }
+
+    private func persistSettingsValues(_ values: [String: String]) throws {
+        guard let appDelegate else {
+            throw ControlHarnessCoreError.appUnavailable
+        }
+
+        guard let language = AppLanguageSetting(rawValue: requiredSettingValue("app.language", from: values)) else {
+            throw ControlHarnessCoreError.invalidArgument("Missing app.language")
+        }
+        language.apply()
+
+        guard let icon = Ghostty.MacOSIcon(rawValue: requiredSettingValue("appearance.icon", from: values)) else {
+            throw ControlHarnessCoreError.invalidArgument("Missing appearance.icon")
+        }
+        guard let frame = Ghostty.MacOSIconFrame(rawValue: requiredSettingValue("appearance.icon.frame", from: values)) else {
+            throw ControlHarnessCoreError.invalidArgument("Missing appearance.icon.frame")
+        }
+        let iconSettings = AppIconSettings(
+            icon: icon,
+            customIconPath: requiredSettingValue("appearance.icon.custom_path", from: values),
+            frame: frame,
+            ghostColorHex: requiredSettingValue("appearance.icon.ghost_color_hex", from: values),
+            screenColorHexes: try normalizeScreenColors(requiredSettingValue("appearance.icon.screen_colors", from: values))
+        )
+        do {
+            try appDelegate.saveVisualAppIconSettings(iconSettings)
+            try appDelegate.saveBrowserSettings(
+                profilePath: requiredSettingValue("browser.profile_path", from: values),
+                runtimePath: requiredSettingValue("browser.runtime_path", from: values)
+            )
+        } catch {
+            throw ControlHarnessCoreError.operationFailed(error.localizedDescription)
+        }
+
+        let gatewaySettings = ControlHarnessGatewayAppSettings(
+            isEnabled: try requiredSettingBoolean("gateway.enabled", from: values),
+            listenHost: requiredSettingValue("gateway.listen_host", from: values),
+            listenPort: UInt16(requiredSettingValue("gateway.listen_port", from: values)) ?? ControlHarnessGatewayAppSettings.defaultListenPort,
+            pairingAdvertiseHost: requiredSettingValue("gateway.pairing_advertise_host", from: values),
+            showPairingQrOnLaunch: try requiredSettingBoolean("gateway.show_pairing_qr_on_launch", from: values),
+            semanticProfile: requiredSettingValue("gateway.semantic_profile", from: values)
+        )
+        appDelegate.saveControlHarnessGatewaySettings(gatewaySettings)
+
+        let store = appDelegate.aiTerminalManagerStore
+        store.saveTodoSettings(.init(
+            enabled: try requiredSettingBoolean("todo.enabled", from: values),
+            workspaceRootPath: requiredSettingValue("todo.workspace_root_path", from: values),
+            showCompletedItems: try requiredSettingBoolean("todo.show_completed_items", from: values),
+            selectedDateAnchor: requiredSettingValue("todo.selected_date_anchor", from: values),
+            sidebarEdge: AITerminalTodoSidebarEdge(rawValue: requiredSettingValue("todo.sidebar_edge", from: values)) ?? .leading,
+            workspaceOverlayVisible: try requiredSettingBoolean("todo.workspace_overlay_visible", from: values),
+            workspaceOverlayCorner: AITerminalTodoOverlayCorner(rawValue: requiredSettingValue("todo.workspace_overlay_corner", from: values)) ?? .topLeading
+        ))
+        store.saveLearningSettings(.init(
+            enabled: try requiredSettingBoolean("learning.enabled", from: values),
+            preferTabWorkingDirectory: try requiredSettingBoolean("learning.prefer_tab_working_directory", from: values),
+            defaultProjectPath: requiredSettingValue("learning.default_project_path", from: values),
+            notesRelativePath: requiredSettingValue("learning.notes_relative_path", from: values),
+            commandTemplate: requiredSettingValue("learning.command_template", from: values),
+            fastModel: AITerminalLearningSettings.defaultFastModel,
+            promptTemplate: AITerminalLearningSettings.defaultPromptTemplate
+        ))
+        store.saveHeartbeatQueueSettings(.init(
+            enabled: try requiredSettingBoolean("heartbeat.enabled", from: values),
+            heartbeatIntervalSeconds: Double(requiredSettingValue("heartbeat.interval_seconds", from: values)) ?? 5,
+            maxConcurrentTasks: Int(requiredSettingValue("heartbeat.max_concurrent_tasks", from: values)) ?? 4,
+            allowExternalInboxMutations: try requiredSettingBoolean("heartbeat.allow_external_inbox_mutations", from: values)
+        ))
+        store.saveAgentRuntimeSettings(.init(
+            enabled: try requiredSettingBoolean("runtime.enabled", from: values),
+            defaultLeaseDurationSeconds: Double(requiredSettingValue("runtime.default_lease_duration_seconds", from: values)) ?? AgentRuntimeSettings().defaultLeaseDurationSeconds,
+            staleTaskPolicy: AgentRuntimeStaleTaskPolicy(rawValue: requiredSettingValue("runtime.stale_task_policy", from: values)) ?? .requeueClaimedWork
+        ))
+    }
+
+    private func requiredSettingValue(_ key: String, from values: [String: String]) -> String {
+        values[key] ?? ""
+    }
+
+    private func requiredSettingBoolean(_ key: String, from values: [String: String]) throws -> Bool {
+        guard let rawValue = values[key], let parsed = Self.parseBooleanString(rawValue) else {
+            throw ControlHarnessCoreError.invalidArgument("Missing or invalid \(key)")
+        }
+        return parsed
+    }
+
+    private func changedSettingKeys(from previous: [String: String], to next: [String: String]) -> [String] {
+        Array(Set(previous.keys).union(next.keys)).sorted().filter { previous[$0] != next[$0] }
+    }
+
+    private func diagnosticsLogURL(source: String) -> URL? {
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.leongong.ghodex"
+        let baseDirectory = ControlHarnessAuditLogger.baseDirectory(bundleID: bundleID)
+        switch source {
+        case "audit":
+            return baseDirectory.appendingPathComponent("control-harness-audit.jsonl", isDirectory: false)
+        case "events":
+            return baseDirectory.appendingPathComponent("control-harness-events.jsonl", isDirectory: false)
+        case "runtime":
+            return baseDirectory.appendingPathComponent("runtime-memory-diagnostics.jsonl", isDirectory: false)
+        default:
+            return nil
+        }
+    }
+
+    private func tailLogLines(at url: URL, source: String, limit: Int) throws -> [ControlDiagnosticsLogLine] {
+        let lines = try readUTF8Lines(at: url)
+        let slice = Array(lines.suffix(limit))
+        let startIndex = max(lines.count - slice.count, 0)
+        return slice.enumerated().map { offset, rawLine in
+            .init(source: source, lineNumber: startIndex + offset + 1, raw: rawLine)
+        }
+    }
+
+    private func readAuditRecords(at url: URL) throws -> [ControlAuditRecord] {
+        try readUTF8Lines(at: url).compactMap { line in
+            guard let data = line.data(using: .utf8) else { return nil }
+            return try? JSONDecoder().decode(ControlAuditRecord.self, from: data)
+        }
+    }
+
+    private func recentAuditErrors(limit: Int) -> [ControlDiagnosticsRecentError] {
+        guard let url = diagnosticsLogURL(source: "audit"),
+              let records = try? readAuditRecords(at: url) else {
+            return []
+        }
+        return records
+            .filter { $0.status == "error" || $0.errorCode != nil }
+            .suffix(limit)
+            .map {
+                .init(
+                    source: "audit",
+                    timestamp: $0.timestamp,
+                    code: $0.errorCode,
+                    message: $0.errorCode ?? "control_harness_error",
+                    command: $0.command
+                )
+            }
+    }
+
+    private func readUTF8Lines(at url: URL) throws -> [String] {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: url.path) else { return [] }
+        let data = try Data(contentsOf: url)
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw ControlHarnessCoreError.operationFailed("Unable to decode log file at \(url.path)")
+        }
+        return text
+            .split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+            .map(String.init)
+            .filter { !$0.isEmpty }
+    }
+
+    private static func parseBooleanString(_ rawValue: String?) -> Bool? {
+        guard let normalized = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              normalized.isEmpty == false else {
+            return nil
+        }
+        switch normalized {
+        case "true", "1", "yes", "on":
+            return true
+        case "false", "0", "no", "off":
+            return false
+        default:
+            return nil
+        }
+    }
+
+    private static func booleanString(_ value: Bool) -> String {
+        value ? "true" : "false"
+    }
+
+    private static func doubleString(_ value: Double) -> String {
+        let rounded = value.rounded()
+        if abs(rounded - value) < 0.000_000_1 {
+            return String(Int(rounded))
+        }
+        return String(value)
     }
 
     private func normalizedOptionalString(_ rawValue: String?) -> String? {

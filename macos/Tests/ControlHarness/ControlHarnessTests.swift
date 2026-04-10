@@ -216,6 +216,186 @@ private struct ControlHarnessResponseResultEnvelope<Result: Decodable>: Decodabl
     }
 }
 
+private struct ControlHarnessCapabilitiesPayload: Decodable {
+    let protocolVersion: String
+    let commands: [String]
+    let features: [String]
+    let compatibility: ControlHarnessCompatibilityPayload
+    let lastSequence: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case commands
+        case features
+        case compatibility
+        case lastSequence = "last_sequence"
+    }
+}
+
+private struct ControlHarnessAppStatePayload: Decodable {
+    let protocolVersion: String
+    let generatedAt: String
+    let isActive: Bool
+    let isHidden: Bool
+    let frontmostWindowNumber: Int?
+    let windowCount: Int
+    let panelCount: Int
+    let settingsDraftPending: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case generatedAt = "generated_at"
+        case isActive = "is_active"
+        case isHidden = "is_hidden"
+        case frontmostWindowNumber = "frontmost_window_number"
+        case windowCount = "window_count"
+        case panelCount = "panel_count"
+        case settingsDraftPending = "settings_draft_pending"
+    }
+}
+
+private struct ControlHarnessWindowSummaryPayload: Decodable {
+    let windowNumber: Int
+    let kind: String
+
+    enum CodingKeys: String, CodingKey {
+        case windowNumber = "window_number"
+        case kind
+    }
+}
+
+private struct ControlHarnessWindowListPayload: Decodable {
+    let protocolVersion: String
+    let windows: [ControlHarnessWindowSummaryPayload]
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case windows
+    }
+}
+
+private struct ControlHarnessPanelSummaryPayload: Decodable {
+    let panelID: String
+    let title: String
+    let isVisible: Bool
+    let selectedTabID: String?
+    let supportedTabIDs: [String]
+    let windowNumber: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case panelID = "panel_id"
+        case title
+        case isVisible = "is_visible"
+        case selectedTabID = "selected_tab_id"
+        case supportedTabIDs = "supported_tab_ids"
+        case windowNumber = "window_number"
+    }
+}
+
+private struct ControlHarnessPanelListPayload: Decodable {
+    let protocolVersion: String
+    let panels: [ControlHarnessPanelSummaryPayload]
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case panels
+    }
+}
+
+private struct ControlHarnessSettingsSchemaEntryPayload: Decodable {
+    let key: String
+    let valueType: String
+    let defaultValue: String
+    let enumValues: [String]?
+    let description: String
+
+    enum CodingKeys: String, CodingKey {
+        case key
+        case valueType = "value_type"
+        case defaultValue = "default_value"
+        case enumValues = "enum_values"
+        case description
+    }
+}
+
+private struct ControlHarnessSettingsSchemaPayload: Decodable {
+    let protocolVersion: String
+    let entries: [ControlHarnessSettingsSchemaEntryPayload]
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case entries
+    }
+}
+
+private struct ControlHarnessSettingsValuesPayload: Decodable {
+    let protocolVersion: String
+    let values: [String: String]
+    let stagedValues: [String: String]?
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case values
+        case stagedValues = "staged_values"
+    }
+}
+
+private struct ControlHarnessSettingsMutationPayload: Decodable {
+    let protocolVersion: String
+    let values: [String: String]
+    let stagedValues: [String: String]?
+    let changedKeys: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case values
+        case stagedValues = "staged_values"
+        case changedKeys = "changed_keys"
+    }
+}
+
+private struct ControlHarnessDiagnosticsMetricsPayload: Decodable {
+    let protocolVersion: String
+    let metrics: ControlHarnessPerformanceSnapshot
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case metrics
+    }
+}
+
+private struct ControlHarnessEventBufferStatusPayload: Decodable {
+    let subscriptionCount: Int
+    let liveSubscriptionCount: Int
+    let bufferedEventCount: Int
+    let bufferedBytes: Int
+    let subscriptionsRequiringSnapshotResync: Int
+    let droppedEvents: Int
+    let maxBufferedEvents: Int
+    let maxBufferedBytes: Int
+
+    enum CodingKeys: String, CodingKey {
+        case subscriptionCount = "subscription_count"
+        case liveSubscriptionCount = "live_subscription_count"
+        case bufferedEventCount = "buffered_event_count"
+        case bufferedBytes = "buffered_bytes"
+        case subscriptionsRequiringSnapshotResync = "subscriptions_requiring_snapshot_resync"
+        case droppedEvents = "dropped_events"
+        case maxBufferedEvents = "max_buffered_events"
+        case maxBufferedBytes = "max_buffered_bytes"
+    }
+}
+
+private struct ControlHarnessDiagnosticsEventBufferStatusPayload: Decodable {
+    let protocolVersion: String
+    let status: ControlHarnessEventBufferStatusPayload
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case status
+    }
+}
+
 private struct ControlHarnessPairingBeginPayload: Decodable {
     let pairingCode: String
     let client: String
@@ -6505,10 +6685,15 @@ struct ControlHarnessTests {
     @Test func runtimeCommandsExposeExpectedSupportAndKinds() {
         #expect(ControlHarnessCore.supportedCommands.contains("system.handshake"))
         #expect(ControlHarnessCore.supportedCommands.contains("state.snapshot"))
+        #expect(ControlHarnessCore.supportedCommands.contains("app.state.get"))
         #expect(ControlHarnessCore.supportedCommands.contains("terminal.write"))
         #expect(ControlHarnessCore.supportedCommands.contains("runtime.snapshot"))
         #expect(ControlHarnessCore.supportedCommands.contains("browser.tab.list"))
         #expect(ControlHarnessCore.supportedCommands.contains("browser.page.load"))
+        #expect(ControlHarnessCore.supportedCommands.contains("window.list"))
+        #expect(ControlHarnessCore.supportedCommands.contains("panel.list"))
+        #expect(ControlHarnessCore.supportedCommands.contains("settings.schema.get"))
+        #expect(ControlHarnessCore.supportedCommands.contains("diagnostics.metrics.get"))
         #expect(ControlHarnessCore.supportedCommands.contains("agent.runtime.snapshot"))
         #expect(ControlHarnessCore.supportedCommands.contains("agent.runtime.session.register"))
         #expect(ControlHarnessCore.supportedCommands.contains("agent.runtime.session.heartbeat"))
@@ -6640,6 +6825,538 @@ struct ControlHarnessTests {
         #expect(register.commandKind == .mutation)
         #expect(enqueue.commandKind == .mutation)
         #expect(schedule.commandKind == .mutation)
+    }
+
+    @Test @MainActor func expandedCapabilitiesAdvertiseUnifiedDesktopControlSurface() throws {
+        let (core, _, _) = makeCore(bundleID: "ghdx.tests.control-surface.capabilities")
+
+        let response = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-surface-capabilities",
+                protocolVersion: nil,
+                authToken: nil,
+                command: "system.capabilities.get",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: nil,
+                scope: nil,
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: nil,
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil
+            ),
+            socketPath: "/tmp/ghodex-control-surface.sock"
+        )
+
+        let envelope = try JSONDecoder().decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessCapabilitiesPayload>.self,
+            from: try JSONEncoder().encode(response)
+        )
+        let result = try #require(envelope.result)
+
+        #expect(envelope.status == "ok")
+        #expect(result.features.contains("app"))
+        #expect(result.features.contains("window"))
+        #expect(result.features.contains("panel"))
+        #expect(result.features.contains("settings"))
+        #expect(result.features.contains("diagnostics"))
+        #expect(result.commands.contains("app.state.get"))
+        #expect(result.commands.contains("window.list"))
+        #expect(result.commands.contains("panel.list"))
+        #expect(result.commands.contains("settings.schema.get"))
+        #expect(result.commands.contains("diagnostics.metrics.get"))
+        #expect(result.compatibility.authority == "control_harness")
+    }
+
+    @Test @MainActor func appPanelWindowAndSettingsCommandsReturnStructuredPayloads() throws {
+        let (core, _, _) = makeCore(bundleID: "ghdx.tests.control-surface.desktop")
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+
+        let appStateResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-app-state",
+                protocolVersion: nil,
+                authToken: nil,
+                command: "app.state.get",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: nil,
+                scope: nil,
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: nil,
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil
+            ),
+            socketPath: "/tmp/ghodex-control-surface.sock"
+        )
+        let appStateEnvelope = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessAppStatePayload>.self,
+            from: try encoder.encode(appStateResponse)
+        )
+        let appState = try #require(appStateEnvelope.result)
+        #expect(appStateEnvelope.status == "ok")
+        #expect(appState.panelCount == 2)
+        #expect(appState.settingsDraftPending == false)
+
+        let windowListResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-window-list",
+                protocolVersion: nil,
+                authToken: nil,
+                command: "window.list",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: nil,
+                scope: nil,
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: nil,
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil
+            ),
+            socketPath: "/tmp/ghodex-control-surface.sock"
+        )
+        let windowListEnvelope = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessWindowListPayload>.self,
+            from: try encoder.encode(windowListResponse)
+        )
+        let windowList = try #require(windowListEnvelope.result)
+        #expect(windowListEnvelope.status == "ok")
+        #expect(windowList.windows.isEmpty)
+
+        let panelListResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-panel-list",
+                protocolVersion: nil,
+                authToken: nil,
+                command: "panel.list",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: nil,
+                scope: nil,
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: nil,
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil
+            ),
+            socketPath: "/tmp/ghodex-control-surface.sock"
+        )
+        let panelListEnvelope = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessPanelListPayload>.self,
+            from: try encoder.encode(panelListResponse)
+        )
+        let panelList = try #require(panelListEnvelope.result)
+        #expect(panelListEnvelope.status == "ok")
+        #expect(panelList.panels.map(\.panelID) == ["settings", "ssh_connections"])
+        #expect(panelList.panels.first?.supportedTabIDs == ["general", "appearance", "gateway"])
+
+        let settingsSchemaResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-settings-schema",
+                protocolVersion: nil,
+                authToken: nil,
+                command: "settings.schema.get",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: nil,
+                scope: nil,
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: nil,
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil
+            ),
+            socketPath: "/tmp/ghodex-control-surface.sock"
+        )
+        let settingsSchemaEnvelope = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessSettingsSchemaPayload>.self,
+            from: try encoder.encode(settingsSchemaResponse)
+        )
+        let settingsSchema = try #require(settingsSchemaEnvelope.result)
+        #expect(settingsSchemaEnvelope.status == "ok")
+        #expect(settingsSchema.entries.contains(where: { $0.key == "gateway.listen_port" }))
+        #expect(settingsSchema.entries.contains(where: { $0.key == "runtime.stale_task_policy" }))
+
+        let settingsValuesResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-settings-values",
+                protocolVersion: nil,
+                authToken: nil,
+                command: "settings.values.get",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: nil,
+                scope: nil,
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: nil,
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil
+            ),
+            socketPath: "/tmp/ghodex-control-surface.sock"
+        )
+        let settingsValuesEnvelope = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessSettingsValuesPayload>.self,
+            from: try encoder.encode(settingsValuesResponse)
+        )
+        let settingsValues = try #require(settingsValuesEnvelope.result)
+        #expect(settingsValuesEnvelope.status == "ok")
+        #expect(settingsValues.values["gateway.listen_port"] != nil)
+        #expect(settingsValues.stagedValues == nil)
+
+        let validateResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-settings-validate",
+                protocolVersion: nil,
+                authToken: nil,
+                command: "settings.validate",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: nil,
+                scope: nil,
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: nil,
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil,
+                payload: [
+                    "gateway.listen_port": "9527",
+                    "runtime.enabled": "true",
+                ]
+            ),
+            socketPath: "/tmp/ghodex-control-surface.sock"
+        )
+        let validateEnvelope = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessSettingsMutationPayload>.self,
+            from: try encoder.encode(validateResponse)
+        )
+        let validateResult = try #require(validateEnvelope.result)
+        #expect(validateEnvelope.status == "ok")
+        #expect(validateResult.stagedValues?["gateway.listen_port"] == "9527")
+        #expect(validateResult.changedKeys.contains("gateway.listen_port"))
+
+        let setResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-settings-set",
+                protocolVersion: nil,
+                authToken: nil,
+                command: "settings.values.set",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: nil,
+                scope: nil,
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: nil,
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil,
+                payload: [
+                    "gateway.listen_port": "9528",
+                ]
+            ),
+            socketPath: "/tmp/ghodex-control-surface.sock"
+        )
+        let setEnvelope = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessSettingsMutationPayload>.self,
+            from: try encoder.encode(setResponse)
+        )
+        let setResult = try #require(setEnvelope.result)
+        #expect(setEnvelope.status == "ok")
+        #expect(setResult.stagedValues?["gateway.listen_port"] == "9528")
+        #expect(setResult.changedKeys.contains("gateway.listen_port"))
+
+        let stagedValuesResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-settings-values-staged",
+                protocolVersion: nil,
+                authToken: nil,
+                command: "settings.values.get",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: nil,
+                scope: nil,
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: nil,
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil
+            ),
+            socketPath: "/tmp/ghodex-control-surface.sock"
+        )
+        let stagedValuesEnvelope = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessSettingsValuesPayload>.self,
+            from: try encoder.encode(stagedValuesResponse)
+        )
+        let stagedValues = try #require(stagedValuesEnvelope.result)
+        #expect(stagedValues.stagedValues?["gateway.listen_port"] == "9528")
+    }
+
+    @Test @MainActor func diagnosticsCommandsExposeMetricsAndBufferedEventStatus() throws {
+        let (core, _, _) = makeCore(bundleID: "ghdx.tests.control-surface.diagnostics")
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+
+        let subscribeResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-buffered-events-subscribe",
+                protocolVersion: nil,
+                authToken: nil,
+                command: "events.stream.subscribe",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: nil,
+                scope: nil,
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: 0,
+                eventLimit: nil,
+                mode: nil,
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil
+            ),
+            socketPath: "/tmp/ghodex-control-surface.sock"
+        )
+        let subscribeEnvelope = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessSubscriptionAckResult>.self,
+            from: try encoder.encode(subscribeResponse)
+        )
+        let subscribeResult = try #require(subscribeEnvelope.result)
+        let streamID = try #require(subscribeResult.streamID)
+        #expect(subscribeEnvelope.status == "ok")
+
+        let metricsResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-diagnostics-metrics",
+                protocolVersion: nil,
+                authToken: nil,
+                command: "diagnostics.metrics.get",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: nil,
+                scope: nil,
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: nil,
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil
+            ),
+            socketPath: "/tmp/ghodex-control-surface.sock"
+        )
+        let metricsEnvelope = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessDiagnosticsMetricsPayload>.self,
+            from: try encoder.encode(metricsResponse)
+        )
+        let metrics = try #require(metricsEnvelope.result)
+        #expect(metricsEnvelope.status == "ok")
+        #expect(metrics.metrics.gateway.totalRequests >= 0)
+
+        let statusResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-event-buffer-status",
+                protocolVersion: nil,
+                authToken: nil,
+                command: "diagnostics.eventBuffer.status",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: nil,
+                scope: nil,
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: nil,
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil
+            ),
+            socketPath: "/tmp/ghodex-control-surface.sock"
+        )
+        let statusEnvelope = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessDiagnosticsEventBufferStatusPayload>.self,
+            from: try encoder.encode(statusResponse)
+        )
+        let status = try #require(statusEnvelope.result)
+        #expect(statusEnvelope.status == "ok")
+        #expect(status.status.subscriptionCount == 1)
+        #expect(status.status.liveSubscriptionCount == 1)
+        #expect(status.status.maxBufferedEvents > 0)
+        #expect(status.status.maxBufferedBytes > 0)
+
+        let unsubscribeResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-buffered-events-unsubscribe",
+                protocolVersion: nil,
+                authToken: nil,
+                command: "events.stream.unsubscribe",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: nil,
+                scope: nil,
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: nil,
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil,
+                streamID: streamID
+            ),
+            socketPath: "/tmp/ghodex-control-surface.sock"
+        )
+        #expect(unsubscribeResponse.status == "ok")
     }
 
     @Test @MainActor func runtimeCommandsRegisterClaimUpdateAndSnapshot() throws {

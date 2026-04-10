@@ -7,6 +7,9 @@ struct ControlHarnessRequestTarget: Codable, Hashable {
     let terminalID: String?
     let todoID: String?
     let subscriptionID: String?
+    let windowNumber: Int?
+    let panelID: String?
+    let panelTabID: String?
     let browserTabID: String?
     let browserContextID: String?
     let pageID: String?
@@ -22,6 +25,9 @@ struct ControlHarnessRequestTarget: Codable, Hashable {
         case terminalID = "terminal_id"
         case todoID = "todo_id"
         case subscriptionID = "subscription_id"
+        case windowNumber = "window_number"
+        case panelID = "panel_id"
+        case panelTabID = "panel_tab_id"
         case browserTabID = "browser_tab_id"
         case browserContextID = "browser_context_id"
         case pageID = "page_id"
@@ -29,6 +35,42 @@ struct ControlHarnessRequestTarget: Codable, Hashable {
         case taskID = "task_id"
         case scheduleID = "schedule_id"
         case documentRevision = "document_revision"
+    }
+
+    init(
+        workspaceID: String? = nil,
+        tabID: String? = nil,
+        parentTabID: String? = nil,
+        terminalID: String? = nil,
+        todoID: String? = nil,
+        subscriptionID: String? = nil,
+        windowNumber: Int? = nil,
+        panelID: String? = nil,
+        panelTabID: String? = nil,
+        browserTabID: String? = nil,
+        browserContextID: String? = nil,
+        pageID: String? = nil,
+        frameName: String? = nil,
+        taskID: String? = nil,
+        scheduleID: String? = nil,
+        documentRevision: Int? = nil
+    ) {
+        self.workspaceID = workspaceID
+        self.tabID = tabID
+        self.parentTabID = parentTabID
+        self.terminalID = terminalID
+        self.todoID = todoID
+        self.subscriptionID = subscriptionID
+        self.windowNumber = windowNumber
+        self.panelID = panelID
+        self.panelTabID = panelTabID
+        self.browserTabID = browserTabID
+        self.browserContextID = browserContextID
+        self.pageID = pageID
+        self.frameName = frameName
+        self.taskID = taskID
+        self.scheduleID = scheduleID
+        self.documentRevision = documentRevision
     }
 }
 
@@ -184,6 +226,8 @@ enum ControlHarnessCommandAliases {
         "state.snapshot": "snapshot",
         "system.target.resolve": "system.target.resolve",
         "system.capabilities.get": "system.capabilities.get",
+        "app.state.get": "app.state.get",
+        "app.relaunch": "app.relaunch",
         "workspace.snapshot": "snapshot",
         "workspace.tab.snapshot": "snapshot",
         "tab.new": "new-tab",
@@ -228,6 +272,32 @@ enum ControlHarnessCommandAliases {
         "todo.item.assign": "todo-assign",
         "todo.syncStale": "todo-sync-stale",
         "todo.item.sync_stale": "todo-sync-stale",
+        "window.list": "window.list",
+        "window.focus": "window.focus",
+        "window.show": "window.show",
+        "window.hide": "window.hide",
+        "window.close": "window.close",
+        "window.tabOverview.toggle": "window.tabOverview.toggle",
+        "window.floatOnTop.set": "window.floatOnTop.set",
+        "panel.list": "panel.list",
+        "panel.open": "panel.open",
+        "panel.focus": "panel.focus",
+        "panel.close": "panel.close",
+        "panel.tab.select": "panel.tab.select",
+        "panel.state.get": "panel.state.get",
+        "settings.schema.get": "settings.schema.get",
+        "settings.values.get": "settings.values.get",
+        "settings.values.set": "settings.values.set",
+        "settings.validate": "settings.validate",
+        "settings.apply": "settings.apply",
+        "settings.reset": "settings.reset",
+        "settings.diff": "settings.diff",
+        "diagnostics.metrics.get": "diagnostics.metrics.get",
+        "diagnostics.metrics.reset": "diagnostics.metrics.reset",
+        "diagnostics.logs.tail": "diagnostics.logs.tail",
+        "diagnostics.errors.recent": "diagnostics.errors.recent",
+        "diagnostics.audit.query": "diagnostics.audit.query",
+        "diagnostics.eventBuffer.status": "diagnostics.eventBuffer.status",
     ]
 
     static let unifiedSupportedCommands = [
@@ -235,6 +305,8 @@ enum ControlHarnessCommandAliases {
         "state.snapshot",
         "system.target.resolve",
         "system.capabilities.get",
+        "app.state.get",
+        "app.relaunch",
         "workspace.snapshot",
         "workspace.tab.snapshot",
         "tab.new",
@@ -281,6 +353,32 @@ enum ControlHarnessCommandAliases {
         "todo.item.assign",
         "todo.syncStale",
         "todo.item.sync_stale",
+        "window.list",
+        "window.focus",
+        "window.show",
+        "window.hide",
+        "window.close",
+        "window.tabOverview.toggle",
+        "window.floatOnTop.set",
+        "panel.list",
+        "panel.open",
+        "panel.focus",
+        "panel.close",
+        "panel.tab.select",
+        "panel.state.get",
+        "settings.schema.get",
+        "settings.values.get",
+        "settings.values.set",
+        "settings.validate",
+        "settings.apply",
+        "settings.reset",
+        "settings.diff",
+        "diagnostics.metrics.get",
+        "diagnostics.metrics.reset",
+        "diagnostics.logs.tail",
+        "diagnostics.errors.recent",
+        "diagnostics.audit.query",
+        "diagnostics.eventBuffer.status",
         "events.subscribe",
         "events.stream.subscribe",
         "events.stream.drain",
@@ -321,6 +419,9 @@ extension ControlHarnessRequest {
             parentTabID: parentTabID ?? target?.parentTabID,
             terminalID: terminalID ?? target?.terminalID,
             todoID: todoID ?? target?.todoID,
+            windowNumber: windowNumber ?? target?.windowNumber,
+            panelID: panelID ?? target?.panelID,
+            panelTabID: panelTabID ?? target?.panelTabID,
             scope: scope,
             text: text,
             terminalKey: terminalKey,
