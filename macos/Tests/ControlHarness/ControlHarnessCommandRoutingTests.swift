@@ -2,6 +2,56 @@ import Foundation
 import Testing
 @testable import GhoDex
 
+private struct RoutingCapabilitiesEnvelope: Decodable {
+    let requestID: String
+    let status: String
+    let result: RoutingCapabilitiesPayload?
+    let errorCode: String?
+
+    enum CodingKeys: String, CodingKey {
+        case requestID = "request_id"
+        case status
+        case result
+        case errorCode = "error_code"
+    }
+}
+
+private struct RoutingCapabilitiesPayload: Decodable {
+    let protocolVersion: String
+    let commands: [String]
+    let compatibility: RoutingCompatibilityPayload
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case commands
+        case compatibility
+    }
+}
+
+private struct RoutingCompatibilityPayload: Decodable {
+    let authority: String
+    let legacyCommands: [String]
+    let migrations: [RoutingMigrationPayload]
+
+    enum CodingKeys: String, CodingKey {
+        case authority
+        case legacyCommands = "legacy_commands"
+        case migrations
+    }
+}
+
+private struct RoutingMigrationPayload: Decodable {
+    let command: String
+    let replacementCommands: [String]
+    let status: String
+
+    enum CodingKeys: String, CodingKey {
+        case command
+        case replacementCommands = "replacement_commands"
+        case status
+    }
+}
+
 private func makeRoutingRequest(
     requestID: String = UUID().uuidString,
     command: String,
@@ -112,7 +162,7 @@ struct ControlHarnessCommandRoutingTests {
         #expect(response.errorCode == nil)
     }
 
-    @Test @MainActor func coreAcceptsSystemCompatibilityCommands() {
+    @Test @MainActor func coreAcceptsSystemCompatibilityCommands() throws {
         let core = makeRoutingCore(bundleID: "ghdx.tests.command-routing.system")
 
         let resolveResponse = core.handle(
@@ -128,6 +178,17 @@ struct ControlHarnessCommandRoutingTests {
         )
         #expect(capabilitiesResponse.status == "ok")
         #expect(capabilitiesResponse.errorCode == nil)
+
+        let encoded = try JSONEncoder().encode(capabilitiesResponse)
+        let envelope = try JSONDecoder().decode(RoutingCapabilitiesEnvelope.self, from: encoded)
+        let capabilities = try #require(envelope.result)
+        #expect(capabilities.protocolVersion == ControlHarnessCore.protocolVersion)
+        #expect(capabilities.commands.contains("events.stream.subscribe"))
+        #expect(capabilities.compatibility.authority == "control_harness")
+        #expect(capabilities.compatibility.legacyCommands.contains("events.subscribe"))
+        let migration = try #require(capabilities.compatibility.migrations.first(where: { $0.command == "events.subscribe" }))
+        #expect(migration.replacementCommands == ["events.stream.subscribe", "events.stream.drain", "events.stream.unsubscribe"])
+        #expect(migration.status == "legacy_supported")
     }
 
     @Test func normalizedRequestAcceptsProjectCanonicalCommands() {

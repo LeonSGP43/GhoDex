@@ -1399,12 +1399,14 @@ private struct ControlHandshakeResult: Encodable {
     let protocolVersion: String
     let socketPath: String
     let commands: [String]
+    let compatibility: ControlCompatibilityMetadata
     let lastSequence: Int64
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol_version"
         case socketPath = "socket_path"
         case commands
+        case compatibility
         case lastSequence = "last_sequence"
     }
 }
@@ -1438,6 +1440,7 @@ private struct ControlCapabilitiesResult: Encodable {
     let commands: [String]
     let backends: [String]
     let features: [String]
+    let compatibility: ControlCompatibilityMetadata
     let lastSequence: Int64
 
     enum CodingKeys: String, CodingKey {
@@ -1445,7 +1448,36 @@ private struct ControlCapabilitiesResult: Encodable {
         case commands
         case backends
         case features
+        case compatibility
         case lastSequence = "last_sequence"
+    }
+}
+
+private struct ControlCompatibilityMetadata: Encodable {
+    let authority: String
+    let legacyCommands: [String]
+    let migrations: [ControlCommandMigrationNotice]
+
+    enum CodingKeys: String, CodingKey {
+        case authority
+        case legacyCommands = "legacy_commands"
+        case migrations
+    }
+}
+
+private struct ControlCommandMigrationNotice: Encodable {
+    let command: String
+    let replacementCommands: [String]
+    let status: String
+    let removalPhase: String
+    let detail: String
+
+    enum CodingKeys: String, CodingKey {
+        case command
+        case replacementCommands = "replacement_commands"
+        case status
+        case removalPhase = "removal_phase"
+        case detail
     }
 }
 
@@ -2791,6 +2823,7 @@ final class ControlHarnessCore {
                 protocolVersion: Self.protocolVersion,
                 socketPath: socketPath,
                     commands: Self.supportedCommands,
+                    compatibility: makeCompatibilityMetadata(),
                     lastSequence: eventHub.currentSequence()
                 )),
                 nil
@@ -2988,7 +3021,30 @@ final class ControlHarnessCore {
                 "browser",
                 "events",
             ],
+            compatibility: makeCompatibilityMetadata(),
             lastSequence: eventHub.currentSequence()
+        )
+    }
+
+    private func makeCompatibilityMetadata() -> ControlCompatibilityMetadata {
+        .init(
+            authority: "control_harness",
+            legacyCommands: [
+                "events.subscribe",
+            ],
+            migrations: [
+                .init(
+                    command: "events.subscribe",
+                    replacementCommands: [
+                        "events.stream.subscribe",
+                        "events.stream.drain",
+                        "events.stream.unsubscribe",
+                    ],
+                    status: "legacy_supported",
+                    removalPhase: "not_scheduled",
+                    detail: "Use the buffered events.stream handle flow for new clients. events.subscribe remains only for long-lived compatibility transports."
+                ),
+            ]
         )
     }
 

@@ -130,13 +130,43 @@ private struct ControlHarnessHandshakePayload: Decodable {
     let protocolVersion: String
     let socketPath: String?
     let commands: [String]
+    let compatibility: ControlHarnessCompatibilityPayload?
     let lastSequence: Int64
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol_version"
         case socketPath = "socket_path"
         case commands
+        case compatibility
         case lastSequence = "last_sequence"
+    }
+}
+
+private struct ControlHarnessCompatibilityPayload: Decodable {
+    let authority: String
+    let legacyCommands: [String]
+    let migrations: [ControlHarnessMigrationPayload]
+
+    enum CodingKeys: String, CodingKey {
+        case authority
+        case legacyCommands = "legacy_commands"
+        case migrations
+    }
+}
+
+private struct ControlHarnessMigrationPayload: Decodable {
+    let command: String
+    let replacementCommands: [String]
+    let status: String
+    let removalPhase: String
+    let detail: String
+
+    enum CodingKeys: String, CodingKey {
+        case command
+        case replacementCommands = "replacement_commands"
+        case status
+        case removalPhase = "removal_phase"
+        case detail
     }
 }
 
@@ -8270,6 +8300,13 @@ struct ControlHarnessTests {
         #expect(handshake.commands.contains("agent.runtime.session.register"))
         #expect(handshake.commands.contains("agent.runtime.session.heartbeat"))
         #expect(handshake.commands.contains("agent.runtime.session.release"))
+        let compatibility = try #require(handshake.compatibility)
+        #expect(compatibility.authority == "control_harness")
+        #expect(compatibility.legacyCommands.contains("events.subscribe"))
+        let migration = try #require(compatibility.migrations.first(where: { $0.command == "events.subscribe" }))
+        #expect(migration.replacementCommands == ["events.stream.subscribe", "events.stream.drain", "events.stream.unsubscribe"])
+        #expect(migration.status == "legacy_supported")
+        #expect(migration.removalPhase == "not_scheduled")
     }
 
     @Test func runtimeSessionLifecycleWorksOverControlHarnessSocket() async throws {
