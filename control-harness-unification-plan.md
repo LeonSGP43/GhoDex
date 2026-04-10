@@ -1,7 +1,7 @@
 # Control Harness Unification Plan
 
 ## Status
-- State: MVP command-surface baseline implemented; verification and migration follow-up remain
+- State: MVP command-surface and verification baseline completed; namespaced client migration remains a follow-up lane
 - Owner surface: `ControlHarness`
 - Date locked: 2026-04-09
 - Scope: unify browser, runtime, terminal, tab, and queue/task control under one authoritative protocol layer without collapsing internal modules into one file.
@@ -12,7 +12,8 @@
 - Browser MVP commands route through the `ControlHarness` adapter layer instead of requiring a second public control authority.
 - Thin system compatibility commands `system.target.resolve` and `system.capabilities.get` are implemented so callers can inspect the resolved instance and public capability set through the same surface.
 - CLI coverage is in place for the namespaced event-stream handle flow: `events.stream.subscribe`, `events.stream.drain`, and `events.stream.unsubscribe` now round-trip as one-shot commands while legacy `events.subscribe` keeps the long-lived socket stream semantics.
-- The next work is not to broaden the command table again; it is to finish higher-level verification, client migration, and any remaining post-MVP cleanup under the same authority model.
+- The higher-level verification lane is now closed for the MVP surface: build, focused `ControlHarnessTests`, runtime socket coverage, and the six documented live acceptance gates are green as of 2026-04-10.
+- The next work is not to broaden the command table again; it is optional client migration, deprecation planning, and post-MVP cleanup under the same authority model.
 
 ### Focused Follow-up Landed
 - `events.stream.subscribe`, `events.stream.drain`, and `events.stream.unsubscribe` now share one explicit public handle shape: the subscribe acknowledgment returns `stream_id`, and follow-up drain/unsubscribe requests resolve the same buffered event-stream registry inside `ControlHarnessCore`.
@@ -254,12 +255,13 @@ Implementation is accepted only when all of the following are true.
 - add focused Swift tests for alias and browser mapping
 - confirm key socket tests still pass
 - run Browser/ControlHarness acceptance gates
-- Status on 2026-04-09: focused Swift/Zig coverage now includes the namespaced event-stream handle lifecycle; broader live acceptance remains pending
+- Status on 2026-04-10: complete for the MVP lane. Focused Swift/Zig coverage is in place, the terminal stream backpressure regression check and the broader `ControlHarnessTests` suite pass, and all documented Browser/ControlHarness live acceptance gates are green.
 
 ### Phase 4 - public migration follow-up
 - migrate docs and clients toward namespaced commands
 - keep legacy aliases until explicit deprecation window is announced
 - eventually retire direct public Browser socket guidance in favor of `ControlHarness`
+- Status on 2026-04-10: still a follow-up lane, but no longer an MVP completion blocker for the unified protocol surface
 
 ## Completion Gates
 Implementation is complete only if all gates pass.
@@ -270,6 +272,8 @@ Implementation is complete only if all gates pass.
 4. No known failing targeted test remains in the touched area
 5. The plan file stays aligned with shipped behavior
 
+Status on 2026-04-10: all five gates are satisfied for the MVP lane.
+
 ## 2026-04-09 Evidence Snapshot
 - `xcodebuild build-for-testing -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' -only-testing:GhosttyTests/ControlHarnessCommandRoutingTests CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=''`
 - `xcodebuild test-without-building -xctestrun /Users/leongong/Library/Developer/Xcode/DerivedData/GhoDex-agcunbrxnmmsbjbkneezzlhlgjed/Build/Products/GhoDex_GhoDex_macosx26.2-arm64.xctestrun -destination 'platform=macOS' -only-testing:GhosttyTests/ControlHarnessCommandRoutingTests CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=''`
@@ -278,6 +282,19 @@ Implementation is complete only if all gates pass.
 - `zig build test -Dtest-filter='parse control system target resolve alias'`
 - `zig build test -Dtest-filter='parse control system capabilities get alias'`
 - `git diff --check -- 'src/cli/control.zig' 'macos/Sources/Features/Control Harness/ControlHarnessCommandRouting.swift' 'macos/Sources/Features/Control Harness/ControlHarnessCore.swift' 'macos/Tests/ControlHarness/ControlHarnessCommandRoutingTests.swift'`
+
+## 2026-04-10 Evidence Snapshot
+- `nu macos/build.nu --scheme GhoDex --configuration Debug --action build`
+- `git diff --check -- 'macos/Sources/Features/Control Harness/ControlHarnessSupport.swift'`
+- `xcodebuild build-for-testing -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' -only-testing:GhosttyTests/ControlHarnessTests/terminalStreamBackpressurePausesUntilAckResumesFlow CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=''`
+- `xcodebuild test-without-building -xctestrun /Users/leongong/Library/Developer/Xcode/DerivedData/GhoDex-agcunbrxnmmsbjbkneezzlhlgjed/Build/Products/GhoDex_GhoDex_macosx26.2-arm64.xctestrun -destination 'platform=macOS' -only-testing:GhosttyTests/ControlHarnessTests CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=''`
+- `/tmp/ghdx-controlharness-tests-after-fix.log` records `terminalStreamBackpressurePausesUntilAckResumesFlow()` passed after `0.758 seconds`, `Suite ControlHarnessTests passed after 2.390 seconds`, and `** TEST EXECUTE SUCCEEDED **`
+- `python3 scripts/control_harness_gateway_transport_live_acceptance.py` -> `/tmp/ghx-control-harness-gateway-transport-live-acceptance.json` (`status: passed`)
+- `python3 scripts/control_harness_terminal_v2_live_acceptance.py` -> `/tmp/ghx-control-harness-terminal-v2-live-acceptance.json` (`status: passed`)
+- `python3 scripts/browser_context_protocol_acceptance.py` -> `/tmp/ghx-browser-context-protocol-acceptance.json` (`status: passed`)
+- `python3 scripts/browser_runtime_prompt_resolution_acceptance.py` -> `/tmp/ghx-browser-runtime-prompt-resolution-acceptance.json` (`status: passed`; permission prompt resolution and auth prompt routing completed through the browser/runtime prompt surface)
+- `python3 scripts/browser_cookie_persistence_acceptance.py` -> `/tmp/ghodex-browser-cookie-persistence-acceptance.json` (`acceptance.all_modes_persisted: true`)
+- `python3 scripts/browser_popup_event_acceptance.py` -> `/tmp/ghx-browser-popup-event-acceptance.json` (`status: passed`; popup routing observed as `pageTab` and `popupWindowHost` in the expected flows)
 
 ## Initial Commit Slicing Rule
 When committing this work, keep atomic boundaries:
