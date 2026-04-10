@@ -10,11 +10,12 @@
 - Phase 1 routing foundation is complete for the documented MVP command surface.
 - `ControlHarness` now advertises and normalizes the catalog MVP command set across system, workspace, terminal, todo, events, and browser namespaces.
 - Browser MVP commands route through the `ControlHarness` adapter layer instead of requiring a second public control authority.
+- The public protocol surface now also covers desktop-shell orchestration through `app.*`, `window.*`, `panel.*`, `settings.*`, and `diagnostics.*`.
 - Thin system compatibility commands `system.target.resolve` and `system.capabilities.get` are implemented so callers can inspect the resolved instance and public capability set through the same surface.
 - CLI coverage is in place for the namespaced event-stream handle flow: `events.stream.subscribe`, `events.stream.drain`, and `events.stream.unsubscribe` now round-trip as one-shot commands while legacy `events.subscribe` keeps the long-lived socket stream semantics.
 - The Android gateway client and the in-repo `happy-client` gateway adapter now consume the buffered event-stream handle flow directly: subscribe returns `stream_id`, the client polls via `events.stream.drain`, and close performs best-effort `events.stream.unsubscribe`.
 - `handshake` and `system.capabilities.get` now publish structured compatibility metadata so clients can discover the single protocol authority, the remaining legacy command surface, and the preferred migration path without relying on out-of-band docs.
-- The higher-level verification lane is now closed for the MVP surface: build, focused `ControlHarnessTests`, runtime socket coverage, and the six documented live acceptance gates are green as of 2026-04-10.
+- The higher-level verification lane is now closed for the MVP surface: build, focused `ControlHarnessTests`, runtime socket coverage, the expanded desktop control contract tests, and the six documented live acceptance gates are green as of 2026-04-10.
 - The next work is not to broaden the command table again; it is out-of-repo client migration, legacy stream deprecation planning, and post-MVP cleanup under the same authority model.
 
 ### Focused Follow-up Landed
@@ -48,7 +49,7 @@ This creates an authority problem: internal adapters are modular, but the public
 ## Goal
 Create one authoritative control protocol for AI control of GhoDex where:
 - all officially supported automation commands are addressable through `ControlHarness`
-- Browser, runtime, queue/task, terminal, and tab operations remain implemented by their own modules behind the protocol layer
+- Browser, runtime, queue/task, terminal, tab, window, panel, settings, and diagnostics operations remain implemented by their own modules behind the protocol layer
 - namespaced commands become the long-term public surface
 - legacy commands remain compatible until explicit deprecation
 - acceptance tests prove the public contract, not only internal adapters
@@ -94,6 +95,8 @@ This plan uses the following SPAC constraints for every control feature.
 Long-term public surface should prefer namespaced commands such as:
 - `system.handshake`
 - `state.snapshot`
+- `app.state.get`
+- `app.relaunch`
 - `tab.new`
 - `tab.close`
 - `tab.rename`
@@ -116,6 +119,32 @@ Long-term public surface should prefer namespaced commands such as:
 - `runtime.schedule.enqueue`
 - `runtime.schedule.update`
 - `runtime.schedule.cancel`
+- `window.list`
+- `window.focus`
+- `window.show`
+- `window.hide`
+- `window.close`
+- `window.tabOverview.toggle`
+- `window.floatOnTop.set`
+- `panel.list`
+- `panel.open`
+- `panel.focus`
+- `panel.close`
+- `panel.tab.select`
+- `panel.state.get`
+- `settings.schema.get`
+- `settings.values.get`
+- `settings.values.set`
+- `settings.validate`
+- `settings.apply`
+- `settings.reset`
+- `settings.diff`
+- `diagnostics.metrics.get`
+- `diagnostics.metrics.reset`
+- `diagnostics.logs.tail`
+- `diagnostics.errors.recent`
+- `diagnostics.audit.query`
+- `diagnostics.eventBuffer.status`
 - `browser.tab.*`
 - `browser.context.*`
 - `browser.page.*`
@@ -200,6 +229,27 @@ Must support through `ControlHarness`:
 - event subscribe/drain/unsubscribe
 - popup/dialog/cookie related commands
 
+### Desktop shell and panel control
+Must support through `ControlHarness`:
+- app state inspection and relaunch
+- top-level window listing/focus/show/hide/close
+- tab overview and float-on-top window toggles
+- panel listing/open/focus/close and tab selection
+- current panel state inspection for settings and SSH Connections
+
+### Settings and diagnostics control
+Must support through `ControlHarness`:
+- settings schema discovery
+- current settings value inspection
+- draft staging via `settings.values.set`
+- non-persisting validation via `settings.validate`
+- live apply/reset/diff operations
+- diagnostics metrics snapshot/reset
+- diagnostics log tailing
+- recent error inspection
+- audit log querying
+- buffered event stream status inspection
+
 ## Security and Gateway Requirements
 - handshake remains unauthenticated when configured that way today
 - observe vs mutate scopes must stay correct after normalization
@@ -226,6 +276,12 @@ Implementation is accepted only when all of the following are true.
 - Browser result payloads are returned as valid JSON envelopes
 - Browser command classification is correct for query/mutation/rate-limit/auth handling
 
+### Desktop shell / settings / diagnostics integration
+- `app.state.get`, `window.list`, and `panel.list` return structured payloads through `ControlHarness`
+- `settings.schema.get`, `settings.values.get`, and `settings.validate` round-trip through the protocol without requiring direct store access
+- `diagnostics.metrics.get` and `diagnostics.eventBuffer.status` expose real runtime state from the same protocol authority
+- panel and settings targets are addressable through `target.window_number`, `target.panel_id`, and `target.panel_tab_id`
+
 ### Runtime/queue coverage
 - runtime session lifecycle and runtime snapshot socket tests remain green
 - task/schedule commands still validate and round-trip correctly after normalization changes
@@ -235,10 +291,14 @@ Implementation is accepted only when all of the following are true.
 ### Unit / focused Swift tests
 - alias normalization for namespaced commands
 - `target` and `options` merge behavior
+- `window_number`, `panel_id`, and `panel_tab_id` target promotion
 - browser adapter request mapping
 - browser command kind classification
+- app/window/panel/settings/diagnostics command kind classification
 - gateway policy still applies to normalized terminal mutations
 - handshake advertises namespaced and browser commands
+- expanded capabilities advertise `app/window/panel/settings/diagnostics`
+- settings and diagnostics commands return structured protocol payloads
 
 ### Focused control harness tests
 - `ControlHarnessTests/runtimeHandshakeAdvertisesCommandsOverControlHarnessSocket()`
