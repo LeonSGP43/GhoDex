@@ -251,10 +251,14 @@ Follow-on evidence after those harness fixes:
 
 ## API Semantics
 
-The stable external protocol version is `browser.tab.v1`.
+The stable Browser adapter protocol versions are `browser.tab.v1` and
+`browser.context.v2`, but the official external automation authority is now
+`ControlHarness`.
 
 Compatibility note:
 
+- new external clients should prefer namespaced `browser.*` commands through
+  `ControlHarness`
 - `browser.context.v2` now documents the top-level object as `browserContext`
 - current `browserTabID` values and `browserContextID` values resolve to the
   same live controller/context object
@@ -281,7 +285,8 @@ Other related commands often used beside cookie flows:
 - `runDOMBatch`
 - `getDebugStatus`
 
-Transport surfaces currently using the same request/response envelope:
+Transport compatibility surfaces currently using the same request/response
+envelope:
 
 - IPC socket at `~/Library/Application Support/GhoDex/browser-control.sock`
 - AppleScript command `run browser command protocol <requestJSON>`

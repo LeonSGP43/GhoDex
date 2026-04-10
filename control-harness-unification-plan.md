@@ -1,7 +1,7 @@
 # Control Harness Unification Plan
 
 ## Status
-- State: MVP command-surface and verification baseline completed; namespaced client migration remains a follow-up lane
+- State: MVP command-surface, verification baseline, and initial in-repo client migration completed; long-lived legacy stream deprecation remains a later follow-up
 - Owner surface: `ControlHarness`
 - Date locked: 2026-04-09
 - Scope: unify browser, runtime, terminal, tab, and queue/task control under one authoritative protocol layer without collapsing internal modules into one file.
@@ -13,12 +13,26 @@
 - Thin system compatibility commands `system.target.resolve` and `system.capabilities.get` are implemented so callers can inspect the resolved instance and public capability set through the same surface.
 - CLI coverage is in place for the namespaced event-stream handle flow: `events.stream.subscribe`, `events.stream.drain`, and `events.stream.unsubscribe` now round-trip as one-shot commands while legacy `events.subscribe` keeps the long-lived socket stream semantics.
 - The higher-level verification lane is now closed for the MVP surface: build, focused `ControlHarnessTests`, runtime socket coverage, and the six documented live acceptance gates are green as of 2026-04-10.
-- The next work is not to broaden the command table again; it is optional client migration, deprecation planning, and post-MVP cleanup under the same authority model.
+- The next work is not to broaden the command table again; it is broader out-of-repo client migration, long-lived stream deprecation planning, and post-MVP cleanup under the same authority model.
 
 ### Focused Follow-up Landed
 - `events.stream.subscribe`, `events.stream.drain`, and `events.stream.unsubscribe` now share one explicit public handle shape: the subscribe acknowledgment returns `stream_id`, and follow-up drain/unsubscribe requests resolve the same buffered event-stream registry inside `ControlHarnessCore`.
 - Legacy `events.subscribe` remains unchanged as the long-lived transport/session path.
 - The remaining work in this area is verification depth and broader client migration, not protocol redesign.
+
+### Client Migration and Deprecation Policy
+- Client migration means moving callers onto the namespaced `ControlHarness` vocabulary without changing behavior.
+- The concrete MVP command mapping is:
+  - `snapshot` -> `state.snapshot`
+  - `new-tab` -> `tab.new`
+  - `send-text` -> `terminal.write`
+  - `send-key` -> `terminal.key`
+  - `run-command` -> `terminal.command.run`
+  - `read-terminal` -> `terminal.read`
+  - `todo-snapshot` -> `todo.snapshot`
+- Deprecation policy means legacy aliases stay accepted until the replacement path is behaviorally equivalent for real clients and all in-repo callers have moved.
+- `events.subscribe` is explicitly not removed in this phase because it still represents the current long-lived stream contract, while `events.stream.subscribe` / `drain` / `unsubscribe` are handle-based one-shot commands with different client semantics.
+- Browser-specific IPC and AppleScript documents remain useful as adapter references, but they are compatibility transport docs, not a second public control authority. The official external authority remains `ControlHarness` and its namespaced `browser.*` command surface.
 
 ## Problem Statement
 GhoDex currently exposes multiple effective control surfaces:
@@ -261,7 +275,7 @@ Implementation is accepted only when all of the following are true.
 - migrate docs and clients toward namespaced commands
 - keep legacy aliases until explicit deprecation window is announced
 - eventually retire direct public Browser socket guidance in favor of `ControlHarness`
-- Status on 2026-04-10: still a follow-up lane, but no longer an MVP completion blocker for the unified protocol surface
+- Status on 2026-04-10: in-repo Android callers and protocol docs are now migrated onto the authority model, but legacy long-lived stream semantics and any out-of-repo clients still remain a later cleanup lane
 
 ## Completion Gates
 Implementation is complete only if all gates pass.
@@ -295,6 +309,7 @@ Status on 2026-04-10: all five gates are satisfied for the MVP lane.
 - `python3 scripts/browser_runtime_prompt_resolution_acceptance.py` -> `/tmp/ghx-browser-runtime-prompt-resolution-acceptance.json` (`status: passed`; permission prompt resolution and auth prompt routing completed through the browser/runtime prompt surface)
 - `python3 scripts/browser_cookie_persistence_acceptance.py` -> `/tmp/ghodex-browser-cookie-persistence-acceptance.json` (`acceptance.all_modes_persisted: true`)
 - `python3 scripts/browser_popup_event_acceptance.py` -> `/tmp/ghx-browser-popup-event-acceptance.json` (`status: passed`; popup routing observed as `pageTab` and `popupWindowHost` in the expected flows)
+- `javac -d /tmp/ghodex-android-selftest-20260410 $(find android -maxdepth 1 -name '*.java' | sort)` and `java -cp /tmp/ghodex-android-selftest-20260410 com.leongong.ghodex.remote.GhoDexGatewayContractSelfTest` (`GhoDex gateway Android contract self-test passed`)
 
 ## Initial Commit Slicing Rule
 When committing this work, keep atomic boundaries:

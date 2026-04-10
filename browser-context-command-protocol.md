@@ -2,9 +2,16 @@
 
 ## Purpose
 
-`browser.context.v2` is the forward-looking Browser Control contract for GhoDex.
-It keeps the existing local IPC and AppleScript transports, but fixes the
-object-model boundary that `browser.tab.v1` blurred.
+`browser.context.v2` is the forward-looking Browser adapter contract behind
+`ControlHarness` for GhoDex. It keeps the existing local IPC and AppleScript
+transports, but fixes the object-model boundary that `browser.tab.v1` blurred.
+
+Authority note:
+
+- `ControlHarness` is the only official external automation authority
+- namespaced `browser.*` commands are the preferred external surface
+- this document exists so direct local adapter clients and acceptance harnesses
+  can share one Browser-side request model during the migration window
 
 The top-level automation object is now:
 

@@ -2,14 +2,16 @@
 
 ## Purpose
 
-`browser.tab.v1` is the versioned external control contract for GhoDex browser
- tabs. External clients should treat this document as the product-facing API for
- browser control sessions, and treat the internal Swift/CEF implementation as an
- implementation detail.
+`browser.tab.v1` is the legacy-compatible Browser sub-protocol for GhoDex.
+External automation authority now lives at `ControlHarness`; this document
+defines the Browser adapter envelope that `ControlHarness` routes to for
+compatibility and local transport purposes.
 
 Compatibility note:
 
 - `browser.tab.v1` remains supported for existing clients
+- new external clients should prefer `ControlHarness` with namespaced
+  `browser.*` commands and treat this document as the Browser adapter contract
 - the underlying top-level object is now documented as a Browser Context
 - `browser.tab.v1` identifiers still resolve to that same top-level context
 - the forward-looking object model is documented in
@@ -24,13 +26,14 @@ The protocol is designed for:
 - future adapters that reuse the same contract instead of inventing one-off
   scripts
 
-## Transports
+## Transport Compatibility
 
 Two local transports currently speak the same request envelope.
 
 ### Local IPC Socket
 
-Preferred for long-lived local sessions.
+Preferred only for direct local adapter sessions that intentionally bypass
+`ControlHarness`.
 
 - Path: `~/Library/Application Support/GhoDex/browser-control.sock`
 - When `GHODEX_BROWSER_APP_SUPPORT_ROOT` is set for an isolated test session,
@@ -228,9 +231,10 @@ targetable through the external command envelope.
 The optional CEF remote debugging lane is a diagnostics surface, not the
 product contract for Browser automation.
 
-- `browser.tab.v1` remains the primary control API for Browser tabs
-- `browser.context.v2` is the new context/page terminology layer for future
-  Browser Control clients
+- `ControlHarness` is the official public automation surface
+- `browser.tab.v1` remains a compatibility Browser adapter protocol
+- `browser.context.v2` is the Browser-side context/page terminology layer for
+  forward migration behind the same authority model
 - Chromium remote debugging stays disabled by default
 - enable it only by setting `ghodex-browser-remote-debug-port` to a positive
   local port in config
