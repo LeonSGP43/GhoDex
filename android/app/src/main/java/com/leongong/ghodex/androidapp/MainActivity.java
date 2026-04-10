@@ -111,7 +111,7 @@ public final class MainActivity extends Activity {
         addButton(root, "Refresh Snapshot", ignored -> runAction("refresh snapshot", () -> {
             captureConnectionInputs();
             ensureStateMachine(false);
-            stateMachine.refreshSnapshot(nextRequestId("snapshot"));
+            stateMachine.refreshSnapshot(nextRequestId("state.snapshot"));
             runOnUiThread(this::autofillTerminalIdIfNeeded);
         }));
 
@@ -149,7 +149,7 @@ public final class MainActivity extends Activity {
             requireNonEmpty(terminalId, "Terminal id is empty");
             requireNonEmpty(text, "Text input is empty");
             String sendText = text.endsWith("\n") ? text : text + "\n";
-            stateMachine.sendText(nextRequestId("send-text"), terminalId, sendText);
+            stateMachine.sendText(nextRequestId("terminal.write"), terminalId, sendText);
             });
         });
 
@@ -333,7 +333,7 @@ public final class MainActivity extends Activity {
                 payload.pairingCode()
             );
             runOnUiThread(() -> authTokenInput.setText(authToken));
-            stateMachine.refreshSnapshot(nextRequestId("snapshot"));
+            stateMachine.refreshSnapshot(nextRequestId("state.snapshot"));
             runOnUiThread(this::autofillTerminalIdIfNeeded);
         });
     }

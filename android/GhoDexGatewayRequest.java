@@ -65,12 +65,15 @@ public final class GhoDexGatewayRequest {
     }
 
     public static GhoDexGatewayRequest snapshot(String requestId, String authToken) {
-        return builder(requestId, "snapshot")
+        return builder(requestId, "state.snapshot")
             .authToken(authToken)
             .build();
     }
 
     public static GhoDexGatewayRequest subscribe(String requestId, String authToken, long sinceSequence, int eventLimit) {
+        // Keep the long-lived subscription on the legacy command until
+        // handle-based `events.stream.*` fully replaces socket-stream semantics
+        // for Android clients.
         return builder(requestId, "events.subscribe")
             .authToken(authToken)
             .sinceSequence(sinceSequence)
@@ -86,7 +89,7 @@ public final class GhoDexGatewayRequest {
         int maxLines,
         int maxChars
     ) {
-        return builder(requestId, "read-terminal")
+        return builder(requestId, "terminal.read")
             .authToken(authToken)
             .terminalId(terminalId)
             .scope(scope)
@@ -97,7 +100,7 @@ public final class GhoDexGatewayRequest {
     }
 
     public static GhoDexGatewayRequest sendText(String requestId, String authToken, String terminalId, String text) {
-        return builder(requestId, "send-text")
+        return builder(requestId, "terminal.write")
             .authToken(authToken)
             .terminalId(terminalId)
             .text(text)
@@ -105,7 +108,7 @@ public final class GhoDexGatewayRequest {
     }
 
     public static GhoDexGatewayRequest runCommand(String requestId, String authToken, String terminalId, String commandText) {
-        return builder(requestId, "run-command")
+        return builder(requestId, "terminal.command.run")
             .authToken(authToken)
             .terminalId(terminalId)
             .commandText(commandText)

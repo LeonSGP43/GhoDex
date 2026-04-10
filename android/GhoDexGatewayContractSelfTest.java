@@ -50,7 +50,7 @@ public final class GhoDexGatewayContractSelfTest {
         String json = GhoDexGatewayRequest
             .sendText("req-send", "secret", "terminal-1", "echo hi\n")
             .toJson();
-        assertContains(json, "\"command\":\"send-text\"");
+        assertContains(json, "\"command\":\"terminal.write\"");
         assertContains(json, "\"terminal_id\":\"terminal-1\"");
         assertContains(json, "\"text\":\"echo hi\\n\"");
     }
@@ -59,7 +59,7 @@ public final class GhoDexGatewayContractSelfTest {
         String json = GhoDexGatewayRequest
             .readTerminalSnapshot("req-read", "secret", "terminal-2", "visible", 80, 2000)
             .toJson();
-        assertContains(json, "\"command\":\"read-terminal\"");
+        assertContains(json, "\"command\":\"terminal.read\"");
         assertContains(json, "\"scope\":\"visible\"");
         assertContains(json, "\"mode\":\"snapshot\"");
         assertContains(json, "\"max_lines\":80");
@@ -89,7 +89,7 @@ public final class GhoDexGatewayContractSelfTest {
         assertEquals("1.0", sessionStore.getProtocolVersion());
 
         String sendJson = transport.lastRequestJson();
-        assertContains(sendJson, "\"command\":\"snapshot\"");
+        assertContains(sendJson, "\"command\":\"state.snapshot\"");
         assertContains(sendJson, "\"auth_token\":\"token-live\"");
     }
 
@@ -230,11 +230,11 @@ public final class GhoDexGatewayContractSelfTest {
                         "scopes", List.of("observe", "mutate")
                     )
                 );
-                case "snapshot" -> GhoDexGatewayEnvelope.ok(
+                case "state.snapshot" -> GhoDexGatewayEnvelope.ok(
                     request.requestId(),
                     Map.of("protocol_version", "1.0")
                 );
-                case "send-text", "run-command", "read-terminal" -> GhoDexGatewayEnvelope.ok(
+                case "terminal.write", "terminal.command.run", "terminal.read" -> GhoDexGatewayEnvelope.ok(
                     request.requestId(),
                     Map.of("accepted", Boolean.TRUE)
                 );
@@ -321,7 +321,7 @@ public final class GhoDexGatewayContractSelfTest {
                             "{\"request_id\":\"" + requestId + "\",\"status\":\"ok\",\"result\":{\"token\":\"token-live\",\"token_id\":\"tok-live\",\"scopes\":[\"observe\"]}}"
                         );
                     }
-                    case "snapshot" -> {
+                    case "state.snapshot" -> {
                         writeLine(
                             outputStream,
                             "{\"request_id\":\"" + requestId + "\",\"status\":\"ok\",\"result\":{\"protocol_version\":\"1.0\",\"last_sequence\":6,\"tabs\":[{\"tab_id\":\"tab-live\",\"generation\":2,\"is_focused\":true,\"terminals\":[{\"terminal_id\":\"terminal-live\",\"generation\":2,\"is_focused\":true,\"is_visible\":true,\"title\":\"Live Terminal\",\"working_directory\":\"/tmp/live\"}]}]}}"
@@ -341,7 +341,7 @@ public final class GhoDexGatewayContractSelfTest {
                             "{\"sequence\":8,\"event\":\"overflow\",\"gap\":true,\"requires_snapshot_resync\":true,\"payload\":{\"dropped_events\":5}}"
                         );
                     }
-                    case "read-terminal", "send-text", "run-command" -> {
+                    case "terminal.read", "terminal.write", "terminal.command.run" -> {
                         writeLine(
                             outputStream,
                             "{\"request_id\":\"" + requestId + "\",\"status\":\"ok\",\"result\":{\"accepted\":true}}"
