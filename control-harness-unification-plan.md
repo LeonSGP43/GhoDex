@@ -13,6 +13,7 @@
 - Thin system compatibility commands `system.target.resolve` and `system.capabilities.get` are implemented so callers can inspect the resolved instance and public capability set through the same surface.
 - CLI coverage is in place for the namespaced event-stream handle flow: `events.stream.subscribe`, `events.stream.drain`, and `events.stream.unsubscribe` now round-trip as one-shot commands while legacy `events.subscribe` keeps the long-lived socket stream semantics.
 - The Android gateway client now consumes the buffered event-stream handle flow directly: subscribe returns `stream_id`, the client polls via `events.stream.drain`, and close performs best-effort `events.stream.unsubscribe`.
+- `handshake` and `system.capabilities.get` now publish structured compatibility metadata so clients can discover the single protocol authority, the remaining legacy command surface, and the preferred migration path without relying on out-of-band docs.
 - The higher-level verification lane is now closed for the MVP surface: build, focused `ControlHarnessTests`, runtime socket coverage, and the six documented live acceptance gates are green as of 2026-04-10.
 - The next work is not to broaden the command table again; it is out-of-repo client migration, legacy stream deprecation planning, and post-MVP cleanup under the same authority model.
 
@@ -33,6 +34,7 @@
   - `todo-snapshot` -> `todo.snapshot`
 - Deprecation policy means legacy aliases stay accepted until the replacement path is behaviorally equivalent for real clients and all in-repo callers have moved.
 - `events.subscribe` is explicitly not removed in this phase because it still represents the current long-lived stream contract, while `events.stream.subscribe` / `drain` / `unsubscribe` are handle-based one-shot commands with different client semantics.
+- The protocol now self-describes that boundary through `result.compatibility`: `authority=control_harness`, `legacy_commands=["events.subscribe"]`, and a migration record whose `replacement_commands` are `events.stream.subscribe`, `events.stream.drain`, and `events.stream.unsubscribe`.
 - Browser-specific IPC and AppleScript documents remain useful as adapter references, but they are compatibility transport docs, not a second public control authority. The official external authority remains `ControlHarness` and its namespaced `browser.*` command surface.
 
 ## Problem Statement
@@ -311,6 +313,7 @@ Status on 2026-04-10: all five gates are satisfied for the MVP lane.
 - `python3 scripts/browser_cookie_persistence_acceptance.py` -> `/tmp/ghodex-browser-cookie-persistence-acceptance.json` (`acceptance.all_modes_persisted: true`)
 - `python3 scripts/browser_popup_event_acceptance.py` -> `/tmp/ghx-browser-popup-event-acceptance.json` (`status: passed`; popup routing observed as `pageTab` and `popupWindowHost` in the expected flows)
 - `javac -d /tmp/ghodex-android-selftest-20260410 $(find android -maxdepth 1 -name '*.java' | sort)` and `java -cp /tmp/ghodex-android-selftest-20260410 com.leongong.ghodex.remote.GhoDexGatewayContractSelfTest` (`GhoDex gateway Android contract self-test passed`)
+- `xcodebuild test -project macos/GhoDex.xcodeproj -scheme GhoDex -destination 'platform=macOS' -only-testing:GhosttyTests/ControlHarnessCommandRoutingTests/coreAcceptsSystemCompatibilityCommands -only-testing:GhosttyTests/ControlHarnessTests/runtimeHandshakeAdvertisesCommandsOverControlHarnessSocket CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=''` (`** TEST SUCCEEDED **`; target selection compiled and launched successfully while Swift Testing reported `0 tests` for this selector set)
 
 ## Initial Commit Slicing Rule
 When committing this work, keep atomic boundaries:
