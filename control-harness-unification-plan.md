@@ -1,7 +1,7 @@
 # Control Harness Unification Plan
 
 ## Status
-- State: MVP command-surface, verification baseline, and initial in-repo client migration completed; long-lived legacy stream deprecation remains a later follow-up
+- State: MVP command-surface, verification baseline, and in-repo client migration completed; remaining follow-up is out-of-repo client migration plus legacy stream deprecation planning
 - Owner surface: `ControlHarness`
 - Date locked: 2026-04-09
 - Scope: unify browser, runtime, terminal, tab, and queue/task control under one authoritative protocol layer without collapsing internal modules into one file.
@@ -12,13 +12,14 @@
 - Browser MVP commands route through the `ControlHarness` adapter layer instead of requiring a second public control authority.
 - Thin system compatibility commands `system.target.resolve` and `system.capabilities.get` are implemented so callers can inspect the resolved instance and public capability set through the same surface.
 - CLI coverage is in place for the namespaced event-stream handle flow: `events.stream.subscribe`, `events.stream.drain`, and `events.stream.unsubscribe` now round-trip as one-shot commands while legacy `events.subscribe` keeps the long-lived socket stream semantics.
+- The Android gateway client now consumes the buffered event-stream handle flow directly: subscribe returns `stream_id`, the client polls via `events.stream.drain`, and close performs best-effort `events.stream.unsubscribe`.
 - The higher-level verification lane is now closed for the MVP surface: build, focused `ControlHarnessTests`, runtime socket coverage, and the six documented live acceptance gates are green as of 2026-04-10.
-- The next work is not to broaden the command table again; it is broader out-of-repo client migration, long-lived stream deprecation planning, and post-MVP cleanup under the same authority model.
+- The next work is not to broaden the command table again; it is out-of-repo client migration, legacy stream deprecation planning, and post-MVP cleanup under the same authority model.
 
 ### Focused Follow-up Landed
 - `events.stream.subscribe`, `events.stream.drain`, and `events.stream.unsubscribe` now share one explicit public handle shape: the subscribe acknowledgment returns `stream_id`, and follow-up drain/unsubscribe requests resolve the same buffered event-stream registry inside `ControlHarnessCore`.
 - Legacy `events.subscribe` remains unchanged as the long-lived transport/session path.
-- The remaining work in this area is verification depth and broader client migration, not protocol redesign.
+- The remaining work in this area is broader out-of-repo client migration and legacy compatibility cleanup, not protocol redesign.
 
 ### Client Migration and Deprecation Policy
 - Client migration means moving callers onto the namespaced `ControlHarness` vocabulary without changing behavior.
@@ -275,7 +276,7 @@ Implementation is accepted only when all of the following are true.
 - migrate docs and clients toward namespaced commands
 - keep legacy aliases until explicit deprecation window is announced
 - eventually retire direct public Browser socket guidance in favor of `ControlHarness`
-- Status on 2026-04-10: in-repo Android callers and protocol docs are now migrated onto the authority model, but legacy long-lived stream semantics and any out-of-repo clients still remain a later cleanup lane
+- Status on 2026-04-10: in-repo Android callers and protocol docs are fully migrated onto the authority model; the only remaining follow-up is legacy compatibility cleanup for out-of-repo clients and any eventual `events.subscribe` retirement window
 
 ## Completion Gates
 Implementation is complete only if all gates pass.
