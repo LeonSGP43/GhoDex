@@ -291,7 +291,7 @@ def terminal_snapshot_summary(snapshot: dict) -> dict[str, object]:
 
 
 def close_only_terminal_window_via_harness(app_bundle: Path, harness_socket: str) -> dict[str, object]:
-    before = run_control_command(app_bundle, harness_socket, "snapshot")
+    before = run_control_command(app_bundle, harness_socket, "state.snapshot")
     before_summary = terminal_snapshot_summary(before)
     if before_summary["terminal_count"] != 1:
         raise RuntimeError(
@@ -310,7 +310,7 @@ def close_only_terminal_window_via_harness(app_bundle: Path, harness_socket: str
     deadline = time.monotonic() + 15.0
     after = None
     while time.monotonic() < deadline:
-        after = run_control_command(app_bundle, harness_socket, "snapshot")
+        after = run_control_command(app_bundle, harness_socket, "state.snapshot")
         after_summary = terminal_snapshot_summary(after)
         if after_summary["terminal_count"] == 0:
             return {
@@ -537,9 +537,11 @@ def local_browser_server() -> dict[str, str]:
 
 def main() -> int:
     args = parse_args()
-    app_bundle = Path(args.app).expanduser() if args.app else resolve_default_app()
-    runtime_root = str(Path(args.runtime_root).expanduser())
-    output_path = Path(args.output)
+    app_bundle = Path(args.app).resolve() if args.app else resolve_default_app()
+    runtime_root = (
+        Path(args.runtime_root).resolve() if args.runtime_root else resolve_default_runtime_root()
+    )
+    output_path = Path(args.output).expanduser().resolve()
 
     session_root = Path(f"/tmp/ghx-browser-last-window-close-{uuid.uuid4().hex[:8]}")
     if session_root.exists():
@@ -555,7 +557,7 @@ def main() -> int:
     success = False
     result: dict[str, object] = {
         "app": str(app_bundle),
-        "runtime_root": runtime_root,
+        "runtime_root": str(runtime_root),
         "session_root": str(session_root),
         "config_path": str(config_path),
         "log_path": str(log_path),
@@ -569,7 +571,7 @@ def main() -> int:
             proc = launch_app(
                 app_bundle,
                 log_path,
-                runtime_root=runtime_root,
+                runtime_root=str(runtime_root),
                 app_support_root=app_support_root,
                 home_dir=home_dir,
                 config_path=config_path,
@@ -580,7 +582,7 @@ def main() -> int:
             )
             result["harness_socket"] = discover_harness_socket(proc.pid, args.page_timeout_ms)
             result["initial_terminal_snapshot"] = terminal_snapshot_summary(
-                run_control_command(app_bundle, result["harness_socket"], "snapshot")
+                run_control_command(app_bundle, result["harness_socket"], "state.snapshot")
             )
             contexts_before = extract_result_json(
                 send_request(str(socket_path), "listContexts", timeout=10.0)["response"]

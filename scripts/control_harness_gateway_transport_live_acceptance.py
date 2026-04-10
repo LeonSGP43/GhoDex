@@ -469,7 +469,7 @@ def wait_for_primary_terminal(app_bundle: Path, socket_path: str, *, timeout_ms:
     deadline = time.monotonic() + (timeout_ms / 1000.0)
     last_snapshot: dict | None = None
     while time.monotonic() < deadline:
-        snapshot = run_control_command(app_bundle, socket_path, "snapshot")
+        snapshot = run_control_command(app_bundle, socket_path, "state.snapshot")
         last_snapshot = snapshot
         tabs = snapshot.get("result", {}).get("tabs") or []
         terminals = [terminal for tab in tabs for terminal in tab.get("terminals") or []]
@@ -497,7 +497,7 @@ def wait_for_write_settle(
         read_result = run_control_command(
             app_bundle,
             socket_path,
-            "read-terminal",
+            "terminal.read",
             f"--terminal-id={terminal_id}",
             "--scope=screen",
             "--mode=snapshot",
@@ -528,7 +528,7 @@ def issue_run_command(
     command = run_control_command(
         app_bundle,
         socket_path,
-        "run-command",
+        "terminal.command.run",
         f"--terminal-id={terminal_id}",
         f"--command=printf {marker}\\n",
     )

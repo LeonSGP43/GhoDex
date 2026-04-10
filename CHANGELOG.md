@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### test(control-harness): align repo acceptance harnesses with namespaced commands
+
+- What changed: Migrated the repo-owned live acceptance scripts to the canonical namespaced control surface where semantics are equivalent, including `state.snapshot`, `terminal.read`, and `terminal.command.run`. Also normalized explicit `--app`, `--runtime-root`, and `--output` paths in `browser_last_window_close_acceptance.py` so the harness remains runnable even after it changes its launch working directory.
+- Why: The unified protocol work was only partially reflected in repo-owned acceptance callers, and the browser last-window-close harness still had a relative-path failure mode that blocked repeatable verification with explicit bundle paths.
+- Impact: In-repo acceptance callers now validate the public namespaced contract instead of prolonging legacy command usage, and the browser last-window-close acceptance can be rerun reliably from the repo root with explicit artifact paths.
+- Verification: `python3 -m py_compile scripts/browser_last_window_close_acceptance.py scripts/control_harness_terminal_v2_live_acceptance.py scripts/control_harness_gateway_transport_live_acceptance.py`; `python3 scripts/control_harness_terminal_v2_live_acceptance.py --app macos/build/ReleaseLocal/GhoDex.app --runtime-root macos/build/cef-runtime/current --output /tmp/ghx-control-harness-terminal-v2-live-20260410.json`; `python3 scripts/control_harness_gateway_transport_live_acceptance.py --app macos/build/ReleaseLocal/GhoDex.app --runtime-root macos/build/cef-runtime/current --output /tmp/ghx-control-harness-gateway-live-20260410.json`; `python3 scripts/browser_last_window_close_acceptance.py --app macos/build/ReleaseLocal/GhoDex.app --runtime-root macos/build/cef-runtime/current --output /tmp/ghx-browser-last-window-close-20260410.json`
+- Files: `scripts/browser_last_window_close_acceptance.py`, `scripts/control_harness_terminal_v2_live_acceptance.py`, `scripts/control_harness_gateway_transport_live_acceptance.py`, `CHANGELOG.md`
+- Decision trail: Keep the closeout protocol-first: move repo-owned callers to canonical command names where behavior matches, keep `events.subscribe` untouched because it still represents the distinct long-lived stream contract, and harden only the acceptance harness path handling needed for repeatable reruns.
+
 ### fix(macos): restore ReleaseLocal control-harness build compatibility
 
 - What changed: Replaced an ambiguous `.init` call in `ControlHarnessCore.swift` with explicit `ControlSettingsDiffEntry(...)` construction so ReleaseLocal compilation no longer trips over contextual type inference, and downgraded the Settings tab-change observer in `SettingsView.swift` to the deployment-target-compatible `onChange(of:)` form.

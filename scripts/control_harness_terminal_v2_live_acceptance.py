@@ -290,7 +290,7 @@ def wait_for_primary_terminal(app_bundle: Path, socket_path: str, *, timeout_ms:
     deadline = time.monotonic() + (timeout_ms / 1000.0)
     last_snapshot: dict | None = None
     while time.monotonic() < deadline:
-        snapshot = run_control_command(app_bundle, socket_path, "snapshot")
+        snapshot = run_control_command(app_bundle, socket_path, "state.snapshot")
         last_snapshot = snapshot
         tabs = snapshot.get("result", {}).get("tabs") or []
         terminals = [terminal for tab in tabs for terminal in tab.get("terminals") or []]
@@ -318,7 +318,7 @@ def wait_for_write_settle(
         read_result = run_control_command(
             app_bundle,
             socket_path,
-            "read-terminal",
+            "terminal.read",
             f"--terminal-id={terminal_id}",
             "--scope=screen",
             "--mode=snapshot",
@@ -384,7 +384,7 @@ def run_acceptance(args: argparse.Namespace) -> dict:
         seed_command = run_control_command(
             app_bundle,
             socket_path,
-            "run-command",
+            "terminal.command.run",
             f"--terminal-id={terminal_id}",
             f"--command=printf {seed_marker}\\\\n",
         )
@@ -402,7 +402,7 @@ def run_acceptance(args: argparse.Namespace) -> dict:
         snapshot_command = run_control_command(
             app_bundle,
             socket_path,
-            "run-command",
+            "terminal.command.run",
             f"--terminal-id={terminal_id}",
             f"--command=printf {snapshot_marker}\\\\n",
         )
@@ -448,7 +448,7 @@ def run_acceptance(args: argparse.Namespace) -> dict:
         semantic_command = run_control_command(
             app_bundle,
             socket_path,
-            "run-command",
+            "terminal.command.run",
             f"--terminal-id={terminal_id}",
             f"--command=printf {semantic_marker}\\\\n",
         )
@@ -547,7 +547,7 @@ def run_acceptance(args: argparse.Namespace) -> dict:
         live_command = run_control_command(
             app_bundle,
             socket_path,
-            "run-command",
+            "terminal.command.run",
             f"--terminal-id={terminal_id}",
             f"--command=printf {live_marker}\\\\n",
         )
