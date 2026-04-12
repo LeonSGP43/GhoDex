@@ -4,11 +4,11 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
-### docs(readme): reposition GhoDex as an early-stage product with roadmap and bilingual entry docs
+### docs(readme): reposition GhoDex as Ghostty plus Codex plus Harness with roadmap and bilingual entry docs
 
-- What changed: Rewrote the default root `README.md` in English as the primary product-facing entry document, expanded it with a clearer product narrative, concrete feature highlights, early-stage project status messaging, and a forward-looking roadmap, and added `docs/README.zh-CN.md` as the Chinese companion entry so language switching still works.
-- Why: The previous root README was still Chinese-first and too narrow for team, stakeholder, and fundraising conversations about what GhoDex already implements and where it is heading next.
-- Impact: The repository now presents GhoDex more clearly as a real but early-stage workstation product, with stronger messaging around the control plane, browser automation, task orchestration, document workflow, remote collaboration direction, and continued maintenance plans.
+- What changed: Rewrote the default root `README.md` in English as the primary product-facing entry document, expanded it with a clearer product narrative, concrete feature highlights, explicit `Ghostty + Codex = GhoDex` positioning, added the stronger `Ghostty + Codex + Harness = GhoDex OS` framing, early-stage project status messaging, and a forward-looking roadmap, and added `docs/README.zh-CN.md` as the Chinese companion entry so language switching still works.
+- Why: The previous root README was still Chinese-first and too narrow for team, stakeholder, and fundraising conversations about what GhoDex already implements, why Codex is central to the product direction, why Harness is the actual control-plane differentiator, and where the project is heading next.
+- Impact: The repository now presents GhoDex more clearly as a real but early-stage workstation product, with stronger messaging around Ghostty as the terminal base, Codex as the workflow/control philosophy, Harness as the unified control plane, and the product's browser automation, task orchestration, document workflow, remote collaboration direction, and continued maintenance plans.
 - Verification: `rg -n "[\\u4e00-\\u9fff]" README.md`; `nu macos/build.nu --configuration ReleaseLocal --action build` in `/tmp/ghodex-release-0.1.0`; `plutil -p /tmp/ghodex-release-0.1.0/macos/build/ReleaseLocal/GhoDex.app/Contents/Info.plist`
 - Files: `README.md`, `docs/README.zh-CN.md`, `CHANGELOG.md`
 - Decision trail: Keep the root README as the default English landing page for external readers, preserve Chinese availability through a dedicated companion doc, and make the main document strong enough to support product communication without overstating project maturity.

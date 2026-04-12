@@ -5,7 +5,11 @@
 </p>
 
 <p align="center">
-  A developer workstation built around native terminal performance, unified AI control, browser automation, and remote orchestration.
+  Ghostty + Codex = GhoDex: a native desktop workstation for agent-driven terminal work, browser automation, and programmable operator workflows.
+</p>
+
+<p align="center">
+  Ghostty + Codex + Harness = GhoDex OS: the terminal base, the execution model, and the unified control plane combined into one operable desktop system.
 </p>
 
 <p align="center">
@@ -35,13 +39,28 @@
 
 ## What GhoDex Is
 
-GhoDex is an early-stage desktop control workspace for developers who want more than a terminal emulator. The project combines a native terminal foundation with AI-assisted task execution, browser automation, operator-facing control APIs, built-in documentation workflows, and remote desktop pairing paths.
+GhoDex stands for `Ghostty + Codex`.
+
+At the system level, the stronger formulation is `Ghostty + Codex + Harness = GhoDex OS`.
+
+The project starts from Ghostty's native desktop terminal foundation and pushes it toward a Codex-style operator workstation: agent-driven execution, explicit control protocols, task orchestration, browser automation, knowledge capture, and remote collaboration paths in one product surface.
+
+In practical terms, the Ghostty side gives GhoDex its terminal-native performance model and desktop runtime shell. The Codex side is what makes the product interesting: structured control, repeatable agent workflows, terminal-to-knowledge accumulation, programmable task execution, and a workstation designed to be operated by both humans and AI systems. The Harness side is what turns those ideas into an operable system surface: one explicit control authority that agents, operators, browser flows, runtime tasks, and remote clients can all target.
 
 The goal is not only to run commands faster, but to make local development work programmable, inspectable, and easier to orchestrate across tabs, tasks, browser contexts, settings, and remote clients.
 
 ## Product Highlights
 
-### 1. AI-Native Terminal Operations
+### 1. Codex-Centered Agent Workstation
+
+- GhoDex is not positioned as "Ghostty with a few AI extras". The product direction is a Codex-style workstation built on top of Ghostty.
+- Codex is the conceptual center for how the app is meant to be used: structured command execution, repeatable operator flows, context-aware task handling, and explicit automation authority instead of one-off shell prompts.
+- The app architecture already reflects that direction through `ControlHarness`, runtime task/schedule flows, diagnostics, settings control, and workflow-oriented state.
+
+Why this matters:
+The strongest product story is not terminal rendering alone. It is that GhoDex tries to turn a native terminal app into a serious local execution environment for agentic software work.
+
+### 2. AI-Native Terminal Operations
 
 - AI Terminal Manager persists terminal-learning state, task/session state, remote session summaries, todo state, and managed skill repository metadata in one app-level store.
 - Learning and workspace bootstrap flows are built into the product instead of being left as ad-hoc shell setup.
@@ -50,7 +69,7 @@ The goal is not only to run commands faster, but to make local development work 
 Why this matters:
 GhoDex is positioned as an operational workstation, not just a shell surface. It is designed to accumulate reusable knowledge and repeatable workflows over time.
 
-### 2. Unified Control Harness Protocol
+### 3. Unified Control Harness Protocol
 
 - `ControlHarness` is the single public automation authority for the current desktop app.
 - The protocol already covers app lifecycle, workspace/tab/terminal control, runtime task/schedule control, todo operations, window/panel control, settings draft/apply flows, diagnostics, and browser automation.
@@ -59,7 +78,7 @@ GhoDex is positioned as an operational workstation, not just a shell surface. It
 Why this matters:
 This gives agents, operators, mobile clients, and future integrations one control plane instead of several fragmented entrypoints.
 
-### 3. Browser Automation Inside the Desktop Runtime
+### 4. Browser Automation Inside the Desktop Runtime
 
 - Browser automation is exposed through the same `ControlHarness` authority via `browser.*`.
 - The current browser layer already supports tab/context/page/frame/DOM/cookie/event/prompt/download-oriented operations.
@@ -68,7 +87,7 @@ This gives agents, operators, mobile clients, and future integrations one contro
 Why this matters:
 GhoDex can act as a local browser automation workstation while staying integrated with terminal sessions and desktop state, instead of forcing a separate browser toolchain.
 
-### 4. Task, Runtime, and Scheduling Workflows
+### 5. Task, Runtime, and Scheduling Workflows
 
 - Runtime commands already support session registration, heartbeats, lease release, task enqueue/claim/update/approve/cancel, and schedule enqueue/update/cancel.
 - Todo workflows are not bolted on. They include snapshot/add/update/complete/assign/sync behaviors and document revision targeting.
@@ -77,7 +96,7 @@ GhoDex can act as a local browser automation workstation while staying integrate
 Why this matters:
 This makes GhoDex usable as a local orchestration layer for repeatable operational work, not only interactive manual terminal use.
 
-### 5. Built-In Developer Documentation Workflow
+### 6. Built-In Developer Documentation Workflow
 
 - Markdown files can be opened directly in-app with preview/source switching.
 - The Markdown viewer supports live preview rendering, source editing, save flow, metadata summary, and font-size controls.
@@ -86,7 +105,7 @@ This makes GhoDex usable as a local orchestration layer for repeatable operation
 Why this matters:
 Documentation, operator notes, and command execution stay closer together, which is important for AI-assisted and multi-step workflows.
 
-### 6. Desktop ↔ Mobile and Multi-Instance Routing
+### 7. Desktop ↔ Mobile and Multi-Instance Routing
 
 - GhoDex supports desktop-to-Android pairing flows based on QR/bootstrap configuration.
 - The relay design already accounts for multiple desktop instances sharing one public endpoint through stable `desktop_id` routing.
@@ -95,7 +114,7 @@ Documentation, operator notes, and command execution stay closer together, which
 Why this matters:
 Remote control and mobile access are treated as part of the product architecture, not as a temporary debug tunnel.
 
-### 7. Workspace-Level Direction Beyond Tabs
+### 8. Workspace-Level Direction Beyond Tabs
 
 - Workspace Map v1 already defines a top-level canvas mode that projects terminal and browser groups onto one controllable workspace view.
 - The current design intentionally keeps runtime controllers as the source of truth and limits canvas commands to a safe v1 allowlist.
@@ -117,7 +136,7 @@ What this means for teams and stakeholders:
 
 - GhoDex is suitable to discuss as a serious prototype / early product with working foundations.
 - It should still be presented honestly as an actively evolving system, not a finished platform.
-- The strongest current story is: native desktop control, unified automation authority, browser + terminal convergence, and developer workflow orchestration.
+- The strongest current story is: Ghostty as the native terminal base, Codex as the workflow and control philosophy, and GhoDex as the product that combines them into one programmable desktop workstation.
 
 ## Roadmap
 
@@ -131,7 +150,7 @@ The current medium-term direction is to keep shipping on top of the existing con
 
 ### 2. Deepen AI Runtime and Task Orchestration
 
-- Expand the runtime/session/task/schedule model into a more complete long-running workstation scheduler.
+- Expand the runtime/session/task/schedule model into a more complete Codex-oriented workstation scheduler.
 - Keep diagnostics, auditability, and operational visibility first-class as automation complexity grows.
 - Improve the bridge between terminal learning, todo state, and queued execution.
 
@@ -157,6 +176,17 @@ The current medium-term direction is to keep shipping on top of the existing con
 - Improve release discipline, build reproducibility, and documentation quality.
 - Keep `VERSION`, `CHANGELOG.md`, protocol docs, and acceptance evidence aligned with the actual shipped surface.
 - Raise the quality bar without slowing down useful iteration.
+
+## Why The Name
+
+`GhoDex = Ghostty + Codex`
+
+`GhoDex OS = Ghostty + Codex + Harness`
+
+- `Ghostty` represents the native terminal base, desktop rendering, and high-performance terminal experience.
+- `Codex` represents the agent workflow model, programmable control philosophy, execution-oriented UX, and the expectation that software work should be operable through explicit machine-usable interfaces.
+- `Harness` represents the explicit machine-usable control plane that makes the workstation scriptable, inspectable, and safe to operate across tabs, runtime jobs, browser automation, settings, diagnostics, and remote entrypoints.
+- `GhoDex` is the attempt to combine both into one product, while `GhoDex OS` is the stronger statement of intent: a terminal-first desktop environment that is also a real operating surface for AI-assisted development work.
 
 ## Installation
 
