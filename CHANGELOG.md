@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### docs(readme): reposition GhoDex as an early-stage product with roadmap and bilingual entry docs
+
+- What changed: Rewrote the default root `README.md` in English as the primary product-facing entry document, expanded it with a clearer product narrative, concrete feature highlights, early-stage project status messaging, and a forward-looking roadmap, and added `docs/README.zh-CN.md` as the Chinese companion entry so language switching still works.
+- Why: The previous root README was still Chinese-first and too narrow for team, stakeholder, and fundraising conversations about what GhoDex already implements and where it is heading next.
+- Impact: The repository now presents GhoDex more clearly as a real but early-stage workstation product, with stronger messaging around the control plane, browser automation, task orchestration, document workflow, remote collaboration direction, and continued maintenance plans.
+- Verification: `rg -n "[\\u4e00-\\u9fff]" README.md`; `nu macos/build.nu --configuration ReleaseLocal --action build` in `/tmp/ghodex-release-0.1.0`; `plutil -p /tmp/ghodex-release-0.1.0/macos/build/ReleaseLocal/GhoDex.app/Contents/Info.plist`
+- Files: `README.md`, `docs/README.zh-CN.md`, `CHANGELOG.md`
+- Decision trail: Keep the root README as the default English landing page for external readers, preserve Chinese availability through a dedicated companion doc, and make the main document strong enough to support product communication without overstating project maturity.
+
 ### docs(control-harness): publish protocol reference and close in-repo migration loop
 
 - What changed: Added `docs/control-harness-protocol.md` as the in-repo operator-facing command reference for the unified `ControlHarness` protocol, linked it from `README.md`, and updated `control-harness-unification-plan.md` so its status, acceptance-gate count, and evidence snapshot match the actual repository state.

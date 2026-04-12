@@ -5,115 +5,221 @@
 </p>
 
 <p align="center">
-  面向高频开发场景的终端工作台：在原生性能基础上，强化 AI 管理、任务编排与远程控制能力。
+  A developer workstation built around native terminal performance, unified AI control, browser automation, and remote orchestration.
 </p>
 
 <p align="center">
-  <strong>Language / 语言</strong>:
-  <a href="./README.md">中文</a>
+  <strong>Language</strong>:
+  <a href="./README.md">English</a>
   ·
-  <a href="./docs/README.en.md">English</a>
+  <a href="./docs/README.zh-CN.md">Chinese</a>
 </p>
 
 <p align="center">
-  <a href="#功能总览">功能总览</a>
+  <a href="#what-ghodex-is">What GhoDex Is</a>
   ·
-  <a href="#优化总结">优化总结</a>
+  <a href="#product-highlights">Product Highlights</a>
   ·
-  <a href="#部署方法">部署方法</a>
+  <a href="#project-status">Project Status</a>
   ·
-  <a href="#操作文档">操作文档</a>
+  <a href="#roadmap">Roadmap</a>
   ·
-  <a href="#开发与贡献">开发与贡献</a>
+  <a href="#installation">Installation</a>
   ·
-  <a href="#声明">声明</a>
+  <a href="#operations">Operations</a>
+  ·
+  <a href="#development-and-contributing">Development & Contributing</a>
+  ·
+  <a href="#attribution">Attribution</a>
 </p>
 
-## 功能总览
+## What GhoDex Is
 
-- AI Terminal Manager：终端学习与知识沉淀流程，可把终端操作沉淀到可追踪的任务/知识上下文。
-- Heartbeat Task Queue：内置心跳任务队列，支持间隔、并发等运行参数控制。
-- Markdown 原生工作流：在 GhoDex 内直接打开 Markdown，支持预览/源码切换与编辑保存。
-- 本地控制通道：支持终端自动化控制与面向 Agent 的命令执行链路。
-- Desktop ↔ Android 远程配对：支持二维码配对与基础远程交互流程。
+GhoDex is an early-stage desktop control workspace for developers who want more than a terminal emulator. The project combines a native terminal foundation with AI-assisted task execution, browser automation, operator-facing control APIs, built-in documentation workflows, and remote desktop pairing paths.
 
-## 优化总结
+The goal is not only to run commands faster, but to make local development work programmable, inspectable, and easier to orchestrate across tabs, tasks, browser contexts, settings, and remote clients.
 
-- 稳定性优化：增强多实例控制场景下的命令路由与归属识别。
-- 可维护性优化：完善 `VERSION` + `CHANGELOG.md` 的版本治理流程。
-- 测试与验证优化：强化本地验证路径，提升升级回归与文档可追溯性。
-- 使用体验优化：提供更贴近日常开发的内置文档阅读与任务管理能力。
+## Product Highlights
 
-## 部署方法
+### 1. AI-Native Terminal Operations
 
-### 1. 快速使用（Release）
+- AI Terminal Manager persists terminal-learning state, task/session state, remote session summaries, todo state, and managed skill repository metadata in one app-level store.
+- Learning and workspace bootstrap flows are built into the product instead of being left as ad-hoc shell setup.
+- Heartbeat execution is configurable with interval, concurrency, retention, and external inbox mutation controls.
 
-1. 打开发布页：<https://github.com/LeonSGP43/GhoDex/releases>
-2. 下载对应平台的发布包。
-3. 安装并启动 GhoDex。
+Why this matters:
+GhoDex is positioned as an operational workstation, not just a shell surface. It is designed to accumulate reusable knowledge and repeatable workflows over time.
 
-### 2. 从源码部署（macOS 推荐）
+### 2. Unified Control Harness Protocol
 
-#### 环境准备
+- `ControlHarness` is the single public automation authority for the current desktop app.
+- The protocol already covers app lifecycle, workspace/tab/terminal control, runtime task/schedule control, todo operations, window/panel control, settings draft/apply flows, diagnostics, and browser automation.
+- Legacy aliases are still accepted, but the product is converging on a stable namespaced command surface.
 
-- Zig（用于核心构建）
-- Xcode / xcodebuild（用于 macOS App 构建）
-- Nushell（可选，用于统一构建脚本 `macos/build.nu`）
+Why this matters:
+This gives agents, operators, mobile clients, and future integrations one control plane instead of several fragmented entrypoints.
 
-#### 拉取源码
+### 3. Browser Automation Inside the Desktop Runtime
+
+- Browser automation is exposed through the same `ControlHarness` authority via `browser.*`.
+- The current browser layer already supports tab/context/page/frame/DOM/cookie/event/prompt/download-oriented operations.
+- Browser/CEF-enabled builds are now treated as a first-class runtime path with explicit runtime checks and failure gates.
+
+Why this matters:
+GhoDex can act as a local browser automation workstation while staying integrated with terminal sessions and desktop state, instead of forcing a separate browser toolchain.
+
+### 4. Task, Runtime, and Scheduling Workflows
+
+- Runtime commands already support session registration, heartbeats, lease release, task enqueue/claim/update/approve/cancel, and schedule enqueue/update/cancel.
+- Todo workflows are not bolted on. They include snapshot/add/update/complete/assign/sync behaviors and document revision targeting.
+- Settings and diagnostics are also exposed as controllable product surfaces, not just internal implementation details.
+
+Why this matters:
+This makes GhoDex usable as a local orchestration layer for repeatable operational work, not only interactive manual terminal use.
+
+### 5. Built-In Developer Documentation Workflow
+
+- Markdown files can be opened directly in-app with preview/source switching.
+- The Markdown viewer supports live preview rendering, source editing, save flow, metadata summary, and font-size controls.
+- This makes project docs, notes, and operational guides part of the same working environment as the terminal and browser.
+
+Why this matters:
+Documentation, operator notes, and command execution stay closer together, which is important for AI-assisted and multi-step workflows.
+
+### 6. Desktop ↔ Mobile and Multi-Instance Routing
+
+- GhoDex supports desktop-to-Android pairing flows based on QR/bootstrap configuration.
+- The relay design already accounts for multiple desktop instances sharing one public endpoint through stable `desktop_id` routing.
+- The owner-gateway design keeps one external entrypoint while still routing requests to the correct local desktop instance.
+
+Why this matters:
+Remote control and mobile access are treated as part of the product architecture, not as a temporary debug tunnel.
+
+### 7. Workspace-Level Direction Beyond Tabs
+
+- Workspace Map v1 already defines a top-level canvas mode that projects terminal and browser groups onto one controllable workspace view.
+- The current design intentionally keeps runtime controllers as the source of truth and limits canvas commands to a safe v1 allowlist.
+
+Why this matters:
+GhoDex is moving toward a richer workspace control model while keeping architectural boundaries explicit and testable.
+
+## Project Status
+
+GhoDex is still an early-stage project. The architecture is already substantial, but the product is not claiming feature freeze or long-term API stability yet.
+
+What is true today:
+
+- The core desktop app, control protocol, browser integration, task/runtime model, and document workflow are real implemented surfaces.
+- The project is actively maintained and still evolving quickly.
+- Some areas are intentionally ahead of polish because the priority is building a programmable workstation foundation with real operator value.
+
+What this means for teams and stakeholders:
+
+- GhoDex is suitable to discuss as a serious prototype / early product with working foundations.
+- It should still be presented honestly as an actively evolving system, not a finished platform.
+- The strongest current story is: native desktop control, unified automation authority, browser + terminal convergence, and developer workflow orchestration.
+
+## Roadmap
+
+The current medium-term direction is to keep shipping on top of the existing control-plane foundation rather than starting over.
+
+### 1. Broaden the Unified Control Surface
+
+- Continue moving external and out-of-repo clients onto the namespaced `ControlHarness` contract.
+- Reduce remaining compatibility debt while keeping live clients stable.
+- Strengthen verification lanes so protocol changes stay checkable.
+
+### 2. Deepen AI Runtime and Task Orchestration
+
+- Expand the runtime/session/task/schedule model into a more complete long-running workstation scheduler.
+- Keep diagnostics, auditability, and operational visibility first-class as automation complexity grows.
+- Improve the bridge between terminal learning, todo state, and queued execution.
+
+### 3. Push the Browser + Desktop Convergence Further
+
+- Keep browser automation inside the same public control authority as terminal/runtime flows.
+- Continue hardening Browser/CEF packaging, runtime activation, and operator documentation.
+- Improve the “one workstation, many controllable surfaces” model instead of splitting browser tooling out again.
+
+### 4. Advance Remote and Mobile Collaboration
+
+- Keep investing in desktop-to-mobile pairing reliability, routing isolation, and multi-instance gateway behavior.
+- Make remote access behave more predictably across real multi-desktop environments.
+- Preserve the rule that routing should be explicit, auditable, and instance-aware.
+
+### 5. Evolve Workspace Map Carefully
+
+- Grow Workspace Map from a safe projection layer toward richer workspace orchestration without breaking runtime ownership boundaries.
+- Keep v2 features such as richer structural editing and more capable canvas interactions behind explicit contracts and gates.
+
+### 6. Continue Product Maturity Work
+
+- Improve release discipline, build reproducibility, and documentation quality.
+- Keep `VERSION`, `CHANGELOG.md`, protocol docs, and acceptance evidence aligned with the actual shipped surface.
+- Raise the quality bar without slowing down useful iteration.
+
+## Installation
+
+### 1. Quick Start (Release)
+
+1. Open the releases page: <https://github.com/LeonSGP43/GhoDex/releases>
+2. Download the release package for your platform.
+3. Install and launch GhoDex.
+
+### 2. Build From Source (Recommended on macOS)
+
+#### Prerequisites
+
+- Zig for the core build
+- Xcode / `xcodebuild` for the macOS app build
+- Nushell (optional) for the unified build script `macos/build.nu`
+
+#### Clone the Repository
 
 ```bash
 git clone https://github.com/LeonSGP43/GhoDex.git
 cd GhoDex
 ```
 
-#### 构建核心（不打包 macOS App）
+#### Build the Core Only (Without Packaging the macOS App)
 
 ```bash
 zig build -Demit-macos-app=false
 ```
 
-#### Browser / CEF 默认构建说明
+#### Browser / CEF Default Build Notes
 
-- `nu macos/build.nu` 在 `--scheme GhoDex` 下默认按 `CEF required` 处理。
-- 默认 runtime 根目录是：
+- `nu macos/build.nu` treats `--scheme GhoDex` as `CEF required` by default.
+- The default runtime root is:
   `~/Library/Application Support/GhoDex/CEF/current`
-- 该目录至少要包含：
+- That directory must contain at least:
   - `Frameworks/Chromium Embedded Framework.framework`
-  - `lib/Debug/libcef_dll_wrapper.a` 或 `lib/Release/libcef_dll_wrapper.a`
-- Browser host bridge 会直接调用 SQLite API 处理 runtime profile 数据，因此
-  CEF-enabled build 还必须链接系统 `libsqlite3`。
-- `nu macos/build.nu` 现在会自动注入
-  `GHODEX_CEF_OTHER_LDFLAGS=-lsqlite3`；如果当前 runtime 是单架构
-  （例如当前 codec-enabled lane 常见的 `macosarm64`），它也会自动把 app
-  build 收窄到匹配架构，避免 CEF wrapper 和 app slice 发生链接不匹配。
-- 如果 runtime 缺失，`macos/build.nu` 现在会直接失败并给出明确提示，而不是静默编出一个 Browser 处于 `unsupportedBuild` 的 app。
-- 如果你明确就是要构建一个禁用 Browser/CEF 的 app，需要显式传：
-  `--cef-mode disabled`
-- Browser 激活模型与 codec runtime 供给说明见：
+  - `lib/Debug/libcef_dll_wrapper.a` or `lib/Release/libcef_dll_wrapper.a`
+- The Browser host bridge calls SQLite APIs directly to manage runtime profile data, so a CEF-enabled build must also link against the system `libsqlite3`.
+- `nu macos/build.nu` now injects `GHODEX_CEF_OTHER_LDFLAGS=-lsqlite3` automatically. If the current runtime is single-architecture, such as the common `macosarm64` codec-enabled lane, it also narrows the app build to the matching architecture so the CEF wrapper and app slice do not fail to link against each other.
+- If the runtime is missing, `macos/build.nu` now fails immediately with an explicit error instead of silently producing an app where Browser stays in `unsupportedBuild`.
+- If you intentionally want to build an app with Browser/CEF disabled, pass `--cef-mode disabled` explicitly.
+- For Browser activation behavior and codec runtime supply details, see:
   [`browser-tab-runtime-activation.md`](./browser-tab-runtime-activation.md)
-  和 [`browser-tab-codec-runtime-playbook.md`](./browser-tab-codec-runtime-playbook.md)
+  and [`browser-tab-codec-runtime-playbook.md`](./browser-tab-codec-runtime-playbook.md)
 
-#### 构建 macOS App（Debug）
+#### Build the macOS App (Debug)
 
 ```bash
 nu macos/build.nu --configuration Debug --action build
 ```
 
-#### 构建 macOS App（ReleaseLocal）
+#### Build the macOS App (ReleaseLocal)
 
 ```bash
 nu macos/build.nu --configuration ReleaseLocal --action build
 ```
 
-#### 无 Nushell 时的替代构建
+#### Fallback Build Without Nushell
 
-如果你要构建带 Browser/CEF 能力的主 app，优先使用上面的
-`nu macos/build.nu`。它会统一处理 CEF runtime 检查和构建参数注入。
+If you are building the main app with Browser/CEF enabled, prefer `nu macos/build.nu` above. It handles CEF runtime checks and build flag injection in one place.
 
-下面这个裸 `xcodebuild` 示例更适合作为低层调试入口；如果你直接用它来构建
-Browser-enabled app，需要自己传对 CEF 相关参数，并让 app 架构和当前 runtime
-架构一致。对于当前 arm64-only runtime，至少应像下面这样传：
+The raw `xcodebuild` example below is better suited for low-level debugging. If you use it directly for a Browser-enabled app, you must provide the CEF-related flags yourself and keep the app architecture aligned with the active runtime architecture. For the current arm64-only runtime, the minimum setup looks like this:
 
 ```bash
 GHODEX_CEF_ROOT="$HOME/Library/Application Support/GhoDex/CEF/current"
@@ -133,28 +239,29 @@ xcodebuild \
   build
 ```
 
-## 操作文档
+## Operations
 
-- 中文操作文档：[`docs/OPERATIONS.zh-CN.md`](./docs/OPERATIONS.zh-CN.md)
-- English operations doc: [`docs/OPERATIONS.en.md`](./docs/OPERATIONS.en.md)
-- Control Harness 协议参考：[`docs/control-harness-protocol.md`](./docs/control-harness-protocol.md)
+- Chinese operations guide: [`docs/OPERATIONS.zh-CN.md`](./docs/OPERATIONS.zh-CN.md)
+- English operations guide: [`docs/OPERATIONS.en.md`](./docs/OPERATIONS.en.md)
+- Control Harness protocol reference: [`docs/control-harness-protocol.md`](./docs/control-harness-protocol.md)
+- Workspace Map v1 notes: [`docs/workspace-map-v1.md`](./docs/workspace-map-v1.md)
+- Multi-instance relay routing notes: [`docs/ghodex-relay-desktop-routing.md`](./docs/ghodex-relay-desktop-routing.md)
 
-## 推荐配置
+## Recommended Configuration
 
-为避免在 shell 中误触整行清空，建议在 `config.ghodex` 中加入：
+To avoid accidentally clearing the entire current line in the shell, add this to `config.ghodex`:
 
 ```ini
 keybind = ctrl+u=ignore
 ```
 
-## 开发与贡献
+## Development and Contributing
 
-- 开发文档：[`HACKING.md`](./HACKING.md)
-- 贡献指南：[`CONTRIBUTING.md`](./CONTRIBUTING.md)
-- 版本历史：[`CHANGELOG.md`](./CHANGELOG.md)
-- 当前版本：[`VERSION`](./VERSION)
+- Development guide: [`HACKING.md`](./HACKING.md)
+- Contribution guide: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
+- Version history: [`CHANGELOG.md`](./CHANGELOG.md)
+- Current version: [`VERSION`](./VERSION)
 
-## 声明
+## Attribution
 
-GhoDex 在 [Ghostty](https://github.com/ghostty-org/ghostty) 基础之上开发，
-沿用上游许可与归属要求，感谢 Ghostty 社区与贡献者的基础能力支持。
+GhoDex is built on top of [Ghostty](https://github.com/ghostty-org/ghostty), follows the upstream licensing and attribution requirements, and depends on the foundational work contributed by the Ghostty community.
