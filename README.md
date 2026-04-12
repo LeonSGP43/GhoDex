@@ -5,11 +5,7 @@
 </p>
 
 <p align="center">
-  Ghostty + Codex = GhoDex: a native desktop workstation for agent-driven terminal work, browser automation, and programmable operator workflows.
-</p>
-
-<p align="center">
-  Ghostty + Codex + Harness = GhoDex OS: the terminal base, the execution model, and the unified control plane combined into one operable desktop system.
+  <strong>GhoDex OS</strong> combines Ghostty, Codex, and Harness into one terminal-native control surface for agent-driven development, browser automation, and programmable operator workflows.
 </p>
 
 <p align="center">
@@ -39,9 +35,7 @@
 
 ## What GhoDex Is
 
-GhoDex stands for `Ghostty + Codex`.
-
-At the system level, the stronger formulation is `Ghostty + Codex + Harness = GhoDex OS`.
+GhoDex starts with `Ghostty + Codex`. The broader product statement is `Ghostty + Codex + Harness = GhoDex OS`.
 
 The project starts from Ghostty's native desktop terminal foundation and pushes it toward a Codex-style operator workstation: agent-driven execution, explicit control protocols, task orchestration, browser automation, knowledge capture, and remote collaboration paths in one product surface.
 
@@ -179,9 +173,8 @@ The current medium-term direction is to keep shipping on top of the existing con
 
 ## Why The Name
 
-`GhoDex = Ghostty + Codex`
-
-`GhoDex OS = Ghostty + Codex + Harness`
+- `GhoDex = Ghostty + Codex`
+- `GhoDex OS = Ghostty + Codex + Harness`
 
 - `Ghostty` represents the native terminal base, desktop rendering, and high-performance terminal experience.
 - `Codex` represents the agent workflow model, programmable control philosophy, execution-oriented UX, and the expectation that software work should be operable through explicit machine-usable interfaces.

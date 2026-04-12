@@ -5,11 +5,7 @@
 </p>
 
 <p align="center">
-  Ghostty + Codex = GhoDex：以原生终端能力为底座，面向 Agent 驱动开发、浏览器自动化与可编排工作流的桌面工作台。
-</p>
-
-<p align="center">
-  Ghostty + Codex + Harness = GhoDex OS：把终端底座、执行工作流与统一控制面合成一个真正可操作的桌面系统。
+  <strong>GhoDex OS</strong> 把 Ghostty、Codex 和 Harness 合成一个面向 Agent 驱动开发、浏览器自动化与可编排工作流的原生桌面控制系统。
 </p>
 
 <p align="center">
@@ -35,9 +31,7 @@
 
 ## 项目定位
 
-GhoDex 的名字就是 `Ghostty + Codex`。
-
-如果进一步强调产品形态，更准确的公式是 `Ghostty + Codex + Harness = GhoDex OS`。
+GhoDex 可以先理解为 `Ghostty + Codex`，而完整的产品表达是 `Ghostty + Codex + Harness = GhoDex OS`。
 
 这个项目不是简单地给 Ghostty 加几个 AI 功能，而是希望把 Ghostty 的原生终端底座，和 Codex 式的执行工作流、协议化控制、任务编排、知识沉淀能力结合起来，做成一个真正可被人和 Agent 共同操作的开发工作台。
 
