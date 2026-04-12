@@ -35,3 +35,18 @@ glad.zip
 
 vgcore.*
 default.profraw
+
+# Private working notes and local artifacts
+/*.md
+!/AGENTS.md
+!/AI_POLICY.md
+!/CHANGELOG.md
+!/CONTRIBUTING.md
+!/HACKING.md
+!/ORIGIN.md
+!/PACKAGING.md
+!/README.md
+!/creator.md
+.tmp/
+scripts/__pycache__/
+macos/macos/
