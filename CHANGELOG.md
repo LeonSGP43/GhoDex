@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-04-12
+
 ### docs(readme): reposition GhoDex as Ghostty plus Codex plus Harness with roadmap and bilingual entry docs
 
 - What changed: Rewrote the default root `README.md` in English as the primary product-facing entry document, expanded it with a clearer product narrative, concrete feature highlights, explicit `Ghostty + Codex = GhoDex` positioning, added the stronger `Ghostty + Codex + Harness = GhoDex OS` framing, tightened the hero layout to remove repeated slogans, and added `docs/README.zh-CN.md` as the Chinese companion entry so language switching still works.
