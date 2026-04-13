@@ -239,8 +239,32 @@ enum AppLocalization {
         "ssh.connections.tab.connections": "Connection Center",
         "ssh.connections.tab.todo": "Todo",
         "ssh.connections.tab.learning": "Learning Settings",
+        "ssh.connections.tab.task_queue": "Task Queue",
         "ssh.connections.page.connections.title": "Connection Center",
         "ssh.connections.page.connections.subtitle": "Manage saved SSH connections, reuse Keychain passwords, and jump back into active remote sessions.",
+        "ssh.connections.task_queue.title": "Task Queue",
+        "ssh.connections.task_queue.subtitle": "Schedule and run terminal commands through the GhoDex heartbeat queue.",
+        "ssh.connections.task_queue.enable": "Enable queue",
+        "ssh.connections.task_queue.heartbeat_interval": "Heartbeat Interval (seconds)",
+        "ssh.connections.task_queue.max_concurrent": "Max Concurrent: %d",
+        "ssh.connections.task_queue.save_settings": "Save Queue Settings",
+        "ssh.connections.task_queue.cancel_all": "Cancel All Queued",
+        "ssh.connections.task_queue.cancelled_all_message": "Queued tasks cancelled.",
+        "ssh.connections.task_queue.clear_finished": "Clear Finished",
+        "ssh.connections.task_queue.cleared_finished_message": "Finished tasks cleared.",
+        "ssh.connections.task_queue.enqueue_title": "Enqueue Command",
+        "ssh.connections.task_queue.schedule_execution": "Schedule execution time",
+        "ssh.connections.task_queue.execute_at": "Execute At",
+        "ssh.connections.task_queue.enqueue": "Enqueue",
+        "ssh.connections.task_queue.task_accepted": "Task accepted: %@",
+        "ssh.connections.task_queue.counts": "Counts · queued %d · running %d · done %d · failed %d",
+        "ssh.connections.task_queue.empty": "No queue tasks.",
+        "ssh.connections.task_queue.saved": "Queue settings saved.",
+        "ssh.connections.task_queue.status.queued": "Queued",
+        "ssh.connections.task_queue.status.running": "Running",
+        "ssh.connections.task_queue.status.done": "Done",
+        "ssh.connections.task_queue.status.failed": "Failed",
+        "ssh.connections.task_queue.status.cancelled": "Cancelled",
         "ssh.connections.todo.title": "Todo Workspace",
         "ssh.connections.todo.subtitle": "Track today's tasks in a manual-first flow with local daily files.",
         "ssh.connections.todo.enable": "Enable todo workflow",
@@ -272,8 +296,10 @@ enum AppLocalization {
         "ssh.connections.todo.date_today": "Today",
         "ssh.connections.todo.date_tomorrow": "Tomorrow",
         "ssh.connections.todo.summary_title": "Day Summary",
+        "ssh.connections.todo.summary_progress": "%d / %d complete · %d%%",
         "ssh.connections.todo.selected_day": "Selected day: %@",
         "ssh.connections.todo.focused_workspace_title": "Focused Tab",
+        "ssh.connections.todo.focused_workspace_summary": "%d / %d complete · %d remaining",
         "ssh.connections.todo.focused_workspace_hint": "This summary tracks tasks assigned to the tab that opened the todo panel.",
         "ssh.connections.todo.quick_look_title": "Tab Tasks",
         "ssh.connections.todo.quick_look_empty": "No tasks are assigned to this tab for today.",
@@ -355,6 +381,7 @@ enum AppLocalization {
         "ssh.connections.learning.log.status.failure": "Failure",
         "ssh.connections.learning.log.show_details": "Show details",
         "ssh.connections.learning.log.hide_details": "Hide details",
+        "ssh.connections.learning.log.exit_code": "Exit code: %d",
         "terminal.notification.bell.title": "Action Required",
         "terminal.notification.bell.body": "Task completed and waiting for your input.",
         "about.tagline": "Fast, native, feature-rich terminal \nemulator pushing modern features.",
@@ -720,8 +747,32 @@ enum AppLocalization {
         "ssh.connections.tab.connections": "连接中心",
         "ssh.connections.tab.todo": "待办",
         "ssh.connections.tab.learning": "学习设置",
+        "ssh.connections.tab.task_queue": "任务队列",
         "ssh.connections.page.connections.title": "连接中心",
         "ssh.connections.page.connections.subtitle": "管理已保存 SSH 连接、复用 Keychain 密码，并快速回到活动中的远程会话。",
+        "ssh.connections.task_queue.title": "任务队列",
+        "ssh.connections.task_queue.subtitle": "通过 GhoDex 心跳队列调度并运行终端命令。",
+        "ssh.connections.task_queue.enable": "启用队列",
+        "ssh.connections.task_queue.heartbeat_interval": "心跳间隔（秒）",
+        "ssh.connections.task_queue.max_concurrent": "最大并发：%d",
+        "ssh.connections.task_queue.save_settings": "保存队列设置",
+        "ssh.connections.task_queue.cancel_all": "取消所有排队任务",
+        "ssh.connections.task_queue.cancelled_all_message": "已取消所有排队任务。",
+        "ssh.connections.task_queue.clear_finished": "清理已完成任务",
+        "ssh.connections.task_queue.cleared_finished_message": "已清理已完成任务。",
+        "ssh.connections.task_queue.enqueue_title": "添加队列命令",
+        "ssh.connections.task_queue.schedule_execution": "设置执行时间",
+        "ssh.connections.task_queue.execute_at": "执行时间",
+        "ssh.connections.task_queue.enqueue": "加入队列",
+        "ssh.connections.task_queue.task_accepted": "任务已接受：%@",
+        "ssh.connections.task_queue.counts": "统计 · 排队 %d · 运行中 %d · 完成 %d · 失败 %d",
+        "ssh.connections.task_queue.empty": "当前没有队列任务。",
+        "ssh.connections.task_queue.saved": "队列设置已保存。",
+        "ssh.connections.task_queue.status.queued": "排队中",
+        "ssh.connections.task_queue.status.running": "运行中",
+        "ssh.connections.task_queue.status.done": "已完成",
+        "ssh.connections.task_queue.status.failed": "失败",
+        "ssh.connections.task_queue.status.cancelled": "已取消",
         "ssh.connections.todo.title": "待办工作区",
         "ssh.connections.todo.subtitle": "用手动优先的方式管理今日任务，并把每日任务文件保存在本地。",
         "ssh.connections.todo.enable": "启用待办工作流",
@@ -752,8 +803,10 @@ enum AppLocalization {
         "ssh.connections.todo.date_today": "今天",
         "ssh.connections.todo.date_tomorrow": "明天",
         "ssh.connections.todo.summary_title": "日期汇总",
+        "ssh.connections.todo.summary_progress": "%d / %d 已完成 · %d%%",
         "ssh.connections.todo.selected_day": "当前日期：%@",
         "ssh.connections.todo.focused_workspace_title": "当前标签页",
+        "ssh.connections.todo.focused_workspace_summary": "%d / %d 已完成 · 剩余 %d",
         "ssh.connections.todo.focused_workspace_hint": "这里显示唤起当前待办面板的标签页所分配任务的完成情况。",
         "ssh.connections.todo.quick_look_title": "标签页任务",
         "ssh.connections.todo.quick_look_empty": "这个标签页今天还没有分配任务。",
@@ -835,6 +888,7 @@ enum AppLocalization {
         "ssh.connections.learning.log.status.failure": "失败",
         "ssh.connections.learning.log.show_details": "展开详情",
         "ssh.connections.learning.log.hide_details": "收起详情",
+        "ssh.connections.learning.log.exit_code": "退出码：%d",
         "terminal.notification.bell.title": "等待操作",
         "terminal.notification.bell.body": "任务已完成，等待你的操作。",
         "about.tagline": "快速、原生、功能丰富的终端模拟器，持续推进现代终端体验。",
@@ -906,34 +960,34 @@ enum AppLocalization {
         "settings.icon.option.paper": "纸质",
         "settings.icon.option.retro": "复古",
         "settings.icon.option.xray": "X 光",
-        "settings.browser.title": "浏览器 Profile",
-        "settings.browser.description": "选择 Browser tab 使用哪个 Chromium profile。保持为 GhoDex 管理的默认值时，浏览器数据会和 Chrome 隔离。",
-        "settings.browser.profile_section": "浏览器 Profile",
-        "settings.browser.use_managed": "使用 GhoDex 管理的浏览器 Profile",
-        "settings.browser.managed_path": "托管 Profile 路径",
-        "settings.browser.custom_path": "自定义 Profile 路径",
+        "settings.browser.title": "浏览器配置",
+        "settings.browser.description": "选择 Browser 标签页使用哪个 Chromium 配置目录。保持为 GhoDex 管理的默认值时，浏览器数据会和 Chrome 隔离。",
+        "settings.browser.profile_section": "浏览器配置",
+        "settings.browser.use_managed": "使用 GhoDex 托管的浏览器配置",
+        "settings.browser.managed_path": "托管配置路径",
+        "settings.browser.custom_path": "自定义配置路径",
         "settings.browser.custom_placeholder": "/Users/you/Library/Application Support/Google/Chrome/Profile 1",
-        "settings.browser.custom_hint": "如果你想复用 cookie 和本地存储，请指向一个专门给 GhoDex/CEF 使用的 Chromium/Chrome profile 目录。",
+        "settings.browser.custom_hint": "如果你想复用 cookie 和本地存储，请指向一个专门给 GhoDex/CEF 使用的 Chromium/Chrome 配置目录。",
         "settings.browser.runtime_section": "CEF 内核",
-        "settings.browser.runtime_description": "默认情况下 GhoDex 会自动下载并管理自己的 Chromium runtime。只有当你想复用一个现成的兼容 CEF runtime 目录时，才切换到自定义路径。",
-        "settings.browser.use_managed_runtime": "使用 GhoDex 管理的 Chromium runtime",
-        "settings.browser.managed_runtime_path": "托管 runtime 路径",
-        "settings.browser.custom_runtime_path": "自定义 runtime 路径",
+        "settings.browser.runtime_description": "默认情况下 GhoDex 会自动下载并管理自己的 Chromium 运行时。只有当你想复用一个现成的兼容 CEF 运行时目录时，才切换到自定义路径。",
+        "settings.browser.use_managed_runtime": "使用 GhoDex 管理的 Chromium 运行时",
+        "settings.browser.managed_runtime_path": "托管运行时路径",
+        "settings.browser.custom_runtime_path": "自定义运行时路径",
         "settings.browser.custom_runtime_placeholder": "/Users/you/Library/Application Support/GhoDex/CEF/current",
-        "settings.browser.custom_runtime_hint": "请指向一个已经包含 Frameworks/Chromium Embedded Framework.framework 的兼容 CEF runtime 根目录。",
+        "settings.browser.custom_runtime_hint": "请指向一个已经包含 Frameworks/Chromium Embedded Framework.framework 的兼容 CEF 运行时根目录。",
         "settings.browser.runtime_media_title": "媒体能力",
-        "settings.browser.runtime_media_managed_warning": "当前托管 CEF runtime 属于 Chromium 品牌分发，不提供 H.264/AAC 播放能力。如果你需要接近正常 Chrome 的 MP4 媒体兼容性，请切换到一个启用了 codec 的自定义 CEF runtime。",
-        "settings.browser.runtime_media_codec_enabled_hint": "这个 runtime 在 managed descriptor 或 manifest 里声明了 H.264/AAC 支持。真正对外宣称接近 Chrome 之前，仍应先跑 browser media acceptance probe 做实测确认。",
-        "settings.browser.runtime_media_chromium_warning": "这个 runtime 看起来仍然是标准的 Chromium 品牌 CEF 分发（%@）。这里同样很可能不支持 H.264/AAC 播放。",
-        "settings.browser.runtime_media_custom_hint": "当前选择的是自定义 runtime。仅凭路径 GhoDex 无法直接验证它是否支持 H.264/AAC；如果你需要接近正常 Chrome 的媒体兼容性，这个 runtime 必须来自启用了 codec 的 CEF 构建，而不是默认的 Chromium 品牌二进制包。",
+        "settings.browser.runtime_media_managed_warning": "当前托管 CEF 运行时属于 Chromium 品牌分发，不提供 H.264/AAC 播放能力。如果你需要接近正常 Chrome 的 MP4 媒体兼容性，请切换到一个启用了 codec 的自定义 CEF 运行时。",
+        "settings.browser.runtime_media_codec_enabled_hint": "这个运行时会在托管描述或清单中声明 H.264/AAC 支持。真正对外宣称接近 Chrome 之前，仍应先跑 browser media acceptance probe 做实测确认。",
+        "settings.browser.runtime_media_chromium_warning": "这个运行时看起来仍然是标准的 Chromium 品牌 CEF 分发（%@）。这里同样很可能不支持 H.264/AAC 播放。",
+        "settings.browser.runtime_media_custom_hint": "当前选择的是自定义运行时。仅凭路径 GhoDex 无法直接验证它是否支持 H.264/AAC；如果你需要接近正常 Chrome 的媒体兼容性，这个运行时必须来自启用了 codec 的 CEF 构建，而不是默认的 Chromium 品牌二进制包。",
         "settings.browser.browse": "选择…",
         "settings.browser.save": "保存浏览器设置",
         "settings.browser.saved": "浏览器设置已写入配置文件。",
-        "settings.browser.restart_required": "如果本次会话里 Chromium 已经启动过，修改浏览器 Profile 路径后需要重启 GhoDex 才能完整生效。",
-        "settings.browser.invalid_path": "保存前请选择一个已存在的 Profile 目录。",
-        "settings.browser.picker_message": "选择 Browser tab 需要复用的浏览器 Profile 目录。",
-        "settings.browser.invalid_runtime_path": "保存前请选择一个已存在的 CEF runtime 目录。",
-        "settings.browser.runtime_picker_message": "选择 Browser tab 要使用的 CEF runtime 根目录。",
+        "settings.browser.restart_required": "如果本次会话里 Chromium 已经启动过，修改浏览器配置目录后需要重启 GhoDex 才能完整生效。",
+        "settings.browser.invalid_path": "保存前请选择一个已存在的配置目录。",
+        "settings.browser.picker_message": "选择 Browser 标签页要复用的浏览器配置目录。",
+        "settings.browser.invalid_runtime_path": "保存前请选择一个已存在的 CEF 运行时目录。",
+        "settings.browser.runtime_picker_message": "选择 Browser 标签页要使用的 CEF 运行时根目录。",
         "settings.gateway.title": "控制网关",
         "settings.gateway.description": "直接在 GhoDex 内运行移动端配对网关。修改会立即生效，并在下次启动时继续保留。",
         "settings.gateway.enabled": "启动应用时自动启用网关",
@@ -1683,8 +1737,38 @@ enum L10n {
         nonisolated static var tabConnections: String { AppLocalization.localizedString("ssh.connections.tab.connections") }
         nonisolated static var tabTodo: String { AppLocalization.localizedString("ssh.connections.tab.todo") }
         nonisolated static var tabLearning: String { AppLocalization.localizedString("ssh.connections.tab.learning") }
+        nonisolated static var tabTaskQueue: String { AppLocalization.localizedString("ssh.connections.tab.task_queue") }
         nonisolated static var connectionsPageTitle: String { AppLocalization.localizedString("ssh.connections.page.connections.title") }
         nonisolated static var connectionsPageSubtitle: String { AppLocalization.localizedString("ssh.connections.page.connections.subtitle") }
+        nonisolated static var taskQueueTitle: String { AppLocalization.localizedString("ssh.connections.task_queue.title") }
+        nonisolated static var taskQueueSubtitle: String { AppLocalization.localizedString("ssh.connections.task_queue.subtitle") }
+        nonisolated static var taskQueueEnable: String { AppLocalization.localizedString("ssh.connections.task_queue.enable") }
+        nonisolated static var taskQueueHeartbeatInterval: String { AppLocalization.localizedString("ssh.connections.task_queue.heartbeat_interval") }
+        nonisolated static func taskQueueMaxConcurrent(_ value: Int) -> String {
+            AppLocalization.localizedString("ssh.connections.task_queue.max_concurrent", value)
+        }
+        nonisolated static var taskQueueSaveSettings: String { AppLocalization.localizedString("ssh.connections.task_queue.save_settings") }
+        nonisolated static var taskQueueCancelAll: String { AppLocalization.localizedString("ssh.connections.task_queue.cancel_all") }
+        nonisolated static var taskQueueCancelledAllMessage: String { AppLocalization.localizedString("ssh.connections.task_queue.cancelled_all_message") }
+        nonisolated static var taskQueueClearFinished: String { AppLocalization.localizedString("ssh.connections.task_queue.clear_finished") }
+        nonisolated static var taskQueueClearedFinishedMessage: String { AppLocalization.localizedString("ssh.connections.task_queue.cleared_finished_message") }
+        nonisolated static var taskQueueEnqueueTitle: String { AppLocalization.localizedString("ssh.connections.task_queue.enqueue_title") }
+        nonisolated static var taskQueueScheduleExecution: String { AppLocalization.localizedString("ssh.connections.task_queue.schedule_execution") }
+        nonisolated static var taskQueueExecuteAt: String { AppLocalization.localizedString("ssh.connections.task_queue.execute_at") }
+        nonisolated static var taskQueueEnqueue: String { AppLocalization.localizedString("ssh.connections.task_queue.enqueue") }
+        nonisolated static func taskQueueTaskAccepted(_ id: String) -> String {
+            AppLocalization.localizedString("ssh.connections.task_queue.task_accepted", id)
+        }
+        nonisolated static func taskQueueCounts(_ queued: Int, _ running: Int, _ done: Int, _ failed: Int) -> String {
+            AppLocalization.localizedString("ssh.connections.task_queue.counts", queued, running, done, failed)
+        }
+        nonisolated static var taskQueueEmpty: String { AppLocalization.localizedString("ssh.connections.task_queue.empty") }
+        nonisolated static var taskQueueSaved: String { AppLocalization.localizedString("ssh.connections.task_queue.saved") }
+        nonisolated static var taskQueueStatusQueued: String { AppLocalization.localizedString("ssh.connections.task_queue.status.queued") }
+        nonisolated static var taskQueueStatusRunning: String { AppLocalization.localizedString("ssh.connections.task_queue.status.running") }
+        nonisolated static var taskQueueStatusDone: String { AppLocalization.localizedString("ssh.connections.task_queue.status.done") }
+        nonisolated static var taskQueueStatusFailed: String { AppLocalization.localizedString("ssh.connections.task_queue.status.failed") }
+        nonisolated static var taskQueueStatusCancelled: String { AppLocalization.localizedString("ssh.connections.task_queue.status.cancelled") }
         nonisolated static var todoTitle: String { AppLocalization.localizedString("ssh.connections.todo.title") }
         nonisolated static var todoSubtitle: String { AppLocalization.localizedString("ssh.connections.todo.subtitle") }
         nonisolated static var todoEnable: String { AppLocalization.localizedString("ssh.connections.todo.enable") }
@@ -1720,8 +1804,14 @@ enum L10n {
         nonisolated static var todoDateToday: String { AppLocalization.localizedString("ssh.connections.todo.date_today") }
         nonisolated static var todoDateTomorrow: String { AppLocalization.localizedString("ssh.connections.todo.date_tomorrow") }
         nonisolated static var todoSummaryTitle: String { AppLocalization.localizedString("ssh.connections.todo.summary_title") }
+        nonisolated static func todoSummaryProgress(_ completedCount: Int, _ totalCount: Int, _ percentage: Int) -> String {
+            AppLocalization.localizedString("ssh.connections.todo.summary_progress", completedCount, totalCount, percentage)
+        }
         nonisolated static func todoSelectedDay(_ value: String) -> String { AppLocalization.localizedString("ssh.connections.todo.selected_day", value) }
         nonisolated static var todoFocusedWorkspaceTitle: String { AppLocalization.localizedString("ssh.connections.todo.focused_workspace_title") }
+        nonisolated static func todoFocusedWorkspaceSummary(_ completedCount: Int, _ totalCount: Int, _ remainingCount: Int) -> String {
+            AppLocalization.localizedString("ssh.connections.todo.focused_workspace_summary", completedCount, totalCount, remainingCount)
+        }
         nonisolated static var todoFocusedWorkspaceHint: String { AppLocalization.localizedString("ssh.connections.todo.focused_workspace_hint") }
         nonisolated static var todoQuickLookTitle: String { AppLocalization.localizedString("ssh.connections.todo.quick_look_title") }
         nonisolated static var todoQuickLookEmpty: String { AppLocalization.localizedString("ssh.connections.todo.quick_look_empty") }
@@ -1850,6 +1940,9 @@ enum L10n {
         nonisolated static var learningLogStatusFailure: String { AppLocalization.localizedString("ssh.connections.learning.log.status.failure") }
         nonisolated static var learningLogShowDetails: String { AppLocalization.localizedString("ssh.connections.learning.log.show_details") }
         nonisolated static var learningLogHideDetails: String { AppLocalization.localizedString("ssh.connections.learning.log.hide_details") }
+        nonisolated static func learningLogExitCode(_ code: Int32) -> String {
+            AppLocalization.localizedString("ssh.connections.learning.log.exit_code", Int(code))
+        }
     }
 
     enum AITerminalManager {

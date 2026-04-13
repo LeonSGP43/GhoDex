@@ -20,7 +20,7 @@ enum SSHConnectionsPanelTab: String, CaseIterable, Identifiable {
         case .learning:
             return L10n.SSHConnections.tabLearning
         case .taskQueue:
-            return "Task Queue"
+            return L10n.SSHConnections.tabTaskQueue
         case .browser:
             return L10n.Settings.browserTitle
         case .preferences:

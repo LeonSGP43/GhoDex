@@ -729,19 +729,19 @@ struct SSHConnectionsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Task Queue")
+                    Text(L10n.SSHConnections.taskQueueTitle)
                         .font(.title2.weight(.semibold))
-                    Text("Schedule and run terminal commands through GhoDex heartbeat queue.")
+                    Text(L10n.SSHConnections.taskQueueSubtitle)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                Toggle("Enable queue", isOn: $heartbeatQueueEnabled)
+                Toggle(L10n.SSHConnections.taskQueueEnable, isOn: $heartbeatQueueEnabled)
 
                 HStack(alignment: .center, spacing: 14) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Heartbeat Interval (seconds)")
+                        Text(L10n.SSHConnections.taskQueueHeartbeatInterval)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         TextField("5", text: $heartbeatIntervalSecondsText)
@@ -750,7 +750,7 @@ struct SSHConnectionsView: View {
                     }
 
                     Stepper(
-                        "Max Concurrent: \(heartbeatMaxConcurrentTasks)",
+                        L10n.SSHConnections.taskQueueMaxConcurrent(heartbeatMaxConcurrentTasks),
                         value: $heartbeatMaxConcurrentTasks,
                         in: 1...16
                     )
@@ -758,46 +758,46 @@ struct SSHConnectionsView: View {
                 }
 
                 HStack(spacing: 12) {
-                    Button("Save Queue Settings") {
+                    Button(L10n.SSHConnections.taskQueueSaveSettings) {
                         persistTaskQueueSettings()
                     }
                     .buttonStyle(.borderedProminent)
 
-                    Button("Cancel All Queued") {
+                    Button(L10n.SSHConnections.taskQueueCancelAll) {
                         store.cancelAllQueuedHeartbeatTasks()
                         syncTaskQueueSettings()
-                        queueStatusMessage = "Queued tasks cancelled."
+                        queueStatusMessage = L10n.SSHConnections.taskQueueCancelledAllMessage
                     }
                     .buttonStyle(.bordered)
 
-                    Button("Clear Finished") {
+                    Button(L10n.SSHConnections.taskQueueClearFinished) {
                         store.clearFinishedHeartbeatTasks()
                         syncTaskQueueSettings()
-                        queueStatusMessage = "Finished tasks cleared."
+                        queueStatusMessage = L10n.SSHConnections.taskQueueClearedFinishedMessage
                     }
                     .buttonStyle(.bordered)
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Enqueue Command")
+                    Text(L10n.SSHConnections.taskQueueEnqueueTitle)
                         .font(.headline)
                     TextField("codex exec \"echo heartbeat\"", text: $queueCommandInput)
                         .textFieldStyle(.roundedBorder)
 
-                    Toggle("Schedule execution time", isOn: $queueScheduleEnabled)
+                    Toggle(L10n.SSHConnections.taskQueueScheduleExecution, isOn: $queueScheduleEnabled)
                     if queueScheduleEnabled {
                         DatePicker(
-                            "Execute At",
+                            L10n.SSHConnections.taskQueueExecuteAt,
                             selection: $queueExecuteAt,
                             displayedComponents: [.date, .hourAndMinute]
                         )
                     }
 
                     HStack(spacing: 10) {
-                        Button("Enqueue") {
+                        Button(L10n.SSHConnections.taskQueueEnqueue) {
                             let executeAt: Date? = queueScheduleEnabled ? queueExecuteAt : nil
                             if let id = store.enqueueHeartbeatTask(command: queueCommandInput, executeAt: executeAt) {
-                                queueStatusMessage = "Task accepted: \(id.uuidString)"
+                                queueStatusMessage = L10n.SSHConnections.taskQueueTaskAccepted(id.uuidString)
                                 queueCommandInput = ""
                                 syncTaskQueueSettings()
                             } else {
@@ -815,14 +815,17 @@ struct SSHConnectionsView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(
-                        "Counts · queued \(store.heartbeatQueuedCount) · running \(store.heartbeatRunningCount) · done \(store.heartbeatDoneCount) · failed \(store.heartbeatFailedCount)"
-                    )
+                    Text(L10n.SSHConnections.taskQueueCounts(
+                        store.heartbeatQueuedCount,
+                        store.heartbeatRunningCount,
+                        store.heartbeatDoneCount,
+                        store.heartbeatFailedCount
+                    ))
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
                     if store.heartbeatQueueTasks.isEmpty {
-                        Text("No queue tasks.")
+                        Text(L10n.SSHConnections.taskQueueEmpty)
                             .foregroundStyle(.secondary)
                     } else {
                         LazyVStack(alignment: .leading, spacing: 10) {
@@ -850,7 +853,7 @@ struct SSHConnectionsView: View {
                                     if task.status == .queued {
                                         HStack {
                                             Spacer()
-                                            Button("Cancel") {
+                                            Button(L10n.Common.cancel) {
                                                 store.cancelHeartbeatTask(task.id)
                                                 syncTaskQueueSettings()
                                             }
@@ -885,7 +888,7 @@ struct SSHConnectionsView: View {
             Text(L10n.SSHConnections.todoSummaryTitle)
                 .font(.headline)
 
-            Text("\(completedCount) / \(totalCount) complete · \(percentage)%")
+            Text(L10n.SSHConnections.todoSummaryProgress(completedCount, totalCount, percentage))
                 .font(.title3.weight(.semibold))
 
             Text(L10n.SSHConnections.todoSelectedDay(AITerminalTodoSettings.dayString(from: todoSelectedDate)))
@@ -967,7 +970,11 @@ struct SSHConnectionsView: View {
                 Text(target.title)
                     .font(.title3.weight(.semibold))
 
-                Text("\(summary.completedCount) / \(summary.totalCount) complete · \(summary.remainingCount) remaining")
+                Text(L10n.SSHConnections.todoFocusedWorkspaceSummary(
+                    summary.completedCount,
+                    summary.totalCount,
+                    summary.remainingCount
+                ))
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
@@ -1095,7 +1102,7 @@ struct SSHConnectionsView: View {
                 Spacer(minLength: 10)
 
                 if todoEditingItemID == item.id {
-                    Button("Cancel") {
+                    Button(L10n.Common.cancel) {
                         todoEditingItemID = nil
                         todoEditingTitle = ""
                         todoEditingNotes = ""
@@ -1176,20 +1183,6 @@ struct SSHConnectionsView: View {
             }
 
             Spacer(minLength: 12)
-
-            VStack(alignment: .trailing, spacing: 8) {
-                Text(L10n.AITerminalManager.launch)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Picker(L10n.AITerminalManager.launch, selection: $store.launchTarget) {
-                    ForEach(AITerminalLaunchTarget.allCases) { target in
-                        Text(target.displayName).tag(target)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 220)
-            }
         }
         .padding(.horizontal, 20)
         .padding(.top, 18)
@@ -1395,7 +1388,7 @@ struct SSHConnectionsView: View {
                 .foregroundStyle(.primary)
 
             if let exitCode = entry.exitCode {
-                Text("exit code: \(exitCode)")
+                Text(L10n.SSHConnections.learningLogExitCode(exitCode))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -2320,7 +2313,7 @@ struct SSHConnectionsView: View {
             maxConcurrentTasks: heartbeatMaxConcurrentTasks
         ))
         syncTaskQueueSettings()
-        queueStatusMessage = store.lastError ?? "Queue settings saved."
+        queueStatusMessage = store.lastError ?? L10n.SSHConnections.taskQueueSaved
     }
 
     private func persistBrowserSettings() {
@@ -2342,15 +2335,15 @@ struct SSHConnectionsView: View {
     private func taskQueueStatusLabel(_ status: AITerminalHeartbeatTaskStatus) -> String {
         switch status {
         case .queued:
-            return "QUEUED"
+            return L10n.SSHConnections.taskQueueStatusQueued
         case .running:
-            return "RUNNING"
+            return L10n.SSHConnections.taskQueueStatusRunning
         case .done:
-            return "DONE"
+            return L10n.SSHConnections.taskQueueStatusDone
         case .failed:
-            return "FAILED"
+            return L10n.SSHConnections.taskQueueStatusFailed
         case .cancelled:
-            return "CANCELLED"
+            return L10n.SSHConnections.taskQueueStatusCancelled
         }
     }
 
