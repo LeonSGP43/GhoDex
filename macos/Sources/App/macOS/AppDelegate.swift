@@ -2133,7 +2133,14 @@ class AppDelegate: NSObject,
             self.appIcon = resolvedImage
         }
         DispatchQueue.global().async {
-            UserDefaults.standard.appIcon = resolvedIcon
+            let defaultsTargets = [
+                UserDefaults.standard,
+                Bundle.main.bundleIdentifier.flatMap(UserDefaults.init(suiteName:)),
+            ].compactMap { $0 }
+
+            for defaults in defaultsTargets {
+                defaults.appIcon = resolvedIcon
+            }
             DistributedNotificationCenter.default()
                 .postNotificationName(.ghosttyIconDidChange, object: nil, userInfo: nil, deliverImmediately: true)
         }
@@ -3619,18 +3626,10 @@ extension AppDelegate {
     }
 
     private static func configStringLiteral(_ value: String) -> String {
-        let data = try? JSONSerialization.data(withJSONObject: [value], options: [])
-        guard
-            let data,
-            let encoded = String(data: data, encoding: .utf8),
-            encoded.count >= 2
-        else {
-            return "\"\""
-        }
-
-        let start = encoded.index(after: encoded.startIndex)
-        let end = encoded.index(before: encoded.endIndex)
-        return String(encoded[start..<end])
+        let escaped = value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "\"\(escaped)\""
     }
 
     private static func browserSettingValue(for key: String, in text: String) -> String? {

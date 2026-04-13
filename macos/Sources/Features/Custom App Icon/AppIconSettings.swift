@@ -30,7 +30,7 @@ struct AppIconSettings: Equatable {
         let screenColorHexes = config.macosIconScreenColor?.compactMap(\.hexString) ?? []
         self.init(
             icon: config.macosIcon,
-            customIconPath: config.macosCustomIcon,
+            customIconPath: Self.normalizedCustomIconPath(config.macosCustomIcon),
             frame: config.macosIconFrame,
             ghostColorHex: config.macosIconGhostColor?.hexString ?? Self.defaultGhostColorHex,
             screenColorHexes: screenColorHexes.isEmpty ? Self.defaultScreenColorHexes : screenColorHexes
@@ -39,10 +39,7 @@ struct AppIconSettings: Equatable {
     }
 
     var sanitized: Self {
-        let trimmedPath = customIconPath.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedPath = trimmedPath.isEmpty
-            ? Self.defaultCustomIconPath
-            : (trimmedPath as NSString).standardizingPath
+        let normalizedPath = Self.normalizedCustomIconPath(customIconPath)
 
         let normalizedGhost = NSColor(hex: ghostColorHex)?.hexString ?? Self.defaultGhostColorHex
 
@@ -120,6 +117,42 @@ struct AppIconSettings: Equatable {
         case .customStyle:
             return AppIcon.customStyle(customStyleIcon).image(in: bundle) ?? bundle.image(forResource: "AppIconImage")
         }
+    }
+}
+
+extension AppIconSettings {
+    static func normalizedCustomIconPath(_ rawPath: String) -> String {
+        let trimmedPath = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPath.isEmpty else { return defaultCustomIconPath }
+
+        let repairedPath = repairedEscapedCustomIconPath(trimmedPath)
+        let standardizedPath = (repairedPath as NSString).standardizingPath
+        return standardizedPath.isEmpty ? defaultCustomIconPath : standardizedPath
+    }
+
+    private static func repairedEscapedCustomIconPath(_ rawPath: String) -> String {
+        var repaired = rawPath
+        let replacements: [(pattern: String, replacement: String)] = [
+            (#"\\+/"#, "/"),
+            (#"\\+~"#, "~"),
+            (#"\\+""#, "\""),
+        ]
+
+        for _ in 0..<6 {
+            let previous = repaired
+            for replacement in replacements {
+                repaired = repaired.replacingOccurrences(
+                    of: replacement.pattern,
+                    with: replacement.replacement,
+                    options: .regularExpression
+                )
+            }
+            if repaired == previous {
+                break
+            }
+        }
+
+        return repaired
     }
 }
 
