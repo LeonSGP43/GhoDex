@@ -66,10 +66,6 @@ struct SettingsView: View {
         appDelegate.appIconSettings.sanitized
     }
 
-    private var iconSettingsDirty: Bool {
-        iconDraftSettings() != savedIconSettings
-    }
-
     private var currentAppIconImage: NSImage {
         appDelegate.appIcon ?? savedIconSettings.previewImage(in: .main) ?? NSImage()
     }
@@ -129,6 +125,29 @@ struct SettingsView: View {
         }
         .onReceive(appDelegate.$appIconSettings) { _ in
             syncIconForm(clearFeedback: false)
+        }
+        .onChange(of: iconSource) { _ in
+            saveIconSettingsIfNeeded()
+        }
+        .onChange(of: builtInIconSelection) { _ in
+            guard iconSource == .builtIn else { return }
+            saveIconSettingsIfNeeded()
+        }
+        .onChange(of: customIconPath) { _ in
+            guard iconSource == .customFile else { return }
+            saveIconSettingsIfNeeded()
+        }
+        .onChange(of: customStyleFrame) { _ in
+            guard iconSource == .customStyle else { return }
+            saveIconSettingsIfNeeded()
+        }
+        .onChange(of: customStyleGhostColor.hexString ?? AppIconSettings.defaultGhostColorHex) { _ in
+            guard iconSource == .customStyle else { return }
+            saveIconSettingsIfNeeded()
+        }
+        .onChange(of: customStyleScreenColors.compactMap(\.hexString)) { _ in
+            guard iconSource == .customStyle else { return }
+            saveIconSettingsIfNeeded()
         }
         .onChange(of: selectedTabBinding.wrappedValue) { newValue in
             onSelectedTabChange?(newValue)
@@ -290,26 +309,6 @@ struct SettingsView: View {
                     customStyleSection
                 }
 
-                HStack(spacing: 12) {
-                    Button(L10n.Settings.iconApply) {
-                        saveIconSettings()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!iconSettingsDirty)
-
-                    Button(L10n.Settings.iconReset) {
-                        syncIconForm(clearFeedback: true)
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(!iconSettingsDirty)
-                }
-
-                if iconSettingsDirty {
-                    Text(L10n.Settings.iconPendingChanges)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
                 if let iconFeedbackMessage {
                     Text(iconFeedbackMessage)
                         .font(.caption)
@@ -330,6 +329,7 @@ struct SettingsView: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 12)], spacing: 12) {
                 ForEach(Ghostty.MacOSIcon.builtInOptions, id: \.self) { icon in
                     Button {
+                        iconSource = .builtIn
                         builtInIconSelection = icon
                     } label: {
                         VStack(spacing: 10) {
@@ -372,10 +372,16 @@ struct SettingsView: View {
             HStack(spacing: 10) {
                 TextField(L10n.Settings.iconCustomPlaceholder, text: $customIconPath)
                     .textFieldStyle(.roundedBorder)
+                    .onSubmit {
+                        iconSource = .customFile
+                        saveIconSettingsIfNeeded()
+                    }
 
                 Button(L10n.Settings.iconCustomBrowse) {
                     guard let path = appDelegate.chooseCustomAppIconPath(currentPath: customIconPath) else { return }
                     customIconPath = path
+                    iconSource = .customFile
+                    saveIconSettingsIfNeeded()
                 }
                 .buttonStyle(.bordered)
             }
@@ -669,6 +675,11 @@ struct SettingsView: View {
             iconFeedbackMessage = error.localizedDescription
             iconFeedbackIsError = true
         }
+    }
+
+    private func saveIconSettingsIfNeeded() {
+        guard iconDraftSettings() != savedIconSettings else { return }
+        saveIconSettings()
     }
 
     private func gatewayDraftSettings() -> ControlHarnessGatewayAppSettings {
