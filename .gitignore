@@ -48,5 +48,6 @@ default.profraw
 !/README.md
 !/creator.md
 .tmp/
+.local/
 scripts/__pycache__/
 macos/macos/
