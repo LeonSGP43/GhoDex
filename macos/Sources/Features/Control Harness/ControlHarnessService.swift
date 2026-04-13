@@ -4,7 +4,7 @@ import OSLog
 
 final class ControlHarnessService {
     private let bundleID: String
-    private let requestHandler: @MainActor (ControlHarnessRequest, String) -> ControlHarnessServiceReply
+    private let requestHandler: @MainActor (ControlHarnessRequest, String) async -> ControlHarnessServiceReply
     private let logger: Logger
     private let acceptQueue = DispatchQueue(
         label: "com.leongong.ghodex.control-harness.service.accept",
@@ -22,7 +22,7 @@ final class ControlHarnessService {
 
     init(
         bundleID: String,
-        requestHandler: @escaping @MainActor (ControlHarnessRequest, String) -> ControlHarnessServiceReply
+        requestHandler: @escaping @MainActor (ControlHarnessRequest, String) async -> ControlHarnessServiceReply
     ) {
         self.bundleID = bundleID
         self.requestHandler = requestHandler
@@ -180,7 +180,7 @@ final class ControlHarnessService {
         var reply: ControlHarnessServiceReply?
 
         Task { @MainActor in
-            reply = requestHandler(request, socketURL.path)
+            reply = await requestHandler(request, socketURL.path)
             semaphore.signal()
         }
 

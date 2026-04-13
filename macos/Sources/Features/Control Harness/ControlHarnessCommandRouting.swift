@@ -183,6 +183,12 @@ private struct DynamicCodingKey: CodingKey, Hashable {
     }
 }
 
+struct ControlCommandCompatibilityEntry: Hashable {
+    let legacyCommand: String
+    let replacementCommands: [String]
+    let detail: String
+}
+
 enum ControlHarnessCommandAliases {
     static let legacySupportedCommands = [
         "handshake",
@@ -646,8 +652,54 @@ enum ControlHarnessBrowserCommandAdapter {
         "browser.event.unsubscribe",
     ]
 
+    private static let asyncRoutedCommands: Set<BrowserExternalCommandKind> = [
+        .newTab,
+        .newContext,
+        .newPageInContext,
+        .listFrames,
+        .loadURL,
+        .goBack,
+        .goForward,
+        .reload,
+        .getCookies,
+        .setCookie,
+        .deleteCookie,
+        .clearCookies,
+        .evaluateJavaScript,
+        .query,
+        .click,
+        .typeText,
+        .waitForSelector,
+        .getText,
+        .getAttributes,
+        .getBoundingBox,
+        .getDOMSnapshot,
+        .runDOMBatch,
+        .resolveDialog,
+        .resolvePermission,
+        .resolveAuth,
+        .resolveCertificate,
+        .cancelDownload,
+    ]
+
     static var supportedCommands: [String] {
-        Array(canonicalCommandSet.union(protocolAliasCommandMap.keys)).sorted()
+        Array(
+            canonicalCommandSet
+                .union(protocolAliasCommandMap.keys)
+                .union(rawAliasCommandMap.keys)
+        ).sorted()
+    }
+
+    static var compatibilityEntries: [ControlCommandCompatibilityEntry] {
+        let aliases = Set(protocolAliasCommandMap.keys).union(rawAliasCommandMap.keys)
+        return aliases.sorted().map { alias in
+            let canonical = canonicalCommand(for: alias)
+            return ControlCommandCompatibilityEntry(
+                legacyCommand: alias,
+                replacementCommands: [canonical],
+                detail: "Use \(canonical) for new browser.tab.v1 clients. \(alias) remains supported for compatibility."
+            )
+        }
     }
 
     static func isBrowserCommand(_ command: String) -> Bool {
@@ -678,6 +730,25 @@ enum ControlHarnessBrowserCommandAdapter {
     static func execute(_ request: ControlHarnessRequest) throws -> AnyEncodable {
         let browserRequest = try makeRequest(from: request)
         let response = ScriptBrowserTab.routeExternalCommand(browserRequest)
+        return try encodeResponse(response, request: browserRequest)
+    }
+
+    @MainActor
+    static func executeAsync(_ request: ControlHarnessRequest) async throws -> AnyEncodable {
+        let browserRequest = try makeRequest(from: request)
+        let response: BrowserExternalCommandResponse
+        if asyncRoutedCommands.contains(browserRequest.command) {
+            response = await ScriptBrowserTab.routeExternalCommandAsync(browserRequest)
+        } else {
+            response = ScriptBrowserTab.routeExternalCommand(browserRequest)
+        }
+        return try encodeResponse(response, request: browserRequest)
+    }
+
+    private static func encodeResponse(
+        _ response: BrowserExternalCommandResponse,
+        request: BrowserExternalCommandRequest
+    ) throws -> AnyEncodable {
         guard response.ok else {
             throw mapError(response.error)
         }
@@ -703,6 +774,11 @@ enum ControlHarnessBrowserCommandAdapter {
             throw ControlHarnessCoreError.unsupportedCommand(normalized.command)
         }
 
+        let normalizedPayload = normalizedBrowserPayload(
+            for: canonical,
+            payload: normalized.payload ?? [:]
+        )
+
         return BrowserExternalCommandRequest(
             id: UUID(uuidString: normalized.requestID) ?? UUID(),
             version: browserProtocolVersion(for: canonical),
@@ -712,7 +788,7 @@ enum ControlHarnessBrowserCommandAdapter {
             pageID: normalized.pageID,
             frameName: normalized.frameName,
             documentRevision: normalized.documentRevision,
-            payload: normalized.payload ?? [:]
+            payload: normalizedPayload
         )
     }
 
@@ -817,11 +893,49 @@ enum ControlHarnessBrowserCommandAdapter {
         switch command {
         case let value where value.hasPrefix("browser.context."),
              let value where value.hasPrefix("browser.page."),
+             let value where value.hasPrefix("browser.dom."),
              let value where value.hasPrefix("browser.frame."):
             return BrowserCommandProtocolVersion.v2
         default:
             return BrowserCommandProtocolVersion.v1
         }
+    }
+
+    private static func normalizedBrowserPayload(
+        for command: String,
+        payload: [String: String]
+    ) -> [String: String] {
+        guard command == "browser.event.subscribe" else {
+            return payload
+        }
+
+        guard payload["kindsJSON"] == nil,
+              let legacyKinds = payload["eventKinds"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              legacyKinds.isEmpty == false
+        else {
+            return payload
+        }
+
+        var normalizedPayload = payload
+        if legacyKinds.hasPrefix("[") {
+            normalizedPayload["kindsJSON"] = legacyKinds
+            normalizedPayload.removeValue(forKey: "eventKinds")
+            return normalizedPayload
+        }
+
+        let kinds = legacyKinds
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.isEmpty == false }
+        guard let encodedKinds = try? JSONEncoder().encode(kinds),
+              let kindsJSON = String(data: encodedKinds, encoding: .utf8)
+        else {
+            return payload
+        }
+
+        normalizedPayload["kindsJSON"] = kindsJSON
+        normalizedPayload.removeValue(forKey: "eventKinds")
+        return normalizedPayload
     }
 
     private static func mapError(_ error: BrowserExternalCommandError?) -> ControlHarnessCoreError {

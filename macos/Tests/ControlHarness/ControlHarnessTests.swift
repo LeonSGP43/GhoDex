@@ -274,6 +274,26 @@ private struct ControlHarnessWindowListPayload: Decodable {
     }
 }
 
+private struct ControlHarnessTabSnapshotPayload: Decodable {
+    let tabID: String
+    let windowNumber: Int
+
+    enum CodingKeys: String, CodingKey {
+        case tabID = "tab_id"
+        case windowNumber = "window_number"
+    }
+}
+
+private struct ControlHarnessSnapshotPayload: Decodable {
+    let protocolVersion: String
+    let tabs: [ControlHarnessTabSnapshotPayload]
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case tabs
+    }
+}
+
 private struct ControlHarnessPanelSummaryPayload: Decodable {
     let panelID: String
     let title: String
@@ -1029,6 +1049,9 @@ struct ControlHarnessTests {
         var sentKeys: [(terminalID: UUID, key: String)] = []
         var executedCommands: [(terminalID: UUID, command: String)] = []
         var closedTerminals: [UUID] = []
+        var awaitedTextEchoes: [(terminalID: UUID, text: String, timeout: TimeInterval)] = []
+        var awaitTextEchoResult = true
+        var actionLog: [String] = []
         var readableSurfaces: [UUID: any ControlHarnessReadableSurface] = [:]
         private lazy var recordingStore = AITerminalManagerStore(
             appDelegateProvider: { [weak self] in self },
@@ -1063,6 +1086,7 @@ struct ControlHarnessTests {
                 return false
             }
 
+            actionLog.append("text:\(text)")
             sentInputs.append((terminalID, text))
             return true
         }
@@ -1072,6 +1096,7 @@ struct ControlHarnessTests {
                 return false
             }
 
+            actionLog.append("key:\(key)")
             sentKeys.append((terminalID, key))
             return true
         }
@@ -1081,8 +1106,19 @@ struct ControlHarnessTests {
                 return false
             }
 
+            actionLog.append("command:\(command)")
             executedCommands.append((terminalID, command))
             return true
+        }
+
+        override func controlHarnessAwaitTextEcho(
+            _ text: String,
+            to terminalID: UUID,
+            timeout: TimeInterval = 0.35
+        ) -> Bool {
+            actionLog.append("await:\(text)")
+            awaitedTextEchoes.append((terminalID, text, timeout))
+            return awaitTextEchoResult
         }
 
         override func controlHarnessCloseTerminal(_ terminalID: UUID) -> Bool {
@@ -1090,6 +1126,7 @@ struct ControlHarnessTests {
                 return false
             }
 
+            actionLog.append("close:\(terminalID.uuidString)")
             closedTerminals.append(terminalID)
             return true
         }
@@ -1634,6 +1671,183 @@ struct ControlHarnessTests {
         #expect(delegate.sentKeys.count == 1)
         #expect(delegate.sentKeys[0].terminalID == terminalID)
         #expect(delegate.sentKeys[0].key == "enter")
+    }
+
+    @Test @MainActor func sendKeyEnterWaitsForPendingTypedEchoBeforeDispatch() {
+        let delegate = RecordingAppDelegate()
+        let bundleID = "ghdx.tests.send-key-enter-awaits-echo"
+        let (core, _, _) = makeCore(delegate: delegate, bundleID: bundleID)
+        let terminalID = UUID()
+
+        let writeRequest = ControlHarnessRequest(
+            requestID: "req-send-text-before-enter",
+            protocolVersion: nil,
+            command: "terminal.write",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: terminalID.uuidString,
+            scope: nil,
+            text: "printf 'WRITE_CHAIN\\n'",
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil
+        )
+        let enterRequest = ControlHarnessRequest(
+            requestID: "req-send-enter-after-text",
+            protocolVersion: nil,
+            command: "terminal.key",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: terminalID.uuidString,
+            scope: nil,
+            text: nil,
+            terminalKey: "enter",
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil
+        )
+
+        let writeResponse = core.handle(writeRequest, socketPath: "/tmp/control-harness-test.sock")
+        let enterResponse = core.handle(enterRequest, socketPath: "/tmp/control-harness-test.sock")
+
+        #expect(writeResponse.status == "ok")
+        #expect(enterResponse.status == "ok")
+        #expect(delegate.sentInputs.count == 1)
+        #expect(delegate.sentKeys.count == 1)
+        #expect(delegate.awaitedTextEchoes.count == 1)
+        #expect(delegate.awaitedTextEchoes[0].terminalID == terminalID)
+        #expect(delegate.awaitedTextEchoes[0].text == "printf 'WRITE_CHAIN\\n'")
+        #expect(delegate.actionLog == [
+            "text:printf 'WRITE_CHAIN\\n'",
+            "await:printf 'WRITE_CHAIN\\n'",
+            "key:enter",
+        ])
+    }
+
+    @Test @MainActor func sendKeyEnterFailsWhenPendingTypedEchoTimesOutAndPreservesRetry() {
+        let delegate = RecordingAppDelegate()
+        delegate.awaitTextEchoResult = false
+        let bundleID = "ghdx.tests.send-key-enter-timeout"
+        let (core, _, _) = makeCore(delegate: delegate, bundleID: bundleID)
+        let terminalID = UUID()
+
+        let writeRequest = ControlHarnessRequest(
+            requestID: "req-send-text-before-enter-timeout",
+            protocolVersion: nil,
+            command: "terminal.write",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: terminalID.uuidString,
+            scope: nil,
+            text: "printf 'WRITE_CHAIN\\n'",
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil
+        )
+        let enterRequest = ControlHarnessRequest(
+            requestID: "req-send-enter-after-text-timeout",
+            protocolVersion: nil,
+            command: "terminal.key",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: terminalID.uuidString,
+            scope: nil,
+            text: nil,
+            terminalKey: "enter",
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            target: nil,
+            options: ControlHarnessRequestOptions(
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil,
+                timeoutMS: 1_200
+            )
+        )
+
+        let writeResponse = core.handle(writeRequest, socketPath: "/tmp/control-harness-test.sock")
+        let timeoutResponse = core.handle(enterRequest, socketPath: "/tmp/control-harness-test.sock")
+
+        #expect(writeResponse.status == "ok")
+        #expect(timeoutResponse.status == "error")
+        #expect(timeoutResponse.errorCode == "operation_failed")
+        #expect(timeoutResponse.errorMessage?.contains("Timed out waiting 1200ms") == true)
+        #expect(delegate.sentInputs.count == 1)
+        #expect(delegate.sentKeys.isEmpty)
+        #expect(delegate.awaitedTextEchoes.count == 1)
+        #expect(delegate.awaitedTextEchoes[0].terminalID == terminalID)
+        #expect(delegate.awaitedTextEchoes[0].text == "printf 'WRITE_CHAIN\\n'")
+        #expect(abs(delegate.awaitedTextEchoes[0].timeout - 1.2) < 0.001)
+
+        delegate.awaitTextEchoResult = true
+        let retryResponse = core.handle(enterRequest, socketPath: "/tmp/control-harness-test.sock")
+
+        #expect(retryResponse.status == "ok")
+        #expect(delegate.sentKeys.count == 1)
+        #expect(delegate.awaitedTextEchoes.count == 2)
+        #expect(delegate.actionLog == [
+            "text:printf 'WRITE_CHAIN\\n'",
+            "await:printf 'WRITE_CHAIN\\n'",
+            "await:printf 'WRITE_CHAIN\\n'",
+            "key:enter",
+        ])
     }
 
     @Test @MainActor func runCommandRejectsNewlineOnlyPayloadWithoutEmittingEvents() {
@@ -6235,14 +6449,14 @@ struct ControlHarnessTests {
         }
     }
 
-    @Test func gatewayPolicyAllowsRemoteTabRename() async throws {
+    @Test func gatewayPolicyBlocksRemoteTabRename() async throws {
         let delegate = await MainActor.run {
             RecordingAppDelegate()
         }
 
         let decision = await MainActor.run {
             delegate.controlHarnessGatewayAccessDecision(ControlHarnessRequest(
-                requestID: "req-rename-tab-allow",
+                requestID: "req-rename-tab-block",
                 protocolVersion: nil,
                 authToken: nil,
                 command: "rename-tab",
@@ -6272,9 +6486,109 @@ struct ControlHarnessTests {
 
         switch decision {
         case .allow:
-            break
+            Issue.record("rename-tab should not be allowed over the remote gateway")
         case .deny(let errorCode, let errorMessage):
-            Issue.record("rename-tab should be allowed for remote gateway use: \(errorCode) \(errorMessage)")
+            #expect(errorCode == "remote_policy_blocked")
+            #expect(errorMessage.contains("rename-tab"))
+        }
+    }
+
+    @Test func gatewayPolicyBlocksRemoteDesktopAndRuntimeMutationsByDefault() async throws {
+        let commands: [(String, [String: String], Int?)] = [
+            ("app.relaunch", [:], nil),
+            ("window.focus", [:], 1),
+            ("panel.open", [:], nil),
+            ("settings.apply", [:], nil),
+            ("diagnostics.metrics.reset", [:], nil),
+            ("agent.runtime.task.enqueue", [:], nil),
+            ("browser.page.load", ["url": "https://example.com"], nil),
+        ]
+
+        let delegate = await MainActor.run {
+            RecordingAppDelegate()
+        }
+
+        for (command, payload, windowNumber) in commands {
+            let decision = await MainActor.run {
+                delegate.controlHarnessGatewayAccessDecision(ControlHarnessRequest(
+                    requestID: "req-\(command)",
+                    protocolVersion: nil,
+                    authToken: nil,
+                    command: command,
+                    tabID: nil,
+                    parentTabID: nil,
+                    terminalID: nil,
+                    todoID: nil,
+                    windowNumber: windowNumber,
+                    panelID: command == "panel.open" ? "settings" : nil,
+                    panelTabID: nil,
+                    scope: nil,
+                    text: nil,
+                    terminalKey: nil,
+                    commandText: nil,
+                    workingDirectory: nil,
+                    title: nil,
+                    notes: nil,
+                    environment: nil,
+                    force: nil,
+                    completed: nil,
+                    workspaceID: nil,
+                    includeCompleted: nil,
+                    client: nil,
+                    deviceID: nil,
+                    deviceLabel: nil,
+                    desktopID: nil,
+                    idempotencyKey: nil,
+                    expectedGeneration: nil,
+                    sinceSequence: nil,
+                    eventLimit: nil,
+                    mode: nil,
+                    sinceFrameID: nil,
+                    maxChars: nil,
+                    maxLines: nil,
+                    cursor: nil,
+                    readAfterWriteID: nil,
+                    streamID: nil,
+                    ackBytes: nil,
+                    lastAckSequence: nil,
+                    pairingCode: nil,
+                    requestedScopes: nil,
+                    sessionID: nil,
+                    taskID: nil,
+                    scheduleID: nil,
+                    capabilities: nil,
+                    leaseDurationSeconds: nil,
+                    taskKind: nil,
+                    taskKinds: nil,
+                    recurrenceMode: nil,
+                    intervalSeconds: nil,
+                    priority: nil,
+                    scheduledAt: nil,
+                    maxRetryCount: nil,
+                    metadata: nil,
+                    taskState: nil,
+                    scheduleState: nil,
+                    errorSummary: nil,
+                    reason: nil,
+                    desktopLabel: nil,
+                    upstreamHost: nil,
+                    upstreamPort: nil,
+                    browserTabID: nil,
+                    browserContextID: command == "browser.page.load" ? "context-1" : nil,
+                    pageID: command == "browser.page.load" ? UUID().uuidString : nil,
+                    frameName: nil,
+                    documentRevision: nil,
+                    payload: payload
+                ))
+            }
+
+            switch decision {
+            case .allow:
+                Issue.record("\(command) should not be allowed over the remote gateway")
+            case .deny(let errorCode, let errorMessage):
+                #expect(errorCode == "remote_policy_blocked")
+                #expect(errorMessage.contains(command))
+            }
         }
     }
 
@@ -6532,6 +6846,11 @@ struct ControlHarnessTests {
     }
 
     @Test func browserCommandsMapThroughControlHarnessRouting() throws {
+        #expect(ControlHarnessBrowserCommandAdapter.supportedCommands.contains("browser.page.load"))
+        #expect(ControlHarnessBrowserCommandAdapter.supportedCommands.contains("browser.loadURL"))
+        #expect(ControlHarnessBrowserCommandAdapter.supportedCommands.contains("browser.newContext"))
+        #expect(ControlHarnessBrowserCommandAdapter.supportedCommands.contains("browser.waitForSelector"))
+
         let request = ControlHarnessRequest(
             requestID: "req-browser-page-load",
             protocolVersion: nil,
@@ -6572,6 +6891,41 @@ struct ControlHarnessTests {
         #expect(browserRequest.payload["url"] == "https://example.com")
         #expect(request.commandKind == .mutation)
 
+        let domRequest = ControlHarnessRequest(
+            requestID: "req-browser-dom-query",
+            protocolVersion: nil,
+            authToken: nil,
+            command: "browser.dom.query",
+            tabID: nil,
+            parentTabID: nil,
+            terminalID: nil,
+            scope: nil,
+            text: nil,
+            commandText: nil,
+            workingDirectory: nil,
+            title: nil,
+            environment: nil,
+            force: nil,
+            client: nil,
+            idempotencyKey: nil,
+            expectedGeneration: nil,
+            sinceSequence: nil,
+            eventLimit: nil,
+            mode: nil,
+            sinceFrameID: nil,
+            maxChars: nil,
+            maxLines: nil,
+            cursor: nil,
+            readAfterWriteID: nil,
+            browserContextID: "context-1",
+            pageID: UUID().uuidString,
+            payload: ["selector": "#ready"]
+        )
+        let normalizedDOMRequest = try ControlHarnessBrowserCommandAdapter.makeRequest(from: domRequest)
+        #expect(normalizedDOMRequest.version == BrowserCommandProtocolVersion.v2)
+        #expect(normalizedDOMRequest.command == .query)
+        #expect(normalizedDOMRequest.payload["selector"] == "#ready")
+
         let subscriptionLikeRequest = ControlHarnessRequest(
             requestID: "req-browser-event-subscribe",
             protocolVersion: nil,
@@ -6600,6 +6954,11 @@ struct ControlHarnessTests {
             readAfterWriteID: nil,
             payload: ["eventKinds": "popupRequest"]
         )
+        let normalizedSubscriptionRequest = try ControlHarnessBrowserCommandAdapter.makeRequest(from: subscriptionLikeRequest)
+        #expect(normalizedSubscriptionRequest.version == BrowserCommandProtocolVersion.v1)
+        #expect(normalizedSubscriptionRequest.command == .subscribeEvents)
+        #expect(normalizedSubscriptionRequest.payload["kindsJSON"] == "[\"popupRequest\"]")
+        #expect(normalizedSubscriptionRequest.payload["eventKinds"] == nil)
         #expect(subscriptionLikeRequest.commandKind == .query)
     }
 
@@ -6925,6 +7284,44 @@ struct ControlHarnessTests {
         #expect(appState.panelCount == 2)
         #expect(appState.settingsDraftPending == false)
 
+        let snapshotResponse = core.handle(
+            ControlHarnessRequest(
+                requestID: "req-state-snapshot",
+                protocolVersion: nil,
+                authToken: nil,
+                command: "state.snapshot",
+                tabID: nil,
+                parentTabID: nil,
+                terminalID: nil,
+                scope: nil,
+                text: nil,
+                commandText: nil,
+                workingDirectory: nil,
+                title: nil,
+                environment: nil,
+                force: nil,
+                client: nil,
+                idempotencyKey: nil,
+                expectedGeneration: nil,
+                sinceSequence: nil,
+                eventLimit: nil,
+                mode: nil,
+                sinceFrameID: nil,
+                maxChars: nil,
+                maxLines: nil,
+                cursor: nil,
+                readAfterWriteID: nil
+            ),
+            socketPath: "/tmp/ghodex-control-surface.sock"
+        )
+        let snapshotEnvelope = try decoder.decode(
+            ControlHarnessResponseResultEnvelope<ControlHarnessSnapshotPayload>.self,
+            from: try encoder.encode(snapshotResponse)
+        )
+        let snapshot = try #require(snapshotEnvelope.result)
+        #expect(snapshotEnvelope.status == "ok")
+        #expect(snapshot.tabs.isEmpty == false)
+
         let windowListResponse = core.handle(
             ControlHarnessRequest(
                 requestID: "req-window-list",
@@ -6961,7 +7358,10 @@ struct ControlHarnessTests {
         )
         let windowList = try #require(windowListEnvelope.result)
         #expect(windowListEnvelope.status == "ok")
-        #expect(windowList.windows.isEmpty)
+        #expect(windowList.windows.count == appState.windowCount)
+        #expect(windowList.windows.allSatisfy { $0.kind.isEmpty == false })
+        let listedWindowNumbers = Set(windowList.windows.map(\.windowNumber))
+        #expect(snapshot.tabs.allSatisfy { listedWindowNumbers.contains($0.windowNumber) })
 
         let panelListResponse = core.handle(
             ControlHarnessRequest(
@@ -7077,8 +7477,11 @@ struct ControlHarnessTests {
         )
         let settingsValues = try #require(settingsValuesEnvelope.result)
         #expect(settingsValuesEnvelope.status == "ok")
-        #expect(settingsValues.values["gateway.listen_port"] != nil)
+        let gatewayListenPort = try #require(settingsValues.values["gateway.listen_port"])
+        #expect(gatewayListenPort.isEmpty == false)
         #expect(settingsValues.stagedValues == nil)
+        let validateGatewayPort = gatewayListenPort == "9527" ? "9528" : "9527"
+        let stagedGatewayPort = gatewayListenPort == "9528" ? "9529" : "9528"
 
         let validateResponse = core.handle(
             ControlHarnessRequest(
@@ -7108,7 +7511,7 @@ struct ControlHarnessTests {
                 cursor: nil,
                 readAfterWriteID: nil,
                 payload: [
-                    "gateway.listen_port": "9527",
+                    "gateway.listen_port": validateGatewayPort,
                     "runtime.enabled": "true",
                 ]
             ),
@@ -7120,7 +7523,7 @@ struct ControlHarnessTests {
         )
         let validateResult = try #require(validateEnvelope.result)
         #expect(validateEnvelope.status == "ok")
-        #expect(validateResult.stagedValues?["gateway.listen_port"] == "9527")
+        #expect(validateResult.stagedValues?["gateway.listen_port"] == validateGatewayPort)
         #expect(validateResult.changedKeys.contains("gateway.listen_port"))
 
         let setResponse = core.handle(
@@ -7151,7 +7554,7 @@ struct ControlHarnessTests {
                 cursor: nil,
                 readAfterWriteID: nil,
                 payload: [
-                    "gateway.listen_port": "9528",
+                    "gateway.listen_port": stagedGatewayPort,
                 ]
             ),
             socketPath: "/tmp/ghodex-control-surface.sock"
@@ -7162,7 +7565,7 @@ struct ControlHarnessTests {
         )
         let setResult = try #require(setEnvelope.result)
         #expect(setEnvelope.status == "ok")
-        #expect(setResult.stagedValues?["gateway.listen_port"] == "9528")
+        #expect(setResult.stagedValues?["gateway.listen_port"] == stagedGatewayPort)
         #expect(setResult.changedKeys.contains("gateway.listen_port"))
 
         let stagedValuesResponse = core.handle(
@@ -7200,7 +7603,7 @@ struct ControlHarnessTests {
             from: try encoder.encode(stagedValuesResponse)
         )
         let stagedValues = try #require(stagedValuesEnvelope.result)
-        #expect(stagedValues.stagedValues?["gateway.listen_port"] == "9528")
+        #expect(stagedValues.stagedValues?["gateway.listen_port"] == stagedGatewayPort)
     }
 
     @Test @MainActor func diagnosticsCommandsExposeMetricsAndBufferedEventStatus() throws {
@@ -9020,10 +9423,20 @@ struct ControlHarnessTests {
         let compatibility = try #require(handshake.compatibility)
         #expect(compatibility.authority == "control_harness")
         #expect(compatibility.legacyCommands.contains("events.subscribe"))
+        #expect(compatibility.legacyCommands.contains("browser.page.navigate"))
+        #expect(compatibility.legacyCommands.contains("browser.loadURL"))
         let migration = try #require(compatibility.migrations.first(where: { $0.command == "events.subscribe" }))
         #expect(migration.replacementCommands == ["events.stream.subscribe", "events.stream.drain", "events.stream.unsubscribe"])
         #expect(migration.status == "legacy_supported")
         #expect(migration.removalPhase == "not_scheduled")
+        let browserPageNavigate = try #require(compatibility.migrations.first(where: { $0.command == "browser.page.navigate" }))
+        #expect(browserPageNavigate.replacementCommands == ["browser.page.load"])
+        #expect(browserPageNavigate.status == "legacy_supported")
+        #expect(browserPageNavigate.removalPhase == "not_scheduled")
+        let browserLoadURL = try #require(compatibility.migrations.first(where: { $0.command == "browser.loadURL" }))
+        #expect(browserLoadURL.replacementCommands == ["browser.page.load"])
+        #expect(browserLoadURL.status == "legacy_supported")
+        #expect(browserLoadURL.removalPhase == "not_scheduled")
     }
 
     @Test func runtimeSessionLifecycleWorksOverControlHarnessSocket() async throws {

@@ -8,10 +8,10 @@ transport layers against a live app instance:
 
 - local Unix-socket `events.subscribe` streams replay + live events
 - gateway TCP handshake succeeds and pairing exchanges an observe token
-- gateway TCP `terminal.snapshot.v2` / `terminal.semantic.v2` work with auth
+- gateway TCP `terminal.snapshot` / `terminal.semantic` work with auth
 - gateway TCP `events.subscribe` streams replay + live events
 - gateway WebSocket handshake succeeds
-- gateway WebSocket `terminal.snapshot.v2` / `terminal.semantic.v2` work with auth
+- gateway WebSocket `terminal.snapshot` / `terminal.semantic` work with auth
 - gateway WebSocket `events.subscribe` streams replay + live events
 """
 
@@ -465,6 +465,43 @@ def run_control_command(app_bundle: Path, socket_path: str, *control_args: str) 
     return json.loads(completed.stdout)
 
 
+def wait_for_expected_target_pid(
+    socket_path: str,
+    *,
+    expected_pid: int,
+    timeout_ms: int,
+    request_timeout: float,
+) -> dict:
+    deadline = time.monotonic() + (timeout_ms / 1000.0)
+    last_response: dict | None = None
+    last_error: str | None = None
+    while time.monotonic() < deadline:
+        try:
+            response = send_single_request_unix(
+                socket_path,
+                {
+                    "request_id": f"req-{uuid.uuid4().hex[:12]}",
+                    "command": "system.target.resolve",
+                },
+                timeout=request_timeout,
+            )
+        except (OSError, TimeoutError, json.JSONDecodeError) as error:
+            last_error = f"{type(error).__name__}: {error}"
+            time.sleep(0.25)
+            continue
+        last_response = response
+        if int(response.get("result", {}).get("instance", {}).get("process_id") or -1) == expected_pid:
+            return response
+        time.sleep(0.25)
+
+    raise RuntimeError(
+        "Timed out waiting for the launched app to own the harness socket. "
+        f"expected_pid={expected_pid} "
+        f"last_response={json.dumps(last_response or {}, sort_keys=True)} "
+        f"last_error={last_error or 'none'}"
+    )
+
+
 def wait_for_primary_terminal(app_bundle: Path, socket_path: str, *, timeout_ms: int) -> tuple[str, dict]:
     deadline = time.monotonic() + (timeout_ms / 1000.0)
     last_snapshot: dict | None = None
@@ -740,6 +777,12 @@ def run_acceptance(args: argparse.Namespace) -> dict:
         gateway_host = "127.0.0.1"
         result["socket_path"] = socket_path
         result["gateway"] = {"host": gateway_host, "port": gateway_port}
+        result["target"] = wait_for_expected_target_pid(
+            socket_path,
+            expected_pid=proc.pid,
+            timeout_ms=args.startup_timeout_ms,
+            request_timeout=args.request_timeout,
+        )
 
         terminal_id, initial_snapshot = wait_for_primary_terminal(
             app_bundle,
@@ -825,14 +868,14 @@ def run_acceptance(args: argparse.Namespace) -> dict:
         result["gateway_tcp_snapshot_seed"] = tcp_snapshot_seed
         tcp_snapshot_request = {
             "request_id": f"req-{uuid.uuid4().hex[:12]}",
-            "command": "terminal.snapshot.v2",
+            "command": "terminal.snapshot",
             "auth_token": auth_token,
             "terminal_id": terminal_id,
             "scope": "screen",
             "mode": "snapshot",
         }
         tcp_snapshot = wait_for_snapshot_v2(
-            label="gateway TCP terminal.snapshot.v2",
+            label="gateway TCP terminal.snapshot",
             marker=tcp_snapshot_seed["marker"],
             timeout=args.request_timeout,
             fetch=lambda remaining: send_single_request_tcp(
@@ -854,14 +897,14 @@ def run_acceptance(args: argparse.Namespace) -> dict:
         result["gateway_tcp_semantic_seed"] = tcp_semantic_seed
         tcp_semantic_request = {
             "request_id": f"req-{uuid.uuid4().hex[:12]}",
-            "command": "terminal.semantic.v2",
+            "command": "terminal.semantic",
             "auth_token": auth_token,
             "terminal_id": terminal_id,
             "scope": "screen",
             "mode": "snapshot",
         }
         tcp_semantic = wait_for_semantic_v2(
-            label="gateway TCP terminal.semantic.v2",
+            label="gateway TCP terminal.semantic",
             marker=tcp_semantic_seed["marker"],
             timeout=args.request_timeout,
             fetch=lambda remaining: send_single_request_tcp(
@@ -937,14 +980,14 @@ def run_acceptance(args: argparse.Namespace) -> dict:
         )
         result["gateway_websocket_snapshot_seed"] = ws_snapshot_seed
         ws_snapshot_response = wait_for_snapshot_v2(
-            label="gateway WebSocket terminal.snapshot.v2",
+            label="gateway WebSocket terminal.snapshot",
             marker=ws_snapshot_seed["marker"],
             timeout=args.request_timeout,
             fetch=lambda remaining: websocket_request(
                 ws_snapshot,
                 {
                     "request_id": f"req-{uuid.uuid4().hex[:12]}",
-                    "command": "terminal.snapshot.v2",
+                    "command": "terminal.snapshot",
                     "auth_token": auth_token,
                     "terminal_id": terminal_id,
                     "scope": "screen",
@@ -964,14 +1007,14 @@ def run_acceptance(args: argparse.Namespace) -> dict:
         )
         result["gateway_websocket_semantic_seed"] = ws_semantic_seed
         ws_semantic_response = wait_for_semantic_v2(
-            label="gateway WebSocket terminal.semantic.v2",
+            label="gateway WebSocket terminal.semantic",
             marker=ws_semantic_seed["marker"],
             timeout=args.request_timeout,
             fetch=lambda remaining: websocket_request(
                 ws_snapshot,
                 {
                     "request_id": f"req-{uuid.uuid4().hex[:12]}",
-                    "command": "terminal.semantic.v2",
+                    "command": "terminal.semantic",
                     "auth_token": auth_token,
                     "terminal_id": terminal_id,
                     "scope": "screen",

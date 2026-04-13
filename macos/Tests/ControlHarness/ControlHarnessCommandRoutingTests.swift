@@ -186,9 +186,17 @@ struct ControlHarnessCommandRoutingTests {
         #expect(capabilities.commands.contains("events.stream.subscribe"))
         #expect(capabilities.compatibility.authority == "control_harness")
         #expect(capabilities.compatibility.legacyCommands.contains("events.subscribe"))
+        #expect(capabilities.compatibility.legacyCommands.contains("browser.page.navigate"))
+        #expect(capabilities.compatibility.legacyCommands.contains("browser.loadURL"))
         let migration = try #require(capabilities.compatibility.migrations.first(where: { $0.command == "events.subscribe" }))
         #expect(migration.replacementCommands == ["events.stream.subscribe", "events.stream.drain", "events.stream.unsubscribe"])
         #expect(migration.status == "legacy_supported")
+        let browserPageNavigate = try #require(capabilities.compatibility.migrations.first(where: { $0.command == "browser.page.navigate" }))
+        #expect(browserPageNavigate.replacementCommands == ["browser.page.load"])
+        #expect(browserPageNavigate.status == "legacy_supported")
+        let browserLoadURL = try #require(capabilities.compatibility.migrations.first(where: { $0.command == "browser.loadURL" }))
+        #expect(browserLoadURL.replacementCommands == ["browser.page.load"])
+        #expect(browserLoadURL.status == "legacy_supported")
     }
 
     @Test func normalizedRequestAcceptsProjectCanonicalCommands() {

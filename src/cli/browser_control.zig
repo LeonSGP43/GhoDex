@@ -4,6 +4,9 @@ const Allocator = std.mem.Allocator;
 const args = @import("args.zig");
 const Action = @import("ghostty.zig").Action;
 
+const browser_control_socket_name = "browser-control.sock";
+const browser_app_support_root_env = "GHODEX_BROWSER_APP_SUPPORT_ROOT";
+
 const Transport = enum {
     auto,
     ipc,
@@ -200,6 +203,26 @@ fn resolveRequest(alloc: Allocator, request: ?[]const u8) ![]u8 {
 }
 
 fn defaultSocketPath(alloc: Allocator) ![]u8 {
+    const app_support_root = try defaultAppSupportRoot(alloc);
+    defer alloc.free(app_support_root);
+
+    return std.fs.path.join(alloc, &.{
+        app_support_root,
+        browser_control_socket_name,
+    });
+}
+
+fn defaultAppSupportRoot(alloc: Allocator) ![]u8 {
+    const override_root = std.process.getEnvVarOwned(alloc, browser_app_support_root_env) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => null,
+        else => return err,
+    };
+    if (override_root) |root| {
+        defer alloc.free(root);
+        const trimmed = std.mem.trim(u8, root, " \n\t");
+        if (trimmed.len > 0) return alloc.dupe(u8, trimmed);
+    }
+
     const home = try std.process.getEnvVarOwned(alloc, "HOME");
     defer alloc.free(home);
 
@@ -208,6 +231,5 @@ fn defaultSocketPath(alloc: Allocator) ![]u8 {
         "Library",
         "Application Support",
         "GhoDex",
-        "browser-control.sock",
     });
 }

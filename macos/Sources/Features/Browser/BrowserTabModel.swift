@@ -770,6 +770,10 @@ final class BrowserPageState: ObservableObject, Identifiable {
         setControlBridgeReady(true)
     }
 
+    func markControlBridgePending() {
+        setControlBridgeReady(false)
+    }
+
     func controlBridgeReadyPublisher() -> AnyPublisher<Bool, Never> {
         controlBridgeReadySubject.eraseToAnyPublisher()
     }
@@ -1133,6 +1137,17 @@ final class BrowserTabModel: ObservableObject {
         page.unbindControlBridge()
         logLifecycleEvent(
             "unbind_bridge",
+            extra: [
+                "page_id": pageID.uuidString,
+            ]
+        )
+    }
+
+    func markBridgePending(for pageID: UUID) {
+        guard let page = pages.first(where: { $0.id == pageID }) else { return }
+        page.markControlBridgePending()
+        logLifecycleEvent(
+            "mark_bridge_pending",
             extra: [
                 "page_id": pageID.uuidString,
             ]

@@ -4668,7 +4668,6 @@ final class AITerminalManagerStore: ObservableObject {
         do {
             try Self.saveConfiguration(configuration, to: configurationURL)
             configurationRevision = UUID()
-            appDelegateProvider()?.ghostty.reloadConfig()
         } catch {
             lastError = L10n.AITerminalManager.saveConfigurationFailed(error.localizedDescription)
         }
@@ -4676,6 +4675,16 @@ final class AITerminalManagerStore: ObservableObject {
 
     nonisolated private static func defaultConfigurationURL() -> URL {
         let fileManager = FileManager.default
+        if let envPath = ProcessInfo.processInfo.environment["GHOSTTY_CONFIG_PATH"],
+           !envPath.isEmpty {
+            let url = URL(fileURLWithPath: envPath, isDirectory: false)
+            try? fileManager.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            return url
+        }
+
         if let path = Ghostty.App.configPath(), !path.isEmpty {
             let url = URL(fileURLWithPath: path, isDirectory: false)
             try? fileManager.createDirectory(
@@ -4976,7 +4985,10 @@ final class AITerminalManagerStore: ObservableObject {
     private func applyGhosttyConfig(_ ghosttyConfig: Ghostty.Config) {
         let reloadedConfiguration = (try? Self.loadConfiguration(at: configurationURL))
             ?? Self.configuration(from: ghosttyConfig)
-        applyConfiguration(reloadedConfiguration)
+        // Runtime sessions/tasks/schedules are live process state. A config reload
+        // may originate from another running app instance sharing the same file,
+        // so keep the current process runtime state authoritative in memory.
+        applyConfiguration(reloadedConfiguration, preserveRuntimeState: true)
         importedSSHHosts = sshConfigHostLoader()
         reconcileImportedState()
         rebuildSessions()
@@ -5005,8 +5017,18 @@ final class AITerminalManagerStore: ObservableObject {
         persistConfiguration()
     }
 
-    private func applyConfiguration(_ nextConfiguration: AITerminalManagerConfiguration) {
-        configuration = Self.sanitizeConfiguration(nextConfiguration)
+    func applyConfiguration(
+        _ nextConfiguration: AITerminalManagerConfiguration,
+        preserveRuntimeState: Bool = false
+    ) {
+        var resolvedConfiguration = nextConfiguration
+        if preserveRuntimeState {
+            resolvedConfiguration.agentRuntimeSessions = configuration.agentRuntimeSessions
+            resolvedConfiguration.agentRuntimeTasks = configuration.agentRuntimeTasks
+            resolvedConfiguration.agentRuntimeSchedules = configuration.agentRuntimeSchedules
+        }
+
+        configuration = Self.sanitizeConfiguration(resolvedConfiguration)
         todoDocumentCache.removeAll()
         configurationRevision = UUID()
         bumpTodoRevision()

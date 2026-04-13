@@ -103,6 +103,13 @@ GhoDex +control diagnostics.logs.tail --payload-json='{"source":"audit"}' --sock
 - `panel.tab.select`
 - `panel.state.get`
 
+Notes:
+
+- `window.focus` acknowledges the focus/order-front mutation, but `window.list.is_focused`
+  and `app.state.get.frontmost_window_number` still depend on macOS making the app active.
+  Background-launched isolated debug instances can remain inactive even when the focus
+  request succeeds.
+
 Current first-class `panel_id` values:
 
 - `settings`
@@ -238,12 +245,14 @@ Primary in-repo verification commands:
 zig build test -Dtest-filter=control
 python3 -m py_compile \
   scripts/browser_last_window_close_acceptance.py \
+  scripts/control_harness_protocol_surface_live_acceptance.py \
   scripts/control_harness_terminal_v2_live_acceptance.py \
   scripts/control_harness_gateway_transport_live_acceptance.py
 ```
 
 Live acceptance scripts that exercise the protocol surface:
 
+- `scripts/control_harness_protocol_surface_live_acceptance.py`
 - `scripts/control_harness_gateway_transport_live_acceptance.py`
 - `scripts/control_harness_terminal_v2_live_acceptance.py`
 - `scripts/browser_last_window_close_acceptance.py`

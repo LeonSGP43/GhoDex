@@ -2459,6 +2459,7 @@ final class ControlHarnessAuditLogger {
 final class ControlHarnessCore {
     nonisolated static let protocolVersion = "1.0"
     nonisolated static let supportedCommands = ControlHarnessCommandAliases.allSupportedCommands
+    private static let pendingTerminalInputEchoTimeoutDefaultMS = 1_500
     static let supportedTerminalKeys: Set<String> = [
         "backspace",
         "enter",
@@ -2492,6 +2493,7 @@ final class ControlHarnessCore {
     private var lastReadFootprintBytes: UInt64?
     private var lastReadMemoryThrottleLogDate: Date?
     private var settingsDraftValues: [String: String]?
+    private var pendingTerminalInputEchoes: [String: String] = [:]
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
         category: "ControlHarnessCore"
@@ -2697,13 +2699,6 @@ final class ControlHarnessCore {
             )
             if case .idempotencyConflict = error {
                 // Preserve the original response cached for this key.
-            } else if let token = request.idempotencyToken, let mutationFingerprint = try? idempotencyFingerprint(for: request) {
-                idempotencyStore.store(
-                    response: response,
-                    sequence: responseSequence,
-                    token: token,
-                    fingerprint: mutationFingerprint
-                )
             }
         } catch {
             logger.error("control harness request failed: \(error.localizedDescription, privacy: .public)")
@@ -2714,7 +2709,79 @@ final class ControlHarnessCore {
                 errorCode: ControlHarnessCoreError.internalFailure.code,
                 errorMessage: error.localizedDescription
             )
-            if let token = request.idempotencyToken, let mutationFingerprint = try? idempotencyFingerprint(for: request) {
+        }
+
+        let durationNs = DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds
+        auditLogger.append(.init(
+            timestamp: Self.iso8601(Date()),
+            requestID: request.requestID,
+            command: request.command,
+            client: request.client,
+            idempotencyKey: request.idempotencyKey,
+            expectedGeneration: request.expectedGeneration,
+            tabID: request.tabID,
+            terminalID: request.terminalID,
+            status: response.status,
+            errorCode: response.errorCode,
+            sequence: responseSequence,
+            durationMs: Double(durationNs) / 1_000_000
+        ))
+
+        return response
+    }
+
+    @MainActor
+    func handleAsync(_ request: ControlHarnessRequest, socketPath: String) async -> ControlHarnessResponse {
+        let request = request.normalized()
+        guard ControlHarnessBrowserCommandAdapter.isBrowserCommand(request.command) else {
+            return handle(request, socketPath: socketPath)
+        }
+
+        let started = DispatchTime.now()
+        let response: ControlHarnessResponse
+        var responseSequence: Int64?
+
+        do {
+            try validateRequest(request)
+            let mutationFingerprint = try idempotencyFingerprint(for: request)
+            if let token = request.idempotencyToken, let mutationFingerprint {
+                switch idempotencyStore.lookup(token: token, fingerprint: mutationFingerprint) {
+                case .miss:
+                    break
+                case .hit(let cachedResponse, let cachedSequence):
+                    responseSequence = cachedSequence
+                    response = cachedResponse
+                    let durationNs = DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds
+                    auditLogger.append(.init(
+                        timestamp: Self.iso8601(Date()),
+                        requestID: request.requestID,
+                        command: request.command,
+                        client: request.client,
+                        idempotencyKey: request.idempotencyKey,
+                        expectedGeneration: request.expectedGeneration,
+                        tabID: request.tabID,
+                        terminalID: request.terminalID,
+                        status: response.status,
+                        errorCode: response.errorCode,
+                        sequence: responseSequence,
+                        durationMs: Double(durationNs) / 1_000_000
+                    ))
+                    return response
+                case .conflict:
+                    throw ControlHarnessCoreError.idempotencyConflict(token)
+                }
+            }
+
+            let result = try await dispatchAsync(request, socketPath: socketPath)
+            responseSequence = result.sequence
+            response = .init(
+                requestID: request.requestID,
+                status: "ok",
+                result: result.payload,
+                errorCode: nil,
+                errorMessage: nil
+            )
+            if let token = request.idempotencyToken, let mutationFingerprint {
                 idempotencyStore.store(
                     response: response,
                     sequence: responseSequence,
@@ -2722,6 +2789,26 @@ final class ControlHarnessCore {
                     fingerprint: mutationFingerprint
                 )
             }
+        } catch let error as ControlHarnessCoreError {
+            response = .init(
+                requestID: request.requestID,
+                status: "error",
+                result: nil,
+                errorCode: error.code,
+                errorMessage: error.localizedDescription
+            )
+            if case .idempotencyConflict = error {
+                // Preserve the original response cached for this key.
+            }
+        } catch {
+            logger.error("control harness request failed: \(error.localizedDescription, privacy: .public)")
+            response = .init(
+                requestID: request.requestID,
+                status: "error",
+                result: nil,
+                errorCode: ControlHarnessCoreError.internalFailure.code,
+                errorMessage: error.localizedDescription
+            )
         }
 
         let durationNs = DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds
@@ -3421,9 +3508,21 @@ final class ControlHarnessCore {
         }
     }
 
+    @MainActor
+    private func dispatchAsync(
+        _ request: ControlHarnessRequest,
+        socketPath: String
+    ) async throws -> (payload: AnyEncodable, sequence: Int64?) {
+        if ControlHarnessBrowserCommandAdapter.isBrowserCommand(request.command) {
+            return (try await ControlHarnessBrowserCommandAdapter.executeAsync(request), nil)
+        }
+
+        return try dispatch(request, socketPath: socketPath)
+    }
+
     private func makeSnapshot() -> ControlSnapshotResult {
-        let tabs = TerminalController.all.compactMap { controller -> ControlTabSnapshot? in
-            guard let window = controller.window else { return nil }
+        let tabs = snapshotTerminalWindows().compactMap { window -> ControlTabSnapshot? in
+            guard let controller = window.windowController as? TerminalController else { return nil }
             let tabID = controller.workspaceID.uuidString
             let terminals = controller.allSurfaces.map { surface in
                 let terminalID = surface.id.uuidString
@@ -3439,7 +3538,7 @@ final class ControlHarnessCore {
             return ControlTabSnapshot(
                 tabID: tabID,
                 generation: generations.currentTabGeneration(for: tabID),
-                windowNumber: window.windowNumber,
+                windowNumber: (window.tabGroup?.selectedWindow ?? window).windowNumber,
                 title: controller.titleOverride ?? window.title,
                 isFocused: window.isKeyWindow,
                 isMainWindow: window.isMainWindow,
@@ -3454,6 +3553,22 @@ final class ControlHarnessCore {
             lastSequence: eventHub.currentSequence(),
             tabs: tabs
         )
+    }
+
+    private func snapshotTerminalWindows() -> [NSWindow] {
+        var seenWorkspaceIDs: Set<UUID> = []
+        var windows: [NSWindow] = []
+
+        for appWindow in NSApp.windows {
+            let tabWindows = appWindow.tabGroup?.windows ?? [appWindow]
+            for tabWindow in tabWindows {
+                guard let controller = tabWindow.windowController as? TerminalController else { continue }
+                guard seenWorkspaceIDs.insert(controller.workspaceID).inserted else { continue }
+                windows.append(tabWindow)
+            }
+        }
+
+        return windows
     }
 
     private func makeTargetResolveResult(socketPath: String) -> ControlTargetResolveResult {
@@ -3498,24 +3613,33 @@ final class ControlHarnessCore {
     }
 
     private func makeCompatibilityMetadata() -> ControlCompatibilityMetadata {
-        .init(
+        let browserMigrations = ControlHarnessBrowserCommandAdapter.compatibilityEntries.map { entry in
+            ControlCommandMigrationNotice(
+                command: entry.legacyCommand,
+                replacementCommands: entry.replacementCommands,
+                status: "legacy_supported",
+                removalPhase: "not_scheduled",
+                detail: entry.detail
+            )
+        }
+        let migrationNotices: [ControlCommandMigrationNotice] = ([
+            ControlCommandMigrationNotice(
+                command: "events.subscribe",
+                replacementCommands: [
+                    "events.stream.subscribe",
+                    "events.stream.drain",
+                    "events.stream.unsubscribe",
+                ],
+                status: "legacy_supported",
+                removalPhase: "not_scheduled",
+                detail: "Use the buffered events.stream handle flow for new clients. events.subscribe remains only for long-lived compatibility transports."
+            ),
+        ] + browserMigrations).sorted { $0.command < $1.command }
+
+        return .init(
             authority: "control_harness",
-            legacyCommands: [
-                "events.subscribe",
-            ],
-            migrations: [
-                .init(
-                    command: "events.subscribe",
-                    replacementCommands: [
-                        "events.stream.subscribe",
-                        "events.stream.drain",
-                        "events.stream.unsubscribe",
-                    ],
-                    status: "legacy_supported",
-                    removalPhase: "not_scheduled",
-                    detail: "Use the buffered events.stream handle flow for new clients. events.subscribe remains only for long-lived compatibility transports."
-                ),
-            ]
+            legacyCommands: migrationNotices.map(\.command),
+            migrations: migrationNotices
         )
     }
 
@@ -3533,13 +3657,53 @@ final class ControlHarnessCore {
         )
     }
 
+    private func syncMainActor<T>(
+        _ body: @escaping @MainActor () throws -> T
+    ) throws -> T {
+        if Thread.isMainThread {
+            return try MainActor.assumeIsolated {
+                try body()
+            }
+        }
+
+        return try DispatchQueue.main.sync {
+            try MainActor.assumeIsolated {
+                try body()
+            }
+        }
+    }
+
+    @MainActor
+    private func activateWindowForControlMutation(_ window: NSWindow) {
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
+
+        _ = NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
+        NSApp.activate(ignoringOtherApps: true)
+        window.orderFrontRegardless()
+        window.makeMain()
+        window.makeKeyAndOrderFront(nil)
+
+        if !window.isKeyWindow || !NSApp.isActive {
+            _ = NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
+            NSApp.activate(ignoringOtherApps: true)
+            window.orderFrontRegardless()
+            window.makeMain()
+            window.makeKey()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+    }
+
     private func relaunchApplication() throws -> ControlAppStateResult {
         guard let appDelegate else {
             throw ControlHarnessCoreError.appUnavailable
         }
-        let result = makeAppStateResult()
-        appDelegate.relaunchApplication()
-        return result
+        return try syncMainActor {
+            let result = self.makeAppStateResult()
+            appDelegate.relaunchApplication()
+            return result
+        }
     }
 
     private func makeWindowListResult() -> ControlWindowListResult {
@@ -3550,49 +3714,77 @@ final class ControlHarnessCore {
     }
 
     private func focusWindow(from request: ControlHarnessRequest) throws -> ControlWindowMutationResult {
-        let window = try resolveWindow(windowNumber: request.windowNumber)
-        if window.isMiniaturized {
-            window.deminiaturize(nil)
+        try syncMainActor {
+            let window = try self.resolveWindow(windowNumber: request.windowNumber)
+            self.activateWindowForControlMutation(window)
+            return .init(window: self.makeWindowSummary(window), action: "focus")
         }
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
-        return .init(window: makeWindowSummary(window), action: "focus")
     }
 
     private func showWindow(from request: ControlHarnessRequest) throws -> ControlWindowMutationResult {
-        let window = try resolveWindow(windowNumber: request.windowNumber)
-        if window.isMiniaturized {
-            window.deminiaturize(nil)
+        try syncMainActor {
+            let window = try self.resolveWindow(windowNumber: request.windowNumber)
+            self.activateWindowForControlMutation(window)
+            return .init(window: self.makeWindowSummary(window), action: "show")
         }
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
-        return .init(window: makeWindowSummary(window), action: "show")
     }
 
     private func hideWindow(from request: ControlHarnessRequest) throws -> ControlWindowMutationResult {
-        let window = try resolveWindow(windowNumber: request.windowNumber)
-        window.orderOut(nil)
-        return .init(window: makeWindowSummary(window), action: "hide")
+        try syncMainActor {
+            let window = try self.resolveWindow(windowNumber: request.windowNumber)
+            window.orderOut(nil)
+            return .init(window: self.makeWindowSummary(window), action: "hide")
+        }
     }
 
     private func closeWindow(from request: ControlHarnessRequest) throws -> ControlWindowMutationResult {
-        let window = try resolveWindow(windowNumber: request.windowNumber)
-        let summaryBeforeClose = makeWindowSummary(window)
-        window.performClose(nil)
-        return .init(window: summaryBeforeClose, action: "close")
+        try syncMainActor {
+            let window = try self.resolveWindow(windowNumber: request.windowNumber)
+            let summaryBeforeClose = self.makeWindowSummary(window)
+            window.performClose(nil)
+            return .init(window: summaryBeforeClose, action: "close")
+        }
     }
 
     private func toggleWindowTabOverview(from request: ControlHarnessRequest) throws -> ControlWindowMutationResult {
-        let window = try resolveWindow(windowNumber: request.windowNumber)
-        window.toggleTabOverview(nil)
-        return .init(window: makeWindowSummary(window), action: "tab_overview_toggle")
+        try syncMainActor {
+            let window = try self.resolveWindow(windowNumber: request.windowNumber)
+            if let tabGroup = window.tabGroup {
+                let targetVisible = !tabGroup.isOverviewVisible
+                tabGroup.isOverviewVisible = targetVisible
+                self.enforceTabOverviewVisibility(tabGroup, targetVisible: targetVisible)
+            } else {
+                window.toggleTabOverview(nil)
+            }
+            return .init(window: self.makeWindowSummary(window), action: "tab_overview_toggle")
+        }
+    }
+
+    private func enforceTabOverviewVisibility(
+        _ tabGroup: NSWindowTabGroup,
+        targetVisible: Bool,
+        attemptsRemaining: Int = 8
+    ) {
+        guard attemptsRemaining > 0 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak tabGroup, weak self] in
+            guard let self, let tabGroup else { return }
+            guard tabGroup.isOverviewVisible != targetVisible else { return }
+            tabGroup.isOverviewVisible = targetVisible
+            self.enforceTabOverviewVisibility(
+                tabGroup,
+                targetVisible: targetVisible,
+                attemptsRemaining: attemptsRemaining - 1
+            )
+        }
     }
 
     private func setWindowFloatOnTop(from request: ControlHarnessRequest) throws -> ControlWindowMutationResult {
-        let window = try resolveWindow(windowNumber: request.windowNumber)
-        let enabled = try parseRequiredPayloadBoolean(request, key: "enabled")
-        window.level = enabled ? .floating : .normal
-        return .init(window: makeWindowSummary(window), action: "float_on_top_set")
+        try syncMainActor {
+            let window = try self.resolveWindow(windowNumber: request.windowNumber)
+            let enabled = try self.parseRequiredPayloadBoolean(request, key: "enabled")
+            window.level = enabled ? .floating : .normal
+            return .init(window: self.makeWindowSummary(window), action: "float_on_top_set")
+        }
     }
 
     private func makePanelListResult() -> ControlPanelListResult {
@@ -3600,45 +3792,53 @@ final class ControlHarnessCore {
     }
 
     private func openPanel(from request: ControlHarnessRequest) throws -> ControlPanelMutationResult {
-        let panel = try mutatePanel(
-            panelID: request.panelID,
-            panelTabID: request.panelTabID,
-            action: "open"
-        ) { panelID, panelTabID in
-            try openPanel(panelID: panelID, panelTabID: panelTabID)
+        try syncMainActor {
+            let panel = try self.mutatePanel(
+                panelID: request.panelID,
+                panelTabID: request.panelTabID,
+                action: "open"
+            ) { panelID, panelTabID in
+                try self.openPanel(panelID: panelID, panelTabID: panelTabID)
+            }
+            return .init(panel: panel, action: "open")
         }
-        return .init(panel: panel, action: "open")
     }
 
     private func focusPanel(from request: ControlHarnessRequest) throws -> ControlPanelMutationResult {
-        let panel = try mutatePanel(
-            panelID: request.panelID,
-            panelTabID: request.panelTabID,
-            action: "focus"
-        ) { panelID, panelTabID in
-            try openPanel(panelID: panelID, panelTabID: panelTabID)
+        try syncMainActor {
+            let panel = try self.mutatePanel(
+                panelID: request.panelID,
+                panelTabID: request.panelTabID,
+                action: "focus"
+            ) { panelID, panelTabID in
+                try self.openPanel(panelID: panelID, panelTabID: panelTabID)
+            }
+            return .init(panel: panel, action: "focus")
         }
-        return .init(panel: panel, action: "focus")
     }
 
     private func closePanel(from request: ControlHarnessRequest) throws -> ControlPanelMutationResult {
-        let panelID = try parsePanelID(request.panelID)
-        switch panelID {
-        case "settings":
-            appDelegate?.settingsController.close(nil)
-        case "ssh_connections":
-            appDelegate?.sshConnectionsController.close(nil)
-        default:
-            break
+        try syncMainActor {
+            let panelID = try self.parsePanelID(request.panelID)
+            switch panelID {
+            case "settings":
+                self.appDelegate?.settingsController.close(nil)
+            case "ssh_connections":
+                self.appDelegate?.sshConnectionsController.close(nil)
+            default:
+                break
+            }
+            return .init(panel: self.panelSummary(panelID: panelID), action: "close")
         }
-        return .init(panel: panelSummary(panelID: panelID), action: "close")
     }
 
     private func selectPanelTab(from request: ControlHarnessRequest) throws -> ControlPanelMutationResult {
-        let panelID = try parsePanelID(request.panelID)
-        let panelTabID = try parseRequiredPanelTabID(request.panelTabID, panelID: panelID)
-        try openPanel(panelID: panelID, panelTabID: panelTabID)
-        return .init(panel: panelSummary(panelID: panelID), action: "tab_select")
+        try syncMainActor {
+            let panelID = try self.parsePanelID(request.panelID)
+            let panelTabID = try self.parseRequiredPanelTabID(request.panelTabID, panelID: panelID)
+            try self.openPanel(panelID: panelID, panelTabID: panelTabID)
+            return .init(panel: self.panelSummary(panelID: panelID), action: "tab_select")
+        }
     }
 
     private func panelState(from request: ControlHarnessRequest) throws -> ControlPanelListResult {
@@ -4055,121 +4255,127 @@ final class ControlHarnessCore {
             throw ControlHarnessCoreError.appUnavailable
         }
 
-        try validateWorkingDirectory(request.workingDirectory)
-        let parentWindow = try resolveParentWindow(parentTabID: request.parentTabID)
-        let config = buildSurfaceConfiguration(from: request)
-        guard let controller = TerminalController.newTab(
-            appDelegate.ghostty,
-            from: parentWindow,
-            withBaseConfig: config
-        ) else {
-            throw ControlHarnessCoreError.operationFailed("Failed to create a new tab")
-        }
+        return try syncMainActor {
+            try self.validateWorkingDirectory(request.workingDirectory)
+            let parentWindow = try self.resolveParentWindow(parentTabID: request.parentTabID)
+            let config = self.buildSurfaceConfiguration(from: request)
+            guard let controller = TerminalController.newTab(
+                appDelegate.ghostty,
+                from: parentWindow,
+                withBaseConfig: config
+            ) else {
+                throw ControlHarnessCoreError.operationFailed("Failed to create a new tab")
+            }
 
-        if let title = normalizedTabTitleOverride(request.title) {
-            controller.titleOverride = title
-        }
+            if let title = self.normalizedTabTitleOverride(request.title) {
+                controller.titleOverride = title
+            }
 
-        let tabID = controller.workspaceID.uuidString
-        let tabGeneration = generations.currentTabGeneration(for: tabID)
-        let terminalID = controller.surfaceTree.leftmostActiveSurface()?.id.uuidString
-        let terminalGeneration = terminalID.map { generations.currentTerminalGeneration(for: $0) }
-        let sequence = eventHub.emit(
-            event: "tab.created",
-            requestID: request.requestID,
-            resource: .init(type: "tab", id: tabID, generation: tabGeneration),
-            payload: AnyEncodable(ControlTabCreatedEventPayload(
-                parentTabID: request.parentTabID,
-                workingDirectory: request.workingDirectory,
-                title: request.title
-            ))
-        )
-        return ControlCreateTabResult(
-            tabID: tabID,
-            tabGeneration: tabGeneration,
-            terminalID: terminalID,
-            terminalGeneration: terminalGeneration,
-            sequence: sequence
-        )
+            let tabID = controller.workspaceID.uuidString
+            let tabGeneration = self.generations.currentTabGeneration(for: tabID)
+            let terminalID = controller.surfaceTree.leftmostActiveSurface()?.id.uuidString
+            let terminalGeneration = terminalID.map { self.generations.currentTerminalGeneration(for: $0) }
+            let sequence = self.eventHub.emit(
+                event: "tab.created",
+                requestID: request.requestID,
+                resource: .init(type: "tab", id: tabID, generation: tabGeneration),
+                payload: AnyEncodable(ControlTabCreatedEventPayload(
+                    parentTabID: request.parentTabID,
+                    workingDirectory: request.workingDirectory,
+                    title: request.title
+                ))
+            )
+            return ControlCreateTabResult(
+                tabID: tabID,
+                tabGeneration: tabGeneration,
+                terminalID: terminalID,
+                terminalGeneration: terminalGeneration,
+                sequence: sequence
+            )
+        }
     }
 
     private func closeTab(from request: ControlHarnessRequest) throws -> ControlTabCloseResult {
-        let controller = try resolveTabController(tabID: request.tabID)
-        let tabID = controller.workspaceID.uuidString
-        let currentGeneration = generations.currentTabGeneration(for: tabID)
-        try generations.assertExpectedGeneration(
-            request.expectedGeneration,
-            resourceType: "tab",
-            resourceID: tabID,
-            currentGeneration: currentGeneration
-        )
-        if request.force != true,
-           let confirmation = closeTabConfirmation(for: controller) {
+        try syncMainActor {
+            let controller = try self.resolveTabController(tabID: request.tabID)
+            let tabID = controller.workspaceID.uuidString
+            let currentGeneration = self.generations.currentTabGeneration(for: tabID)
+            try self.generations.assertExpectedGeneration(
+                request.expectedGeneration,
+                resourceType: "tab",
+                resourceID: tabID,
+                currentGeneration: currentGeneration
+            )
+            if request.force != true,
+               let confirmation = self.closeTabConfirmation(for: controller) {
+                return .init(
+                    tabID: tabID,
+                    generation: currentGeneration,
+                    sequence: self.eventHub.currentSequence(),
+                    closed: false,
+                    requiresConfirmation: true,
+                    confirmationTitle: confirmation.title,
+                    confirmationMessage: confirmation.message
+                )
+            }
+            if request.force == true {
+                controller.closeTabImmediately()
+            } else {
+                controller.closeTab(nil)
+            }
+            let generation = self.generations.advanceTabGeneration(for: tabID)
+            let sequence = self.eventHub.emit(
+                event: "tab.closed",
+                requestID: request.requestID,
+                resource: .init(type: "tab", id: tabID, generation: generation),
+                payload: AnyEncodable(["force": request.force == true])
+            )
             return .init(
                 tabID: tabID,
-                generation: currentGeneration,
-                sequence: eventHub.currentSequence(),
-                closed: false,
-                requiresConfirmation: true,
-                confirmationTitle: confirmation.title,
-                confirmationMessage: confirmation.message
+                generation: generation,
+                sequence: sequence,
+                closed: true,
+                requiresConfirmation: false,
+                confirmationTitle: nil,
+                confirmationMessage: nil
             )
         }
-        if request.force == true {
-            controller.closeTabImmediately()
-        } else {
-            controller.closeTab(nil)
-        }
-        let generation = generations.advanceTabGeneration(for: tabID)
-        let sequence = eventHub.emit(
-            event: "tab.closed",
-            requestID: request.requestID,
-            resource: .init(type: "tab", id: tabID, generation: generation),
-            payload: AnyEncodable(["force": request.force == true])
-        )
-        return .init(
-            tabID: tabID,
-            generation: generation,
-            sequence: sequence,
-            closed: true,
-            requiresConfirmation: false,
-            confirmationTitle: nil,
-            confirmationMessage: nil
-        )
     }
 
     private func renameTab(from request: ControlHarnessRequest) throws -> ControlTabMutationResult {
-        let controller = try resolveTabController(tabID: request.tabID)
-        let tabID = controller.workspaceID.uuidString
-        let currentGeneration = generations.currentTabGeneration(for: tabID)
-        try generations.assertExpectedGeneration(
-            request.expectedGeneration,
-            resourceType: "tab",
-            resourceID: tabID,
-            currentGeneration: currentGeneration
-        )
+        try syncMainActor {
+            let controller = try self.resolveTabController(tabID: request.tabID)
+            let tabID = controller.workspaceID.uuidString
+            let currentGeneration = self.generations.currentTabGeneration(for: tabID)
+            try self.generations.assertExpectedGeneration(
+                request.expectedGeneration,
+                resourceType: "tab",
+                resourceID: tabID,
+                currentGeneration: currentGeneration
+            )
 
-        let normalizedTitle = normalizedTabTitleOverride(request.title)
-        controller.titleOverride = normalizedTitle
+            let normalizedTitle = self.normalizedTabTitleOverride(request.title)
+            controller.titleOverride = normalizedTitle
 
-        let generation = generations.advanceTabGeneration(for: tabID)
-        let sequence = eventHub.emit(
-            event: "tab.updated",
-            requestID: request.requestID,
-            resource: .init(type: "tab", id: tabID, generation: generation),
-            payload: AnyEncodable(ControlTabUpdatedEventPayload(title: normalizedTitle, hasBell: controller.bell))
-        )
+            let generation = self.generations.advanceTabGeneration(for: tabID)
+            let sequence = self.eventHub.emit(
+                event: "tab.updated",
+                requestID: request.requestID,
+                resource: .init(type: "tab", id: tabID, generation: generation),
+                payload: AnyEncodable(ControlTabUpdatedEventPayload(title: normalizedTitle, hasBell: controller.bell))
+            )
 
-        return .init(
-            tabID: tabID,
-            generation: generation,
-            sequence: sequence,
-            title: normalizedTitle,
-            closed: false,
-            requiresConfirmation: false,
-            confirmationTitle: nil,
-            confirmationMessage: nil
-        )
+            return .init(
+                tabID: tabID,
+                generation: generation,
+                sequence: sequence,
+                title: normalizedTitle,
+                closed: false,
+                requiresConfirmation: false,
+                confirmationTitle: nil,
+                confirmationMessage: nil
+            )
+        }
     }
 
     @MainActor
@@ -4186,145 +4392,195 @@ final class ControlHarnessCore {
     }
 
     private func sendText(from request: ControlHarnessRequest) throws -> ControlTerminalMutationResult {
-        guard let text = request.text, !text.isEmpty else {
-            throw ControlHarnessCoreError.invalidArgument("Missing text payload")
+        try syncMainActor {
+            guard let text = request.text, !text.isEmpty else {
+                throw ControlHarnessCoreError.invalidArgument("Missing text payload")
+            }
+            let terminalID = try self.parseTerminalID(request.terminalID)
+            let terminalIDString = terminalID.uuidString
+            let currentGeneration = self.generations.currentTerminalGeneration(for: terminalIDString)
+            try self.generations.assertExpectedGeneration(
+                request.expectedGeneration,
+                resourceType: "terminal",
+                resourceID: terminalIDString,
+                currentGeneration: currentGeneration
+            )
+            guard let appDelegate = self.appDelegate else {
+                throw ControlHarnessCoreError.appUnavailable
+            }
+            guard appDelegate.controlHarnessSendText(text, to: terminalID) else {
+                throw ControlHarnessCoreError.terminalNotFound(terminalID.uuidString)
+            }
+            self.pendingTerminalInputEchoes[terminalIDString, default: ""] += text
+            let generation = self.generations.advanceTerminalGeneration(for: terminalIDString)
+            let sequence = self.eventHub.emit(
+                event: "terminal.input.sent",
+                requestID: request.requestID,
+                resource: .init(type: "terminal", id: terminalIDString, generation: generation),
+                payload: AnyEncodable(["text_length": text.count])
+            )
+            self.sampleStore.removeTerminal(terminalIDString)
+            let writeID = Self.writeID(forSequence: sequence)
+            self.readAfterWriteStore.recordTextWrite(
+                terminalID: terminalIDString,
+                writeID: writeID,
+                sequence: sequence,
+                visibleFrameID: self.readStore.latestFrameID(for: terminalIDString, scope: "visible"),
+                screenFrameID: self.readStore.latestFrameID(for: terminalIDString, scope: "screen")
+            )
+            return .init(
+                terminalID: terminalIDString,
+                generation: generation,
+                sequence: sequence,
+                operation: "send-text",
+                acknowledged: true,
+                writeID: writeID
+            )
         }
-        let terminalID = try parseTerminalID(request.terminalID)
-        let terminalIDString = terminalID.uuidString
-        let currentGeneration = generations.currentTerminalGeneration(for: terminalIDString)
-        try generations.assertExpectedGeneration(
-            request.expectedGeneration,
-            resourceType: "terminal",
-            resourceID: terminalIDString,
-            currentGeneration: currentGeneration
-        )
-        guard let appDelegate else {
-            throw ControlHarnessCoreError.appUnavailable
+    }
+
+    private func pendingTerminalInputEchoTimeout(from request: ControlHarnessRequest) -> TimeInterval {
+        let payloadTimeoutMS = request.payload.flatMap { payload in
+            if let rawTimeout = payload["timeoutMS"] ?? payload["timeout_ms"],
+               let timeoutMS = Int(rawTimeout.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                return timeoutMS
+            }
+            return nil
         }
-        guard appDelegate.controlHarnessSendText(text, to: terminalID) else {
-            throw ControlHarnessCoreError.terminalNotFound(terminalID.uuidString)
-        }
-        let generation = generations.advanceTerminalGeneration(for: terminalIDString)
-        let sequence = eventHub.emit(
-            event: "terminal.input.sent",
-            requestID: request.requestID,
-            resource: .init(type: "terminal", id: terminalIDString, generation: generation),
-            payload: AnyEncodable(["text_length": text.count])
-        )
-        sampleStore.removeTerminal(terminalIDString)
-        let writeID = Self.writeID(forSequence: sequence)
-        readAfterWriteStore.recordTextWrite(
-            terminalID: terminalIDString,
-            writeID: writeID,
-            sequence: sequence,
-            visibleFrameID: readStore.latestFrameID(for: terminalIDString, scope: "visible"),
-            screenFrameID: readStore.latestFrameID(for: terminalIDString, scope: "screen")
-        )
-        return .init(
-            terminalID: terminalIDString,
-            generation: generation,
-            sequence: sequence,
-            operation: "send-text",
-            acknowledged: true,
-            writeID: writeID
-        )
+        let timeoutMS = request.options?.timeoutMS
+            ?? payloadTimeoutMS
+            ?? Self.pendingTerminalInputEchoTimeoutDefaultMS
+        return TimeInterval(max(0, timeoutMS)) / 1000.0
     }
 
     private func sendKey(from request: ControlHarnessRequest) throws -> ControlTerminalMutationResult {
-        guard let terminalKey = request.terminalKey?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased(),
-            !terminalKey.isEmpty else {
-            throw ControlHarnessCoreError.invalidArgument("Missing terminal_key payload")
+        try syncMainActor {
+            guard let terminalKey = request.terminalKey?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased(),
+                !terminalKey.isEmpty else {
+                throw ControlHarnessCoreError.invalidArgument("Missing terminal_key payload")
+            }
+            guard Self.supportedTerminalKeys.contains(terminalKey) else {
+                throw ControlHarnessCoreError.invalidArgument("Unsupported terminal_key: \(terminalKey)")
+            }
+            let terminalID = try self.parseTerminalID(request.terminalID)
+            let terminalIDString = terminalID.uuidString
+            let currentGeneration = self.generations.currentTerminalGeneration(for: terminalIDString)
+            try self.generations.assertExpectedGeneration(
+                request.expectedGeneration,
+                resourceType: "terminal",
+                resourceID: terminalIDString,
+                currentGeneration: currentGeneration
+            )
+            guard let appDelegate = self.appDelegate else {
+                throw ControlHarnessCoreError.appUnavailable
+            }
+            switch terminalKey {
+            case "enter":
+                if let pendingText = self.pendingTerminalInputEchoes[terminalIDString],
+                   pendingText.isEmpty == false {
+                    let timeout = self.pendingTerminalInputEchoTimeout(from: request)
+                    guard appDelegate.controlHarnessAwaitTextEcho(
+                        pendingText,
+                        to: terminalID,
+                        timeout: timeout
+                    ) else {
+                        throw ControlHarnessCoreError.operationFailed(
+                            "Timed out waiting \(Int(timeout * 1000))ms for typed input to echo before sending enter for terminal_id=\(terminalIDString)"
+                        )
+                    }
+                    self.pendingTerminalInputEchoes.removeValue(forKey: terminalIDString)
+                } else {
+                    self.pendingTerminalInputEchoes.removeValue(forKey: terminalIDString)
+                }
+            case "backspace":
+                if var pendingText = self.pendingTerminalInputEchoes[terminalIDString], pendingText.isEmpty == false {
+                    pendingText.removeLast()
+                    self.pendingTerminalInputEchoes[terminalIDString] = pendingText
+                }
+            case "tab":
+                self.pendingTerminalInputEchoes[terminalIDString, default: ""] += "\t"
+            default:
+                self.pendingTerminalInputEchoes.removeValue(forKey: terminalIDString)
+            }
+            guard appDelegate.controlHarnessSendKey(terminalKey, to: terminalID) else {
+                throw ControlHarnessCoreError.terminalNotFound(terminalID.uuidString)
+            }
+            let generation = self.generations.advanceTerminalGeneration(for: terminalIDString)
+            let sequence = self.eventHub.emit(
+                event: "terminal.key.sent",
+                requestID: request.requestID,
+                resource: .init(type: "terminal", id: terminalIDString, generation: generation),
+                payload: AnyEncodable(["terminal_key": terminalKey])
+            )
+            self.sampleStore.removeTerminal(terminalIDString)
+            let writeID = Self.writeID(forSequence: sequence)
+            self.readAfterWriteStore.recordTextWrite(
+                terminalID: terminalIDString,
+                writeID: writeID,
+                sequence: sequence,
+                visibleFrameID: self.readStore.latestFrameID(for: terminalIDString, scope: "visible"),
+                screenFrameID: self.readStore.latestFrameID(for: terminalIDString, scope: "screen")
+            )
+            return .init(
+                terminalID: terminalIDString,
+                generation: generation,
+                sequence: sequence,
+                operation: "send-key",
+                acknowledged: true,
+                writeID: writeID
+            )
         }
-        guard Self.supportedTerminalKeys.contains(terminalKey) else {
-            throw ControlHarnessCoreError.invalidArgument("Unsupported terminal_key: \(terminalKey)")
-        }
-        let terminalID = try parseTerminalID(request.terminalID)
-        let terminalIDString = terminalID.uuidString
-        let currentGeneration = generations.currentTerminalGeneration(for: terminalIDString)
-        try generations.assertExpectedGeneration(
-            request.expectedGeneration,
-            resourceType: "terminal",
-            resourceID: terminalIDString,
-            currentGeneration: currentGeneration
-        )
-        guard let appDelegate else {
-            throw ControlHarnessCoreError.appUnavailable
-        }
-        guard appDelegate.controlHarnessSendKey(terminalKey, to: terminalID) else {
-            throw ControlHarnessCoreError.terminalNotFound(terminalID.uuidString)
-        }
-        let generation = generations.advanceTerminalGeneration(for: terminalIDString)
-        let sequence = eventHub.emit(
-            event: "terminal.key.sent",
-            requestID: request.requestID,
-            resource: .init(type: "terminal", id: terminalIDString, generation: generation),
-            payload: AnyEncodable(["terminal_key": terminalKey])
-        )
-        sampleStore.removeTerminal(terminalIDString)
-        let writeID = Self.writeID(forSequence: sequence)
-        readAfterWriteStore.recordTextWrite(
-            terminalID: terminalIDString,
-            writeID: writeID,
-            sequence: sequence,
-            visibleFrameID: readStore.latestFrameID(for: terminalIDString, scope: "visible"),
-            screenFrameID: readStore.latestFrameID(for: terminalIDString, scope: "screen")
-        )
-        return .init(
-            terminalID: terminalIDString,
-            generation: generation,
-            sequence: sequence,
-            operation: "send-key",
-            acknowledged: true,
-            writeID: writeID
-        )
     }
 
     private func runCommand(from request: ControlHarnessRequest) throws -> ControlTerminalMutationResult {
-        guard let commandText = request.commandText, !commandText.isEmpty else {
-            throw ControlHarnessCoreError.invalidArgument("Missing command_text payload")
+        try syncMainActor {
+            guard let commandText = request.commandText, !commandText.isEmpty else {
+                throw ControlHarnessCoreError.invalidArgument("Missing command_text payload")
+            }
+            let terminalID = try self.parseTerminalID(request.terminalID)
+            let terminalIDString = terminalID.uuidString
+            let currentGeneration = self.generations.currentTerminalGeneration(for: terminalIDString)
+            try self.generations.assertExpectedGeneration(
+                request.expectedGeneration,
+                resourceType: "terminal",
+                resourceID: terminalIDString,
+                currentGeneration: currentGeneration
+            )
+            guard let appDelegate = self.appDelegate else {
+                throw ControlHarnessCoreError.appUnavailable
+            }
+            guard appDelegate.controlHarnessRunCommand(commandText, to: terminalID) else {
+                throw ControlHarnessCoreError.terminalNotFound(terminalID.uuidString)
+            }
+            self.pendingTerminalInputEchoes.removeValue(forKey: terminalIDString)
+            let generation = self.generations.advanceTerminalGeneration(for: terminalIDString)
+            let sequence = self.eventHub.emit(
+                event: "terminal.command.sent",
+                requestID: request.requestID,
+                resource: .init(type: "terminal", id: terminalIDString, generation: generation),
+                payload: AnyEncodable(["command_length": commandText.count])
+            )
+            self.sampleStore.removeTerminal(terminalIDString)
+            let writeID = Self.writeID(forSequence: sequence)
+            self.readAfterWriteStore.recordCommandWrite(
+                terminalID: terminalIDString,
+                writeID: writeID,
+                sequence: sequence,
+                commandText: commandText,
+                visibleFrameID: self.readStore.latestFrameID(for: terminalIDString, scope: "visible"),
+                screenFrameID: self.readStore.latestFrameID(for: terminalIDString, scope: "screen")
+            )
+            return .init(
+                terminalID: terminalIDString,
+                generation: generation,
+                sequence: sequence,
+                operation: "run-command",
+                acknowledged: true,
+                writeID: writeID
+            )
         }
-        let terminalID = try parseTerminalID(request.terminalID)
-        let terminalIDString = terminalID.uuidString
-        let currentGeneration = generations.currentTerminalGeneration(for: terminalIDString)
-        try generations.assertExpectedGeneration(
-            request.expectedGeneration,
-            resourceType: "terminal",
-            resourceID: terminalIDString,
-            currentGeneration: currentGeneration
-        )
-        guard let appDelegate else {
-            throw ControlHarnessCoreError.appUnavailable
-        }
-        guard appDelegate.controlHarnessRunCommand(commandText, to: terminalID) else {
-            throw ControlHarnessCoreError.terminalNotFound(terminalID.uuidString)
-        }
-        let generation = generations.advanceTerminalGeneration(for: terminalIDString)
-        let sequence = eventHub.emit(
-            event: "terminal.command.sent",
-            requestID: request.requestID,
-            resource: .init(type: "terminal", id: terminalIDString, generation: generation),
-            payload: AnyEncodable(["command_length": commandText.count])
-        )
-        sampleStore.removeTerminal(terminalIDString)
-        let writeID = Self.writeID(forSequence: sequence)
-        readAfterWriteStore.recordCommandWrite(
-            terminalID: terminalIDString,
-            writeID: writeID,
-            sequence: sequence,
-            commandText: commandText,
-            visibleFrameID: readStore.latestFrameID(for: terminalIDString, scope: "visible"),
-            screenFrameID: readStore.latestFrameID(for: terminalIDString, scope: "screen")
-        )
-        return .init(
-            terminalID: terminalIDString,
-            generation: generation,
-            sequence: sequence,
-            operation: "run-command",
-            acknowledged: true,
-            writeID: writeID
-        )
     }
 
     private func readTerminal(from request: ControlHarnessRequest) throws -> ControlReadTerminalResult {
@@ -4569,40 +4825,43 @@ final class ControlHarnessCore {
     }
 
     private func closeTerminal(from request: ControlHarnessRequest) throws -> ControlTerminalMutationResult {
-        let terminalID = try parseTerminalID(request.terminalID)
-        let terminalIDString = terminalID.uuidString
-        let currentGeneration = generations.currentTerminalGeneration(for: terminalIDString)
-        try generations.assertExpectedGeneration(
-            request.expectedGeneration,
-            resourceType: "terminal",
-            resourceID: terminalIDString,
-            currentGeneration: currentGeneration
-        )
-        guard let appDelegate else {
-            throw ControlHarnessCoreError.appUnavailable
+        try syncMainActor {
+            let terminalID = try self.parseTerminalID(request.terminalID)
+            let terminalIDString = terminalID.uuidString
+            let currentGeneration = self.generations.currentTerminalGeneration(for: terminalIDString)
+            try self.generations.assertExpectedGeneration(
+                request.expectedGeneration,
+                resourceType: "terminal",
+                resourceID: terminalIDString,
+                currentGeneration: currentGeneration
+            )
+            guard let appDelegate = self.appDelegate else {
+                throw ControlHarnessCoreError.appUnavailable
+            }
+            guard appDelegate.controlHarnessCloseTerminal(terminalID) else {
+                throw ControlHarnessCoreError.terminalNotFound(terminalID.uuidString)
+            }
+            self.pendingTerminalInputEchoes.removeValue(forKey: terminalIDString)
+            self.sampleStore.removeTerminal(terminalIDString)
+            self.readStore.removeTerminal(terminalIDString)
+            self.readAfterWriteStore.removeTerminal(terminalIDString)
+            self.streamStore.removeTerminal(terminalIDString)
+            let generation = self.generations.advanceTerminalGeneration(for: terminalIDString)
+            let sequence = self.eventHub.emit(
+                event: "terminal.closed",
+                requestID: request.requestID,
+                resource: .init(type: "terminal", id: terminalIDString, generation: generation),
+                payload: nil
+            )
+            return .init(
+                terminalID: terminalIDString,
+                generation: generation,
+                sequence: sequence,
+                operation: "close-terminal",
+                acknowledged: true,
+                writeID: nil
+            )
         }
-        guard appDelegate.controlHarnessCloseTerminal(terminalID) else {
-            throw ControlHarnessCoreError.terminalNotFound(terminalID.uuidString)
-        }
-        sampleStore.removeTerminal(terminalIDString)
-        readStore.removeTerminal(terminalIDString)
-        readAfterWriteStore.removeTerminal(terminalIDString)
-        streamStore.removeTerminal(terminalIDString)
-        let generation = generations.advanceTerminalGeneration(for: terminalIDString)
-        let sequence = eventHub.emit(
-            event: "terminal.closed",
-            requestID: request.requestID,
-            resource: .init(type: "terminal", id: terminalIDString, generation: generation),
-            payload: nil
-        )
-        return .init(
-            terminalID: terminalIDString,
-            generation: generation,
-            sequence: sequence,
-            operation: "close-terminal",
-            acknowledged: true,
-            writeID: nil
-        )
     }
 
     private struct TerminalReadResolution {

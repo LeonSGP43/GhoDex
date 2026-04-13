@@ -394,6 +394,7 @@ private struct BrowserCEFDeckView: NSViewRepresentable {
                         ))
                         return
                     }
+                    self.model.markBridgePending(for: pageID)
                     completion(.success(for: request))
                     // Schedule navigation after the IPC reply is released so
                     // reentrant auth/certificate prompts cannot strand the
@@ -402,12 +403,15 @@ private struct BrowserCEFDeckView: NSViewRepresentable {
                         view.loadURLString(url)
                     }
                 case .goBack:
+                    self.model.markBridgePending(for: pageID)
                     view.goBack()
                     completion(.success(for: request))
                 case .goForward:
+                    self.model.markBridgePending(for: pageID)
                     view.goForward()
                     completion(.success(for: request))
                 case .reload:
+                    self.model.markBridgePending(for: pageID)
                     view.reloadPage()
                     completion(.success(for: request))
                 case .cancelDownload:

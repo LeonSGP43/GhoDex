@@ -1183,7 +1183,6 @@ def main() -> int:
                 result["unsubscribe"] = send_request(
                     str(socket_path),
                     "unsubscribeEvents",
-                    browser_tab_id=browser_tab_id,
                     payload={"subscriptionID": subscription_id},
                     timeout=command_timeout,
                 )

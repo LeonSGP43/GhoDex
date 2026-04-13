@@ -2559,21 +2559,23 @@ void GhoDexCEFClient::OnResourceLoadComplete(CefRefPtr<CefBrowser> browser,
       }
 
       clear_pending();
-      [owner notifyRuntimeEventKind:@"authenticationRequest" payload:@{
-        @"requestID": request_id,
-        @"phase": @"resolved",
-        @"originURL": url_string ?: @"",
-        @"host": host_string ?: @"",
-        @"port": IntegerString(port),
-        @"realm": realm_string ?: @"",
-        @"scheme": @"basic",
-        @"isProxy": @"false",
-        @"accepted": BoolString(accepted),
-      }];
+      dispatch_async(dispatch_get_main_queue(), ^{
+        [owner notifyRuntimeEventKind:@"authenticationRequest" payload:@{
+          @"requestID": request_id,
+          @"phase": @"resolved",
+          @"originURL": url_string ?: @"",
+          @"host": host_string ?: @"",
+          @"port": IntegerString(port),
+          @"realm": realm_string ?: @"",
+          @"scheme": @"basic",
+          @"isProxy": @"false",
+          @"accepted": BoolString(accepted),
+        }];
 
-      if (accepted) {
-        [owner loadURLString:url_string];
-      }
+        if (accepted) {
+          [owner loadURLString:url_string];
+        }
+      });
     };
 
     dispatch_after(
@@ -3368,24 +3370,29 @@ bool GhoDexCEFClient::GetAuthCredentials(CefRefPtr<CefBrowser> browser,
 
         if (externally_resolved) {
           BOOL accepted = [resolution_payload[@"accepted"] isEqualToString:@"true"];
-          if (accepted) {
-            retained_callback->Continue(
-                CefString((resolution_payload[@"username"] ?: @"").UTF8String),
-                CefString((resolution_payload[@"password"] ?: @"").UTF8String));
-          } else {
-            retained_callback->Cancel();
-          }
-          [owner notifyRuntimeEventKind:@"authenticationRequest" payload:@{
-            @"requestID": request_id,
-            @"phase": @"resolved",
-            @"originURL": origin ?: @"",
-            @"host": host_string ?: @"",
-            @"port": IntegerString(port),
-            @"realm": realm_string ?: @"",
-            @"scheme": scheme_string ?: @"authentication",
-            @"isProxy": BoolString(isProxy),
-            @"accepted": BoolString(accepted),
-          }];
+          dispatch_async(dispatch_get_main_queue(), ^{
+            if (!retained_callback.get()) {
+              return;
+            }
+            if (accepted) {
+              retained_callback->Continue(
+                  CefString((resolution_payload[@"username"] ?: @"").UTF8String),
+                  CefString((resolution_payload[@"password"] ?: @"").UTF8String));
+            } else {
+              retained_callback->Cancel();
+            }
+            [owner notifyRuntimeEventKind:@"authenticationRequest" payload:@{
+              @"requestID": request_id,
+              @"phase": @"resolved",
+              @"originURL": origin ?: @"",
+              @"host": host_string ?: @"",
+              @"port": IntegerString(port),
+              @"realm": realm_string ?: @"",
+              @"scheme": scheme_string ?: @"authentication",
+              @"isProxy": BoolString(isProxy),
+              @"accepted": BoolString(accepted),
+            }];
+          });
           return;
         }
 
@@ -3495,18 +3502,26 @@ bool GhoDexCEFClient::OnCertificateError(CefRefPtr<CefBrowser> browser,
 
         if (externally_resolved) {
           BOOL accepted = [resolution_payload[@"accepted"] isEqualToString:@"true"];
-          if (accepted) {
-            retained_callback->Continue();
-          } else {
-            retained_callback->Cancel();
-          }
-          [owner notifyRuntimeEventKind:@"certificateWarning" payload:@{
-            @"requestID": request_id,
-            @"phase": @"resolved",
-            @"requestURL": url ?: @"",
-            @"errorCode": error_code,
-            @"accepted": BoolString(accepted),
-          }];
+          // Defer the certificate continuation until after the current control
+          // response unwinds so the resolveCertificate request cannot strand
+          // its own IPC/control acknowledgment.
+          dispatch_async(dispatch_get_main_queue(), ^{
+            if (!retained_callback.get()) {
+              return;
+            }
+            if (accepted) {
+              retained_callback->Continue();
+            } else {
+              retained_callback->Cancel();
+            }
+            [owner notifyRuntimeEventKind:@"certificateWarning" payload:@{
+              @"requestID": request_id,
+              @"phase": @"resolved",
+              @"requestURL": url ?: @"",
+              @"errorCode": error_code,
+              @"accepted": BoolString(accepted),
+            }];
+          });
           return;
         }
 
@@ -3889,6 +3904,9 @@ void GhoDexCEFClient::EmitState(bool isLoading, bool canGoBack, bool canGoForwar
   NSString *url_string = [NSString stringWithUTF8String:current_url.c_str() ?: ""];
   dispatch_async(dispatch_get_main_queue(), ^{
     [owner_ notifyURL:url_string ?: @"" canGoBack:canGoBack canGoForward:canGoForward isLoading:isLoading];
+    if (!isLoading) {
+      [owner_ notifyBridgeReady];
+    }
   });
 }
 

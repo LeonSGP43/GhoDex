@@ -986,6 +986,55 @@ struct AITerminalManagerTests {
         #expect(persistedSchedule.capabilityRequirements == visionSchedule.capabilityRequirements)
     }
 
+    @Test @MainActor func applyConfigurationPreservesCurrentRuntimeStateDuringExternalReload() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+        try "font-size = 14\n".write(to: tempURL, atomically: true, encoding: .utf8)
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        store.saveAgentRuntimeSettings(.init(
+            enabled: true,
+            defaultLeaseDurationSeconds: 30,
+            staleTaskPolicy: .requeueClaimedWork
+        ))
+        let session = try store.registerAgentRuntimeSession(
+            clientKind: .codexTab,
+            terminalID: UUID(),
+            hostWorkspaceID: UUID(),
+            capabilities: ["terminal"]
+        )
+        let task = try store.enqueueAgentRuntimeTask(
+            kind: .terminalCommand,
+            capabilityRequirements: ["terminal"],
+            payload: .init(command: "pwd")
+        )
+        let schedule = try store.enqueueAgentRuntimeSchedule(
+            taskKind: .terminalCommand,
+            capabilityRequirements: ["terminal"],
+            payload: .init(command: "echo scheduled"),
+            startAt: Date().addingTimeInterval(60),
+            recurrence: .init(mode: .once)
+        )
+
+        var externalConfiguration = try AITerminalManagerStore.loadConfiguration(at: tempURL)
+        externalConfiguration.learningSettings.defaultProjectPath = "/tmp/reloaded-project"
+        externalConfiguration.agentRuntimeSessions = []
+        externalConfiguration.agentRuntimeTasks = []
+        externalConfiguration.agentRuntimeSchedules = []
+
+        store.applyConfiguration(externalConfiguration, preserveRuntimeState: true)
+
+        #expect(store.learningSettings.defaultProjectPath == "/tmp/reloaded-project")
+        #expect(store.agentRuntimeSessions.contains(where: { $0.id == session.id }))
+        #expect(store.agentRuntimeTasks.contains(where: { $0.id == task.id }))
+        #expect(store.agentRuntimeSchedules.contains(where: { $0.id == schedule.id }))
+    }
+
     @Test @MainActor func storeMaterializesOneShotAgentRuntimeScheduleIntoQueuedTask() throws {
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)

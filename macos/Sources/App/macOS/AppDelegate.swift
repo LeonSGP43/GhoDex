@@ -36,8 +36,18 @@ class AppDelegate: NSObject,
                     NSApplicationDelegate,
                     UNUserNotificationCenterDelegate,
                     GhosttyAppDelegate {
+    struct RelaunchProcessPlan: Equatable {
+        let executableURL: URL
+        let arguments: [String]
+        let environment: [String: String]?
+        let currentDirectoryURL: URL?
+    }
+
     private static let skipInitialTerminalWindowEnvKey = "GHODEX_SKIP_INITIAL_TERMINAL_WINDOW"
     private static let isRunningUnderTests = isRunningTests()
+    private static let controlHarnessANSIEscapeRegex = try! NSRegularExpression( // swiftlint:disable:this force_try
+        pattern: "\u{001B}\\[[0-9;?]*[ -/]*[@-~]"
+    )
     // The application logger. We should probably move this at some point to a dedicated
     // class/struct but for now it lives here! 🤷‍♂️
     static let logger = Logger(
@@ -195,7 +205,8 @@ class AppDelegate: NSObject,
         }
 
         let store = AITerminalManagerStore(
-            appDelegateProvider: { [weak self] in self }
+            appDelegateProvider: { [weak self] in self },
+            configurationURL: Self.browserSettingsConfigURL()
         )
         _aiTerminalManagerStore = store
         return store
@@ -250,12 +261,12 @@ class AppDelegate: NSObject,
     private func controlHarnessReply(
         _ request: ControlHarnessRequest,
         socketPath: String
-    ) -> ControlHarnessServiceReply {
+    ) async -> ControlHarnessServiceReply {
         let normalizedRequest = request.normalized()
         if normalizedRequest.command == "events.subscribe" || normalizedRequest.command == "terminal.stream.open" {
             return .subscription(controlHarnessCore.handleSubscription(normalizedRequest, socketPath: socketPath))
         }
-        return .single(controlHarnessCore.handle(normalizedRequest, socketPath: socketPath))
+        return .single(await controlHarnessCore.handleAsync(normalizedRequest, socketPath: socketPath))
     }
 
     @MainActor
@@ -284,11 +295,17 @@ class AppDelegate: NSObject,
     func controlHarnessGatewayAccessDecision(
         _ request: ControlHarnessRequest
     ) -> ControlHarnessGateway.RequestAuthorization {
+        let requestedCommand = request.command
         let request = request.normalized()
-        switch request.command {
-        case "handshake", "snapshot", "read-terminal", "events.subscribe":
-            return .allow
 
+        switch request.commandKind {
+        case .query, .subscription:
+            return .allow
+        case .mutation:
+            break
+        }
+
+        switch request.command {
         case "send-text", "send-key", "run-command", "close-terminal":
             guard let rawTerminalID = request.terminalID,
                   let terminalID = UUID(uuidString: rawTerminalID) else {
@@ -307,25 +324,25 @@ class AppDelegate: NSObject,
             case .managedWaitingApproval:
                 return .deny(
                     errorCode: "approval_required",
-                    errorMessage: "Remote \(request.command) requires desktop approval for terminal_id=\(rawTerminalID)"
+                    errorMessage: "Remote \(requestedCommand) requires desktop approval for terminal_id=\(rawTerminalID)"
                 )
             case .manual:
                 return .deny(
                     errorCode: "remote_policy_blocked",
-                    errorMessage: "Remote \(request.command) is disabled for terminal state \(managedState.rawValue)"
+                    errorMessage: "Remote \(requestedCommand) is disabled for terminal state \(managedState.rawValue)"
                 )
             case .managedPaused, .managedCompleted, .managedFailed:
                 return .deny(
                     errorCode: "remote_policy_blocked",
-                    errorMessage: "Remote \(request.command) is disabled for terminal state \(managedState.rawValue)"
+                    errorMessage: "Remote \(requestedCommand) is disabled for terminal state \(managedState.rawValue)"
                 )
             }
 
-        case "new-tab", "close-tab", "rename-tab":
-            return .allow
-
         default:
-            return .allow
+            return .deny(
+                errorCode: "remote_policy_blocked",
+                errorMessage: "Remote mutation command \(requestedCommand) is disabled over the control-harness gateway"
+            )
         }
     }
 
@@ -341,7 +358,7 @@ class AppDelegate: NSObject,
                     errorMessage: ControlHarnessCoreError.appUnavailable.localizedDescription
                 ))
             }
-            return self.controlHarnessReply(request, socketPath: socketPath)
+            return await self.controlHarnessReply(request, socketPath: socketPath)
         }
     )
 
@@ -368,7 +385,7 @@ class AppDelegate: NSObject,
                     errorMessage: ControlHarnessCoreError.appUnavailable.localizedDescription
                 ))
             }
-            return self.controlHarnessReply(request, socketPath: socketPath)
+            return await self.controlHarnessReply(request, socketPath: socketPath)
         },
         requestAuthorizer: { [weak self] request in
             guard let self else {
@@ -671,6 +688,13 @@ class AppDelegate: NSObject,
             )
         }
 
+        if let pendingTerminateReason, pendingTerminateRequestedBy == "relaunch" {
+            return acceptTerminate(
+                reason: pendingTerminateReason,
+                requestedBy: "relaunch"
+            )
+        }
+
         let windows = NSApplication.shared.windows
         if windows.isEmpty {
             return acceptTerminate(
@@ -786,16 +810,65 @@ class AppDelegate: NSObject,
 
     @MainActor
     func relaunchApplication() {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = ["-n", Bundle.main.bundlePath]
+        let relaunchPlan = Self.makeRelaunchProcessPlan(
+            executableURL: Bundle.main.executableURL,
+            bundlePath: Bundle.main.bundlePath,
+            arguments: ProcessInfo.processInfo.arguments,
+            environment: ProcessInfo.processInfo.environment,
+            currentDirectoryPath: FileManager.default.currentDirectoryPath
+        )
+        DispatchQueue.main.async {
+            let process = Process()
+            process.executableURL = relaunchPlan.executableURL
+            process.arguments = relaunchPlan.arguments
+            process.environment = relaunchPlan.environment
+            process.currentDirectoryURL = relaunchPlan.currentDirectoryURL
 
-        do {
-            try process.run()
-            NSApp.terminate(nil)
-        } catch {
-            Self.logger.error("Failed to relaunch GhoDex: \(error.localizedDescription)")
+            do {
+                try process.run()
+                self.pendingTerminateReason = "app_relaunch"
+                self.pendingTerminateRequestedBy = "relaunch"
+                self.pendingTerminateSignal = nil
+                self.signalTerminationRequested = false
+                NSApp.terminate(nil)
+            } catch {
+                Self.logger.error("Failed to relaunch GhoDex: \(error.localizedDescription)")
+            }
         }
+    }
+
+    static func makeRelaunchProcessPlan(
+        executableURL: URL?,
+        bundlePath: String,
+        arguments: [String],
+        environment: [String: String],
+        currentDirectoryPath: String
+    ) -> RelaunchProcessPlan {
+        if let executableURL {
+            let sanitizedArguments = arguments.dropFirst().filter { argument in
+                !argument.hasPrefix("-psn_")
+            }
+            let currentDirectoryURL: URL?
+            let trimmedPath = currentDirectoryPath.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedPath.isEmpty {
+                currentDirectoryURL = nil
+            } else {
+                currentDirectoryURL = URL(fileURLWithPath: trimmedPath, isDirectory: true)
+            }
+            return .init(
+                executableURL: executableURL,
+                arguments: Array(sanitizedArguments),
+                environment: environment,
+                currentDirectoryURL: currentDirectoryURL
+            )
+        }
+
+        return .init(
+            executableURL: URL(fileURLWithPath: "/usr/bin/open"),
+            arguments: ["-n", bundlePath],
+            environment: nil,
+            currentDirectoryURL: nil
+        )
     }
 
     /// This is called when the application is already open and someone double-clicks the icon
@@ -2435,14 +2508,52 @@ class AppDelegate: NSObject,
     }
 
     @MainActor
-    func controlHarnessCloseTerminal(_ terminalID: UUID) -> Bool {
-        guard let surface = findSurface(forUUID: terminalID),
-              let nativeSurface = surface.surface else {
+    func controlHarnessAwaitTextEcho(_ text: String, to terminalID: UUID, timeout: TimeInterval = 0.35) -> Bool {
+        guard let surface = findSurface(forUUID: terminalID) else {
             return false
         }
 
-        ghostty.requestClose(surface: nativeSurface)
+        let expected = Self.normalizedControlHarnessEchoText(text)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard expected.isEmpty == false else {
+            return true
+        }
+
+        let deadline = Date().addingTimeInterval(max(0.01, timeout))
+        repeat {
+            let snapshot = surface.controlHarnessScreenText(refresh: true).content
+            let normalizedSnapshot = Self.normalizedControlHarnessEchoText(snapshot)
+            if normalizedSnapshot.contains(expected) {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        } while Date() < deadline
+
+        return false
+    }
+
+    @MainActor
+    func controlHarnessCloseTerminal(_ terminalID: UUID) -> Bool {
+        guard let surface = findSurface(forUUID: terminalID),
+              let controller = surface.window?.windowController as? BaseTerminalController else {
+            return false
+        }
+
+        // Harness callers are non-interactive, so this path must never block on
+        // the normal confirm-close sheet for a live process.
+        controller.closeSurface(surface, withConfirmation: false)
         return true
+    }
+
+    private static func normalizedControlHarnessEchoText(_ text: String) -> String {
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        let withoutANSI = controlHarnessANSIEscapeRegex.stringByReplacingMatches(
+            in: text,
+            options: [],
+            range: range,
+            withTemplate: ""
+        )
+        return withoutANSI.replacingOccurrences(of: "\r", with: "\n")
     }
 
     // MARK: - Dock Menu

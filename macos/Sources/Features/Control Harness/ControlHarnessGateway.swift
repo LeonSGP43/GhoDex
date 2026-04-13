@@ -328,7 +328,7 @@ final class ControlHarnessGateway {
 
     private let bundleID: String
     private let authManager: ControlHarnessAuth?
-    private let requestHandler: (@MainActor (ControlHarnessRequest, String) -> ControlHarnessServiceReply)?
+    private let requestHandler: (@MainActor (ControlHarnessRequest, String) async -> ControlHarnessServiceReply)?
     private let requestAuthorizer: (@MainActor (ControlHarnessRequest) -> RequestAuthorization)?
     private var rateLimiter: ControlHarnessGatewayRateLimiter
     private var sessionRegistry: ControlHarnessGatewaySessionRegistry
@@ -374,7 +374,7 @@ final class ControlHarnessGateway {
         bundleID: String,
         configuration: Configuration = .init(),
         authManager: ControlHarnessAuth? = nil,
-        requestHandler: (@MainActor (ControlHarnessRequest, String) -> ControlHarnessServiceReply)? = nil,
+        requestHandler: (@MainActor (ControlHarnessRequest, String) async -> ControlHarnessServiceReply)? = nil,
         requestAuthorizer: (@MainActor (ControlHarnessRequest) -> RequestAuthorization)? = nil,
         performanceMonitor: ControlHarnessPerformanceMonitor? = nil
     ) {
@@ -2358,9 +2358,13 @@ final class ControlHarnessGateway {
                 errorMessage: "The control harness gateway has no request handler"
             ))
         }
-        let reply = syncMainActor { [self] in
-            requestHandler(request, listenerPathDescription())
+        let semaphore = DispatchSemaphore(value: 0)
+        var reply: ControlHarnessServiceReply?
+        Task { @MainActor in
+            reply = await requestHandler(request, listenerPathDescription())
+            semaphore.signal()
         }
+        semaphore.wait()
         return reply ?? .single(ControlHarnessResponse(
             requestID: request.requestID,
             status: "error",

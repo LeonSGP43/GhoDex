@@ -6,8 +6,8 @@ Control Harness terminal V2 live acceptance harness.
 This harness launches an isolated GhoDex.app, discovers the live control
 harness socket, and proves the terminal V2 surface works against a real app:
 
-- `terminal.snapshot.v2` returns ANSI snapshot content
-- `terminal.semantic.v2` returns exact text plus logical lines
+- `terminal.snapshot` returns ANSI snapshot content
+- `terminal.semantic` returns exact text plus logical lines
 - `terminal.stream.open` returns stream metadata and a seed replay chunk
 - `terminal.stream.ack` succeeds for the opened stream
 - a live terminal write produces a streamed `terminal_chunk` record
@@ -105,17 +105,22 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def recv_line(sock: socket.socket) -> str:
-    data = b""
-    while b"\n" not in data:
-        chunk = sock.recv(65536)
-        if not chunk:
-            break
-        data += chunk
-    if not data:
-        raise RuntimeError("socket closed before a line was received")
-    line, _, _ = data.partition(b"\n")
-    return line.decode().strip()
+class SocketLineReader:
+    def __init__(self, sock: socket.socket) -> None:
+        self.sock = sock
+        self.buffer = b""
+
+    def recv_line(self) -> str:
+        while b"\n" not in self.buffer:
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                break
+            self.buffer += chunk
+        if not self.buffer:
+            raise RuntimeError("socket closed before a line was received")
+        line, sep, remainder = self.buffer.partition(b"\n")
+        self.buffer = remainder if sep else b""
+        return line.decode().strip()
 
 
 def recv_until_close(sock: socket.socket) -> str:
@@ -141,18 +146,19 @@ def send_single_request(socket_path: str, body: dict, *, timeout: float) -> dict
     return json.loads(response_text)
 
 
-def open_subscription(socket_path: str, body: dict, *, timeout: float) -> tuple[socket.socket, dict]:
+def open_subscription(socket_path: str, body: dict, *, timeout: float) -> tuple[SocketLineReader, dict]:
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     client.settimeout(timeout)
     client.connect(socket_path)
     client.sendall((json.dumps(body) + "\n").encode())
     client.shutdown(socket.SHUT_WR)
-    ack = json.loads(recv_line(client))
-    return client, ack
+    reader = SocketLineReader(client)
+    ack = json.loads(reader.recv_line())
+    return reader, ack
 
 
 def wait_for_stream_chunk(
-    client: socket.socket,
+    reader: SocketLineReader,
     *,
     timeout_ms: int,
     predicate,
@@ -161,9 +167,9 @@ def wait_for_stream_chunk(
     observed: list[dict] = []
     while time.monotonic() < deadline:
         remaining = max(0.1, deadline - time.monotonic())
-        client.settimeout(remaining)
+        reader.sock.settimeout(remaining)
         try:
-            line = recv_line(client)
+            line = reader.recv_line()
         except TimeoutError:
             continue
         except socket.timeout:
@@ -274,6 +280,43 @@ def wait_for_harness_socket(pid: int, *, timeout_ms: int) -> str:
     )
 
 
+def wait_for_expected_target_pid(
+    socket_path: str,
+    *,
+    expected_pid: int,
+    timeout_ms: int,
+    request_timeout: float,
+) -> dict:
+    deadline = time.monotonic() + (timeout_ms / 1000.0)
+    last_response: dict | None = None
+    last_error: str | None = None
+    while time.monotonic() < deadline:
+        try:
+            response = send_single_request(
+                socket_path,
+                {
+                    "request_id": f"req-{uuid.uuid4().hex[:12]}",
+                    "command": "system.target.resolve",
+                },
+                timeout=request_timeout,
+            )
+        except (OSError, TimeoutError, json.JSONDecodeError) as error:
+            last_error = f"{type(error).__name__}: {error}"
+            time.sleep(0.25)
+            continue
+        last_response = response
+        if int(response.get("result", {}).get("instance", {}).get("process_id") or -1) == expected_pid:
+            return response
+        time.sleep(0.25)
+
+    raise RuntimeError(
+        "Timed out waiting for the launched app to own the harness socket. "
+        f"expected_pid={expected_pid} "
+        f"last_response={json.dumps(last_response or {}, sort_keys=True)} "
+        f"last_error={last_error or 'none'}"
+    )
+
+
 def run_control_command(app_bundle: Path, socket_path: str, *control_args: str) -> dict:
     executable = app_bundle / "Contents" / "MacOS" / "GhoDex"
     completed = subprocess.run(
@@ -350,7 +393,7 @@ def run_acceptance(args: argparse.Namespace) -> dict:
     log_path = session_root / "app.log"
 
     proc: subprocess.Popen[str] | None = None
-    stream_client: socket.socket | None = None
+    stream_client: SocketLineReader | None = None
     result = {
         "app": str(app_bundle),
         "runtime_root": str(runtime_root),
@@ -371,6 +414,12 @@ def run_acceptance(args: argparse.Namespace) -> dict:
 
         socket_path = wait_for_harness_socket(proc.pid, timeout_ms=args.startup_timeout_ms)
         result["socket_path"] = socket_path
+        result["target"] = wait_for_expected_target_pid(
+            socket_path,
+            expected_pid=proc.pid,
+            timeout_ms=args.startup_timeout_ms,
+            request_timeout=args.request_timeout,
+        )
 
         terminal_id, initial_snapshot = wait_for_primary_terminal(
             app_bundle,
@@ -418,7 +467,7 @@ def run_acceptance(args: argparse.Namespace) -> dict:
 
         snapshot_request = {
             "request_id": f"req-{uuid.uuid4().hex[:12]}",
-            "command": "terminal.snapshot.v2",
+            "command": "terminal.snapshot",
             "terminal_id": terminal_id,
             "scope": "screen",
             "mode": "snapshot",
@@ -431,15 +480,15 @@ def run_acceptance(args: argparse.Namespace) -> dict:
         snapshot_result = snapshot_response.get("result") or {}
         if snapshot_response.get("status") != "ok":
             raise RuntimeError(
-                f"terminal.snapshot.v2 failed: {json.dumps(snapshot_response, sort_keys=True)}"
+                f"terminal.snapshot failed: {json.dumps(snapshot_response, sort_keys=True)}"
             )
         if snapshot_result.get("snapshot_format") != "ansi_text":
             raise RuntimeError(
-                f"terminal.snapshot.v2 returned unexpected format: {json.dumps(snapshot_response, sort_keys=True)}"
+                f"terminal.snapshot returned unexpected format: {json.dumps(snapshot_response, sort_keys=True)}"
             )
         if snapshot_marker not in (snapshot_result.get("content") or ""):
             raise RuntimeError(
-                "terminal.snapshot.v2 content did not include snapshot marker. "
+                "terminal.snapshot content did not include snapshot marker. "
                 f"Response: {json.dumps(snapshot_response, sort_keys=True)}"
             )
         result["terminal_snapshot_v2"] = snapshot_response
@@ -464,7 +513,7 @@ def run_acceptance(args: argparse.Namespace) -> dict:
 
         semantic_request = {
             "request_id": f"req-{uuid.uuid4().hex[:12]}",
-            "command": "terminal.semantic.v2",
+            "command": "terminal.semantic",
             "terminal_id": terminal_id,
             "scope": "screen",
             "mode": "snapshot",
@@ -478,16 +527,16 @@ def run_acceptance(args: argparse.Namespace) -> dict:
         logical_lines = semantic_result.get("logical_lines") or []
         if semantic_response.get("status") != "ok":
             raise RuntimeError(
-                f"terminal.semantic.v2 failed: {json.dumps(semantic_response, sort_keys=True)}"
+                f"terminal.semantic failed: {json.dumps(semantic_response, sort_keys=True)}"
             )
         if semantic_marker not in (semantic_result.get("exact_text") or ""):
             raise RuntimeError(
-                "terminal.semantic.v2 exact_text did not include semantic marker. "
+                "terminal.semantic exact_text did not include semantic marker. "
                 f"Response: {json.dumps(semantic_response, sort_keys=True)}"
             )
         if not any(semantic_marker in line for line in logical_lines):
             raise RuntimeError(
-                "terminal.semantic.v2 logical_lines did not include semantic marker. "
+                "terminal.semantic logical_lines did not include semantic marker. "
                 f"Response: {json.dumps(semantic_response, sort_keys=True)}"
             )
         result["terminal_semantic_v2"] = semantic_response
@@ -571,7 +620,7 @@ def run_acceptance(args: argparse.Namespace) -> dict:
     finally:
         if stream_client is not None:
             try:
-                stream_client.close()
+                stream_client.sock.close()
             except OSError:
                 pass
         if proc is not None:

@@ -290,6 +290,21 @@ final class ScriptBrowserTab: NSObject {
         }
     }
 
+    fileprivate func listFramesAsync(pageID: UUID? = nil) async -> Result<String, BrowserControlError> {
+        let timeout = Self.externalCommandTimeout()
+
+        switch await waitForPageBridge(pageID: pageID, timeout: timeout) {
+        case .success:
+            break
+        case let .failure(error):
+            return .failure(error)
+        }
+
+        return await awaitControlResult(timeout: timeout) { completion in
+            issueListFrames(pageID: pageID, completion: completion)
+        }
+    }
+
     fileprivate func runExternalDOMCommand(
         _ command: BrowserControlCommandKind,
         payload: [String: String],
@@ -334,6 +349,46 @@ final class ScriptBrowserTab: NSObject {
             return .failure(error)
         }
 
+        return await awaitControlResult(timeout: timeout) { completion in
+            issueExternalDOMCommand(
+                command,
+                payload: payload,
+                pageID: pageID,
+                frameName: frameName,
+                timeoutMS: timeoutMS,
+                completion: completion
+            )
+        }
+    }
+
+    fileprivate func runExternalPromptResolutionCommand(
+        _ command: BrowserControlCommandKind,
+        payload: [String: String],
+        pageID: UUID? = nil,
+        frameName: String? = nil,
+        timeoutMS: Int? = nil
+    ) -> Result<String, BrowserControlError> {
+        let timeout = Self.externalCommandTimeout(timeoutMS: timeoutMS)
+        return awaitControlResultSynchronously(timeout: timeout) { completion in
+            issueExternalDOMCommand(
+                command,
+                payload: payload,
+                pageID: pageID,
+                frameName: frameName,
+                timeoutMS: timeoutMS,
+                completion: completion
+            )
+        }
+    }
+
+    fileprivate func runExternalPromptResolutionCommandAsync(
+        _ command: BrowserControlCommandKind,
+        payload: [String: String],
+        pageID: UUID? = nil,
+        frameName: String? = nil,
+        timeoutMS: Int? = nil
+    ) async -> Result<String, BrowserControlError> {
+        let timeout = Self.externalCommandTimeout(timeoutMS: timeoutMS)
         return await awaitControlResult(timeout: timeout) { completion in
             issueExternalDOMCommand(
                 command,
@@ -1054,7 +1109,61 @@ extension ScriptBrowserTab {
             return .failure(for: request, error: .invalidRequest("The runtime prompt resolution payload is invalid."))
         }
 
-        switch target.browserTab.runExternalDOMCommand(
+        switch target.browserTab.runExternalPromptResolutionCommand(
+            command,
+            payload: resolutionRequest.controlPayload,
+            pageID: target.page.id,
+            frameName: target.frameName,
+            timeoutMS: nil
+        ) {
+        case .success:
+            do {
+                return .success(
+                    for: request,
+                    resultJSON: try jsonString(
+                        from: BrowserExternalRuntimeResolutionAck(
+                            requestID: resolutionRequest.requestID,
+                            kind: resolutionRequest.kind,
+                            resolved: true
+                        )
+                    )
+                )
+            } catch {
+                return .failure(
+                    for: request,
+                    error: .internalFailure("The runtime prompt resolution acknowledgment could not be serialized as JSON.")
+                )
+            }
+        case let .failure(error):
+            return .failure(for: request, error: error.externalCommandError)
+        }
+    }
+
+    private static func routeExternalRuntimePromptResolutionCommandAsync(
+        _ request: BrowserExternalCommandRequest,
+        command: BrowserControlCommandKind
+    ) async -> BrowserExternalCommandResponse {
+        let target: ResolvedExternalPageTarget
+        switch resolvePageTarget(for: request) {
+        case let .success(resolved):
+            target = resolved
+        case let .failure(error):
+            return .failure(for: request, error: error)
+        }
+
+        let resolutionRequest: BrowserRuntimePromptResolutionRequest
+        do {
+            resolutionRequest = try BrowserRuntimePromptResolutionRequest.from(
+                command: request.command,
+                payload: request.payload
+            )
+        } catch let error as BrowserExternalCommandError {
+            return .failure(for: request, error: error)
+        } catch {
+            return .failure(for: request, error: .invalidRequest("The runtime prompt resolution payload is invalid."))
+        }
+
+        switch await target.browserTab.runExternalPromptResolutionCommandAsync(
             command,
             payload: resolutionRequest.controlPayload,
             pageID: target.page.id,
@@ -1114,6 +1223,65 @@ extension ScriptBrowserTab {
         }
 
         switch target.browserTab.runExternalDOMCommand(
+            command,
+            payload: controlRequest.controlPayload,
+            pageID: target.page.id,
+            frameName: target.frameName,
+            timeoutMS: nil
+        ) {
+        case .success:
+            do {
+                return .success(
+                    for: request,
+                    resultJSON: try jsonString(
+                        from: BrowserExternalDownloadControlAck(
+                            downloadID: controlRequest.downloadID,
+                            accepted: true,
+                            operation: controlRequest.operation
+                        )
+                    )
+                )
+            } catch {
+                return .failure(
+                    for: request,
+                    error: .internalFailure("The download control acknowledgment could not be serialized as JSON.")
+                )
+            }
+        case let .failure(error):
+            return .failure(for: request, error: error.externalCommandError)
+        }
+    }
+
+    private static func routeExternalDownloadControlCommandAsync(
+        _ request: BrowserExternalCommandRequest,
+        command: BrowserControlCommandKind
+    ) async -> BrowserExternalCommandResponse {
+        let target: ResolvedExternalPageTarget
+        switch resolvePageTarget(for: request) {
+        case let .success(resolved):
+            target = resolved
+        case let .failure(error):
+            return .failure(for: request, error: error)
+        }
+
+        let controlRequest: BrowserDownloadControlRequest
+        do {
+            switch request.command {
+            case .cancelDownload:
+                controlRequest = try BrowserDownloadControlRequest.cancel(from: request.payload)
+            default:
+                return .failure(
+                    for: request,
+                    error: .invalidRequest("The \(request.command.rawValue) command is not a download control command.")
+                )
+            }
+        } catch let error as BrowserExternalCommandError {
+            return .failure(for: request, error: error)
+        } catch {
+            return .failure(for: request, error: .invalidRequest("The download control payload is invalid."))
+        }
+
+        switch await target.browserTab.runExternalDOMCommandAsync(
             command,
             payload: controlRequest.controlPayload,
             pageID: target.page.id,
@@ -1218,8 +1386,23 @@ extension ScriptBrowserTab {
         }
 
         switch request.command {
-        case .listPages, .getActivePage, .activatePage, .listFrames:
+        case .listPages, .getActivePage, .activatePage:
             return routeExternalCommand(request)
+        case .listFrames:
+            let target: ResolvedExternalPageTarget
+            switch resolvePageTarget(for: request) {
+            case let .success(resolved):
+                target = resolved
+            case let .failure(error):
+                return .failure(for: request, error: error)
+            }
+
+            switch await target.browserTab.listFramesAsync(pageID: target.page.id) {
+            case let .success(resultJSON):
+                return .success(for: request, resultJSON: resultJSON)
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
         case .newPageInContext:
             guard let browserTab = browserTab(for: request) else {
                 return .failure(for: request, error: .invalidRequest("The browserContextID/browserTabID does not resolve to a live Browser context."))
@@ -1227,7 +1410,12 @@ extension ScriptBrowserTab {
 
             switch browserTab.newPage(initialURL: request.payload["url"]) {
             case let .success(summary):
-                browserTab.scheduleExternalControlStartup()
+                switch await browserTab.waitForActivePageBridge(timeout: Self.externalCommandTimeout()) {
+                case .success:
+                    break
+                case let .failure(error):
+                    return .failure(for: request, error: error.externalCommandError)
+                }
                 do {
                     return .success(for: request, resultJSON: try jsonString(from: summary))
                 } catch {
@@ -1324,7 +1512,12 @@ extension ScriptBrowserTab {
                 contextPolicy: contextPolicy
             )
             let browserTab = ScriptBrowserTab(controller: controller)
-            browserTab.scheduleExternalControlStartup()
+            switch await browserTab.waitForActivePageBridge(timeout: Self.externalCommandTimeout()) {
+            case .success:
+                break
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
 
             do {
                 return .success(for: request, resultJSON: try jsonString(from: browserTab.contextSummary))
@@ -1355,6 +1548,39 @@ extension ScriptBrowserTab {
                 }
             case let .failure(error):
                 return .failure(for: request, error: error.externalCommandError)
+            }
+        case .goBack:
+            switch await routeExternalDOMCommandAsync(request, command: .goBack) {
+            case let response where response.ok:
+                do {
+                    return .success(for: request, resultJSON: try jsonString(from: BrowserExternalMutationAck(accepted: true, operation: "goBack")))
+                } catch {
+                    return .failure(for: request, error: .internalFailure("The goBack acknowledgment could not be serialized as JSON."))
+                }
+            case let response:
+                return response
+            }
+        case .goForward:
+            switch await routeExternalDOMCommandAsync(request, command: .goForward) {
+            case let response where response.ok:
+                do {
+                    return .success(for: request, resultJSON: try jsonString(from: BrowserExternalMutationAck(accepted: true, operation: "goForward")))
+                } catch {
+                    return .failure(for: request, error: .internalFailure("The goForward acknowledgment could not be serialized as JSON."))
+                }
+            case let response:
+                return response
+            }
+        case .reload:
+            switch await routeExternalDOMCommandAsync(request, command: .reload) {
+            case let response where response.ok:
+                do {
+                    return .success(for: request, resultJSON: try jsonString(from: BrowserExternalMutationAck(accepted: true, operation: "reload")))
+                } catch {
+                    return .failure(for: request, error: .internalFailure("The reload acknowledgment could not be serialized as JSON."))
+                }
+            case let response:
+                return response
             }
         case .getCookies:
             let target: ResolvedExternalPageTarget
@@ -1458,6 +1684,16 @@ extension ScriptBrowserTab {
             case let .failure(error):
                 return .failure(for: request, error: error.externalCommandError)
             }
+        case .resolveDialog:
+            return await routeExternalRuntimePromptResolutionCommandAsync(request, command: .resolveDialog)
+        case .resolvePermission:
+            return await routeExternalRuntimePromptResolutionCommandAsync(request, command: .resolvePermission)
+        case .resolveAuth:
+            return await routeExternalRuntimePromptResolutionCommandAsync(request, command: .resolveAuth)
+        case .resolveCertificate:
+            return await routeExternalRuntimePromptResolutionCommandAsync(request, command: .resolveCertificate)
+        case .cancelDownload:
+            return await routeExternalDownloadControlCommandAsync(request, command: .cancelDownload)
         default:
             return routeExternalCommand(request)
         }
@@ -1539,7 +1775,12 @@ extension ScriptBrowserTab {
                 contextPolicy: contextPolicy
             )
             let browserTab = ScriptBrowserTab(controller: controller)
-            browserTab.scheduleExternalControlStartup()
+            switch browserTab.waitForActivePageBridgeSynchronously(timeout: Self.externalCommandTimeout()) {
+            case .success:
+                break
+            case let .failure(error):
+                return .failure(for: request, error: error.externalCommandError)
+            }
 
             do {
                 return .success(for: request, resultJSON: try jsonString(from: browserTab.contextSummary))
@@ -1569,7 +1810,12 @@ extension ScriptBrowserTab {
 
             switch browserTab.newPage(initialURL: request.payload["url"]) {
             case let .success(summary):
-                browserTab.scheduleExternalControlStartup()
+                switch browserTab.waitForActivePageBridgeSynchronously(timeout: Self.externalCommandTimeout()) {
+                case .success:
+                    break
+                case let .failure(error):
+                    return .failure(for: request, error: error.externalCommandError)
+                }
                 do {
                     return .success(for: request, resultJSON: try jsonString(from: summary))
                 } catch {
