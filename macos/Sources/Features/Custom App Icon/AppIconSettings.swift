@@ -76,12 +76,20 @@ struct AppIconSettings: Equatable {
         URL(fileURLWithPath: sanitized.customIconPath, isDirectory: false)
     }
 
-    var customIconImage: NSImage? {
+    var rawCustomIconImage: NSImage? {
         NSImage(contentsOf: customIconURL)
     }
 
+    var customIconImage: NSImage? {
+        rawCustomIconImage?.renderedAppIconCanvas()
+    }
+
+    var customIconPNGData: Data? {
+        customIconImage?.pngData()
+    }
+
     var isCustomIconValid: Bool {
-        customIconImage != nil
+        rawCustomIconImage != nil && customIconImage != nil
     }
 
     var customStyleIcon: ColorizedGhosttyIcon {

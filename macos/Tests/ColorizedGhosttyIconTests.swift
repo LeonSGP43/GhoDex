@@ -15,6 +15,20 @@ struct ColorizedGhosttyIconTests {
         .init(screenColors: screenColors, ghostColor: ghostColor, frame: frame)
     }
 
+    private func makeImage(size: NSSize, color: NSColor) -> NSImage {
+        let image = NSImage(size: size)
+        image.lockFocus()
+        color.setFill()
+        NSRect(origin: .zero, size: size).fill()
+        image.unlockFocus()
+        return image
+    }
+
+    private func bitmapRep(for image: NSImage) -> NSBitmapImageRep? {
+        guard let tiffData = image.tiffRepresentation else { return nil }
+        return NSBitmapImageRep(data: tiffData)
+    }
+
     // MARK: - Codable
 
     @Test func codableRoundTripPreservesIcon() throws {
@@ -108,6 +122,41 @@ struct ColorizedGhosttyIconTests {
         #expect(decoded.screenColors.compactMap(\.hexString) == ["#112233", "#AABBCC"])
     }
 
+    @Test func renderedAppIconCanvasAddsSafeMarginsAndTransparentCorners() {
+        let source = makeImage(size: NSSize(width: 512, height: 512), color: .systemBlue)
+
+        guard let rendered = source.renderedAppIconCanvas(),
+              let bitmap = bitmapRep(for: rendered) else {
+            Issue.record("Expected rendered app icon bitmap")
+            return
+        }
+
+        #expect(Int(rendered.size.width) == 1024)
+        #expect(Int(rendered.size.height) == 1024)
+        #expect(bitmap.alphaAt(x: 0, y: 0) == 0)
+        #expect(bitmap.alphaAt(x: 140, y: 140) == 0)
+        #expect(bitmap.alphaAt(x: 200, y: 200) > 0)
+    }
+
+    @Test func customIconImageReturnsProcessedCanvasInsteadOfRawBounds() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("png")
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        let source = makeImage(size: NSSize(width: 256, height: 256), color: .systemRed)
+        try #require(source.pngData()).write(to: tempURL)
+
+        let settings = AppIconSettings(icon: .custom, customIconPath: tempURL.path)
+        let rendered = try #require(settings.customIconImage)
+        let bitmap = try #require(bitmapRep(for: rendered))
+
+        #expect(Int(rendered.size.width) == 1024)
+        #expect(Int(rendered.size.height) == 1024)
+        #expect(bitmap.alphaAt(x: 10, y: 10) == 0)
+        #expect(bitmap.alphaAt(x: 512, y: 512) > 0)
+    }
+
     // MARK: - Equatable
 
     @Test func equatableUsesHexColorAndFrameValues() {
@@ -140,5 +189,11 @@ struct ColorizedGhosttyIconTests {
         let lhs = makeIcon(ghostColor: NSColor(hex: "#445566")!)
         let rhs = makeIcon(ghostColor: NSColor(hex: "#665544")!)
         #expect(lhs != rhs)
+    }
+}
+
+private extension NSBitmapImageRep {
+    func alphaAt(x: Int, y: Int) -> CGFloat {
+        colorAt(x: x, y: y)?.alphaComponent ?? 0
     }
 }

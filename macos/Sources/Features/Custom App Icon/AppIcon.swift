@@ -39,7 +39,8 @@ enum AppIcon: Equatable, Codable {
             self = .xray
         case .custom:
             let normalizedPath = AppIconSettings.normalizedCustomIconPath(config.macosCustomIcon)
-            if let data = try? Data(contentsOf: URL(filePath: normalizedPath, relativeTo: nil)) {
+            let settings = AppIconSettings(icon: .custom, customIconPath: normalizedPath)
+            if let data = settings.customIconPNGData {
                 self = .custom(data)
             } else {
                 return nil
