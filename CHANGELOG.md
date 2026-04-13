@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### chore(repo): finish root layout cleanup
+
+- What changed: Moved the remaining root-level gateway acceptance helper into `scripts/` and kept the repo root focused on entry docs, build files, and project metadata.
+- Why: The last obvious root-level script was tooling, not a project entrypoint, so keeping it at top level made the repo layout noisier than necessary.
+- Impact: The root directory is cleaner, while the acceptance helper remains available under the existing scripts area where similar tooling already lives.
+- Verification: `test -f scripts/control_gateway_acceptance_probe.py`; `find . -maxdepth 1 -mindepth 1 -type f | sort`
+- Files: `scripts/control_gateway_acceptance_probe.py`, `CHANGELOG.md`
+
 ### chore(repo): ignore private planning markdown
 
 - What changed: Added ignore rules for private top-level planning markdown plus local artifact folders, and removed the tracked planning/spec files from version control while leaving local copies intact.
@@ -1441,20 +1449,20 @@ All notable changes to this project are documented in this file.
 
 ### test(control): record live desktop probe evidence
 
-- What changed: Updated `android-remote-control-acceptance.md` with a real loopback desktop run launched from the branch-built Debug app, including the launch command, local pairing flow, live `events.subscribe` confirmation, scripted foreground input steps, and the archived coarse `%CPU` plus `gateway.metrics` snapshot captured by `control_gateway_acceptance_probe.py`.
+- What changed: Updated `android-remote-control-acceptance.md` with a real loopback desktop run launched from the branch-built Debug app, including the launch command, local pairing flow, live `events.subscribe` confirmation, scripted foreground input steps, and the archived coarse `%CPU` plus `gateway.metrics` snapshot captured by `scripts/control_gateway_acceptance_probe.py`.
 - Why: The acceptance doc already had app-hosted smoke archives, but it still lacked any live desktop evidence. The remaining gap was a durable record of one real gateway-enabled session showing bounded CPU and observed sampler state under foreground activity.
 - Impact: `Acceptance Metrics` is no longer backed only by synthetic smoke data. The branch now carries one recorded live desktop probe with explicit numbers and an honest note about the remaining human-perceptual lag caveat.
-- Verification: `python3 control_gateway_acceptance_probe.py --pid 89723 --port 45777 --duration 8 --interval 1 --label scenario-a-live-clean --skip-reset --output /tmp/ghdx-scenario-a-live-clean.json`
+- Verification: `python3 scripts/control_gateway_acceptance_probe.py --pid 89723 --port 45777 --duration 8 --interval 1 --label scenario-a-live-clean --skip-reset --output /tmp/ghdx-scenario-a-live-clean.json`
 - Files: `android-remote-control-acceptance.md`, `CHANGELOG.md`
 - Decision trail: Record the live run inside the durable acceptance document rather than leaving the evidence in `/tmp` or chat history. The coarse probe is sufficient to close the “no live data at all” gap while still clearly separating itself from a stricter production sign-off pass.
 
 ### test(control): add live cpu acceptance probe
 
-- What changed: Added a stdlib-only `control_gateway_acceptance_probe.py` helper that resets `gateway.metrics`, samples the live desktop process `%CPU` via `ps`, captures the final `gateway.metrics` envelope, and writes one JSON artifact per acceptance run. Updated `android-remote-control-acceptance.md` to include the exact live-smoke command and to document that the helper is a coarse probe rather than a replacement for Activity Monitor or Instruments.
+- What changed: Added a stdlib-only `scripts/control_gateway_acceptance_probe.py` helper that resets `gateway.metrics`, samples the live desktop process `%CPU` via `ps`, captures the final `gateway.metrics` envelope, and writes one JSON artifact per acceptance run. Updated `android-remote-control-acceptance.md` to include the exact live-smoke command and to document that the helper is a coarse probe rather than a replacement for Activity Monitor or Instruments.
 - Why: The branch had automated desktop smoke archives, but the acceptance plan still required a repeatable way to collect live CPU evidence from a real running desktop session. Without a bundled probe, that last gate stayed manual in an underspecified way.
 - Impact: Operators now have a single command that archives a live CPU window plus sampler/gateway metrics for Scenario A/B/C runs, which moves `Acceptance Metrics` closer to closeout while keeping the final high-fidelity CPU/lag sign-off explicit.
-- Verification: `python3 control_gateway_acceptance_probe.py --help`; `git diff --check`
-- Files: `control_gateway_acceptance_probe.py`, `android-remote-control-acceptance.md`, `CHANGELOG.md`
+- Verification: `python3 scripts/control_gateway_acceptance_probe.py --help`; `git diff --check`
+- Files: `scripts/control_gateway_acceptance_probe.py`, `android-remote-control-acceptance.md`, `CHANGELOG.md`
 - Decision trail: Keep the live acceptance helper outside the app and stdlib-only so it can run against any local desktop process without adding another runtime dependency or altering the control gateway itself.
 
 ### fix(control): restore app-hosted control test compatibility
