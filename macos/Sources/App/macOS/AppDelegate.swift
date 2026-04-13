@@ -2219,24 +2219,6 @@ class AppDelegate: NSObject,
     }
 
     @MainActor
-    func chooseCustomAppIconPath(currentPath: String?) -> String? {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.canCreateDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.image]
-        panel.prompt = L10n.Settings.iconCustomBrowse
-        panel.message = L10n.Settings.iconCustomPickerMessage
-
-        let normalized = Self.normalizedCustomAppIconPath(currentPath) ?? AppIconSettings.defaultCustomIconPath
-        panel.directoryURL = URL(fileURLWithPath: normalized).deletingLastPathComponent()
-
-        guard panel.runModal() == .OK, let url = panel.url else { return nil }
-        return url.path
-    }
-
-    @MainActor
     func chooseBrowserRuntimePath(currentPath: String?) -> String? {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -2282,19 +2264,6 @@ class AppDelegate: NSObject,
     @MainActor
     func saveVisualAppIconSettings(_ rawSettings: AppIconSettings) throws {
         let settings = rawSettings.sanitized
-
-        if settings.icon == .custom {
-            let path = settings.customIconPath
-            guard FileManager.default.fileExists(atPath: path),
-                  settings.isCustomIconValid else {
-                throw NSError(
-                    domain: "GhoDexIconSettings",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: L10n.Settings.iconInvalidCustomPath]
-                )
-            }
-        }
-
         let configURL = Self.browserSettingsConfigURL()
         try Self.saveAppIconSettingsConfig(settings, to: configURL)
         ghostty.reloadConfig()
@@ -3408,13 +3377,6 @@ extension AppDelegate {
         return (trimmed as NSString).standardizingPath
     }
 
-    fileprivate static func normalizedCustomAppIconPath(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        return (trimmed as NSString).standardizingPath
-    }
-
     fileprivate static func normalizedBrowserRuntimePath(_ value: String?) -> String? {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3583,14 +3545,9 @@ extension AppDelegate {
 
     private static func appIconSettingsConfigBlock(_ settings: AppIconSettings) -> String {
         let normalized = settings.sanitized
-        let screenColors = normalized.screenColorHexes.joined(separator: ",")
         return [
             iconSettingsStartMarker,
             "\(macosIconConfigKey) = \(configStringLiteral(normalized.icon.rawValue))",
-            "\(macosCustomIconConfigKey) = \(configStringLiteral(normalized.customIconPath))",
-            "\(macosIconFrameConfigKey) = \(configStringLiteral(normalized.frame.rawValue))",
-            "\(macosIconGhostColorConfigKey) = \(configStringLiteral(normalized.ghostColorHex))",
-            "\(macosIconScreenColorConfigKey) = \(configStringLiteral(screenColors))",
             iconSettingsEndMarker,
         ].joined(separator: "\n")
     }

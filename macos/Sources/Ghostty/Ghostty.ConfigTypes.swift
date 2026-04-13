@@ -22,6 +22,18 @@ extension Ghostty {
         case custom
         case customStyle = "custom-style"
 
+        static let builtInOptions: [Self] = [
+            .official,
+            .blueprint,
+            .chalkboard,
+            .glass,
+            .holographic,
+            .microchip,
+            .paper,
+            .retro,
+            .xray,
+        ]
+
         /// Bundled asset name for built-in icons
         var assetName: String? {
             switch self {
@@ -36,6 +48,10 @@ extension Ghostty {
             case .xray: return "XrayImage"
             case .custom, .customStyle: return nil
             }
+        }
+
+        var builtInValue: Self {
+            Self.builtInOptions.contains(self) ? self : .official
         }
     }
 

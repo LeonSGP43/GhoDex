@@ -37,24 +37,8 @@ enum AppIcon: Equatable, Codable {
             self = .retro
         case .xray:
             self = .xray
-        case .custom:
-            let normalizedPath = AppIconSettings.normalizedCustomIconPath(config.macosCustomIcon)
-            let settings = AppIconSettings(icon: .custom, customIconPath: normalizedPath)
-            if let data = settings.customIconPNGData {
-                self = .custom(data)
-            } else {
-                return nil
-            }
-        case .customStyle:
-            // Discard saved icon name
-            // if no valid colours were found
-            guard
-                let ghostColor = config.macosIconGhostColor,
-                let screenColors = config.macosIconScreenColor
-            else {
-                return nil
-            }
-            self = .customStyle(ColorizedGhosttyIcon(screenColors: screenColors, ghostColor: ghostColor, frame: config.macosIconFrame))
+        case .custom, .customStyle:
+            return nil
         }
     }
 #endif

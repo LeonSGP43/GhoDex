@@ -15,7 +15,15 @@ extension UserDefaults {
             guard let data = data(forKey: Self.customIconKeyNew) else {
                 return nil
             }
-            return try? JSONDecoder().decode(AppIcon.self, from: data)
+            guard let icon = try? JSONDecoder().decode(AppIcon.self, from: data) else {
+                return nil
+            }
+            switch icon {
+            case .custom, .customStyle:
+                return nil
+            default:
+                return icon
+            }
         }
 
         set {

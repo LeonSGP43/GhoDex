@@ -5859,11 +5859,7 @@ final class ControlHarnessCore {
         let defaults = defaultSettingsValues()
         return [
             .init(key: "app.language", valueType: "enum", defaultValue: defaults["app.language"] ?? "", enumValues: AppLanguageSetting.allCases.map(\.rawValue), description: "Desktop UI language override."),
-            .init(key: "appearance.icon", valueType: "enum", defaultValue: defaults["appearance.icon"] ?? "", enumValues: Ghostty.MacOSIcon.builtInOptions.map(\.rawValue) + [Ghostty.MacOSIcon.custom.rawValue, Ghostty.MacOSIcon.customStyle.rawValue], description: "App icon preset."),
-            .init(key: "appearance.icon.custom_path", valueType: "path", defaultValue: defaults["appearance.icon.custom_path"] ?? "", enumValues: nil, description: "Custom ICNS path."),
-            .init(key: "appearance.icon.frame", valueType: "enum", defaultValue: defaults["appearance.icon.frame"] ?? "", enumValues: [Ghostty.MacOSIconFrame.aluminum.rawValue, Ghostty.MacOSIconFrame.beige.rawValue, Ghostty.MacOSIconFrame.plastic.rawValue, Ghostty.MacOSIconFrame.chrome.rawValue], description: "Custom style icon frame."),
-            .init(key: "appearance.icon.ghost_color_hex", valueType: "color", defaultValue: defaults["appearance.icon.ghost_color_hex"] ?? "", enumValues: nil, description: "Ghost color hex."),
-            .init(key: "appearance.icon.screen_colors", valueType: "csv_colors", defaultValue: defaults["appearance.icon.screen_colors"] ?? "", enumValues: nil, description: "Comma separated screen colors."),
+            .init(key: "appearance.icon", valueType: "enum", defaultValue: defaults["appearance.icon"] ?? "", enumValues: Ghostty.MacOSIcon.builtInOptions.map(\.rawValue), description: "Built-in app icon preset."),
             .init(key: "browser.profile_path", valueType: "path", defaultValue: defaults["browser.profile_path"] ?? "", enumValues: nil, description: "Browser profile override path."),
             .init(key: "browser.runtime_path", valueType: "path", defaultValue: defaults["browser.runtime_path"] ?? "", enumValues: nil, description: "Browser runtime override path."),
             .init(key: "gateway.enabled", valueType: "bool", defaultValue: defaults["gateway.enabled"] ?? "", enumValues: ["true", "false"], description: "Control gateway enable flag."),
@@ -5901,10 +5897,6 @@ final class ControlHarnessCore {
 
             let iconSettings = appDelegate.appIconSettings.sanitized
             values["appearance.icon"] = iconSettings.icon.rawValue
-            values["appearance.icon.custom_path"] = iconSettings.customIconPath
-            values["appearance.icon.frame"] = iconSettings.frame.rawValue
-            values["appearance.icon.ghost_color_hex"] = iconSettings.ghostColorHex
-            values["appearance.icon.screen_colors"] = iconSettings.screenColorHexes.joined(separator: ",")
 
             values["browser.profile_path"] = appDelegate.browserProfilePathOverride ?? ""
             values["browser.runtime_path"] = appDelegate.browserRuntimePathOverride ?? ""
@@ -5958,10 +5950,6 @@ final class ControlHarnessCore {
         return [
             "app.language": AppLanguageSetting.system.rawValue,
             "appearance.icon": iconDefaults.icon.rawValue,
-            "appearance.icon.custom_path": iconDefaults.customIconPath,
-            "appearance.icon.frame": iconDefaults.frame.rawValue,
-            "appearance.icon.ghost_color_hex": iconDefaults.ghostColorHex,
-            "appearance.icon.screen_colors": iconDefaults.screenColorHexes.joined(separator: ","),
             "browser.profile_path": "",
             "browser.runtime_path": "",
             "gateway.enabled": Self.booleanString(gatewayDefaults.isEnabled),
@@ -6022,29 +6010,11 @@ final class ControlHarnessCore {
             return value.rawValue
 
         case "appearance.icon":
-            guard let value = Ghostty.MacOSIcon(rawValue: trimmed) else {
+            guard let value = Ghostty.MacOSIcon(rawValue: trimmed),
+                  Ghostty.MacOSIcon.builtInOptions.contains(value) else {
                 throw ControlHarnessCoreError.invalidArgument("Unsupported appearance.icon value: \(rawValue)")
             }
             return value.rawValue
-
-        case "appearance.icon.custom_path":
-            return trimmed.isEmpty ? AppIconSettings.defaultCustomIconPath : (trimmed as NSString).standardizingPath
-
-        case "appearance.icon.frame":
-            guard let value = Ghostty.MacOSIconFrame(rawValue: trimmed) else {
-                throw ControlHarnessCoreError.invalidArgument("Unsupported appearance.icon.frame value: \(rawValue)")
-            }
-            return value.rawValue
-
-        case "appearance.icon.ghost_color_hex":
-            guard let normalized = NSColor(hex: trimmed)?.hexString else {
-                throw ControlHarnessCoreError.invalidArgument("appearance.icon.ghost_color_hex must be a hex color")
-            }
-            return normalized
-
-        case "appearance.icon.screen_colors":
-            let colors = try normalizeScreenColors(trimmed)
-            return colors.joined(separator: ",")
 
         case "browser.profile_path", "browser.runtime_path":
             return trimmed.isEmpty ? "" : (trimmed as NSString).standardizingPath
@@ -6128,21 +6098,6 @@ final class ControlHarnessCore {
         }
     }
 
-    private func normalizeScreenColors(_ rawValue: String) throws -> [String] {
-        let parts = rawValue
-            .split { $0 == "," || $0 == "\n" }
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        if parts.isEmpty {
-            return AppIconSettings.defaultScreenColorHexes
-        }
-        let normalized = parts.compactMap { NSColor(hex: $0)?.hexString }
-        guard normalized.count == parts.count else {
-            throw ControlHarnessCoreError.invalidArgument("appearance.icon.screen_colors must be comma-separated hex colors")
-        }
-        return Array(normalized.prefix(AppIconSettings.maxScreenColorCount))
-    }
-
     private func persistSettingsValues(_ values: [String: String]) throws {
         guard let appDelegate else {
             throw ControlHarnessCoreError.appUnavailable
@@ -6153,19 +6108,11 @@ final class ControlHarnessCore {
         }
         language.apply()
 
-        guard let icon = Ghostty.MacOSIcon(rawValue: requiredSettingValue("appearance.icon", from: values)) else {
+        guard let icon = Ghostty.MacOSIcon(rawValue: requiredSettingValue("appearance.icon", from: values)),
+              Ghostty.MacOSIcon.builtInOptions.contains(icon) else {
             throw ControlHarnessCoreError.invalidArgument("Missing appearance.icon")
         }
-        guard let frame = Ghostty.MacOSIconFrame(rawValue: requiredSettingValue("appearance.icon.frame", from: values)) else {
-            throw ControlHarnessCoreError.invalidArgument("Missing appearance.icon.frame")
-        }
-        let iconSettings = AppIconSettings(
-            icon: icon,
-            customIconPath: requiredSettingValue("appearance.icon.custom_path", from: values),
-            frame: frame,
-            ghostColorHex: requiredSettingValue("appearance.icon.ghost_color_hex", from: values),
-            screenColorHexes: try normalizeScreenColors(requiredSettingValue("appearance.icon.screen_colors", from: values))
-        )
+        let iconSettings = AppIconSettings(icon: icon)
         do {
             try appDelegate.saveVisualAppIconSettings(iconSettings)
             try appDelegate.saveBrowserSettings(

@@ -8,12 +8,6 @@ struct SettingsView: View {
         case gateway
     }
 
-    private enum IconSource: Hashable {
-        case builtIn
-        case customFile
-        case customStyle
-    }
-
     @EnvironmentObject private var appDelegate: AppDelegate
     private let visibleTabs: [SettingsTab]
     private let externalSelection: Binding<SettingsTab>?
@@ -27,12 +21,7 @@ struct SettingsView: View {
     @State private var gatewayPairingHost = ""
     @State private var gatewayShowQrOnLaunch = false
     @State private var gatewaySemanticProfile: ControlHarnessSemanticProfile = .defaultValue
-    @State private var iconSource: IconSource = .builtIn
     @State private var builtInIconSelection: Ghostty.MacOSIcon = .official
-    @State private var customIconPath = AppIconSettings.defaultCustomIconPath
-    @State private var customStyleFrame: Ghostty.MacOSIconFrame = .aluminum
-    @State private var customStyleGhostColor = NSColor(hex: AppIconSettings.defaultGhostColorHex) ?? .white
-    @State private var customStyleScreenColors = AppIconSettings.defaultScreenColorHexes.compactMap(NSColor.init(hex:))
     @State private var iconFeedbackMessage: String?
     @State private var iconFeedbackIsError = false
 
@@ -71,7 +60,7 @@ struct SettingsView: View {
     }
 
     private var draftAppIconImage: NSImage {
-        iconDraftSettings().previewImage(in: .main) ?? currentAppIconImage
+        AppIconSettings(icon: builtInIconSelection).previewImage(in: .main) ?? currentAppIconImage
     }
 
     init(
@@ -126,27 +115,7 @@ struct SettingsView: View {
         .onReceive(appDelegate.$appIconSettings) { _ in
             syncIconForm(clearFeedback: false)
         }
-        .onChange(of: iconSource) { _ in
-            saveIconSettingsIfNeeded()
-        }
         .onChange(of: builtInIconSelection) { _ in
-            guard iconSource == .builtIn else { return }
-            saveIconSettingsIfNeeded()
-        }
-        .onChange(of: customIconPath) { _ in
-            guard iconSource == .customFile else { return }
-            saveIconSettingsIfNeeded()
-        }
-        .onChange(of: customStyleFrame) { _ in
-            guard iconSource == .customStyle else { return }
-            saveIconSettingsIfNeeded()
-        }
-        .onChange(of: customStyleGhostColor.hexString ?? AppIconSettings.defaultGhostColorHex) { _ in
-            guard iconSource == .customStyle else { return }
-            saveIconSettingsIfNeeded()
-        }
-        .onChange(of: customStyleScreenColors.compactMap(\.hexString)) { _ in
-            guard iconSource == .customStyle else { return }
             saveIconSettingsIfNeeded()
         }
         .onChange(of: selectedTabBinding.wrappedValue) { newValue in
@@ -285,29 +254,7 @@ struct SettingsView: View {
                     .padding(.vertical, 4)
                 }
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(L10n.Settings.iconModeTitle)
-                        .font(.headline)
-
-                    Picker(L10n.Settings.iconModeTitle, selection: $iconSource) {
-                        Text(L10n.Settings.iconModeBuiltIn).tag(IconSource.builtIn)
-                        Text(L10n.Settings.iconModeCustomFile).tag(IconSource.customFile)
-                        Text(L10n.Settings.iconModeCustomStyle).tag(IconSource.customStyle)
-                    }
-                    .pickerStyle(.segmented)
-                }
-
-                if iconSource == .builtIn {
-                    builtInIconSection
-                }
-
-                if iconSource == .customFile {
-                    customIconSection
-                }
-
-                if iconSource == .customStyle {
-                    customStyleSection
-                }
+                builtInIconSection
 
                 if let iconFeedbackMessage {
                     Text(iconFeedbackMessage)
@@ -329,7 +276,6 @@ struct SettingsView: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 12)], spacing: 12) {
                 ForEach(Ghostty.MacOSIcon.builtInOptions, id: \.self) { icon in
                     Button {
-                        iconSource = .builtIn
                         builtInIconSelection = icon
                     } label: {
                         VStack(spacing: 10) {
@@ -360,97 +306,6 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.plain)
                 }
-            }
-        }
-    }
-
-    private var customIconSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(L10n.Settings.iconCustomPath)
-                .font(.headline)
-
-            HStack(spacing: 10) {
-                TextField(L10n.Settings.iconCustomPlaceholder, text: $customIconPath)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit {
-                        iconSource = .customFile
-                        saveIconSettingsIfNeeded()
-                    }
-
-                Button(L10n.Settings.iconCustomBrowse) {
-                    guard let path = appDelegate.chooseCustomAppIconPath(currentPath: customIconPath) else { return }
-                    customIconPath = path
-                    iconSource = .customFile
-                    saveIconSettingsIfNeeded()
-                }
-                .buttonStyle(.bordered)
-            }
-
-            Text(L10n.Settings.iconCustomHelp)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private var customStyleSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(L10n.Settings.iconStyleTitle)
-                .font(.headline)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text(L10n.Settings.iconFrame)
-                    .font(.subheadline.weight(.medium))
-                Picker(L10n.Settings.iconFrame, selection: $customStyleFrame) {
-                    Text(L10n.Settings.iconFrameAluminum).tag(Ghostty.MacOSIconFrame.aluminum)
-                    Text(L10n.Settings.iconFrameBeige).tag(Ghostty.MacOSIconFrame.beige)
-                    Text(L10n.Settings.iconFramePlastic).tag(Ghostty.MacOSIconFrame.plastic)
-                    Text(L10n.Settings.iconFrameChrome).tag(Ghostty.MacOSIconFrame.chrome)
-                }
-                .pickerStyle(.segmented)
-            }
-
-            ColorPicker(
-                L10n.Settings.iconGhostColor,
-                selection: Binding(
-                    get: { Color(nsColor: customStyleGhostColor) },
-                    set: { customStyleGhostColor = NSColor($0) }
-                ),
-                supportsOpacity: false
-            )
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text(L10n.Settings.iconScreenColors)
-                    .font(.subheadline.weight(.medium))
-
-                ForEach(Array(customStyleScreenColors.indices), id: \.self) { index in
-                    HStack(spacing: 10) {
-                        ColorPicker(
-                            "\(L10n.Settings.iconScreenColors) \(index + 1)",
-                            selection: screenColorBinding(for: index),
-                            supportsOpacity: false
-                        )
-
-                        if let hex = customStyleScreenColors[index].hexString {
-                            Text(hex)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                                .frame(width: 76, alignment: .leading)
-                        }
-
-                        Button(L10n.Settings.iconRemoveColor) {
-                            removeScreenColor(at: index)
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(customStyleScreenColors.count <= 1)
-                    }
-                }
-
-                Button(L10n.Settings.iconAddColor) {
-                    addScreenColor()
-                }
-                .buttonStyle(.bordered)
-                .disabled(customStyleScreenColors.count >= AppIconSettings.maxScreenColorCount)
             }
         }
     }
@@ -568,23 +423,7 @@ struct SettingsView: View {
 
     private func syncIconForm(clearFeedback: Bool) {
         let settings = savedIconSettings
-
-        switch settings.icon {
-        case .custom:
-            iconSource = .customFile
-            builtInIconSelection = .official
-        case .customStyle:
-            iconSource = .customStyle
-            builtInIconSelection = .official
-        default:
-            iconSource = .builtIn
-            builtInIconSelection = settings.icon
-        }
-
-        customIconPath = settings.customIconPath
-        customStyleFrame = settings.frame
-        customStyleGhostColor = settings.ghostColor
-        customStyleScreenColors = settings.screenColors
+        builtInIconSelection = settings.icon
 
         if clearFeedback {
             iconFeedbackMessage = nil
@@ -592,49 +431,8 @@ struct SettingsView: View {
         }
     }
 
-    private func addScreenColor() {
-        let fallback = customStyleScreenColors.last ?? (NSColor(hex: AppIconSettings.defaultScreenColorHexes.last ?? "") ?? .systemBlue)
-        customStyleScreenColors.append(fallback)
-    }
-
-    private func removeScreenColor(at index: Int) {
-        guard customStyleScreenColors.indices.contains(index), customStyleScreenColors.count > 1 else { return }
-        customStyleScreenColors.remove(at: index)
-    }
-
-    private func screenColorBinding(for index: Int) -> Binding<Color> {
-        Binding(
-            get: {
-                let color = customStyleScreenColors.indices.contains(index)
-                    ? customStyleScreenColors[index]
-                    : (customStyleScreenColors.last ?? .systemBlue)
-                return Color(nsColor: color)
-            },
-            set: { newValue in
-                guard customStyleScreenColors.indices.contains(index) else { return }
-                customStyleScreenColors[index] = NSColor(newValue)
-            }
-        )
-    }
-
     private func iconDraftSettings() -> AppIconSettings {
-        let selectedIcon: Ghostty.MacOSIcon
-        switch iconSource {
-        case .builtIn:
-            selectedIcon = builtInIconSelection
-        case .customFile:
-            selectedIcon = .custom
-        case .customStyle:
-            selectedIcon = .customStyle
-        }
-
-        return AppIconSettings(
-            icon: selectedIcon,
-            customIconPath: customIconPath,
-            frame: customStyleFrame,
-            ghostColorHex: customStyleGhostColor.hexString ?? AppIconSettings.defaultGhostColorHex,
-            screenColorHexes: customStyleScreenColors.compactMap(\.hexString)
-        ).sanitized
+        AppIconSettings(icon: builtInIconSelection).sanitized
     }
 
     private func builtInPreviewImage(for icon: Ghostty.MacOSIcon) -> NSImage {
@@ -662,7 +460,7 @@ struct SettingsView: View {
         case .xray:
             return L10n.Settings.iconOptionXray
         case .custom, .customStyle:
-            return ""
+            return L10n.Settings.iconOptionOfficial
         }
     }
 
