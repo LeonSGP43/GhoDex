@@ -2124,13 +2124,13 @@ class AppDelegate: NSObject,
     }
 
     private func updateAppIcon(from config: Ghostty.Config) {
-        // Since this is called after `DockTilePlugin` has been running,
-        // clean it up here to trigger a correct update of the current config.
-        UserDefaults.standard.removeObject(forKey: "CustomGhosttyIcon")
+        let resolvedSettings = AppIconSettings(config: config)
         let resolvedIcon = AppIcon(config: config)
-        let resolvedImage = AppIconSettings(config: config).previewImage(in: .main)
+        let resolvedImage = resolvedSettings.previewImage(in: .main)
         DispatchQueue.main.async {
+            self.appIconSettings = resolvedSettings
             self.appIcon = resolvedImage
+            self.applyLiveAppIcon(resolvedImage, resolvedIcon: resolvedIcon)
         }
         DispatchQueue.global().async {
             let defaultsTargets = [
@@ -2139,11 +2139,55 @@ class AppDelegate: NSObject,
             ].compactMap { $0 }
 
             for defaults in defaultsTargets {
+                defaults.removeObject(forKey: "CustomGhosttyIcon")
                 defaults.appIcon = resolvedIcon
             }
             DistributedNotificationCenter.default()
                 .postNotificationName(.ghosttyIconDidChange, object: nil, userInfo: nil, deliverImmediately: true)
         }
+    }
+
+    @MainActor
+    private func applyLiveAppIcon(_ image: NSImage?, resolvedIcon: AppIcon?) {
+        let defaultImage = Bundle.main.image(forResource: "AppIconImage")
+        NSApp.applicationIconImage = image ?? defaultImage ?? NSApp.applicationIconImage
+        applyLiveDockTileIcon(image)
+        syncBundleIcon(image, resolvedIcon: resolvedIcon)
+    }
+
+    @MainActor
+    private func applyLiveDockTileIcon(_ image: NSImage?) {
+        let dockTile = NSApp.dockTile
+        guard let image else {
+            dockTile.contentView = nil
+            dockTile.display()
+            return
+        }
+
+        let iconView = NSImageView(frame: CGRect(origin: .zero, size: dockTile.size))
+        iconView.wantsLayer = true
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+        iconView.image = image
+        dockTile.contentView = iconView
+        dockTile.display()
+    }
+
+    @MainActor
+    private func syncBundleIcon(_ image: NSImage?, resolvedIcon: AppIcon?) {
+        guard
+            let appBundleURL = Bundle.main.bundleURL as URL?,
+            AppBundleIconMutationPolicy.shouldWriteBundleIcon(at: appBundleURL)
+        else {
+            return
+        }
+
+        let appBundlePath = appBundleURL.path
+        if resolvedIcon == nil {
+            NSWorkspace.shared.setIcon(nil, forFile: appBundlePath)
+        } else {
+            NSWorkspace.shared.setIcon(image, forFile: appBundlePath)
+        }
+        NSWorkspace.shared.noteFileSystemChanged(appBundlePath)
     }
 
     var managedBrowserProfilePath: String {
