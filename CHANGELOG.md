@@ -4,6 +4,38 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### chore(repo): ignore private planning markdown
+
+- What changed: Added ignore rules for private top-level planning markdown plus local artifact folders, and removed the tracked planning/spec files from version control while leaving local copies intact.
+- Why: Those markdown files contain private working notes and decision drafts that should remain local and must not be uploaded with product code.
+- Impact: The repo now keeps product documentation while excluding local planning notes, temporary acceptance output, Python bytecode, and generated `macos/macos` artifacts from future commits.
+- Verification: `git check-ignore -v plan.md treelog.md browser-tab-full-pass-plan.md .tmp/control-harness-unification-acceptance/browser_context_protocol_acceptance.json scripts/__pycache__/control_harness_protocol_surface_live_acceptance.cpython-310.pyc macos/macos/GhoDexKit.xcframework/Info.plist`; `git status --short`
+- Files: `.gitignore`
+
+### feat(control-harness): complete browser protocol surface
+
+- What changed: Finished the unified control-harness browser protocol surface across app routing, browser runtime bridging, AppleScript/browser models, CLI support, protocol docs, live acceptance scripts, and regression tests.
+- Why: The browser side of the harness layer needed complete end-to-end coverage so each control path had a real implementation, routing, and acceptance proof instead of partial protocol stubs.
+- Impact: Browser-control operations now run through the same harness surface with broader test coverage and live acceptance evidence for protocol completeness.
+- Verification: `nu macos/build.nu --configuration ReleaseLocal --action build`; `python3 scripts/control_harness_protocol_surface_live_acceptance.py`; `python3 scripts/control_harness_browser_protocol_surface_live_acceptance.py`
+- Files: `docs/control-harness-protocol.md`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Features/Control Harness/*`, `macos/Sources/Features/Browser/*`, `macos/Tests/ControlHarness/*`, `scripts/control_harness_*`, `src/cli/browser_control.zig`
+
+### fix(macos): localize ssh settings content
+
+- What changed: Localized the remaining SSH settings panel labels and content paths, including tab naming/default display behavior tied to the active app language.
+- Why: Parts of the SSH/settings UI were still bypassing the localization layer and produced mixed-language settings content.
+- Impact: The settings panel now follows the selected language more consistently for SSH-related content.
+- Verification: `nu macos/build.nu --configuration Debug --action build`
+- Files: `macos/Sources/Features/SSH Connections/SSHConnectionsController.swift`, `macos/Sources/Features/SSH Connections/SSHConnectionsView.swift`, `macos/Sources/Helpers/AppLocalization.swift`
+
+### feat(branding): refresh app and hero artwork
+
+- What changed: Replaced the default app icon assets with the new multi-size logo set and updated the README hero image to the supplied artwork.
+- Why: The project branding needed the new logo propagated into both the installable macOS app icon assets and the repository-facing hero image.
+- Impact: Built apps and repo presentation now use the updated branding consistently across icon sizes and the main README visual.
+- Verification: `file macos/Assets.xcassets/AppIconImage.imageset/macOS-AppIcon-1024px.png images/icons/icon_16.png images/icons/icon_512.png`; `nu macos/build.nu --configuration Debug --action build`; `nu macos/build.nu --configuration ReleaseLocal --action build`
+- Files: `macos/Assets.xcassets/AppIconImage.imageset/*`, `images/icons/*`, `images/readme/welcome-hero.jpg`
+
 ## [0.2.1] - 2026-04-12
 
 ### docs(readme): reposition GhoDex as Ghostty plus Codex plus Harness with roadmap and bilingual entry docs
