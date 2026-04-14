@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-14
+
 ### feat(settings): add configurable mouse side-button top-level tab switching
 
 - What changed: Added the config-backed `ghodex-mouse-back-forward-switches-tabs` setting, exposed it in the General settings panel as a toggle, and taught the app-level local event monitor to intercept mouse side-button presses and cycle native macOS top-level tabs when the setting is enabled.
