@@ -44,6 +44,7 @@ class AppDelegate: NSObject,
     }
 
     private static let skipInitialTerminalWindowEnvKey = "GHODEX_SKIP_INITIAL_TERMINAL_WINDOW"
+    static let welcomeSetupShownDefaultsKey = "GhoDexWelcomeSetupShown"
     private static let isRunningUnderTests = isRunningTests()
     private static let controlHarnessANSIEscapeRegex = try! NSRegularExpression( // swiftlint:disable:this force_try
         pattern: "\u{001B}\\[[0-9;?]*[ -/]*[@-~]"
@@ -61,6 +62,7 @@ class AppDelegate: NSObject,
     @IBOutlet private var menuCheckForUpdates: NSMenuItem?
     @IBOutlet private var menuOpenConfig: NSMenuItem?
     @IBOutlet private var menuSettingsPanel: NSMenuItem?
+    private var menuWelcomeSetup: NSMenuItem?
     private var menuTodoWorkspace: NSMenuItem?
     @IBOutlet private var menuReloadConfig: NSMenuItem?
     @IBOutlet private var menuSecureInput: NSMenuItem?
@@ -151,6 +153,20 @@ class AppDelegate: NSObject,
 
     private var shouldSkipInitialTerminalWindow: Bool {
         Self.shouldSkipInitialTerminalWindow(environment: ProcessInfo.processInfo.environment)
+    }
+
+    static func shouldShowWelcomeSetupOnFirstLaunch(
+        userDefaults: UserDefaults = .standard,
+        isRunningUnderTests: Bool = AppDelegate.isRunningUnderTests
+    ) -> Bool {
+        guard !isRunningUnderTests else { return false }
+        return userDefaults.bool(forKey: welcomeSetupShownDefaultsKey) == false
+    }
+
+    static func markWelcomeSetupShown(
+        userDefaults: UserDefaults = .standard
+    ) {
+        userDefaults.set(true, forKey: welcomeSetupShownDefaultsKey)
     }
 
     /// The ghostty global state. Only one per process.
@@ -409,6 +425,10 @@ class AppDelegate: NSObject,
     )
 
     @MainActor lazy var settingsController = SettingsController(appDelegate: self)
+    @MainActor lazy var welcomeSetupController = WelcomeSetupController(
+        appDelegate: self,
+        store: aiTerminalManagerStore
+    )
     private let browserControlIPCService = BrowserControlIPCService()
     /// The elapsed time since the process was started
     var timeSinceLaunch: TimeInterval {
@@ -665,6 +685,8 @@ class AppDelegate: NSObject,
                 _ = TerminalController.newWindow(ghostty)
                 undoManager.enableUndoRegistration()
             }
+
+            maybeShowWelcomeSetupOnFirstLaunch()
         }
     }
 
@@ -1054,7 +1076,9 @@ class AppDelegate: NSObject,
     /// Setup localized titles for menu items that are created in xib but need
     /// to track our runtime language selection.
     private func setupMenuLocalization() {
+        installWelcomeSetupMenuItemIfNeeded()
         installTodoWorkspaceMenuItemIfNeeded()
+        menuWelcomeSetup?.title = L10n.WelcomeSetup.menuTitle
         menuTodoWorkspace?.title = L10n.SSHConnections.todoPanelTitle
         menuSaveWorkspace?.title = L10n.AITerminalManager.saveWorkspaceAction
     }
@@ -1623,6 +1647,7 @@ class AppDelegate: NSObject,
         self.menuCheckForUpdates?.setImageIfDesired(systemSymbolName: "square.and.arrow.down")
         self.menuOpenConfig?.setImageIfDesired(systemSymbolName: "gear")
         self.menuSettingsPanel?.setImageIfDesired(systemSymbolName: "slider.horizontal.3")
+        self.menuWelcomeSetup?.setImageIfDesired(systemSymbolName: "wand.and.stars")
         self.menuTodoWorkspace?.setImageIfDesired(systemSymbolName: "checklist")
         self.menuReloadConfig?.setImageIfDesired(systemSymbolName: "arrow.trianglehead.2.clockwise.rotate.90")
         self.menuSecureInput?.setImageIfDesired(systemSymbolName: "lock.display")
@@ -1774,6 +1799,31 @@ class AppDelegate: NSObject,
         let insertionIndex = menu.index(of: settingsItem) + 1
         menu.insertItem(item, at: max(insertionIndex, 0))
         menuTodoWorkspace = item
+    }
+
+    private func installWelcomeSetupMenuItemIfNeeded() {
+        guard menuWelcomeSetup == nil,
+              let settingsItem = menuSettingsPanel,
+              let menu = settingsItem.menu else { return }
+
+        let item = NSMenuItem(
+            title: L10n.WelcomeSetup.menuTitle,
+            action: #selector(showWelcomeSetup(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+
+        let insertionIndex = menu.index(of: settingsItem) + 1
+        menu.insertItem(item, at: max(insertionIndex, 0))
+        menuWelcomeSetup = item
+    }
+
+    private func maybeShowWelcomeSetupOnFirstLaunch() {
+        guard Self.shouldShowWelcomeSetupOnFirstLaunch() else { return }
+        DispatchQueue.main.async { [weak self] in
+            Self.markWelcomeSetupShown()
+            self?.welcomeSetupController.show()
+        }
     }
 
     // MARK: Notifications and Events
@@ -2655,6 +2705,10 @@ class AppDelegate: NSObject,
 
     @IBAction func openConfig(_ sender: Any?) {
         Ghostty.App.openConfig()
+    }
+
+    @IBAction func showWelcomeSetup(_ sender: Any?) {
+        welcomeSetupController.show()
     }
 
     @IBAction func reloadConfig(_ sender: Any?) {

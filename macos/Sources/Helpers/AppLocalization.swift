@@ -455,6 +455,41 @@ enum AppLocalization {
         "settings.icon.option.paper": "Paper",
         "settings.icon.option.retro": "Retro",
         "settings.icon.option.xray": "X-Ray",
+        "welcome_setup.window_title": "Welcome Setup",
+        "welcome_setup.menu_title": "Welcome Setup...",
+        "welcome_setup.title": "Set up GhoDex for your first run",
+        "welcome_setup.subtitle": "Configure the paths, browser runtime, and remote control basics that are easiest to miss on a fresh install. You can reopen this assistant anytime from the app menu.",
+        "welcome_setup.section.app.title": "App Basics",
+        "welcome_setup.section.app.body": "Choose your interface language, built-in icon, and default mouse behavior before you settle into daily use.",
+        "welcome_setup.section.learning.title": "Learning Workspace",
+        "welcome_setup.section.learning.body": "Point GhoDex at your chat workspace and notes path so learning and scaffolded workspaces land in the right place from day one.",
+        "welcome_setup.section.learning.chat_workspace": "Chat Workspace Path",
+        "welcome_setup.section.learning.chat_workspace_help": "The learn workspace is derived beside this chat workspace directory.",
+        "welcome_setup.section.learning.notes_relative_path": "Notes Relative Path",
+        "welcome_setup.section.learning.notes_relative_path_help": "Relative notes paths resolve from the learn workspace. Absolute paths are also supported.",
+        "welcome_setup.section.todo.title": "Todo Workspace",
+        "welcome_setup.section.todo.body": "Choose where daily todo documents and workspace overlays should be created.",
+        "welcome_setup.section.todo.workspace_root_help": "GhoDex writes todo day files and workspace metadata under this root.",
+        "welcome_setup.section.browser.title": "Browser Runtime",
+        "welcome_setup.section.browser.body": "Browser tabs need a Chromium runtime. Managed paths are the safest default; custom paths are for advanced setups.",
+        "welcome_setup.section.browser.runtime.ready": "Browser runtime is ready in this app session.",
+        "welcome_setup.section.browser.runtime.unavailable": "No compatible browser runtime is active yet.",
+        "welcome_setup.section.browser.runtime.initializing": "Chromium is still initializing for this app session.",
+        "welcome_setup.section.browser.runtime.failed": "A runtime was found, but Chromium could not be activated yet. Retry activation or reinstall the managed runtime.",
+        "welcome_setup.section.browser.runtime.unsupported": "This build does not support managed CEF runtime activation.",
+        "welcome_setup.section.browser.install_runtime": "Install Managed Runtime",
+        "welcome_setup.section.browser.retry_activation": "Retry Activation",
+        "welcome_setup.section.browser.activation_failed": "Browser runtime installed, but Chromium could not be activated in this app session.",
+        "welcome_setup.section.gateway.title": "Remote Control Gateway",
+        "welcome_setup.section.gateway.body": "These settings control how GhoDex exposes its harness gateway to local or remote clients.",
+        "welcome_setup.footer_note": "This assistant edits the same settings used elsewhere in GhoDex. It does not introduce a second configuration source.",
+        "welcome_setup.open_settings": "Open Settings Panel",
+        "welcome_setup.apply": "Apply",
+        "welcome_setup.finish": "Finish Setup",
+        "welcome_setup.saved": "Setup saved.",
+        "welcome_setup.saved_restart_required": "Setup saved. Restart GhoDex to fully apply the language change.",
+        "welcome_setup.finished": "Setup saved. You can reopen this assistant later from the app menu.",
+        "welcome_setup.finished_restart_required": "Setup saved. Restart GhoDex to fully apply the language change; this assistant remains available from the app menu.",
         "settings.browser.title": "Browser Profile",
         "settings.browser.description": "Choose which Chromium profile GhoDex should use for Browser tabs. Leave it on the managed default to keep browser data isolated from Chrome.",
         "settings.browser.profile_section": "Browser Profile",
@@ -968,6 +1003,41 @@ enum AppLocalization {
         "settings.icon.option.paper": "纸质",
         "settings.icon.option.retro": "复古",
         "settings.icon.option.xray": "X 光",
+        "welcome_setup.window_title": "欢迎设置",
+        "welcome_setup.menu_title": "欢迎设置...",
+        "welcome_setup.title": "首次启动时先把 GhoDex 配好",
+        "welcome_setup.subtitle": "把最容易遗漏的路径、Browser 运行时和远程控制基础项先配置清楚。后续你也可以随时从应用菜单重新打开这个助手。",
+        "welcome_setup.section.app.title": "应用基础",
+        "welcome_setup.section.app.body": "先选好界面语言、内置图标和默认鼠标行为，后续日常使用会更顺手。",
+        "welcome_setup.section.learning.title": "学习工作区",
+        "welcome_setup.section.learning.body": "把聊天工作区和笔记路径先设好，这样学习能力和脚手架工作区会从第一天起就落到正确位置。",
+        "welcome_setup.section.learning.chat_workspace": "聊天工作区路径",
+        "welcome_setup.section.learning.chat_workspace_help": "learn 工作区会自动生成在这个聊天工作区目录旁边。",
+        "welcome_setup.section.learning.notes_relative_path": "笔记相对路径",
+        "welcome_setup.section.learning.notes_relative_path_help": "相对路径会以 learn 工作区为基准解析；也支持直接填写绝对路径。",
+        "welcome_setup.section.todo.title": "Todo 工作区",
+        "welcome_setup.section.todo.body": "选择每天的 todo 文档和工作区覆盖层要写到哪里。",
+        "welcome_setup.section.todo.workspace_root_help": "GhoDex 会在这个根目录下写入 todo 日文件和工作区元数据。",
+        "welcome_setup.section.browser.title": "Browser 运行时",
+        "welcome_setup.section.browser.body": "Browser 标签页需要 Chromium 运行时。托管路径是默认最稳的方式；自定义路径更适合高级场景。",
+        "welcome_setup.section.browser.runtime.ready": "当前应用会话中的 Browser 运行时已经就绪。",
+        "welcome_setup.section.browser.runtime.unavailable": "当前还没有可用的 Browser 运行时。",
+        "welcome_setup.section.browser.runtime.initializing": "Chromium 仍在当前应用会话中初始化。",
+        "welcome_setup.section.browser.runtime.failed": "已经找到运行时，但 Chromium 还没成功激活。你可以重试激活，或者重新安装托管运行时。",
+        "welcome_setup.section.browser.runtime.unsupported": "当前构建不支持托管 CEF 运行时激活。",
+        "welcome_setup.section.browser.install_runtime": "安装托管运行时",
+        "welcome_setup.section.browser.retry_activation": "重试激活",
+        "welcome_setup.section.browser.activation_failed": "Browser 运行时已经安装，但当前应用会话里还没能成功激活 Chromium。",
+        "welcome_setup.section.gateway.title": "远程控制网关",
+        "welcome_setup.section.gateway.body": "这些设置决定了 GhoDex 如何把 harness 网关暴露给本地或远程客户端。",
+        "welcome_setup.footer_note": "这个助手编辑的是 GhoDex 现有设置本体，不会引入第二套配置来源。",
+        "welcome_setup.open_settings": "打开设置面板",
+        "welcome_setup.apply": "应用",
+        "welcome_setup.finish": "完成设置",
+        "welcome_setup.saved": "设置已保存。",
+        "welcome_setup.saved_restart_required": "设置已保存。语言变更需要重启 GhoDex 才能完全生效。",
+        "welcome_setup.finished": "设置已保存。后续你可以从应用菜单重新打开这个助手。",
+        "welcome_setup.finished_restart_required": "设置已保存。语言变更需要重启 GhoDex 才能完全生效；这个助手后续仍可从应用菜单重新打开。",
         "settings.browser.title": "浏览器配置",
         "settings.browser.description": "选择 Browser 标签页使用哪个 Chromium 配置目录。保持为 GhoDex 管理的默认值时，浏览器数据会和 Chrome 隔离。",
         "settings.browser.profile_section": "浏览器配置",
@@ -1668,6 +1738,44 @@ enum L10n {
         nonisolated static var gatewayApply: String { AppLocalization.localizedString("settings.gateway.apply") }
         nonisolated static var gatewayShowQr: String { AppLocalization.localizedString("settings.gateway.show_qr") }
         nonisolated static var gatewayPendingChanges: String { AppLocalization.localizedString("settings.gateway.pending_changes") }
+    }
+
+    enum WelcomeSetup {
+        nonisolated static var windowTitle: String { AppLocalization.localizedString("welcome_setup.window_title") }
+        nonisolated static var menuTitle: String { AppLocalization.localizedString("welcome_setup.menu_title") }
+        nonisolated static var title: String { AppLocalization.localizedString("welcome_setup.title") }
+        nonisolated static var subtitle: String { AppLocalization.localizedString("welcome_setup.subtitle") }
+        nonisolated static var appSectionTitle: String { AppLocalization.localizedString("welcome_setup.section.app.title") }
+        nonisolated static var appSectionBody: String { AppLocalization.localizedString("welcome_setup.section.app.body") }
+        nonisolated static var learningSectionTitle: String { AppLocalization.localizedString("welcome_setup.section.learning.title") }
+        nonisolated static var learningSectionBody: String { AppLocalization.localizedString("welcome_setup.section.learning.body") }
+        nonisolated static var learningChatWorkspace: String { AppLocalization.localizedString("welcome_setup.section.learning.chat_workspace") }
+        nonisolated static var learningChatWorkspaceHelp: String { AppLocalization.localizedString("welcome_setup.section.learning.chat_workspace_help") }
+        nonisolated static var learningNotesRelativePath: String { AppLocalization.localizedString("welcome_setup.section.learning.notes_relative_path") }
+        nonisolated static var learningNotesRelativePathHelp: String { AppLocalization.localizedString("welcome_setup.section.learning.notes_relative_path_help") }
+        nonisolated static var todoSectionTitle: String { AppLocalization.localizedString("welcome_setup.section.todo.title") }
+        nonisolated static var todoSectionBody: String { AppLocalization.localizedString("welcome_setup.section.todo.body") }
+        nonisolated static var todoWorkspaceRootHelp: String { AppLocalization.localizedString("welcome_setup.section.todo.workspace_root_help") }
+        nonisolated static var browserSectionTitle: String { AppLocalization.localizedString("welcome_setup.section.browser.title") }
+        nonisolated static var browserSectionBody: String { AppLocalization.localizedString("welcome_setup.section.browser.body") }
+        nonisolated static var browserRuntimeReady: String { AppLocalization.localizedString("welcome_setup.section.browser.runtime.ready") }
+        nonisolated static var browserRuntimeUnavailable: String { AppLocalization.localizedString("welcome_setup.section.browser.runtime.unavailable") }
+        nonisolated static var browserRuntimeInitializing: String { AppLocalization.localizedString("welcome_setup.section.browser.runtime.initializing") }
+        nonisolated static var browserRuntimeFailed: String { AppLocalization.localizedString("welcome_setup.section.browser.runtime.failed") }
+        nonisolated static var browserRuntimeUnsupported: String { AppLocalization.localizedString("welcome_setup.section.browser.runtime.unsupported") }
+        nonisolated static var browserInstallRuntime: String { AppLocalization.localizedString("welcome_setup.section.browser.install_runtime") }
+        nonisolated static var browserRetryActivation: String { AppLocalization.localizedString("welcome_setup.section.browser.retry_activation") }
+        nonisolated static var browserRuntimeActivationFailed: String { AppLocalization.localizedString("welcome_setup.section.browser.activation_failed") }
+        nonisolated static var gatewaySectionTitle: String { AppLocalization.localizedString("welcome_setup.section.gateway.title") }
+        nonisolated static var gatewaySectionBody: String { AppLocalization.localizedString("welcome_setup.section.gateway.body") }
+        nonisolated static var footerNote: String { AppLocalization.localizedString("welcome_setup.footer_note") }
+        nonisolated static var openSettings: String { AppLocalization.localizedString("welcome_setup.open_settings") }
+        nonisolated static var apply: String { AppLocalization.localizedString("welcome_setup.apply") }
+        nonisolated static var finish: String { AppLocalization.localizedString("welcome_setup.finish") }
+        nonisolated static var saved: String { AppLocalization.localizedString("welcome_setup.saved") }
+        nonisolated static var savedRestartRequired: String { AppLocalization.localizedString("welcome_setup.saved_restart_required") }
+        nonisolated static var finished: String { AppLocalization.localizedString("welcome_setup.finished") }
+        nonisolated static var finishedRestartRequired: String { AppLocalization.localizedString("welcome_setup.finished_restart_required") }
     }
 
     enum App {

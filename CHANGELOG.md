@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(onboarding): add first-run setup guide for core GhoDex workflows
+
+- What changed: Added a dedicated first-run Welcome Setup window that auto-opens once on initial launch, can be reopened from the app menu, and lets users configure language, mouse side-button tab switching, built-in app icon, learning workspace defaults, todo workspace root, browser managed profile/runtime, and Control Harness gateway settings from one guided flow.
+- Why: New users were landing directly in a dense settings surface without enough product context, which made important GhoDex-specific workflows like learning, todo, browser runtime, and remote control feel fragmented and hard to understand.
+- Impact: First launch now has a guided onboarding layer that writes back into the existing app settings sources of truth instead of creating a parallel config path, while still allowing users to reopen the guide later for setup corrections.
+- Verification: `zig build -Demit-xcframework=true -Demit-macos-app=false`; `nu macos/build.nu --configuration Debug --action build`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination platform=macOS,arch=arm64 -derivedDataPath macos/build/DerivedDataTest ARCHS=arm64 ONLY_ACTIVE_ARCH=YES EXCLUDED_ARCHS=x86_64 GHODEX_CEF_ENABLED=1 GHODEX_CEF_ROOT=/Users/leongong/Desktop/LeonProjects/GhoDex/macos/build/cef-runtime/current GHODEX_CEF_OTHER_LDFLAGS=-lsqlite3 GHODEX_CEF_WRAPPER_LIB=/Users/leongong/Desktop/LeonProjects/GhoDex/macos/build/cef-runtime/current/lib/Debug/libcef_dll_wrapper.a -skip-testing GhosttyUITests -only-testing:GhosttyTests/AppDelegateWelcomeSetupTests -only-testing:GhosttyTests/AppDelegateStartupPolicyTests -only-testing:GhosttyTests/AppDelegateMouseNavigationTests test`
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Features/Settings/WelcomeSetupController.swift`, `macos/Sources/Features/Settings/WelcomeSetupView.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `macos/Tests/AppDelegateWelcomeSetupTests.swift`, `CHANGELOG.md`
+- Decision trail: Keep onboarding as a thin orchestration layer over the existing settings/runtime stores so the first-run guide reuses the same persistence and runtime hooks as the rest of GhoDex.
+
 ## [0.3.1] - 2026-04-14
 
 ### fix(settings): route mouse side-button tab switching through window dispatch
