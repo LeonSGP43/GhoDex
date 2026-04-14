@@ -661,7 +661,7 @@ class AppDelegate: NSObject,
         // Setup a local event monitor for app-level keyboard shortcuts and
         // mouse side-button tab switching. See localEventHandler for more info.
         _ = NSEvent.addLocalMonitorForEvents(
-            matching: [.keyDown, .otherMouseDown],
+            matching: [.keyDown, .otherMouseDown, .swipe, .gesture, .systemDefined],
             handler: localEventHandler)
 
         // Notifications
@@ -1962,14 +1962,19 @@ class AppDelegate: NSObject,
     /// events without any terminal windows open.
     @MainActor
     private func localEventHandler(_ event: NSEvent) -> NSEvent? {
-        return switch event.type {
+        switch event.type {
         case .keyDown:
-            localEventKeyDown(event)
+            recordMouseNavigationCandidate(event, source: "app.local_monitor")
+            return localEventKeyDown(event)
         case .otherMouseDown:
-            handleMouseBackForwardTabSwitch(event) ? nil : event
+            recordMouseNavigationCandidate(event, source: "app.local_monitor")
+            return handleMouseBackForwardTabSwitch(event) ? nil : event
+        case .swipe, .gesture, .systemDefined:
+            recordMouseNavigationCandidate(event, source: "app.local_monitor")
+            return event
 
         default:
-            event
+            return event
         }
     }
 
@@ -1998,8 +2003,62 @@ class AppDelegate: NSObject,
         }
 
         guard targetIndex != selectedIndex else { return false }
+        RuntimeDiagnosticsLogger.log(
+            component: "mouse_navigation",
+            event: "tab_switch_applied",
+            details: [
+                "source": hostWindow == nil ? "app_delegate" : "window_dispatch",
+                "eventType": String(describing: event.type),
+                "buttonNumber": String(event.buttonNumber),
+                "selectedIndex": String(selectedIndex),
+                "targetIndex": String(targetIndex),
+                "tabCount": String(tabbedWindows.count),
+            ]
+        )
         tabbedWindows[targetIndex].makeKeyAndOrderFront(nil)
         return true
+    }
+
+    @MainActor
+    func recordMouseNavigationCandidate(
+        _ event: NSEvent,
+        source: String,
+        hostWindow: NSWindow? = nil
+    ) {
+        guard mouseBackForwardSwitchesTabs else { return }
+        guard Self.shouldRecordMouseNavigationCandidate(event) else { return }
+
+        let resolvedWindow = hostWindow ?? event.window ?? NSApp.keyWindow ?? NSApp.mainWindow
+        let windowClass = resolvedWindow.map { String(describing: type(of: $0)) } ?? "nil"
+        let windowTitle = resolvedWindow?.title ?? ""
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let details: [String: String] = [
+            "source": source,
+            "type": String(describing: event.type),
+            "buttonNumber": String(event.buttonNumber),
+            "keyCode": String(event.keyCode),
+            "isARepeat": event.isARepeat ? "true" : "false",
+            "characters": event.characters ?? "",
+            "charactersIgnoringModifiers": event.charactersIgnoringModifiers ?? "",
+            "modifierFlags": Self.describeMouseNavigationModifierFlags(flags),
+            "modifierFlagsRaw": String(flags.rawValue),
+            "deltaX": String(format: "%.3f", event.deltaX),
+            "deltaY": String(format: "%.3f", event.deltaY),
+            "scrollingDeltaX": String(format: "%.3f", event.scrollingDeltaX),
+            "scrollingDeltaY": String(format: "%.3f", event.scrollingDeltaY),
+            "phase": String(event.phase.rawValue),
+            "momentumPhase": String(event.momentumPhase.rawValue),
+            "subtype": String(event.subtype.rawValue),
+            "windowClass": windowClass,
+            "windowTitle": windowTitle,
+            "windowNumber": String(event.windowNumber),
+        ]
+
+        RuntimeDiagnosticsLogger.log(
+            component: "mouse_navigation",
+            event: "candidate_event",
+            details: details
+        )
     }
 
     private func localEventKeyDown(_ event: NSEvent) -> NSEvent? {
@@ -3615,6 +3674,32 @@ extension AppDelegate {
         default:
             return nil
         }
+    }
+
+    static func shouldRecordMouseNavigationCandidate(_ event: NSEvent) -> Bool {
+        switch event.type {
+        case .otherMouseDown, .swipe, .gesture, .systemDefined:
+            return true
+        case .keyDown:
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            return !flags.isDisjoint(with: [.command, .control, .option, .function])
+        default:
+            return false
+        }
+    }
+
+    static func describeMouseNavigationModifierFlags(_ flags: NSEvent.ModifierFlags) -> String {
+        let normalized = flags.intersection(.deviceIndependentFlagsMask)
+        var names: [String] = []
+        if normalized.contains(.capsLock) { names.append("capsLock") }
+        if normalized.contains(.shift) { names.append("shift") }
+        if normalized.contains(.control) { names.append("control") }
+        if normalized.contains(.option) { names.append("option") }
+        if normalized.contains(.command) { names.append("command") }
+        if normalized.contains(.numericPad) { names.append("numericPad") }
+        if normalized.contains(.help) { names.append("help") }
+        if normalized.contains(.function) { names.append("function") }
+        return names.isEmpty ? "none" : names.joined(separator: ",")
     }
 
     static func terminationReason(forAppleEventTypeCode typeCode: DescType) -> String {

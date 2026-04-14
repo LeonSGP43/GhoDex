@@ -203,10 +203,16 @@ class TerminalWindow: NSWindow {
     override var canBecomeMain: Bool { return true }
 
     override func sendEvent(_ event: NSEvent) {
-        if event.type == .otherMouseDown,
-           let appDelegate = NSApp.delegate as? AppDelegate,
-           appDelegate.handleMouseBackForwardTabSwitch(event, in: self) {
-            return
+        if let appDelegate = NSApp.delegate as? AppDelegate {
+            appDelegate.recordMouseNavigationCandidate(
+                event,
+                source: "terminal_window.sendEvent",
+                hostWindow: self
+            )
+            if event.type == .otherMouseDown,
+               appDelegate.handleMouseBackForwardTabSwitch(event, in: self) {
+                return
+            }
         }
 
         if event.type == .keyDown,
