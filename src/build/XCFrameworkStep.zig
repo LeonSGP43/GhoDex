@@ -41,6 +41,7 @@ pub fn create(b: *std.Build, opts: Options) *XCFrameworkStep {
     const run_delete = run: {
         const run = RunStep.create(b, b.fmt("xcframework delete {s}", .{opts.name}));
         run.has_side_effects = true;
+        run.cwd = b.path("");
         run.addArgs(&.{ "rm", "-rf", opts.out_path });
         break :run run;
     };
@@ -49,6 +50,7 @@ pub fn create(b: *std.Build, opts: Options) *XCFrameworkStep {
     const run_create = run: {
         const run = RunStep.create(b, b.fmt("xcframework {s}", .{opts.name}));
         run.has_side_effects = true;
+        run.cwd = b.path("");
         run.addArgs(&.{ "xcodebuild", "-create-xcframework" });
         for (opts.libraries) |lib| {
             run.addArg("-library");
