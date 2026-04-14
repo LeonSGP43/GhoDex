@@ -445,6 +445,8 @@ enum AppLocalization {
         "settings.icon.saved": "Logo settings saved to config.",
         "settings.icon.live_apply": "After saving, GhoDex reloads config and updates the app icon immediately.",
         "settings.icon.option.official": "Official",
+        "settings.icon.option.ghodex": "GhoDex",
+        "settings.icon.option.banana": "Banana",
         "settings.icon.option.blueprint": "Blueprint",
         "settings.icon.option.chalkboard": "Chalkboard",
         "settings.icon.option.glass": "Glass",
@@ -952,6 +954,8 @@ enum AppLocalization {
         "settings.icon.saved": "Logo 设置已写入配置文件。",
         "settings.icon.live_apply": "保存后 GhoDex 会重载配置，并立即更新应用图标。",
         "settings.icon.option.official": "官方",
+        "settings.icon.option.ghodex": "GhoDex",
+        "settings.icon.option.banana": "香蕉",
         "settings.icon.option.blueprint": "蓝图",
         "settings.icon.option.chalkboard": "黑板",
         "settings.icon.option.glass": "玻璃",
@@ -1587,6 +1591,8 @@ enum L10n {
         nonisolated static var iconSaved: String { AppLocalization.localizedString("settings.icon.saved") }
         nonisolated static var iconLiveApply: String { AppLocalization.localizedString("settings.icon.live_apply") }
         nonisolated static var iconOptionOfficial: String { AppLocalization.localizedString("settings.icon.option.official") }
+        nonisolated static var iconOptionGhodex: String { AppLocalization.localizedString("settings.icon.option.ghodex") }
+        nonisolated static var iconOptionBanana: String { AppLocalization.localizedString("settings.icon.option.banana") }
         nonisolated static var iconOptionBlueprint: String { AppLocalization.localizedString("settings.icon.option.blueprint") }
         nonisolated static var iconOptionChalkboard: String { AppLocalization.localizedString("settings.icon.option.chalkboard") }
         nonisolated static var iconOptionGlass: String { AppLocalization.localizedString("settings.icon.option.glass") }

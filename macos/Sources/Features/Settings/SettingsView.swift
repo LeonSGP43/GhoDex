@@ -443,6 +443,10 @@ struct SettingsView: View {
         switch icon {
         case .official:
             return L10n.Settings.iconOptionOfficial
+        case .ghodex:
+            return L10n.Settings.iconOptionGhodex
+        case .banana:
+            return L10n.Settings.iconOptionBanana
         case .blueprint:
             return L10n.Settings.iconOptionBlueprint
         case .chalkboard:

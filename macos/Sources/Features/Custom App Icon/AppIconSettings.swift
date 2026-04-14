@@ -18,7 +18,11 @@ struct AppIconSettings: Equatable {
     func previewImage(in bundle: Bundle = .main) -> NSImage? {
         switch sanitized.icon {
         case .official:
-            return bundle.image(forResource: "AppIconImage")
+            return AppIcon.officialImage(in: bundle, appBundleURL: bundle.bundleURL)
+        case .ghodex:
+            return AppIcon.ghodex.image(in: bundle)
+        case .banana:
+            return AppIcon.banana.image(in: bundle)
         case .blueprint:
             return AppIcon.blueprint.image(in: bundle)
         case .chalkboard:
@@ -36,7 +40,7 @@ struct AppIconSettings: Equatable {
         case .xray:
             return AppIcon.xray.image(in: bundle)
         case .custom, .customStyle:
-            return bundle.image(forResource: "AppIconImage")
+            return AppIcon.officialImage(in: bundle, appBundleURL: bundle.bundleURL)
         }
     }
 }

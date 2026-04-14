@@ -113,6 +113,16 @@ struct ColorizedGhosttyIconTests {
         #expect(AppIconSettings(icon: .customStyle).sanitized.icon == .official)
     }
 
+    @Test func bananaBuiltInIconIsAvailable() {
+        #expect(Ghostty.MacOSIcon.builtInOptions.contains(.banana))
+        #expect(Ghostty.MacOSIcon.banana.assetName == "BananaImage")
+    }
+
+    @Test func ghodexBuiltInIconIsAvailable() {
+        #expect(Ghostty.MacOSIcon.builtInOptions.contains(.ghodex))
+        #expect(Ghostty.MacOSIcon.ghodex.assetName == "GhodexImage")
+    }
+
     // MARK: - Equatable
 
     @Test func equatableUsesHexColorAndFrameValues() {

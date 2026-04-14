@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(branding): add built-in banana and ghodex icon presets
+
+- What changed: Added two new built-in app icon presets, `banana` and `ghodex`, wired them into the macOS settings panel, control-harness icon enum surface, localization strings, configuration parsing, and About icon cycle, and generated bundled `BananaImage` and `GhodexImage` assets from the supplied logo files using the same rounded/inset alpha shape as the existing preset icons.
+- Why: Both supplied logos should behave like first-class built-in presets instead of depending on fragile runtime custom-icon paths.
+- Impact: The banana and GhoDex logos now persist as normal built-in icon options and can be selected anywhere the app exposes built-in icon presets.
+- Verification: `python3` asset generation check for `BananaImage.imageset/macOS-AppIcon-1024px.png` and `GhodexImage.imageset/macOS-AppIcon-1024px.png`; `nu macos/build.nu --configuration ReleaseLocal --action build`
+- Files: `macos/Assets.xcassets/Alternate Icons/BananaImage.imageset/*`, `macos/Assets.xcassets/Alternate Icons/GhodexImage.imageset/*`, `src/config/Config.zig`, `macos/Sources/Ghostty/Ghostty.ConfigTypes.swift`, `macos/Sources/Features/Custom App Icon/*`, `macos/Sources/Features/Settings/SettingsView.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `macos/Sources/Features/About/AboutViewModel.swift`, `macos/Tests/ColorizedGhosttyIconTests.swift`, `CHANGELOG.md`
+
+### fix(macos): align official runtime icon with the bundled app icon
+
+- What changed: Switched the default `official` icon preview/runtime path to load the app bundle's actual primary icon resource instead of the square `AppIconImage` preview asset, and updated the Dock tile reset path to use that same bundled icon.
+- Why: The installed app icon already had the intended rounded/inset macOS presentation, but launching the app replaced it with a full-bleed preview image, which made the Dock icon look inconsistent with other macOS apps.
+- Impact: The default GhoDex icon now stays visually aligned across the static bundle icon, settings preview, and live Dock/app icon behavior.
+- Verification: `python3` alpha-bbox inspection for `macos/Assets.xcassets/AppIconImage.imageset/macOS-AppIcon-1024px.png` and `/Applications/GhoDex.app/Contents/Resources/Ghostty.icns`; `xcodebuild build -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration ReleaseLocal -destination 'platform=macOS'`
+- Files: `macos/Sources/Features/Custom App Icon/AppIcon.swift`, `macos/Sources/Features/Custom App Icon/AppIconSettings.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Features/Custom App Icon/DockTilePlugin.swift`, `CHANGELOG.md`
+
 ### chore(repo): finish root layout cleanup
 
 - What changed: Moved the remaining root-level gateway acceptance helper into `scripts/` and kept the repo root focused on entry docs, build files, and project metadata.

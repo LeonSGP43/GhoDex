@@ -8,6 +8,8 @@ class AboutViewModel: ObservableObject {
 
     private let icons: [Ghostty.MacOSIcon] = [
         .official,
+        .ghodex,
+        .banana,
         .blueprint,
         .chalkboard,
         .microchip,

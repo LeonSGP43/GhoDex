@@ -107,6 +107,7 @@ class DockTilePlugin: NSObject, NSDockTilePlugIn {
     private func resetIcon(dockTile: NSDockTile) {
         let appBundlePath = self.ghosttyAppURL?.path
         let shouldWriteBundleIcon = AppBundleIconMutationPolicy.shouldWriteBundleIcon(at: ghosttyAppURL)
+        let officialAppIcon = AppIcon.officialImage(in: pluginBundle, appBundleURL: ghosttyAppURL)
         let appIcon: NSImage
         if #available(macOS 26.0, *) {
             // Reset to the default (glassy) icon.
@@ -118,25 +119,13 @@ class DockTilePlugin: NSObject, NSDockTilePlugIn {
             // Use the `Blueprint` icon to distinguish Debug from Release builds.
             appIcon = pluginBundle.image(forResource: "BlueprintImage")!
             #else
-            // Get the composed icon from the app bundle.
-            if let appBundlePath,
-                let iconRep = NSWorkspace.shared.icon(forFile: appBundlePath)
-                .bestRepresentation(
-                    for: CGRect(origin: .zero, size: dockTile.size),
-                    context: nil,
-                    hints: nil
-            ) {
-                appIcon = NSImage(size: dockTile.size)
-                appIcon.addRepresentation(iconRep)
-            } else {
-                // If something unexpected happens on macOS 26,
-                // fall back to a bundled icon.
-                appIcon = pluginBundle.image(forResource: "AppIconImage")!
-            }
+            // Use the app bundle's real icon so the default preset matches the
+            // installed app icon instead of a square preview asset.
+            appIcon = officialAppIcon ?? pluginBundle.image(forResource: "AppIconImage")!
             #endif
         } else {
             // Use the bundled icon to keep the corner radius consistent with pre-Tahoe apps.
-            appIcon = pluginBundle.image(forResource: "AppIconImage")!
+            appIcon = officialAppIcon ?? pluginBundle.image(forResource: "AppIconImage")!
             if shouldWriteBundleIcon, let appBundlePath {
                 NSWorkspace.shared.setIcon(appIcon, forFile: appBundlePath)
             }

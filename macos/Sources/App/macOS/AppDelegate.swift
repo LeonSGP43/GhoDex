@@ -2149,7 +2149,7 @@ class AppDelegate: NSObject,
 
     @MainActor
     private func applyLiveAppIcon(_ image: NSImage?, resolvedIcon: AppIcon?) {
-        let defaultImage = Bundle.main.image(forResource: "AppIconImage")
+        let defaultImage = AppIcon.officialImage(in: .main, appBundleURL: Bundle.main.bundleURL)
         NSApp.applicationIconImage = image ?? defaultImage ?? NSApp.applicationIconImage
         applyLiveDockTileIcon(image)
         syncBundleIcon(image, resolvedIcon: resolvedIcon)

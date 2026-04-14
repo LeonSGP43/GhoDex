@@ -4,6 +4,8 @@ import System
 /// The icon style for the Ghostty App.
 enum AppIcon: Equatable, Codable {
     case official
+    case ghodex
+    case banana
     case blueprint
     case chalkboard
     case glass
@@ -21,6 +23,10 @@ enum AppIcon: Equatable, Codable {
         switch config.macosIcon {
         case .official:
             return nil
+        case .ghodex:
+            self = .ghodex
+        case .banana:
+            self = .banana
         case .blueprint:
             self = .blueprint
         case .chalkboard:
@@ -47,6 +53,10 @@ enum AppIcon: Equatable, Codable {
         switch self {
         case .official:
             return nil
+        case .ghodex:
+            return bundle.image(forResource: "GhodexImage")!
+        case .banana:
+            return bundle.image(forResource: "BananaImage")!
         case .blueprint:
             return bundle.image(forResource: "BlueprintImage")!
         case .chalkboard:
@@ -68,6 +78,38 @@ enum AppIcon: Equatable, Codable {
         case let .customStyle(customIcon):
             return customIcon.makeImage(in: bundle)
         }
+    }
+
+    static func officialImage(in bundle: Bundle, appBundleURL: URL? = nil) -> NSImage? {
+        if let appBundleURL {
+            let icon = NSWorkspace.shared.icon(forFile: appBundleURL.path)
+            if let iconRep = icon.bestRepresentation(
+                for: CGRect(origin: .zero, size: NSSize(width: 1024, height: 1024)),
+                context: nil,
+                hints: nil
+            ) {
+                let image = NSImage(size: iconRep.size)
+                image.addRepresentation(iconRep)
+                return image
+            }
+
+            return icon
+        }
+
+        guard let iconFile = bundle.object(forInfoDictionaryKey: "CFBundleIconFile") as? String else {
+            return bundle.image(forResource: "AppIconImage")
+        }
+
+        let iconName = URL(fileURLWithPath: iconFile).deletingPathExtension().lastPathComponent
+        if let image = bundle.image(forResource: iconName) {
+            return image
+        }
+
+        if let iconURL = bundle.url(forResource: iconName, withExtension: "icns") {
+            return NSImage(contentsOf: iconURL)
+        }
+
+        return bundle.image(forResource: "AppIconImage")
     }
 }
 
