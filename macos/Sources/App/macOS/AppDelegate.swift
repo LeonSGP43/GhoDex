@@ -528,10 +528,10 @@ class AppDelegate: NSObject,
             NSApp.servicesMenu = menuServices
         }
 
-        // Setup a local event monitor for app-level keyboard shortcuts. See
-        // localEventHandler for more info why.
+        // Setup a local event monitor for app-level keyboard shortcuts and
+        // mouse side-button tab switching. See localEventHandler for more info.
         _ = NSEvent.addLocalMonitorForEvents(
-            matching: [.keyDown],
+            matching: [.keyDown, .otherMouseDown],
             handler: localEventHandler)
 
         // Notifications
@@ -1830,10 +1830,13 @@ class AppDelegate: NSObject,
 
     /// This handles events from the NSEvent.addLocalEventMonitor. We use this so we can get
     /// events without any terminal windows open.
+    @MainActor
     private func localEventHandler(_ event: NSEvent) -> NSEvent? {
         return switch event.type {
         case .keyDown:
             localEventKeyDown(event)
+        case .otherMouseDown:
+            handleMouseBackForwardTabSwitch(event) ? nil : event
 
         default:
             event

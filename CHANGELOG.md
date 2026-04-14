@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(input): restore app-wide mouse side-button top-level tab switching
+
+- What changed: Reintroduced mouse side-button top-level tab switching at the app-level local event monitor so `otherMouseDown` events for the back/forward side buttons are intercepted before focused content or window-class differences can drop them.
+- Why: The previous window-dispatch-only path was not reliably firing in real use, including Terminal top-level tabs, so enabling the setting could still leave the back/forward side buttons with no visible effect.
+- Impact: When `ghodex-mouse-back-forward-switches-tabs` is enabled, mouse side buttons now switch previous/next native macOS top-level tabs consistently across the active app window instead of depending on specific window subclasses to receive the event first.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS' -skip-testing GhosttyUITests -only-testing:GhosttyTests/AppDelegateMouseNavigationTests test`
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `CHANGELOG.md`
+- Decision trail: Keep the window-level interception as a secondary safety net, but move the real entry point back to the app-level event monitor because mouse side-button switching is a cross-window app behavior, not a per-window implementation detail.
+
 ### feat(onboarding): add first-run setup guide for core GhoDex workflows
 
 - What changed: Added a dedicated first-run Welcome Setup window that auto-opens once on initial launch, can be reopened from the app menu, and lets users configure language, mouse side-button tab switching, built-in app icon, learning workspace defaults, todo workspace root, browser managed profile/runtime, and Control Harness gateway settings from one guided flow.
