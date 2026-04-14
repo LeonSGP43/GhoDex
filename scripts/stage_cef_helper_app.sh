@@ -23,19 +23,129 @@ app_short_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionStri
 main_exec="$contents_dir/MacOS/$app_exec"
 helper_root="$contents_dir/Frameworks"
 
+detect_codesign_identity() {
+  local signature_info authority
+
+  signature_info="$(/usr/bin/codesign -dv --verbose=4 "$app_bundle" 2>&1 || true)"
+  authority="$(printf '%s\n' "$signature_info" | awk -F= '/^Authority=/{print $2; exit}')"
+  printf '%s' "$authority"
+}
+
+resolve_codesign_identity() {
+  local requested_identity="$1"
+  local sha_match
+
+  if [[ -z "$requested_identity" || "$requested_identity" == "-" ]]; then
+    printf '%s' "-"
+    return 0
+  fi
+
+  if [[ "$requested_identity" =~ ^[A-F0-9]{40}$ ]]; then
+    printf '%s' "$requested_identity"
+    return 0
+  fi
+
+  sha_match="$(
+    security find-identity -v -p codesigning 2>/dev/null \
+      | awk -v needle="$requested_identity" 'index($0, "\"" needle "\"") { print $2; exit }'
+  )"
+
+  if [[ -n "$sha_match" ]]; then
+    printf '%s' "$sha_match"
+    return 0
+  fi
+
+  printf '%s' "$requested_identity"
+}
+
+capture_app_entitlements() {
+  local destination="$1"
+
+  if /usr/bin/codesign -d --entitlements :- "$app_bundle" >"$destination" 2>/dev/null; then
+    if [[ -s "$destination" ]]; then
+      return 0
+    fi
+  fi
+
+  rm -f "$destination"
+  return 1
+}
+
+path_has_stable_signature() {
+  local target_path="$1"
+  local signature_info
+
+  signature_info="$(/usr/bin/codesign -dv --verbose=4 "$target_path" 2>&1 || true)"
+  grep -q '^Authority=' <<<"$signature_info"
+}
+
+codesign_identity="$(resolve_codesign_identity "${GHODEX_CODESIGN_IDENTITY:-$(detect_codesign_identity)}")"
+
+app_entitlements_file=""
+if [[ "$codesign_identity" != "-" ]]; then
+  app_entitlements_file="$(mktemp -t ghodex-app-entitlements)"
+  if ! capture_app_entitlements "$app_entitlements_file"; then
+    app_entitlements_file=""
+  fi
+fi
+
+cleanup_temp_files() {
+  if [[ -n "$app_entitlements_file" && -f "$app_entitlements_file" ]]; then
+    rm -f "$app_entitlements_file"
+  fi
+}
+
+trap cleanup_temp_files EXIT
+
 remove_signature_artifacts() {
   local target_path="$1"
+  local remove_signature="${2:-1}"
 
   [[ -e "$target_path" ]] || return 0
   xattr -cr "$target_path" 2>/dev/null || true
-  /usr/bin/codesign --remove-signature "$target_path" >/dev/null 2>&1 || true
+
+  if [[ "$remove_signature" == "1" ]]; then
+    /usr/bin/codesign --remove-signature "$target_path" >/dev/null 2>&1 || true
+  fi
 }
 
 sign_code_path() {
   local target_path="$1"
+  local sign_mode="${2:-generic}"
+  local preserve_existing_signature=0
+  local -a codesign_args
 
-  remove_signature_artifacts "$target_path"
-  /usr/bin/codesign --force --sign - --timestamp=none "$target_path"
+  if path_has_stable_signature "$target_path"; then
+    preserve_existing_signature=1
+  fi
+
+  remove_signature_artifacts "$target_path" "$((1 - preserve_existing_signature))"
+
+  codesign_args=(/usr/bin/codesign --force --sign "$codesign_identity")
+  if [[ "$codesign_identity" == "-" ]]; then
+    codesign_args+=(--timestamp=none)
+  else
+    codesign_args+=(--timestamp)
+  fi
+
+  if [[ "$preserve_existing_signature" == "1" ]]; then
+    codesign_args+=(--preserve-metadata=identifier,requirements,flags,runtime,entitlements)
+  fi
+
+  if [[ "$codesign_identity" != "-" ]]; then
+    case "$sign_mode" in
+      helper-executable|helper-bundle|app-bundle)
+        codesign_args+=(--options runtime)
+        ;;
+    esac
+  fi
+
+  if [[ "$sign_mode" == "app-bundle" && -n "$app_entitlements_file" ]]; then
+    codesign_args+=(--entitlements "$app_entitlements_file")
+  fi
+
+  codesign_args+=("$target_path")
+  "${codesign_args[@]}"
 }
 
 verify_code_path() {
@@ -47,11 +157,12 @@ verify_code_path() {
 sign_with_retry() {
   local target_path="$1"
   local label="$2"
+  local sign_mode="${3:-generic}"
   local max_attempts=2
   local attempt=1
 
   while (( attempt <= max_attempts )); do
-    if sign_code_path "$target_path" && verify_code_path "$target_path"; then
+    if sign_code_path "$target_path" "$sign_mode" && verify_code_path "$target_path"; then
       return 0
     fi
 
@@ -177,8 +288,8 @@ sign_helper_bundle() {
     \) -print
   )
 
-  sign_with_retry "$helper_contents/MacOS/$helper_exec" "helper executable"
-  sign_with_retry "$helper_bundle" "helper bundle"
+  sign_with_retry "$helper_contents/MacOS/$helper_exec" "helper executable" "helper-executable"
+  sign_with_retry "$helper_bundle" "helper bundle" "helper-bundle"
 }
 
 create_helper_bundle "$app_exec Helper" ""
@@ -190,4 +301,5 @@ sign_helper_bundle "$helper_root/$app_exec Helper.app"
 sign_helper_bundle "$helper_root/$app_exec Helper (GPU).app"
 sign_helper_bundle "$helper_root/$app_exec Helper (Plugin).app"
 sign_helper_bundle "$helper_root/$app_exec Helper (Renderer).app"
-sign_with_retry "$app_bundle" "app bundle"
+sign_with_retry "$contents_dir/PlugIns/DockTilePlugin.plugin" "dock tile plugin"
+sign_with_retry "$app_bundle" "app bundle" "app-bundle"

@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### build(signing): switch release bundles to Developer ID signing
+
+- What changed: Bound the macOS `GhoDex` app target and `DockTilePlugin` release configurations to team `865A37WV28`, removed the ad-hoc `CODE_SIGN_IDENTITY = "-"` override from release builds, set `Release` / `ReleaseLocal` to sign with `Developer ID Application`, and fixed the CEF helper staging script so it preserves the real Developer ID signature instead of re-signing helper bundles back to ad-hoc.
+- Why: The previous release configuration always produced ad-hoc signed bundles, which is fine for local replacement but not suitable for real outside distribution.
+- Impact: `Release` and `ReleaseLocal` builds now keep a consistent Developer ID signature across the top-level app bundle, `DockTilePlugin`, and the generated CEF helper apps instead of falling back to ad-hoc after the post-build helper staging step.
+- Verification: `nu macos/build.nu --configuration ReleaseLocal --action clean`; `nu macos/build.nu --configuration ReleaseLocal --action build`; `bash scripts/stage_cef_helper_app.sh macos/build/ReleaseLocal/GhoDex.app`; `codesign -dv --verbose=4 macos/build/ReleaseLocal/GhoDex.app`; `codesign --verify --deep --strict macos/build/ReleaseLocal/GhoDex.app`; `spctl --assess --type execute --verbose=4 macos/build/ReleaseLocal/GhoDex.app`
+- Files: `macos/GhoDex.xcodeproj/project.pbxproj`, `scripts/stage_cef_helper_app.sh`, `CHANGELOG.md`
+- Decision trail: Keep debug signing behavior untouched for now, harden only the release-facing configs, and make the helper-bundle staging script reuse the exact signing identity that Xcode used so post-build packaging cannot silently downgrade the release bundle.
+
 ### feat(settings): surface macOS permission diagnostics
 
 - What changed: Added a General settings diagnostics card that shows the current app signing state, exposes bundle/team/signer metadata when available, and links directly to the macOS Files and Folders and Full Disk Access privacy panes.
