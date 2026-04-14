@@ -6,7 +6,137 @@ import OSLog
 import Sparkle
 import GhoDexKit
 import Darwin
+import Security
 import UniformTypeIdentifiers
+
+enum AppPermissionPrivacySettingsDestination: Equatable {
+    case filesAndFolders
+    case fullDiskAccess
+
+    var candidateURLs: [URL] {
+        switch self {
+        case .filesAndFolders:
+            return [
+                URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders"),
+                URL(fileURLWithPath: "/System/Library/PreferencePanes/Security.prefPane"),
+            ].compactMap { $0 }
+        case .fullDiskAccess:
+            return [
+                URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"),
+                URL(fileURLWithPath: "/System/Library/PreferencePanes/Security.prefPane"),
+            ].compactMap { $0 }
+        }
+    }
+}
+
+enum AppPermissionSigningState: Equatable {
+    case unavailable(String)
+    case adhoc
+    case signed
+}
+
+private enum AppPermissionAccessDiagnosticsError: LocalizedError {
+    case bundleNotFound(URL)
+    case staticCodeCreate(OSStatus)
+    case signingInformation(OSStatus)
+
+    var errorDescription: String? {
+        switch self {
+        case .bundleNotFound(let bundleURL):
+            return "App bundle not found at \(bundleURL.path)."
+        case .staticCodeCreate(let status):
+            return SecCopyErrorMessageString(status, nil) as String? ?? "Code-sign inspection failed (\(status))."
+        case .signingInformation(let status):
+            return SecCopyErrorMessageString(status, nil) as String? ?? "Signing information is unavailable (\(status))."
+        }
+    }
+}
+
+struct AppPermissionAccessDiagnostics: Equatable {
+    let signingState: AppPermissionSigningState
+    let bundleIdentifier: String?
+    let teamIdentifier: String?
+    let signerSummary: String?
+
+    var isAdHocSigned: Bool {
+        if case .adhoc = signingState {
+            return true
+        }
+        return false
+    }
+
+    var statusText: String {
+        switch signingState {
+        case .unavailable:
+            return L10n.Settings.permissionsSigningUnavailable
+        case .adhoc:
+            return L10n.Settings.permissionsSigningAdhoc
+        case .signed:
+            return L10n.Settings.permissionsSigningStable
+        }
+    }
+
+    var detailText: String {
+        switch signingState {
+        case .unavailable(let message):
+            return L10n.Settings.permissionsUnavailableDetail(message)
+        case .adhoc:
+            return L10n.Settings.permissionsAdhocDetail
+        case .signed:
+            return L10n.Settings.permissionsStableDetail
+        }
+    }
+
+    static func current(bundleURL: URL = Bundle.main.bundleURL) -> Self {
+        let resolvedBundle = Bundle(url: bundleURL)
+        let fallbackBundleIdentifier = resolvedBundle?.bundleIdentifier
+
+        do {
+            guard FileManager.default.fileExists(atPath: bundleURL.path) else {
+                throw AppPermissionAccessDiagnosticsError.bundleNotFound(bundleURL)
+            }
+
+            var staticCode: SecStaticCode?
+            let createStatus = SecStaticCodeCreateWithPath(bundleURL as CFURL, [], &staticCode)
+            guard createStatus == errSecSuccess, let staticCode else {
+                throw AppPermissionAccessDiagnosticsError.staticCodeCreate(createStatus)
+            }
+
+            var signingInformation: CFDictionary?
+            let copyStatus = SecCodeCopySigningInformation(
+                staticCode,
+                SecCSFlags(rawValue: kSecCSSigningInformation),
+                &signingInformation
+            )
+            guard copyStatus == errSecSuccess,
+                  let info = signingInformation as? [String: Any] else {
+                throw AppPermissionAccessDiagnosticsError.signingInformation(copyStatus)
+            }
+
+            let bundleIdentifier = (info[kSecCodeInfoIdentifier as String] as? String) ?? fallbackBundleIdentifier
+            let teamIdentifier = info[kSecCodeInfoTeamIdentifier as String] as? String
+            let certificates = info[kSecCodeInfoCertificates as String] as? [SecCertificate] ?? []
+            let signerSummary = certificates
+                .compactMap { SecCertificateCopySubjectSummary($0) as String? }
+                .first { $0.isEmpty == false }
+
+            let hasStableIdentity = (teamIdentifier?.isEmpty == false) || certificates.isEmpty == false
+            return AppPermissionAccessDiagnostics(
+                signingState: hasStableIdentity ? .signed : .adhoc,
+                bundleIdentifier: bundleIdentifier,
+                teamIdentifier: teamIdentifier,
+                signerSummary: signerSummary
+            )
+        } catch {
+            return AppPermissionAccessDiagnostics(
+                signingState: .unavailable(error.localizedDescription),
+                bundleIdentifier: fallbackBundleIdentifier,
+                teamIdentifier: nil,
+                signerSummary: nil
+            )
+        }
+    }
+}
 
 enum RemotePairingQRCodeRequestSource: Equatable {
     case manual
@@ -2358,6 +2488,20 @@ class AppDelegate: NSObject,
         let configURL = Self.browserSettingsConfigURL()
         try Self.saveMouseNavigationSettingsConfig(enabled: enabled, to: configURL)
         ghostty.reloadConfig()
+    }
+
+    @MainActor
+    var permissionAccessDiagnostics: AppPermissionAccessDiagnostics {
+        AppPermissionAccessDiagnostics.current(bundleURL: Bundle.main.bundleURL)
+    }
+
+    @MainActor
+    @discardableResult
+    func openPrivacySettings(_ destination: AppPermissionPrivacySettingsDestination) -> Bool {
+        for candidateURL in destination.candidateURLs where NSWorkspace.shared.open(candidateURL) {
+            return true
+        }
+        return false
     }
 
     @MainActor

@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(settings): surface macOS permission diagnostics
+
+- What changed: Added a General settings diagnostics card that shows the current app signing state, exposes bundle/team/signer metadata when available, and links directly to the macOS Files and Folders and Full Disk Access privacy panes.
+- Why: Local debug and ad hoc builds can lose macOS privacy grants after rebuilds, which made permission failures hard to explain from inside the app and forced users to hunt through System Settings manually.
+- Impact: GhoDex now explains whether the current app build is ad hoc, stably signed, or unreadable from the current bundle, and gives users a faster route to the two privacy panes most often needed during local development and automation setup.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS' -skip-testing GhosttyUITests -only-testing:GhosttyTests/AppPermissionAccessDiagnosticsTests test`
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Features/Settings/SettingsView.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `macos/Tests/AppPermissionAccessDiagnosticsTests.swift`, `CHANGELOG.md`
+- Decision trail: Keep permission diagnostics read-only and derived from the live app bundle so the settings panel adds observability and privacy-settings shortcuts without creating any new persisted state.
+
 ### fix(input): restore app-wide mouse side-button top-level tab switching
 
 - What changed: Reintroduced mouse side-button top-level tab switching at the app-level local event monitor so `otherMouseDown` events for the back/forward side buttons are intercepted before focused content or window-class differences can drop them.

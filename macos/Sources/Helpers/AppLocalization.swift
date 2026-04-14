@@ -522,6 +522,21 @@ enum AppLocalization {
         "settings.mouse_navigation.switch_tabs": "Use mouse back/forward buttons to switch top-level tabs",
         "settings.mouse_navigation.description": "When enabled, side buttons on the mouse cycle native macOS top-level tabs in Terminal, Browser, and Workspace Map windows. Leave this off if you want Browser tabs to keep page back/forward behavior.",
         "settings.mouse_navigation.saved": "Mouse navigation setting saved to config.",
+        "settings.permissions.title": "macOS Permission Diagnostics",
+        "settings.permissions.description": "Use these shortcuts when GhoDex needs Files and Folders or Full Disk Access. The signing status helps explain whether those privacy grants are likely to survive local rebuilds and app updates.",
+        "settings.permissions.signing": "Signing Status",
+        "settings.permissions.bundle_identifier": "Bundle ID",
+        "settings.permissions.team_identifier": "Team ID",
+        "settings.permissions.signer_summary": "Signer",
+        "settings.permissions.open_files_and_folders": "Open Files & Folders",
+        "settings.permissions.open_full_disk_access": "Open Full Disk Access",
+        "settings.permissions.open_settings_failed": "GhoDex could not open the requested macOS privacy settings page.",
+        "settings.permissions.signing.unavailable": "Signing details unavailable",
+        "settings.permissions.signing.unavailable_detail": "GhoDex could not inspect the current app signature: %@",
+        "settings.permissions.signing.adhoc": "Ad hoc / local debug signature",
+        "settings.permissions.signing.adhoc_detail": "macOS may treat rebuilt copies of this app as a new binary, so Files and Folders or Full Disk Access approvals can disappear after local rebuilds.",
+        "settings.permissions.signing.stable": "Stable signed app",
+        "settings.permissions.signing.stable_detail": "This app has a stable signing identity, so macOS privacy grants are more likely to survive relaunches and app updates.",
         "settings.gateway.title": "Control Gateway",
         "settings.gateway.description": "Run the mobile pairing gateway directly inside GhoDex. Changes apply immediately and persist across launches.",
         "settings.gateway.enabled": "Enable gateway on app launch",
@@ -1070,6 +1085,21 @@ enum AppLocalization {
         "settings.mouse_navigation.switch_tabs": "使用鼠标前进/回退按钮切换顶层标签页",
         "settings.mouse_navigation.description": "开启后，鼠标侧键会在 Terminal、Browser 和 Workspace Map 窗口的原生 macOS 顶层标签页之间循环切换。如果你希望 Browser 标签页继续保留网页前进/回退行为，请保持关闭。",
         "settings.mouse_navigation.saved": "鼠标导航设置已写入配置文件。",
+        "settings.permissions.title": "macOS 权限诊断",
+        "settings.permissions.description": "当 GhoDex 需要“文件与文件夹”或“完全磁盘访问权限”时，可用这里的快捷入口直接跳转。签名状态也会帮助你判断这些隐私授权在本地重编译和应用更新后是否更可能保留下来。",
+        "settings.permissions.signing": "签名状态",
+        "settings.permissions.bundle_identifier": "Bundle ID",
+        "settings.permissions.team_identifier": "Team ID",
+        "settings.permissions.signer_summary": "签名者",
+        "settings.permissions.open_files_and_folders": "打开“文件与文件夹”",
+        "settings.permissions.open_full_disk_access": "打开“完全磁盘访问权限”",
+        "settings.permissions.open_settings_failed": "GhoDex 无法打开目标 macOS 隐私设置页面。",
+        "settings.permissions.signing.unavailable": "无法读取签名信息",
+        "settings.permissions.signing.unavailable_detail": "GhoDex 无法检查当前应用的签名信息：%@",
+        "settings.permissions.signing.adhoc": "Ad hoc / 本地调试签名",
+        "settings.permissions.signing.adhoc_detail": "macOS 可能会把重编译后的这个应用视为新的二进制，因此“文件与文件夹”或“完全磁盘访问权限”的授权在本地重新构建后可能丢失。",
+        "settings.permissions.signing.stable": "稳定签名应用",
+        "settings.permissions.signing.stable_detail": "这个应用拥有稳定的签名身份，因此 macOS 隐私授权更有可能在重启和应用更新后继续保留。",
         "settings.gateway.title": "控制网关",
         "settings.gateway.description": "直接在 GhoDex 内运行移动端配对网关。修改会立即生效，并在下次启动时继续保留。",
         "settings.gateway.enabled": "启动应用时自动启用网关",
@@ -1713,6 +1743,23 @@ enum L10n {
         nonisolated static var mouseNavigationSwitchTabs: String { AppLocalization.localizedString("settings.mouse_navigation.switch_tabs") }
         nonisolated static var mouseNavigationDescription: String { AppLocalization.localizedString("settings.mouse_navigation.description") }
         nonisolated static var mouseNavigationSaved: String { AppLocalization.localizedString("settings.mouse_navigation.saved") }
+        nonisolated static var permissionsTitle: String { AppLocalization.localizedString("settings.permissions.title") }
+        nonisolated static var permissionsDescription: String { AppLocalization.localizedString("settings.permissions.description") }
+        nonisolated static var permissionsSigningTitle: String { AppLocalization.localizedString("settings.permissions.signing") }
+        nonisolated static var permissionsBundleIdentifier: String { AppLocalization.localizedString("settings.permissions.bundle_identifier") }
+        nonisolated static var permissionsTeamIdentifier: String { AppLocalization.localizedString("settings.permissions.team_identifier") }
+        nonisolated static var permissionsSignerSummary: String { AppLocalization.localizedString("settings.permissions.signer_summary") }
+        nonisolated static var permissionsOpenFilesAndFolders: String { AppLocalization.localizedString("settings.permissions.open_files_and_folders") }
+        nonisolated static var permissionsOpenFullDiskAccess: String { AppLocalization.localizedString("settings.permissions.open_full_disk_access") }
+        nonisolated static var permissionsOpenSettingsFailed: String { AppLocalization.localizedString("settings.permissions.open_settings_failed") }
+        nonisolated static var permissionsSigningUnavailable: String { AppLocalization.localizedString("settings.permissions.signing.unavailable") }
+        nonisolated static func permissionsUnavailableDetail(_ message: String) -> String {
+            AppLocalization.localizedString("settings.permissions.signing.unavailable_detail", message)
+        }
+        nonisolated static var permissionsSigningAdhoc: String { AppLocalization.localizedString("settings.permissions.signing.adhoc") }
+        nonisolated static var permissionsAdhocDetail: String { AppLocalization.localizedString("settings.permissions.signing.adhoc_detail") }
+        nonisolated static var permissionsSigningStable: String { AppLocalization.localizedString("settings.permissions.signing.stable") }
+        nonisolated static var permissionsStableDetail: String { AppLocalization.localizedString("settings.permissions.signing.stable_detail") }
         nonisolated static var gatewayTitle: String { AppLocalization.localizedString("settings.gateway.title") }
         nonisolated static var gatewayDescription: String { AppLocalization.localizedString("settings.gateway.description") }
         nonisolated static var gatewayEnabled: String { AppLocalization.localizedString("settings.gateway.enabled") }

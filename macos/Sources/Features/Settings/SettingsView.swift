@@ -25,6 +25,7 @@ struct SettingsView: View {
     @State private var builtInIconSelection: Ghostty.MacOSIcon = .official
     @State private var inputFeedbackMessage: String?
     @State private var inputFeedbackIsError = false
+    @State private var permissionsFeedbackMessage: String?
     @State private var iconFeedbackMessage: String?
     @State private var iconFeedbackIsError = false
 
@@ -64,6 +65,10 @@ struct SettingsView: View {
 
     private var draftAppIconImage: NSImage {
         AppIconSettings(icon: builtInIconSelection).previewImage(in: .main) ?? currentAppIconImage
+    }
+
+    private var permissionAccessDiagnostics: AppPermissionAccessDiagnostics {
+        appDelegate.permissionAccessDiagnostics
     }
 
     init(
@@ -216,6 +221,76 @@ struct SettingsView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(L10n.Settings.permissionsTitle)
+                        .font(.headline)
+
+                    Text(L10n.Settings.permissionsDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Text(L10n.Settings.permissionsSigningTitle)
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Text(permissionAccessDiagnostics.statusText)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(permissionStatusColor)
+                            .multilineTextAlignment(.trailing)
+                    }
+
+                    Text(permissionAccessDiagnostics.detailText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let bundleIdentifier = permissionAccessDiagnostics.bundleIdentifier,
+                       bundleIdentifier.isEmpty == false {
+                        Text("\(L10n.Settings.permissionsBundleIdentifier): \(bundleIdentifier)")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let teamIdentifier = permissionAccessDiagnostics.teamIdentifier,
+                       teamIdentifier.isEmpty == false {
+                        Text("\(L10n.Settings.permissionsTeamIdentifier): \(teamIdentifier)")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let signerSummary = permissionAccessDiagnostics.signerSummary,
+                       signerSummary.isEmpty == false {
+                        Text("\(L10n.Settings.permissionsSignerSummary): \(signerSummary)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    HStack(spacing: 12) {
+                        Button(L10n.Settings.permissionsOpenFilesAndFolders) {
+                            openPrivacySettings(.filesAndFolders)
+                        }
+
+                        Button(L10n.Settings.permissionsOpenFullDiskAccess) {
+                            openPrivacySettings(.fullDiskAccess)
+                        }
+                    }
+
+                    if let permissionsFeedbackMessage {
+                        Text(permissionsFeedbackMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(16)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color(nsColor: .controlBackgroundColor))
+                )
 
                 Divider()
 
@@ -519,6 +594,21 @@ struct SettingsView: View {
             mouseBackForwardSwitchesTabs = appDelegate.mouseBackForwardSwitchesTabs
             inputFeedbackMessage = error.localizedDescription
             inputFeedbackIsError = true
+        }
+    }
+
+    private var permissionStatusColor: Color {
+        if case .unavailable = permissionAccessDiagnostics.signingState {
+            return Color.secondary
+        }
+        return permissionAccessDiagnostics.isAdHocSigned ? Color.orange : Color.primary
+    }
+
+    private func openPrivacySettings(_ destination: AppPermissionPrivacySettingsDestination) {
+        permissionsFeedbackMessage = nil
+        guard appDelegate.openPrivacySettings(destination) else {
+            permissionsFeedbackMessage = L10n.Settings.permissionsOpenSettingsFailed
+            return
         }
     }
 
