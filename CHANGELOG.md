@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-04-14
+
 ### fix(settings): route mouse side-button tab switching through window dispatch
 
 - What changed: Moved the opt-in mouse back/forward top-level tab switching path out of the app-wide local event monitor and into each top-level window's `sendEvent` dispatch path, added a dedicated `WorkspaceMapWindow` host so workspace-map tabs participate in the same interception layer, and extracted the button-to-target-index calculation into a test-covered helper.
