@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(settings): add configurable mouse side-button top-level tab switching
+
+- What changed: Added the config-backed `ghodex-mouse-back-forward-switches-tabs` setting, exposed it in the General settings panel as a toggle, and taught the app-level local event monitor to intercept mouse side-button presses and cycle native macOS top-level tabs when the setting is enabled.
+- Why: Some users want Terminal-style mouse back/forward tab navigation across GhoDex top-level tabs, but Browser tabs also have a legitimate need to preserve page back/forward semantics, so the behavior needed to be opt-in instead of hardwired.
+- Impact: GhoDex can now switch Terminal, Browser, and Workspace Map top-level tabs with mouse side buttons when enabled, while the default off state preserves the previous behavior and avoids unexpected Browser navigation conflicts.
+- Verification: `zig build -Demit-macos-app=false`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS' build`
+- Files: `src/config/Config.zig`, `macos/Sources/Ghostty/Ghostty.Config.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Features/Settings/SettingsView.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `CHANGELOG.md`
+- Decision trail: Keep the switch at the app-level local event layer so one opt-in setting can govern every native top-level tab surface, including Workspace Map windows that do not subclass `TerminalWindow`, but leave it disabled by default and persist it in the main config file so Browser users can retain normal page navigation unless they explicitly choose the global tab-switching behavior.
+
 ### feat(branding): add built-in banana and ghodex icon presets
 
 - What changed: Added two new built-in app icon presets, `banana` and `ghodex`, wired them into the macOS settings panel, control-harness icon enum surface, localization strings, configuration parsing, and About icon cycle, and generated bundled `BananaImage` and `GhodexImage` assets from the supplied logo files using the same rounded/inset alpha shape as the existing preset icons.

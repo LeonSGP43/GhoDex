@@ -21,7 +21,10 @@ struct SettingsView: View {
     @State private var gatewayPairingHost = ""
     @State private var gatewayShowQrOnLaunch = false
     @State private var gatewaySemanticProfile: ControlHarnessSemanticProfile = .defaultValue
+    @State private var mouseBackForwardSwitchesTabs = false
     @State private var builtInIconSelection: Ghostty.MacOSIcon = .official
+    @State private var inputFeedbackMessage: String?
+    @State private var inputFeedbackIsError = false
     @State private var iconFeedbackMessage: String?
     @State private var iconFeedbackIsError = false
 
@@ -106,14 +109,21 @@ struct SettingsView: View {
         .frame(minWidth: 780, minHeight: 560)
         .onAppear {
             syncGatewayForm()
+            syncInputForm(clearFeedback: true)
             syncIconForm(clearFeedback: true)
             onSelectedTabChange?(selectedTabBinding.wrappedValue)
         }
         .onReceive(appDelegate.$controlHarnessGatewaySettings) { _ in
             syncGatewayForm()
         }
+        .onReceive(appDelegate.$mouseBackForwardSwitchesTabs) { _ in
+            syncInputForm(clearFeedback: false)
+        }
         .onReceive(appDelegate.$appIconSettings) { _ in
             syncIconForm(clearFeedback: false)
+        }
+        .onChange(of: mouseBackForwardSwitchesTabs) { _ in
+            saveMouseNavigationSettingIfNeeded()
         }
         .onChange(of: builtInIconSelection) { _ in
             saveIconSettingsIfNeeded()
@@ -183,6 +193,27 @@ struct SettingsView: View {
                         Button(L10n.Settings.restartNow) {
                             appDelegate.relaunchApplication()
                         }
+                    }
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(L10n.Settings.mouseNavigationTitle)
+                        .font(.headline)
+
+                    Toggle(L10n.Settings.mouseNavigationSwitchTabs, isOn: $mouseBackForwardSwitchesTabs)
+
+                    Text(L10n.Settings.mouseNavigationDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let inputFeedbackMessage {
+                        Text(inputFeedbackMessage)
+                            .font(.caption)
+                            .foregroundStyle(inputFeedbackIsError ? Color.red : Color.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
 
@@ -421,6 +452,15 @@ struct SettingsView: View {
         gatewaySemanticProfile = settings.semanticProfileValue
     }
 
+    private func syncInputForm(clearFeedback: Bool) {
+        mouseBackForwardSwitchesTabs = appDelegate.mouseBackForwardSwitchesTabs
+
+        if clearFeedback {
+            inputFeedbackMessage = nil
+            inputFeedbackIsError = false
+        }
+    }
+
     private func syncIconForm(clearFeedback: Bool) {
         let settings = savedIconSettings
         builtInIconSelection = settings.icon
@@ -465,6 +505,20 @@ struct SettingsView: View {
             return L10n.Settings.iconOptionXray
         case .custom, .customStyle:
             return L10n.Settings.iconOptionOfficial
+        }
+    }
+
+    private func saveMouseNavigationSettingIfNeeded() {
+        guard mouseBackForwardSwitchesTabs != appDelegate.mouseBackForwardSwitchesTabs else { return }
+
+        do {
+            try appDelegate.saveMouseBackForwardTabSwitchingSetting(mouseBackForwardSwitchesTabs)
+            inputFeedbackMessage = L10n.Settings.mouseNavigationSaved
+            inputFeedbackIsError = false
+        } catch {
+            mouseBackForwardSwitchesTabs = appDelegate.mouseBackForwardSwitchesTabs
+            inputFeedbackMessage = error.localizedDescription
+            inputFeedbackIsError = true
         }
     }
 

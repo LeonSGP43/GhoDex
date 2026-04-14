@@ -3799,6 +3799,16 @@ term: []const u8 = "xterm-ghostty",
 /// If unset, GhoDex falls back to its built-in browser start page.
 @"ghodex-browser-homepage": ?[:0]const u8 = null,
 
+/// When enabled, mouse back/forward side buttons switch between native macOS
+/// top-level tabs instead of flowing through to the focused surface.
+///
+/// This applies to GhoDex top-level tab groups such as Terminal, Browser, and
+/// Workspace Map windows. It is disabled by default so Browser tabs keep their
+/// normal page back/forward behavior unless the user explicitly opts in.
+///
+/// This setting can be changed at runtime.
+@"ghodex-mouse-back-forward-switches-tabs": bool = false,
+
 /// The browser profile directory used by the in-app Chromium tab feature.
 /// Leave unset to use GhoDex's managed profile directory instead.
 @"ghodex-browser-profile-path": ?[:0]const u8 = null,
