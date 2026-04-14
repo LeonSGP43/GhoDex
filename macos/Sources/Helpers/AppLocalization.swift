@@ -481,6 +481,10 @@ enum AppLocalization {
         "settings.browser.picker_message": "Choose the browser profile directory that Browser tabs should reuse.",
         "settings.browser.invalid_runtime_path": "Choose an existing CEF runtime directory before saving.",
         "settings.browser.runtime_picker_message": "Choose the CEF runtime directory that Browser tabs should use.",
+        "settings.mouse_navigation.title": "Mouse Navigation",
+        "settings.mouse_navigation.switch_tabs": "Use mouse back/forward buttons to switch top-level tabs",
+        "settings.mouse_navigation.description": "When enabled, side buttons on the mouse cycle native macOS top-level tabs in Terminal, Browser, and Workspace Map windows. Leave this off if you want Browser tabs to keep page back/forward behavior.",
+        "settings.mouse_navigation.saved": "Mouse navigation setting saved to config.",
         "settings.gateway.title": "Control Gateway",
         "settings.gateway.description": "Run the mobile pairing gateway directly inside GhoDex. Changes apply immediately and persist across launches.",
         "settings.gateway.enabled": "Enable gateway on app launch",
@@ -988,6 +992,10 @@ enum AppLocalization {
         "settings.browser.picker_message": "选择 Browser 标签页要复用的浏览器配置目录。",
         "settings.browser.invalid_runtime_path": "保存前请选择一个已存在的 CEF 运行时目录。",
         "settings.browser.runtime_picker_message": "选择 Browser 标签页要使用的 CEF 运行时根目录。",
+        "settings.mouse_navigation.title": "鼠标导航",
+        "settings.mouse_navigation.switch_tabs": "使用鼠标前进/回退按钮切换顶层标签页",
+        "settings.mouse_navigation.description": "开启后，鼠标侧键会在 Terminal、Browser 和 Workspace Map 窗口的原生 macOS 顶层标签页之间循环切换。如果你希望 Browser 标签页继续保留网页前进/回退行为，请保持关闭。",
+        "settings.mouse_navigation.saved": "鼠标导航设置已写入配置文件。",
         "settings.gateway.title": "控制网关",
         "settings.gateway.description": "直接在 GhoDex 内运行移动端配对网关。修改会立即生效，并在下次启动时继续保留。",
         "settings.gateway.enabled": "启动应用时自动启用网关",
@@ -1625,6 +1633,10 @@ enum L10n {
         nonisolated static var browserPickerMessage: String { AppLocalization.localizedString("settings.browser.picker_message") }
         nonisolated static var browserInvalidRuntimePath: String { AppLocalization.localizedString("settings.browser.invalid_runtime_path") }
         nonisolated static var browserRuntimePickerMessage: String { AppLocalization.localizedString("settings.browser.runtime_picker_message") }
+        nonisolated static var mouseNavigationTitle: String { AppLocalization.localizedString("settings.mouse_navigation.title") }
+        nonisolated static var mouseNavigationSwitchTabs: String { AppLocalization.localizedString("settings.mouse_navigation.switch_tabs") }
+        nonisolated static var mouseNavigationDescription: String { AppLocalization.localizedString("settings.mouse_navigation.description") }
+        nonisolated static var mouseNavigationSaved: String { AppLocalization.localizedString("settings.mouse_navigation.saved") }
         nonisolated static var gatewayTitle: String { AppLocalization.localizedString("settings.gateway.title") }
         nonisolated static var gatewayDescription: String { AppLocalization.localizedString("settings.gateway.description") }
         nonisolated static var gatewayEnabled: String { AppLocalization.localizedString("settings.gateway.enabled") }

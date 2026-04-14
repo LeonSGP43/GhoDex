@@ -427,6 +427,7 @@ class AppDelegate: NSObject,
     /// The custom app icon image that is currently in use.
     @Published private(set) var appIcon: NSImage?
     @Published private(set) var appIconSettings = AppIconSettings()
+    @Published private(set) var mouseBackForwardSwitchesTabs = false
     @Published private(set) var browserProfilePathOverride: String?
     @Published private(set) var browserRuntimePathOverride: String?
 
@@ -510,7 +511,7 @@ class AppDelegate: NSObject,
         // Setup a local event monitor for app-level keyboard shortcuts. See
         // localEventHandler for more info why.
         _ = NSEvent.addLocalMonitorForEvents(
-            matching: [.keyDown],
+            matching: [.keyDown, .otherMouseDown],
             handler: localEventHandler)
 
         // Notifications
@@ -1784,9 +1785,37 @@ class AppDelegate: NSObject,
         case .keyDown:
             localEventKeyDown(event)
 
+        case .otherMouseDown:
+            localEventOtherMouseDown(event)
+
         default:
             event
         }
+    }
+
+    private func localEventOtherMouseDown(_ event: NSEvent) -> NSEvent? {
+        guard mouseBackForwardSwitchesTabs else { return event }
+        guard event.buttonNumber == 3 || event.buttonNumber == 4 else { return event }
+        guard let window = event.window ?? NSApp.keyWindow ?? NSApp.mainWindow else { return event }
+        guard window.isKeyWindow else { return event }
+        guard let tabGroup = window.tabGroup else { return event }
+
+        let tabbedWindows = tabGroup.windows
+        guard tabbedWindows.count > 1 else { return event }
+
+        let selectedWindow = tabGroup.selectedWindow ?? window
+        guard let selectedIndex = tabbedWindows.firstIndex(where: { $0 == selectedWindow }) else { return event }
+
+        let targetIndex: Int
+        if event.buttonNumber == 3 {
+            targetIndex = selectedIndex == 0 ? tabbedWindows.count - 1 : selectedIndex - 1
+        } else {
+            targetIndex = selectedIndex == tabbedWindows.count - 1 ? 0 : selectedIndex + 1
+        }
+
+        guard targetIndex != selectedIndex else { return event }
+        tabbedWindows[targetIndex].makeKeyAndOrderFront(nil)
+        return nil
     }
 
     private func localEventKeyDown(_ event: NSEvent) -> NSEvent? {
@@ -2022,6 +2051,7 @@ class AppDelegate: NSObject,
         // Update the config we need to store
         self.derivedConfig = DerivedConfig(config)
         appIconSettings = AppIconSettings(config: config)
+        mouseBackForwardSwitchesTabs = config.ghodexMouseBackForwardSwitchesTabs
         syncBrowserProfileConfig(config)
         syncBrowserRuntimeConfig(config)
         syncBrowserRemoteDebugPortConfig(config)
@@ -2266,6 +2296,13 @@ class AppDelegate: NSObject,
         let settings = rawSettings.sanitized
         let configURL = Self.browserSettingsConfigURL()
         try Self.saveAppIconSettingsConfig(settings, to: configURL)
+        ghostty.reloadConfig()
+    }
+
+    @MainActor
+    func saveMouseBackForwardTabSwitchingSetting(_ enabled: Bool) throws {
+        let configURL = Self.browserSettingsConfigURL()
+        try Self.saveMouseNavigationSettingsConfig(enabled: enabled, to: configURL)
         ghostty.reloadConfig()
     }
 
@@ -3320,9 +3357,12 @@ extension AppDelegate {
     private static let browserSettingsEndMarker = "# <<< GhoDex browser settings <<<"
     private static let iconSettingsStartMarker = "# >>> GhoDex app icon settings >>>"
     private static let iconSettingsEndMarker = "# <<< GhoDex app icon settings <<<"
+    private static let mouseNavigationSettingsStartMarker = "# >>> GhoDex mouse navigation settings >>>"
+    private static let mouseNavigationSettingsEndMarker = "# <<< GhoDex mouse navigation settings <<<"
     private static let browserProfileConfigKey = "ghodex-browser-profile-path"
     private static let browserRuntimeConfigKey = "ghodex-browser-runtime-path"
     private static let browserRemoteDebugPortConfigKey = "ghodex-browser-remote-debug-port"
+    private static let mouseBackForwardSwitchesTabsConfigKey = "ghodex-mouse-back-forward-switches-tabs"
     private static let macosIconConfigKey = "macos-icon"
     private static let macosCustomIconConfigKey = "macos-custom-icon"
     private static let macosIconFrameConfigKey = "macos-icon-frame"
@@ -3522,6 +3562,27 @@ extension AppDelegate {
         try text.write(to: url, atomically: true, encoding: .utf8)
     }
 
+    fileprivate static func saveMouseNavigationSettingsConfig(enabled: Bool, to url: URL) throws {
+        let fileManager = FileManager.default
+        try fileManager.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        let existingText: String
+        if fileManager.fileExists(atPath: url.path) {
+            existingText = try String(contentsOf: url, encoding: .utf8)
+        } else {
+            existingText = ""
+        }
+
+        let stripped = stripMouseNavigationSettingsConfig(from: existingText)
+        let block = mouseNavigationSettingsConfigBlock(enabled: enabled)
+        let normalized = stripped.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = normalized.isEmpty ? "\(block)\n" : "\(normalized)\n\n\(block)\n"
+        try text.write(to: url, atomically: true, encoding: .utf8)
+    }
+
     fileprivate static func loadBrowserSettingsConfig() -> (profilePath: String?, runtimePath: String?) {
         let url = browserSettingsConfigURL()
         guard let text = try? String(contentsOf: url, encoding: .utf8) else {
@@ -3552,6 +3613,14 @@ extension AppDelegate {
         ].joined(separator: "\n")
     }
 
+    private static func mouseNavigationSettingsConfigBlock(enabled: Bool) -> String {
+        [
+            mouseNavigationSettingsStartMarker,
+            "\(mouseBackForwardSwitchesTabsConfigKey) = \(enabled ? "true" : "false")",
+            mouseNavigationSettingsEndMarker,
+        ].joined(separator: "\n")
+    }
+
     private static func stripBrowserSettingsConfig(from text: String) -> String {
         let lines = text.components(separatedBy: .newlines)
         var result: [String] = []
@@ -3578,6 +3647,39 @@ extension AppDelegate {
                 trimmed == browserProfileConfigKey ||
                 trimmed.hasPrefix("\(browserRuntimeConfigKey) =") ||
                 trimmed == browserRuntimeConfigKey {
+                continue
+            }
+
+            result.append(line)
+        }
+
+        return result.joined(separator: "\n")
+    }
+
+    private static func stripMouseNavigationSettingsConfig(from text: String) -> String {
+        let lines = text.components(separatedBy: .newlines)
+        var result: [String] = []
+        var insideManagedBlock = false
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            if trimmed == mouseNavigationSettingsStartMarker {
+                insideManagedBlock = true
+                continue
+            }
+
+            if trimmed == mouseNavigationSettingsEndMarker {
+                insideManagedBlock = false
+                continue
+            }
+
+            if insideManagedBlock {
+                continue
+            }
+
+            if trimmed.hasPrefix("\(mouseBackForwardSwitchesTabsConfigKey) =") ||
+                trimmed == mouseBackForwardSwitchesTabsConfigKey {
                 continue
             }
 

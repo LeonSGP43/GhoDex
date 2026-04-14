@@ -810,6 +810,10 @@ extension Ghostty {
             optionalString(for: "ghodex-browser-homepage")
         }
 
+        var ghodexMouseBackForwardSwitchesTabs: Bool {
+            bool(for: "ghodex-mouse-back-forward-switches-tabs", default: false)
+        }
+
         var ghodexBrowserProfilePath: String? {
             optionalString(for: "ghodex-browser-profile-path")
         }
