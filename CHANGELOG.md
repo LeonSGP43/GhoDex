@@ -4,16 +4,25 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(settings): route mouse side-button tab switching through window dispatch
+
+- What changed: Moved the opt-in mouse back/forward top-level tab switching path out of the app-wide local event monitor and into each top-level window's `sendEvent` dispatch path, added a dedicated `WorkspaceMapWindow` host so workspace-map tabs participate in the same interception layer, and extracted the button-to-target-index calculation into a test-covered helper.
+- Why: The original settings work added the toggle and config persistence, but the live side-button interception was too weak at the app monitor layer and did not reliably preempt focused window content, so the feature could appear enabled while doing nothing in real tab groups.
+- Impact: When `ghodex-mouse-back-forward-switches-tabs` is enabled, mouse side-button presses now switch the previous/next native top-level tab at the active window dispatch layer instead of falling through to focused terminal/browser/workspace-map content.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS' -only-testing:GhosttyTests/AppDelegateMouseNavigationTests test`; `zig build -Demit-macos-app=false`
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Features/Terminal/Window Styles/TerminalWindow.swift`, `macos/Sources/Features/Workspace Map/WorkspaceMapWindow.swift`, `macos/Sources/Features/Workspace Map/WorkspaceMapController.swift`, `macos/Tests/AppDelegateMouseNavigationTests.swift`, `CHANGELOG.md`
+- Decision trail: Keep the setting and config file as the single source of truth, but move the actual side-button interception down to the concrete top-level window dispatch path so Browser, Terminal, and Workspace Map all get the same stronger behavior before their focused content consumes the event.
+
 ## [0.3.0] - 2026-04-14
 
 ### feat(settings): add configurable mouse side-button top-level tab switching
 
-- What changed: Added the config-backed `ghodex-mouse-back-forward-switches-tabs` setting, exposed it in the General settings panel as a toggle, and taught the app-level local event monitor to intercept mouse side-button presses and cycle native macOS top-level tabs when the setting is enabled.
+- What changed: Added the config-backed `ghodex-mouse-back-forward-switches-tabs` setting, exposed it in the General settings panel as a toggle, and wired mouse side-button presses to cycle native macOS top-level tabs when the setting is enabled.
 - Why: Some users want Terminal-style mouse back/forward tab navigation across GhoDex top-level tabs, but Browser tabs also have a legitimate need to preserve page back/forward semantics, so the behavior needed to be opt-in instead of hardwired.
 - Impact: GhoDex can now switch Terminal, Browser, and Workspace Map top-level tabs with mouse side buttons when enabled, while the default off state preserves the previous behavior and avoids unexpected Browser navigation conflicts.
 - Verification: `zig build -Demit-macos-app=false`; `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS' build`
 - Files: `src/config/Config.zig`, `macos/Sources/Ghostty/Ghostty.Config.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Features/Settings/SettingsView.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `CHANGELOG.md`
-- Decision trail: Keep the switch at the app-level local event layer so one opt-in setting can govern every native top-level tab surface, including Workspace Map windows that do not subclass `TerminalWindow`, but leave it disabled by default and persist it in the main config file so Browser users can retain normal page navigation unless they explicitly choose the global tab-switching behavior.
+- Decision trail: Keep one opt-in setting governing every native top-level tab surface, leave it disabled by default, and persist it in the main config file so Browser users can retain normal page navigation unless they explicitly choose the global tab-switching behavior.
 
 ### feat(branding): add built-in banana and ghodex icon presets
 

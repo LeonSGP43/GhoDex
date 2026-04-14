@@ -511,7 +511,7 @@ class AppDelegate: NSObject,
         // Setup a local event monitor for app-level keyboard shortcuts. See
         // localEventHandler for more info why.
         _ = NSEvent.addLocalMonitorForEvents(
-            matching: [.keyDown, .otherMouseDown],
+            matching: [.keyDown],
             handler: localEventHandler)
 
         // Notifications
@@ -1785,37 +1785,38 @@ class AppDelegate: NSObject,
         case .keyDown:
             localEventKeyDown(event)
 
-        case .otherMouseDown:
-            localEventOtherMouseDown(event)
-
         default:
             event
         }
     }
 
-    private func localEventOtherMouseDown(_ event: NSEvent) -> NSEvent? {
-        guard mouseBackForwardSwitchesTabs else { return event }
-        guard event.buttonNumber == 3 || event.buttonNumber == 4 else { return event }
-        guard let window = event.window ?? NSApp.keyWindow ?? NSApp.mainWindow else { return event }
-        guard window.isKeyWindow else { return event }
-        guard let tabGroup = window.tabGroup else { return event }
+    @MainActor
+    func handleMouseBackForwardTabSwitch(_ event: NSEvent, in hostWindow: NSWindow? = nil) -> Bool {
+        guard mouseBackForwardSwitchesTabs else { return false }
+        guard
+            let preferredWindow = hostWindow ?? event.window ?? NSApp.keyWindow ?? NSApp.mainWindow
+        else { return false }
+
+        let window = selectedTopLevelWindow(for: preferredWindow)
+        guard let window, window.isKeyWindow else { return false }
+        guard let tabGroup = window.tabGroup else { return false }
 
         let tabbedWindows = tabGroup.windows
-        guard tabbedWindows.count > 1 else { return event }
+        guard tabbedWindows.count > 1 else { return false }
 
         let selectedWindow = tabGroup.selectedWindow ?? window
-        guard let selectedIndex = tabbedWindows.firstIndex(where: { $0 == selectedWindow }) else { return event }
-
-        let targetIndex: Int
-        if event.buttonNumber == 3 {
-            targetIndex = selectedIndex == 0 ? tabbedWindows.count - 1 : selectedIndex - 1
-        } else {
-            targetIndex = selectedIndex == tabbedWindows.count - 1 ? 0 : selectedIndex + 1
+        guard let selectedIndex = tabbedWindows.firstIndex(where: { $0 == selectedWindow }) else { return false }
+        guard let targetIndex = Self.mouseBackForwardTabSwitchTargetIndex(
+            forButtonNumber: event.buttonNumber,
+            selectedIndex: selectedIndex,
+            tabCount: tabbedWindows.count
+        ) else {
+            return false
         }
 
-        guard targetIndex != selectedIndex else { return event }
+        guard targetIndex != selectedIndex else { return false }
         tabbedWindows[targetIndex].makeKeyAndOrderFront(nil)
-        return nil
+        return true
     }
 
     private func localEventKeyDown(_ event: NSEvent) -> NSEvent? {
@@ -3394,6 +3395,24 @@ extension AppDelegate {
             return "SIGUSR2"
         default:
             return "SIG\(signalNumber)"
+        }
+    }
+
+    static func mouseBackForwardTabSwitchTargetIndex(
+        forButtonNumber buttonNumber: Int,
+        selectedIndex: Int,
+        tabCount: Int
+    ) -> Int? {
+        guard tabCount > 1 else { return nil }
+        guard (0..<tabCount).contains(selectedIndex) else { return nil }
+
+        switch buttonNumber {
+        case 3:
+            return selectedIndex == 0 ? tabCount - 1 : selectedIndex - 1
+        case 4:
+            return selectedIndex == tabCount - 1 ? 0 : selectedIndex + 1
+        default:
+            return nil
         }
     }
 

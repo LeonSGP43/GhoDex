@@ -743,7 +743,7 @@ final class WorkspaceMapController: NSWindowController, NSWindowDelegate, TopLev
 
     init(_ ghostty: Ghostty.App) {
         self.ghostty = ghostty
-        let window = NSWindow(
+        let window = WorkspaceMapWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1200, height: 780),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
