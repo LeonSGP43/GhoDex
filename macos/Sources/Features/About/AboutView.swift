@@ -20,6 +20,9 @@ struct AboutView: View {
     private var buildFingerprint: String? { bundleString("GhoDexBuild") }
     private var buildBranch: String? { bundleString("GhoDexBuildBranch") }
     private var copyright: String? { bundleString("NSHumanReadableCopyright") }
+    private var permissionAccessDiagnostics: AppPermissionAccessDiagnostics {
+        AppPermissionAccessDiagnostics.current(bundleURL: Bundle.main.bundleURL)
+    }
     private var workspaceState: String? {
         guard let raw = bundleString("GhoDexBuildWorkspaceState")?.lowercased() else { return nil }
         switch raw {
@@ -106,6 +109,31 @@ struct AboutView: View {
                     }
                     if let buildFingerprint {
                         PropertyRow(label: L10n.About.fingerprint, text: buildFingerprint)
+                    }
+                    PropertyRow(
+                        label: L10n.Settings.permissionsSigningTitle,
+                        text: permissionAccessDiagnostics.statusText
+                    )
+                    if let bundleIdentifier = permissionAccessDiagnostics.bundleIdentifier,
+                       bundleIdentifier.isEmpty == false {
+                        PropertyRow(
+                            label: L10n.Settings.permissionsBundleIdentifier,
+                            text: bundleIdentifier
+                        )
+                    }
+                    if let teamIdentifier = permissionAccessDiagnostics.teamIdentifier,
+                       teamIdentifier.isEmpty == false {
+                        PropertyRow(
+                            label: L10n.Settings.permissionsTeamIdentifier,
+                            text: teamIdentifier
+                        )
+                    }
+                    if let signerSummary = permissionAccessDiagnostics.signerSummary,
+                       signerSummary.isEmpty == false {
+                        PropertyRow(
+                            label: L10n.Settings.permissionsSignerSummary,
+                            text: signerSummary
+                        )
                     }
                 }
                 .frame(maxWidth: .infinity)

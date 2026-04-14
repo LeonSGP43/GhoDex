@@ -67,10 +67,6 @@ struct SettingsView: View {
         AppIconSettings(icon: builtInIconSelection).previewImage(in: .main) ?? currentAppIconImage
     }
 
-    private var permissionAccessDiagnostics: AppPermissionAccessDiagnostics {
-        appDelegate.permissionAccessDiagnostics
-    }
-
     init(
         initialTab: SettingsTab = .general,
         visibleTabs: [SettingsTab] = SettingsTab.allCases,
@@ -232,42 +228,6 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        Text(L10n.Settings.permissionsSigningTitle)
-                            .font(.subheadline.weight(.semibold))
-                        Spacer()
-                        Text(permissionAccessDiagnostics.statusText)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(permissionStatusColor)
-                            .multilineTextAlignment(.trailing)
-                    }
-
-                    Text(permissionAccessDiagnostics.detailText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    if let bundleIdentifier = permissionAccessDiagnostics.bundleIdentifier,
-                       bundleIdentifier.isEmpty == false {
-                        Text("\(L10n.Settings.permissionsBundleIdentifier): \(bundleIdentifier)")
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
-
-                    if let teamIdentifier = permissionAccessDiagnostics.teamIdentifier,
-                       teamIdentifier.isEmpty == false {
-                        Text("\(L10n.Settings.permissionsTeamIdentifier): \(teamIdentifier)")
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
-
-                    if let signerSummary = permissionAccessDiagnostics.signerSummary,
-                       signerSummary.isEmpty == false {
-                        Text("\(L10n.Settings.permissionsSignerSummary): \(signerSummary)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
 
                     HStack(spacing: 12) {
                         Button(L10n.Settings.permissionsOpenFilesAndFolders) {
@@ -595,13 +555,6 @@ struct SettingsView: View {
             inputFeedbackMessage = error.localizedDescription
             inputFeedbackIsError = true
         }
-    }
-
-    private var permissionStatusColor: Color {
-        if case .unavailable = permissionAccessDiagnostics.signingState {
-            return Color.secondary
-        }
-        return permissionAccessDiagnostics.isAdHocSigned ? Color.orange : Color.primary
     }
 
     private func openPrivacySettings(_ destination: AppPermissionPrivacySettingsDestination) {

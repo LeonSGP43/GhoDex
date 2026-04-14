@@ -13,6 +13,15 @@ All notable changes to this project are documented in this file.
 - Files: `macos/GhoDex.xcodeproj/project.pbxproj`, `scripts/stage_cef_helper_app.sh`, `CHANGELOG.md`
 - Decision trail: Keep debug signing behavior untouched for now, harden only the release-facing configs, and make the helper-bundle staging script reuse the exact signing identity that Xcode used so post-build packaging cannot silently downgrade the release bundle.
 
+### refactor(settings): move signing details out of Settings
+
+- What changed: Removed signing-state, team, bundle, and signer diagnostics from the General settings privacy card, kept only the direct privacy-settings shortcuts there, and surfaced the signing details in the About window instead.
+- Why: The signing status is mainly release/build metadata and should not be front-and-center in the everyday settings workflow.
+- Impact: Settings stays focused on actionable privacy shortcuts, while build/signing metadata remains available in About when it is actually needed.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS,arch=arm64' ARCHS=arm64 ONLY_ACTIVE_ARCH=YES EXCLUDED_ARCHS=x86_64 GHODEX_CEF_ENABLED=1 GHODEX_CEF_ROOT=/Users/leongong/Desktop/LeonProjects/GhoDex/macos/build/cef-runtime/current GHODEX_CEF_OTHER_LDFLAGS=-lsqlite3 GHODEX_CEF_WRAPPER_LIB=/Users/leongong/Desktop/LeonProjects/GhoDex/macos/build/cef-runtime/current/lib/Debug/libcef_dll_wrapper.a build`
+- Files: `macos/Sources/Features/Settings/SettingsView.swift`, `macos/Sources/Features/About/AboutView.swift`, `macos/Sources/Helpers/AppLocalization.swift`, `CHANGELOG.md`
+- Decision trail: Keep Settings optimized for user actions and reserve signing/build metadata for About, where release diagnostics are expected.
+
 ### feat(settings): surface macOS permission diagnostics
 
 - What changed: Added a General settings diagnostics card that shows the current app signing state, exposes bundle/team/signer metadata when available, and links directly to the macOS Files and Folders and Full Disk Access privacy panes.
