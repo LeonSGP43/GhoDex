@@ -72,11 +72,6 @@ class TitlebarTabsTahoeTerminalWindow: TransparentTitlebarTerminalWindow, NSTool
     /// naturally due to whatever mess we made.
     override func sendEvent(_ event: NSEvent) {
         if let appDelegate = NSApp.delegate as? AppDelegate {
-            appDelegate.recordMouseNavigationCandidate(
-                event,
-                source: "tahoe_window.sendEvent",
-                hostWindow: self
-            )
             if event.type == .otherMouseDown,
                appDelegate.handleMouseBackForwardTabSwitch(event, in: self) {
                 return

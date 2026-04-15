@@ -734,12 +734,13 @@ private struct TodoWorkspaceSidebar: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
-                TodoTimelineScrollView {
+                ScrollView(showsIndicators: false) {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         ForEach(visibleTodoItemsSnapshot, id: \.id) { item in
                             todoItemRow(item)
                         }
                     }
+                    .padding(.vertical, 1)
                 }
             }
         }
@@ -1316,59 +1317,6 @@ private struct TodoComposerTitleField: NSViewRepresentable {
             }
 
             return false
-        }
-    }
-}
-
-private struct TodoTimelineScrollView<Content: View>: NSViewRepresentable {
-    let content: Content
-
-    init(@ViewBuilder content: () -> Content) {
-        self.content = content()
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(hostingView: NSHostingView(rootView: content))
-    }
-
-    func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView(frame: .zero)
-        scrollView.drawsBackground = false
-        scrollView.borderType = .noBorder
-        scrollView.hasVerticalScroller = false
-        scrollView.hasHorizontalScroller = false
-        scrollView.autohidesScrollers = true
-        scrollView.scrollerStyle = .overlay
-        scrollView.automaticallyAdjustsContentInsets = false
-        scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
-
-        let hostingView = context.coordinator.hostingView
-        hostingView.frame = NSRect(origin: .zero, size: .zero)
-        scrollView.documentView = hostingView
-        return scrollView
-    }
-
-    func updateNSView(_ nsView: NSScrollView, context: Context) {
-        let hostingView = context.coordinator.hostingView
-        hostingView.rootView = content
-
-        let targetWidth = max(nsView.contentSize.width, 1)
-        if hostingView.frame.width != targetWidth {
-            hostingView.setFrameSize(NSSize(width: targetWidth, height: hostingView.frame.height))
-        }
-
-        let fittingSize = hostingView.fittingSize
-        let targetSize = NSSize(width: targetWidth, height: fittingSize.height)
-        if hostingView.frame.size != targetSize {
-            hostingView.setFrameSize(targetSize)
-        }
-    }
-
-    final class Coordinator {
-        let hostingView: NSHostingView<Content>
-
-        init(hostingView: NSHostingView<Content>) {
-            self.hostingView = hostingView
         }
     }
 }

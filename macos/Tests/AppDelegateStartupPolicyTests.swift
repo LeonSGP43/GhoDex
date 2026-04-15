@@ -67,4 +67,62 @@ struct AppDelegateStartupPolicyTests {
         #expect(item.keyEquivalent == "t")
         #expect(item.keyEquivalentModifierMask.contains(.command))
     }
+
+    @Test func applyMenuShortcutAssignsDefaultNewTabShortcutWhenConfigIsEmpty() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        try "".write(to: tempURL, atomically: true, encoding: .utf8)
+
+        let config = Ghostty.Config(at: tempURL.path(percentEncoded: false))
+        #expect(config.errors.isEmpty)
+
+        let item = NSMenuItem()
+        AppDelegate.applyMenuShortcut(config, action: "new_tab", to: item)
+
+        #expect(item.keyEquivalent == "t")
+        #expect(item.keyEquivalentModifierMask.contains(.command))
+    }
+
+    @Test func mouseBackForwardTabSwitchTargetIndexSupportsMouseButtons() {
+        #expect(
+            AppDelegate.mouseBackForwardTabSwitchTargetIndex(
+                forButtonNumber: 3,
+                selectedIndex: 0,
+                tabCount: 4
+            ) == 3
+        )
+        #expect(
+            AppDelegate.mouseBackForwardTabSwitchTargetIndex(
+                forButtonNumber: 4,
+                selectedIndex: 3,
+                tabCount: 4
+            ) == 0
+        )
+    }
+
+    @Test func mouseBackForwardTabSwitchTargetIndexSupportsSwipeDirections() {
+        #expect(
+            AppDelegate.mouseBackForwardTabSwitchTargetIndex(
+                swipeDeltaX: -1,
+                selectedIndex: 2,
+                tabCount: 4
+            ) == 1
+        )
+        #expect(
+            AppDelegate.mouseBackForwardTabSwitchTargetIndex(
+                swipeDeltaX: 1,
+                selectedIndex: 2,
+                tabCount: 4
+            ) == 3
+        )
+        #expect(
+            AppDelegate.mouseBackForwardTabSwitchTargetIndex(
+                swipeDeltaX: 0,
+                selectedIndex: 2,
+                tabCount: 4
+            ) == nil
+        )
+    }
 }
