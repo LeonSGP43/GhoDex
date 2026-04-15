@@ -205,6 +205,40 @@ final class AITerminalManagerStore: ObservableObject {
     nonisolated private static let legacyConfigurationFilename = "ai-terminal-manager.json"
     nonisolated private static let managedConfigStartMarker = "# >>> GhoDex managed settings >>>"
     nonisolated private static let managedConfigEndMarker = "# <<< GhoDex managed settings <<<"
+    nonisolated private static let managedConfigKeys: Set<String> = [
+        "ghodex-saved-host",
+        "ghodex-imported-host-override",
+        "ghodex-favorite-host",
+        "ghodex-recent-host",
+        "ghodex-workspace",
+        "ghodex-saved-workspace-template",
+        "ghodex-heartbeat-task",
+        "ghodex-agent-runtime-session",
+        "ghodex-agent-runtime-task",
+        "ghodex-agent-runtime-schedule",
+        "ghodex-learning-log",
+        "ghodex-todo-enabled",
+        "ghodex-todo-workspace-root-path",
+        "ghodex-todo-show-completed-items",
+        "ghodex-todo-selected-date-anchor",
+        "ghodex-todo-sidebar-edge",
+        "ghodex-todo-workspace-overlay-visible",
+        "ghodex-todo-workspace-overlay-corner",
+        "ghodex-learning-enabled",
+        "ghodex-learning-prefer-tab-working-directory",
+        "ghodex-learning-default-project-path",
+        "ghodex-learning-notes-relative-path",
+        "ghodex-learning-command-template",
+        "ghodex-learning-fast-model",
+        "ghodex-learning-prompt-template",
+        "ghodex-heartbeat-enabled",
+        "ghodex-heartbeat-interval-seconds",
+        "ghodex-heartbeat-max-concurrent-tasks",
+        "ghodex-heartbeat-allow-external-inbox-mutations",
+        "ghodex-agent-runtime-enabled",
+        "ghodex-agent-runtime-default-lease-seconds",
+        "ghodex-agent-runtime-stale-task-policy",
+    ]
     nonisolated private static let agentRuntimeScheduleIDMetadataKey = "ghodex_schedule_id"
     nonisolated private static let agentRuntimeScheduleFireAtMetadataKey = "ghodex_schedule_fire_at"
     nonisolated private static let managedSkillRepositorySpecs: [ManagedSkillRepositorySpec] = [
@@ -5777,7 +5811,7 @@ final class AITerminalManagerStore: ObservableObject {
                 continue
             }
 
-            if trimmed.hasPrefix("ghodex-") {
+            if isManagedConfigLine(trimmed) {
                 continue
             }
 
@@ -5816,7 +5850,7 @@ final class AITerminalManagerStore: ObservableObject {
                 continue
             }
 
-            guard isInsideManagedBlock || trimmed.hasPrefix("ghodex-") else { continue }
+            guard isInsideManagedBlock || isManagedConfigLine(trimmed) else { continue }
             guard trimmed.hasPrefix(prefix) else { continue }
             lastValue = String(trimmed.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
         }
@@ -5841,7 +5875,7 @@ final class AITerminalManagerStore: ObservableObject {
                 continue
             }
 
-            guard isInsideManagedBlock || trimmed.hasPrefix("ghodex-") else { continue }
+            guard isInsideManagedBlock || isManagedConfigLine(trimmed) else { continue }
             guard trimmed.hasPrefix(prefix) else { continue }
             let rawValue = String(trimmed.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
             values.append(decodedConfigStringLiteral(rawValue))
@@ -5879,6 +5913,17 @@ final class AITerminalManagerStore: ObservableObject {
         return text
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
-            .contains { $0.hasPrefix("ghodex-") }
+            .contains(where: isManagedConfigLine)
+    }
+
+    nonisolated private static func isManagedConfigLine(_ trimmedLine: String) -> Bool {
+        guard let key = managedConfigKey(in: trimmedLine) else { return false }
+        return managedConfigKeys.contains(key)
+    }
+
+    nonisolated private static func managedConfigKey(in trimmedLine: String) -> String? {
+        guard let separatorIndex = trimmedLine.firstIndex(of: "=") else { return nil }
+        let key = trimmedLine[..<separatorIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+        return key.isEmpty ? nil : key
     }
 }

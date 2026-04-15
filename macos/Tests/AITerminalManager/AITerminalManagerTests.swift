@@ -805,6 +805,52 @@ struct AITerminalManagerTests {
         #expect(AITerminalManagerTestSupport.occurrences(of: AITerminalManagerTestSupport.managedConfigEndMarker, in: text) == 1)
     }
 
+    @Test @MainActor func storePersistencePreservesUnrelatedGhoDexSettingsAndKeybinds() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ghodex")
+
+        let originalText = """
+        font-size = 14
+        keybind = cmd+i=prompt_surface_title
+        ghodex-custom-unrelated-setting = true
+
+        # >>> GhoDex browser settings >>>
+        ghodex-browser-profile-path = "/tmp/browser-profile"
+        ghodex-browser-runtime-path = "/tmp/browser-runtime"
+        # <<< GhoDex browser settings <<<
+
+        # >>> GhoDex mouse navigation settings >>>
+        ghodex-mouse-back-forward-switches-tabs = true
+        # <<< GhoDex mouse navigation settings <<<
+        """
+        try originalText.write(to: tempURL, atomically: true, encoding: .utf8)
+
+        let store = AITerminalManagerStore(
+            appDelegateProvider: { nil },
+            configurationURL: tempURL
+        )
+
+        store.saveHost(
+            name: "Buildbox",
+            sshAlias: "buildbox",
+            hostname: "",
+            user: "deploy",
+            port: "2222",
+            defaultDirectory: "/srv/app"
+        )
+
+        let text = try String(contentsOf: tempURL, encoding: .utf8)
+        #expect(text.contains("font-size = 14"))
+        #expect(text.contains("keybind = cmd+i=prompt_surface_title"))
+        #expect(text.contains("ghodex-custom-unrelated-setting = true"))
+        #expect(text.contains(#"ghodex-browser-profile-path = "/tmp/browser-profile""#))
+        #expect(text.contains(#"ghodex-browser-runtime-path = "/tmp/browser-runtime""#))
+        #expect(text.contains("ghodex-mouse-back-forward-switches-tabs = true"))
+        #expect(AITerminalManagerTestSupport.occurrences(of: AITerminalManagerTestSupport.managedConfigStartMarker, in: text) == 1)
+        #expect(AITerminalManagerTestSupport.occurrences(of: AITerminalManagerTestSupport.managedConfigEndMarker, in: text) == 1)
+    }
+
     @Test @MainActor func storeReloadsPersistedConfigurationFromGhoDexConfig() throws {
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
