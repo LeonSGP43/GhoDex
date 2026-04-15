@@ -888,7 +888,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "GhoDex Dock Tile Plugin";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSPrincipalClass = "";
+				INFOPLIST_KEY_NSPrincipalClass = "$(PRODUCT_MODULE_NAME).DockTilePlugin";
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Bundles";
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
@@ -918,7 +918,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "GhoDex Dock Tile Plugin";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSPrincipalClass = "";
+				INFOPLIST_KEY_NSPrincipalClass = "$(PRODUCT_MODULE_NAME).DockTilePlugin";
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Bundles";
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
@@ -948,7 +948,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "GhoDex Dock Tile Plugin";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSPrincipalClass = "";
+				INFOPLIST_KEY_NSPrincipalClass = "$(PRODUCT_MODULE_NAME).DockTilePlugin";
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Bundles";
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
