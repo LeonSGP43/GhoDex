@@ -22,6 +22,7 @@ app_short_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionStri
 
 main_exec="$contents_dir/MacOS/$app_exec"
 helper_root="$contents_dir/Frameworks"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 detect_codesign_identity() {
   local signature_info authority
@@ -71,6 +72,26 @@ capture_app_entitlements() {
   return 1
 }
 
+detect_default_app_entitlements() {
+  local candidate=""
+
+  case "$app_bundle" in
+    */ReleaseLocal/*)
+      candidate="$repo_root/macos/GhoDexReleaseLocal.entitlements"
+      ;;
+    */Debug/*)
+      candidate="$repo_root/macos/GhoDexDebug.entitlements"
+      ;;
+    *)
+      candidate="$repo_root/macos/GhoDex.entitlements"
+      ;;
+  esac
+
+  if [[ -f "$candidate" ]]; then
+    printf '%s' "$candidate"
+  fi
+}
+
 path_has_stable_signature() {
   local target_path="$1"
   local signature_info
@@ -82,15 +103,19 @@ path_has_stable_signature() {
 codesign_identity="$(resolve_codesign_identity "${GHODEX_CODESIGN_IDENTITY:-$(detect_codesign_identity)}")"
 
 app_entitlements_file=""
+app_entitlements_is_temp=0
 if [[ "$codesign_identity" != "-" ]]; then
   app_entitlements_file="$(mktemp -t ghodex-app-entitlements)"
+  app_entitlements_is_temp=1
   if ! capture_app_entitlements "$app_entitlements_file"; then
-    app_entitlements_file=""
+    rm -f "$app_entitlements_file"
+    app_entitlements_file="$(detect_default_app_entitlements)"
+    app_entitlements_is_temp=0
   fi
 fi
 
 cleanup_temp_files() {
-  if [[ -n "$app_entitlements_file" && -f "$app_entitlements_file" ]]; then
+  if [[ "$app_entitlements_is_temp" == "1" && -n "$app_entitlements_file" && -f "$app_entitlements_file" ]]; then
     rm -f "$app_entitlements_file"
   fi
 }
@@ -113,6 +138,7 @@ sign_code_path() {
   local target_path="$1"
   local sign_mode="${2:-generic}"
   local preserve_existing_signature=0
+  local target_dir target_name temp_path
   local -a codesign_args
 
   if path_has_stable_signature "$target_path"; then
@@ -144,12 +170,34 @@ sign_code_path() {
     codesign_args+=(--entitlements "$app_entitlements_file")
   fi
 
+  if [[ "$target_path" == "$main_exec" ]]; then
+    target_dir="$(dirname "$target_path")"
+    target_name="$(basename "$target_path")"
+    temp_path="$(mktemp "$target_dir/.${target_name}.codesign.XXXXXX")"
+
+    cp "$target_path" "$temp_path"
+    chmod --reference="$target_path" "$temp_path" 2>/dev/null || chmod 755 "$temp_path"
+    touch -r "$target_path" "$temp_path" 2>/dev/null || true
+    xattr -cr "$temp_path" 2>/dev/null || true
+    remove_signature_artifacts "$temp_path" 1
+
+    codesign_args+=("$temp_path")
+    "${codesign_args[@]}"
+    mv -f "$temp_path" "$target_path"
+    return 0
+  fi
+
   codesign_args+=("$target_path")
   "${codesign_args[@]}"
 }
 
 verify_code_path() {
   local target_path="$1"
+
+  if [[ "$target_path" == "$main_exec" ]]; then
+    path_has_stable_signature "$target_path"
+    return $?
+  fi
 
   /usr/bin/codesign --verify --deep --strict --verbose=2 "$target_path" >/dev/null
 }
@@ -302,4 +350,5 @@ sign_helper_bundle "$helper_root/$app_exec Helper (GPU).app"
 sign_helper_bundle "$helper_root/$app_exec Helper (Plugin).app"
 sign_helper_bundle "$helper_root/$app_exec Helper (Renderer).app"
 sign_with_retry "$contents_dir/PlugIns/DockTilePlugin.plugin" "dock tile plugin"
+sign_with_retry "$main_exec" "app executable" "helper-executable"
 sign_with_retry "$app_bundle" "app bundle" "app-bundle"
