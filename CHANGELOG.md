@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### test(diagnostics): wire governance gate into canonical protocol verification
+
+- What changed: Updated `scripts/control_harness_protocol_surface_live_acceptance.py` so the canonical non-browser live acceptance now also executes `scripts/control_harness_diagnostics_live_acceptance.py` as a related gate and records its artifact/status in the parent output. Also refreshed `docs/control-harness-protocol.md` so the published diagnostics command list and verification entrypoints match the current governance surface.
+- Why: The dedicated diagnostics live harness already existed, but it was still too easy for the normal protocol verification lane and the public protocol reference to drift away from it, which would make future readiness checks look greener than the actual diagnostics surface.
+- Impact: The standard protocol-surface live run now proves the diagnostics governance lane as part of the same verification workflow, and operators can find the current diagnostics commands and rerun path directly from the protocol doc.
+- Verification: `python3 -m py_compile scripts/control_harness_protocol_surface_live_acceptance.py scripts/control_harness_diagnostics_live_acceptance.py`; `python3 scripts/control_harness_protocol_surface_live_acceptance.py --app macos/build/ReleaseLocal/GhoDex.app --runtime-root macos/build/cef-runtime/current --output /tmp/ghx-control-harness-protocol-with-diagnostics.json`
+- Files: `scripts/control_harness_protocol_surface_live_acceptance.py`, `docs/control-harness-protocol.md`, `CHANGELOG.md`
+- Decision trail: Keep diagnostics governance as a dedicated child harness for isolation, but make the canonical protocol verification lane call it explicitly so regression evidence stays centralized instead of relying on chat history or manual operator memory.
+
 ### feat(diagnostics): persist crash markers and correlate macOS crash reports
 
 - What changed: Extended `RuntimeDiagnosticsLogger` so every diagnostics record now carries the active lifecycle session metadata, added a local crash marker flow for fatal signals and uncaught Objective-C exceptions, and on next launch automatically correlates the marker with the latest matching macOS `DiagnosticReports` `.ips/.crash` file plus the last in-app breadcrumb. The latest correlated result is persisted to `Diagnostics/runtime-last-crash-summary.json`.

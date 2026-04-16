@@ -38,6 +38,30 @@ from typing import Any, Callable
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = "/tmp/ghx-control-harness-protocol-surface-live-acceptance.json"
 HARNESS_SOCKET_RE = re.compile(r"(?P<path>/Users/.*/ControlHarness/harness\.sock)$")
+READ_ONLY_RETRYABLE_COMMANDS = {
+    "system.handshake",
+    "system.target.resolve",
+    "system.capabilities.get",
+    "app.state.get",
+    "state.snapshot",
+    "terminal.read",
+    "terminal.snapshot",
+    "terminal.semantic",
+    "window.list",
+    "panel.list",
+    "panel.state.get",
+    "settings.schema.get",
+    "settings.values.get",
+    "settings.diff",
+    "runtime.snapshot",
+    "todo.snapshot",
+    "diagnostics.metrics.get",
+    "diagnostics.logs.tail",
+    "diagnostics.logs.query",
+    "diagnostics.errors.recent",
+    "diagnostics.audit.query",
+    "diagnostics.eventBuffer.status",
+}
 
 
 def resolve_default_app() -> Path:
@@ -110,6 +134,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Preserve the launched app/session root on failure for live post-mortem inspection.",
     )
+    parser.add_argument(
+        "--skip-related-diagnostics-gate",
+        action="store_true",
+        help="Skip the dedicated diagnostics governance live gate that complements the canonical protocol surface run.",
+    )
     return parser.parse_args()
 
 
@@ -134,6 +163,79 @@ def send_single_request(socket_path: str, body: dict[str, Any], *, timeout: floa
     response_text = recv_until_close(client)
     client.close()
     return json.loads(response_text)
+
+
+def socket_accepts_connections(socket_path: str, *, timeout: float = 1.0) -> bool:
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(timeout)
+    try:
+        client.connect(socket_path)
+    except OSError:
+        client.close()
+        return False
+
+    client.close()
+    return True
+
+
+def run_related_gate(
+    script_name: str,
+    *,
+    app_bundle: Path,
+    output_path: Path,
+    startup_timeout_ms: int,
+    request_timeout: float,
+    settle_ms: int,
+) -> dict[str, Any]:
+    script_path = REPO_ROOT / "scripts" / script_name
+    command = [
+        "python3",
+        str(script_path),
+        "--app",
+        str(app_bundle),
+        "--startup-timeout-ms",
+        str(startup_timeout_ms),
+        "--request-timeout",
+        str(request_timeout),
+        "--settle-ms",
+        str(settle_ms),
+        "--output",
+        str(output_path),
+    ]
+    completed = subprocess.run(
+        command,
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    child_artifact: dict[str, Any] | None = None
+    if output_path.exists():
+        try:
+            child_artifact = json.loads(output_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            child_artifact = None
+
+    result = {
+        "script": f"scripts/{script_name}",
+        "artifact_path": str(output_path),
+        "return_code": completed.returncode,
+        "status": child_artifact.get("status") if child_artifact else None,
+        "stdout_tail": completed.stdout.splitlines()[-40:],
+        "stderr_tail": completed.stderr.splitlines()[-40:],
+    }
+    if child_artifact is not None and "summary" in child_artifact:
+        result["summary"] = child_artifact["summary"]
+
+    if completed.returncode != 0:
+        raise RuntimeError(f"{script_name} exited with code {completed.returncode}")
+    if child_artifact is None:
+        raise RuntimeError(f"{script_name} did not produce a readable artifact at {output_path}")
+    if child_artifact.get("status") != "ok":
+        raise RuntimeError(f"{script_name} finished without ok status")
+
+    return result
 
 
 class SocketLineReader:
@@ -270,6 +372,46 @@ def write_artifact(output_path: Path, artifact: dict[str, Any]) -> None:
     output_path.write_text(json.dumps(artifact, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def create_isolated_todo_workspace(root_path: Path) -> Path:
+    workspace_root = root_path.resolve()
+    days_dir = workspace_root / "days"
+    days_dir.mkdir(parents=True, exist_ok=True)
+
+    readme_path = workspace_root / "README.md"
+    if not readme_path.exists():
+        readme_path.write_text(
+            "# GhoDex Todo Workspace\n\nDaily todo files live under `days/YYYY-MM-DD.json`.\n",
+            encoding="utf-8",
+        )
+
+    creator_path = workspace_root / "creator.md"
+    if not creator_path.exists():
+        creator_path.write_text(
+            "\n".join(
+                [
+                    "# creator",
+                    "",
+                    "## Why this folder exists",
+                    "This workspace stores isolated live-acceptance todo files for GhoDex.",
+                    "",
+                    "## Created by",
+                    "scripts/control_harness_protocol_surface_live_acceptance.py",
+                    "",
+                    "## Creation date",
+                    date.today().isoformat(),
+                    "",
+                    "## Scope",
+                    "- Store date-based todo files under `days/`.",
+                    "- Keep protocol-surface acceptance isolated from user todo data.",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    return workspace_root
+
+
 def process_snapshot(pid: int | None) -> str | None:
     if pid is None:
         return None
@@ -291,6 +433,7 @@ def launch_app(
     app_support_root: Path,
     home_dir: Path,
     config_path: Path,
+    todo_workspace_root: Path,
 ) -> subprocess.Popen[str]:
     executable = app_bundle / "Contents" / "MacOS" / "GhoDex"
     if not executable.exists():
@@ -316,6 +459,9 @@ def launch_app(
             [
                 "initial-window = true",
                 "quit-after-last-window-closed = false",
+                "ghodex-todo-enabled = true",
+                f"ghodex-todo-workspace-root-path = {json.dumps(str(todo_workspace_root))}",
+                "ghodex-todo-show-completed-items = true",
                 "",
             ]
         ),
@@ -349,7 +495,9 @@ def wait_for_harness_socket(pid: int, *, timeout_ms: int) -> str:
         for line in completed.stdout.splitlines():
             match = HARNESS_SOCKET_RE.search(line)
             if match:
-                return match.group("path")
+                socket_path = match.group("path")
+                if os.path.exists(socket_path) and socket_accepts_connections(socket_path):
+                    return socket_path
         time.sleep(0.25)
 
     raise RuntimeError(
@@ -380,6 +528,7 @@ class HarnessClient:
         self.artifact = artifact
         self.artifact.setdefault("requests", {})
         self.artifact.setdefault("request_order", [])
+        self.artifact.setdefault("request_retries", [])
 
     def set_socket(self, socket_path: str) -> None:
         self.socket_path = socket_path
@@ -397,10 +546,33 @@ class HarnessClient:
         self.artifact["last_request_label"] = label
         self.artifact["last_request_command"] = command
         self.artifact["request_order"].append(label)
-        response = send_single_request(self.socket_path, body, timeout=self.timeout)
+        response: dict[str, Any] | None = None
+        attempt_count = 0
+        max_attempts = 3 if command in READ_ONLY_RETRYABLE_COMMANDS else 1
+        for attempt in range(1, max_attempts + 1):
+            attempt_count = attempt
+            try:
+                response = send_single_request(self.socket_path, body, timeout=self.timeout)
+                break
+            except TimeoutError as exc:
+                if attempt >= max_attempts:
+                    raise
+                self.artifact["request_retries"].append(
+                    {
+                        "label": label,
+                        "command": command,
+                        "attempt": attempt,
+                        "reason": str(exc) or "timed out",
+                    }
+                )
+                time.sleep(0.5 * attempt)
+
+        if response is None:
+            raise RuntimeError(f"{command} did not produce a response after {max_attempts} attempt(s)")
         self.artifact["requests"][label] = {
             "request": body,
             "response": response,
+            "attempt_count": attempt_count,
         }
         self.artifact["last_successful_request_label"] = label
         self.artifact["last_successful_request_command"] = command
@@ -449,6 +621,17 @@ def wait_for_expected_target_pid(
         timeout_ms=timeout_ms,
         interval_s=0.25,
     )
+
+
+def response_has_resolved_todo_workspace(
+    response: dict[str, Any],
+    *,
+    expected_root: Path,
+) -> bool:
+    actual_root = response.get("result", {}).get("values", {}).get("todo.workspace_root_path")
+    if not actual_root:
+        return False
+    return Path(str(actual_root)).resolve() == expected_root
 
 
 def extract_snapshot_tab(snapshot_response: dict[str, Any], *, index: int = 0) -> dict[str, Any]:
@@ -619,6 +802,7 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
     session_root = Path(f"/tmp/ghx-control-harness-protocol-{uuid.uuid4().hex[:8]}")
     home_dir = session_root / "home"
     app_support_root = session_root / "app-support"
+    todo_workspace_root = create_isolated_todo_workspace(session_root / "todo-workspace")
     config_path = home_dir / ".config" / "ghostty" / "config"
     log_path = session_root / "app.log"
 
@@ -626,10 +810,12 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
         "app": str(app_bundle),
         "runtime_root": str(runtime_root) if runtime_root is not None else None,
         "session_root": str(session_root),
+        "isolated_todo_workspace_root": str(todo_workspace_root),
         "log_path": str(log_path),
         "related_live_gates": [
             "scripts/control_harness_terminal_v2_live_acceptance.py",
             "scripts/control_harness_gateway_transport_live_acceptance.py",
+            "scripts/control_harness_diagnostics_live_acceptance.py",
             "scripts/browser_context_protocol_acceptance.py",
             "scripts/browser_runtime_prompt_resolution_acceptance.py",
             "scripts/browser_cookie_persistence_acceptance.py",
@@ -666,6 +852,7 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
             app_support_root=app_support_root,
             home_dir=home_dir,
             config_path=config_path,
+            todo_workspace_root=todo_workspace_root,
         )
         current_pid = proc.pid
         current_socket = wait_for_harness_socket(current_pid, timeout_ms=args.startup_timeout_ms)
@@ -897,6 +1084,12 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
         settings_schema = client.request("settings.schema.get")
         settings_values_before = client.request("settings.values.get")
         current_values = dict(settings_values_before["result"]["values"])
+        current_todo_workspace_root = str(current_values["todo.workspace_root_path"])
+        if Path(current_todo_workspace_root).resolve() != todo_workspace_root:
+            raise RuntimeError(
+                "Live acceptance is not using the isolated todo workspace. "
+                f"expected={todo_workspace_root} actual={current_todo_workspace_root}"
+            )
         current_gateway_port = str(current_values["gateway.listen_port"])
         validate_gateway_port = "9528" if current_gateway_port == "9527" else "9527"
         staged_gateway_port = "9531" if current_gateway_port in {"9527", "9528", "9530"} else "9530"
@@ -927,18 +1120,23 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
                 "gateway.listen_port": applied_gateway_port,
                 "runtime.enabled": "true",
                 "todo.enabled": "true",
+                "todo.workspace_root_path": str(todo_workspace_root),
             },
         )
+        def wait_for_applied_settings_values() -> dict[str, Any] | None:
+            response = client.request("settings.values.get", _label="settings.values.get.after-apply")
+            values = response.get("result", {}).get("values", {})
+            if values.get("gateway.listen_port") != applied_gateway_port:
+                return None
+            if values.get("runtime.enabled") != "true":
+                return None
+            if not response_has_resolved_todo_workspace(response, expected_root=todo_workspace_root):
+                return None
+            return response
+
         applied_values_response = wait_until(
             "applied settings values",
-            lambda: (
-                response
-                if (
-                    response := client.request("settings.values.get", _label="settings.values.get.after-apply")
-                ).get("result", {}).get("values", {}).get("gateway.listen_port") == applied_gateway_port
-                and response.get("result", {}).get("values", {}).get("runtime.enabled") == "true"
-                else None
-            ),
+            wait_for_applied_settings_values,
             timeout_ms=args.settle_ms,
         )
 
@@ -1085,6 +1283,11 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
 
         today_string, yesterday_string = today_strings()
         todo_snapshot_initial = client.request("todo.snapshot", date=today_string, include_completed=True)
+        if int(todo_snapshot_initial["result"]["returned_count"]) != 0:
+            raise RuntimeError(
+                "Isolated todo workspace was expected to start empty, "
+                f"but returned_count={todo_snapshot_initial['result']['returned_count']}"
+            )
         stale_add = client.request(
             "todo.add",
             title="Harness stale task",
@@ -1188,6 +1391,30 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
             ),
             timeout_ms=args.settle_ms,
         )
+        reapply_isolated_todo_response = client.request(
+            "settings.apply",
+            payload={
+                "todo.enabled": "true",
+                "todo.workspace_root_path": str(todo_workspace_root),
+            },
+        )
+        def wait_for_reisolated_todo_workspace() -> dict[str, Any] | None:
+            response = client.request(
+                "settings.values.get",
+                _label="settings.values.get.after-todo-reisolation",
+            )
+            values = response.get("result", {}).get("values", {})
+            if values.get("todo.enabled") != "true":
+                return None
+            if not response_has_resolved_todo_workspace(response, expected_root=todo_workspace_root):
+                return None
+            return response
+
+        settings_values_after_todo_reisolation = wait_until(
+            "isolated todo workspace reapply",
+            wait_for_reisolated_todo_workspace,
+            timeout_ms=args.settle_ms,
+        )
 
         relaunch_response = client.request("app.relaunch")
         old_pid = current_pid
@@ -1216,6 +1443,23 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
             ),
             timeout_ms=args.settle_ms,
         )
+        settings_values_after_relaunch = client.request(
+            "settings.values.get",
+            _label="settings.values.get.after-relaunch",
+        )
+        relaunch_todo_workspace_root = (
+            settings_values_after_relaunch.get("result", {})
+            .get("values", {})
+            .get("todo.workspace_root_path", "")
+        )
+        if not response_has_resolved_todo_workspace(
+            settings_values_after_relaunch,
+            expected_root=todo_workspace_root,
+        ):
+            raise RuntimeError(
+                "Relaunched compatibility phase lost the isolated todo workspace. "
+                f"expected={todo_workspace_root} actual={relaunch_todo_workspace_root}"
+            )
 
         compatibility_expected_commands = {
             "handshake",
@@ -1864,6 +2108,14 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
             date=today_string,
             include_completed=True,
         )
+        if int(compat_todo_snapshot["result"]["returned_count"]) != int(
+            todo_snapshot_final["result"]["returned_count"]
+        ):
+            raise RuntimeError(
+                "Compatibility todo snapshot did not stay on the isolated workspace. "
+                f"expected_count={todo_snapshot_final['result']['returned_count']} "
+                f"actual_count={compat_todo_snapshot['result']['returned_count']}"
+            )
         record_compatibility_result(
             artifact,
             command="todo-snapshot",
@@ -2153,6 +2405,8 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
             "settings_events",
             {
                 "schema_entry_count": len(settings_schema["result"]["entries"]),
+                "isolated_todo_workspace_root": str(todo_workspace_root),
+                "values_before": settings_values_before["result"]["values"],
                 "validate_changed_keys": validate_response["result"]["changed_keys"],
                 "draft_changed_keys": stage_response["result"]["changed_keys"],
                 "diff_entries": diff_response["result"]["entries"],
@@ -2168,6 +2422,9 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
                 "events_unsubscribed": events_unsubscribe["result"]["unsubscribed"],
                 "reset_defaults_changed_keys": reset_defaults_response["result"]["changed_keys"],
                 "values_after_defaults": settings_values_after_defaults["result"]["values"],
+                "todo_reisolation_changed_keys": reapply_isolated_todo_response["result"]["changed_keys"],
+                "values_after_todo_reisolation": settings_values_after_todo_reisolation["result"]["values"],
+                "values_after_relaunch": settings_values_after_relaunch["result"]["values"],
             },
         )
         record_summary(
@@ -2229,6 +2486,19 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
                 "claim_next_cancel_state": compat_claim_next_cancel["result"]["task"]["state"],
             },
         )
+
+        if not args.skip_related_diagnostics_gate:
+            related_diagnostics_output = (
+                session_root / "related-control-harness-diagnostics-live-acceptance.json"
+            )
+            artifact.setdefault("related_gate_results", {})["diagnostics"] = run_related_gate(
+                "control_harness_diagnostics_live_acceptance.py",
+                app_bundle=app_bundle,
+                output_path=related_diagnostics_output,
+                startup_timeout_ms=args.startup_timeout_ms,
+                request_timeout=args.request_timeout,
+                settle_ms=args.settle_ms,
+            )
 
         artifact["status"] = "ok"
         artifact["completed_at"] = iso8601_now()

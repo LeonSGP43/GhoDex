@@ -153,10 +153,19 @@ Settings semantics:
 
 - `diagnostics.metrics.get`
 - `diagnostics.metrics.reset`
+- `diagnostics.status`
 - `diagnostics.logs.tail`
+- `diagnostics.logs.query`
 - `diagnostics.errors.recent`
 - `diagnostics.audit.query`
 - `diagnostics.eventBuffer.status`
+- `diagnostics.crash.latest`
+- `diagnostics.mode.get`
+- `diagnostics.mode.set`
+- `diagnostics.retention.get`
+- `diagnostics.retention.apply`
+- `diagnostics.cleanup.run`
+- `diagnostics.export.bundle`
 
 Supported diagnostics log sources:
 
@@ -232,10 +241,13 @@ Primary artifacts:
 
 Operational inspection path:
 
+- use `diagnostics.status` for active budgets, source sizes, effective mode, and crash-summary presence
 - use `diagnostics.logs.tail` for recent raw log lines
+- use `diagnostics.logs.query` for structured runtime/audit/events filtering
 - use `diagnostics.errors.recent` for recent structured error summaries
 - use `diagnostics.audit.query` for structured audit records
 - use `diagnostics.eventBuffer.status` for buffered event-stream pressure and resync state
+- use `diagnostics.crash.latest` for the latest correlated crash marker + macOS report summary
 
 ## Verification
 
@@ -245,6 +257,7 @@ Primary in-repo verification commands:
 zig build test -Dtest-filter=control
 python3 -m py_compile \
   scripts/browser_last_window_close_acceptance.py \
+  scripts/control_harness_diagnostics_live_acceptance.py \
   scripts/control_harness_protocol_surface_live_acceptance.py \
   scripts/control_harness_terminal_v2_live_acceptance.py \
   scripts/control_harness_gateway_transport_live_acceptance.py
@@ -255,6 +268,7 @@ Live acceptance scripts that exercise the protocol surface:
 - `scripts/control_harness_protocol_surface_live_acceptance.py`
 - `scripts/control_harness_gateway_transport_live_acceptance.py`
 - `scripts/control_harness_terminal_v2_live_acceptance.py`
+- `scripts/control_harness_diagnostics_live_acceptance.py`
 - `scripts/browser_last_window_close_acceptance.py`
 - `scripts/browser_context_protocol_acceptance.py`
 - `scripts/browser_runtime_prompt_resolution_acceptance.py`
