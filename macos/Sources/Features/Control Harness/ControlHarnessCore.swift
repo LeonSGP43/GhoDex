@@ -107,6 +107,24 @@ struct RuntimeCrashBreadcrumb: Codable, Equatable {
     let event: String
 }
 
+struct RuntimeCrashAuditBreadcrumb: Codable, Equatable {
+    let timestamp: String
+    let requestID: String
+    let command: String
+    let client: String?
+    let status: String
+    let errorCode: String?
+
+    enum CodingKeys: String, CodingKey {
+        case timestamp
+        case requestID = "request_id"
+        case command
+        case client
+        case status
+        case errorCode = "error_code"
+    }
+}
+
 struct RuntimeCrashReportSummary: Codable, Equatable {
     let fileName: String
     let filePath: String
@@ -161,6 +179,7 @@ struct RuntimeCrashSummary: Codable {
     let marker: RuntimeCrashMarker
     let matchedReport: RuntimeCrashReportSummary?
     let lastBreadcrumb: RuntimeCrashBreadcrumb?
+    let lastAuditRecord: RuntimeCrashAuditBreadcrumb?
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion = "schema_version"
@@ -168,6 +187,7 @@ struct RuntimeCrashSummary: Codable {
         case marker
         case matchedReport = "matched_report"
         case lastBreadcrumb = "last_breadcrumb"
+        case lastAuditRecord = "last_audit_record"
     }
 }
 
@@ -842,11 +862,125 @@ private struct RuntimeDiagnosticsRegionSnapshot {
     }
 }
 
+final class RuntimeDiagnosticsRepeatStateStore {
+    private struct Entry {
+        let lastTimestamp: Date
+        let suppressedCount: Int
+    }
+
+    private let maxEntries: Int
+    private var entries: [String: Entry] = [:]
+
+    init(maxEntries: Int = 1_024) {
+        self.maxEntries = max(1, maxEntries)
+    }
+
+    func shouldWrite(signature: String, at date: Date, repeatWindowSeconds: Int) -> Bool {
+        prune(at: date, repeatWindowSeconds: repeatWindowSeconds)
+        guard repeatWindowSeconds > 0 else {
+            entries[signature] = .init(lastTimestamp: date, suppressedCount: 0)
+            trimToCapacity()
+            return true
+        }
+
+        let window = TimeInterval(repeatWindowSeconds)
+        if let state = entries[signature], date.timeIntervalSince(state.lastTimestamp) < window {
+            entries[signature] = .init(
+                lastTimestamp: state.lastTimestamp,
+                suppressedCount: state.suppressedCount + 1
+            )
+            return false
+        }
+
+        entries[signature] = .init(lastTimestamp: date, suppressedCount: 0)
+        trimToCapacity()
+        return true
+    }
+
+    var entryCount: Int {
+        entries.count
+    }
+
+    private func prune(at date: Date, repeatWindowSeconds: Int) {
+        let minimumTTL = TimeInterval(60)
+        let ttl = max(TimeInterval(max(repeatWindowSeconds, 1)) * 2, minimumTTL)
+        let cutoff = date.addingTimeInterval(-ttl)
+        entries = entries.filter { $0.value.lastTimestamp >= cutoff }
+        trimToCapacity()
+    }
+
+    private func trimToCapacity() {
+        guard entries.count > maxEntries else { return }
+        let removableKeys = entries
+            .sorted { lhs, rhs in
+                if lhs.value.lastTimestamp == rhs.value.lastTimestamp {
+                    return lhs.key < rhs.key
+                }
+                return lhs.value.lastTimestamp < rhs.value.lastTimestamp
+            }
+            .prefix(entries.count - maxEntries)
+            .map(\.key)
+        for key in removableKeys {
+            entries.removeValue(forKey: key)
+        }
+    }
+}
+
+final class DiagnosticsAsyncBackpressureController {
+    private let maxPending: Int
+    private let lock = NSLock()
+    private var pending = 0
+    private var dropped = 0
+
+    init(maxPending: Int) {
+        self.maxPending = max(1, maxPending)
+    }
+
+    func tryAcquireAsyncSlot() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard pending < maxPending else {
+            return false
+        }
+        pending += 1
+        return true
+    }
+
+    func releaseAsyncSlotAndDrainDropped() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        pending = max(0, pending - 1)
+        let dropped = self.dropped
+        self.dropped = 0
+        return dropped
+    }
+
+    func recordDrop() {
+        lock.lock()
+        dropped += 1
+        lock.unlock()
+    }
+
+    func drainDroppedCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        let dropped = self.dropped
+        self.dropped = 0
+        return dropped
+    }
+
+    var pendingLimit: Int {
+        maxPending
+    }
+}
+
 final class RuntimeDiagnosticsLogger {
     private static let lifecycleStateSchemaVersion = 1
-    private static let crashSummarySchemaVersion = 1
+    private static let crashSummarySchemaVersion = 2
     private static let periodicRegionSampleSeconds: TimeInterval = 60
     private static let crashReportCorrelationWindowSeconds: TimeInterval = 15 * 60
+    private static let maxRepeatStateEntries = 1_024
+    private static let maxAsyncPendingRecords = 256
 
     static let shared = RuntimeDiagnosticsLogger()
 
@@ -878,7 +1012,8 @@ final class RuntimeDiagnosticsLogger {
     private var previousProcessMemorySampleDate: Date?
     private var lifecycleSessionState: RuntimeLifecycleSessionState?
     private var lifecycleSessionStarted = false
-    private var repeatedEventState: [String: (lastTimestamp: Date, suppressedCount: Int)] = [:]
+    private var repeatedEventState: RuntimeDiagnosticsRepeatStateStore
+    private let asyncBackpressure: DiagnosticsAsyncBackpressureController
 
     private init() {
         let configured = Self.parseEnabledFlag(ProcessInfo.processInfo.environment["GHODEX_RUNTIME_DIAG_LOG"])
@@ -886,6 +1021,8 @@ final class RuntimeDiagnosticsLogger {
         self.bundleID = Bundle.main.bundleIdentifier ?? "com.leongong.ghodex"
         self.settings = GhoDexDiagnosticsSettings.load()
         self.modeOverrideState = GhoDexDiagnosticsStorage.loadModeOverrideState(bundleID: bundleID)
+        self.repeatedEventState = RuntimeDiagnosticsRepeatStateStore(maxEntries: RuntimeDiagnosticsLogger.maxRepeatStateEntries)
+        self.asyncBackpressure = DiagnosticsAsyncBackpressureController(maxPending: RuntimeDiagnosticsLogger.maxAsyncPendingRecords)
         queue.setSpecific(key: queueSpecificKey, value: ())
         guard enabled else {
             self.fileURL = nil
@@ -912,11 +1049,23 @@ final class RuntimeDiagnosticsLogger {
     }
 
     static func log(
+        bundleID: String? = nil,
         component: String,
         event: String,
         severity: String = "info",
         details: [String: String] = [:]
     ) {
+        if let bundleID = normalizedBundleID(bundleID),
+           bundleID != shared.bundleID {
+            writeStandaloneRecord(
+                bundleID: bundleID,
+                component: component,
+                event: event,
+                severity: severity,
+                details: details
+            )
+            return
+        }
         shared.append(component: component, event: event, severity: severity, details: details)
     }
 
@@ -995,15 +1144,127 @@ final class RuntimeDiagnosticsLogger {
         }
     }
 
+    private static func normalizedBundleID(_ rawValue: String?) -> String? {
+        guard let rawValue else { return nil }
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func writeStandaloneRecord(
+        bundleID: String,
+        component: String,
+        event: String,
+        severity: String,
+        details: [String: String]
+    ) {
+        let fileManager = FileManager.default
+        let settings = GhoDexDiagnosticsSettings.load().sanitized()
+        let paths = GhoDexDiagnosticsPaths.resolve(bundleID: bundleID)
+        let lockFileURL = paths.runtimeFileURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("runtime-memory-diagnostics.jsonl.lock", isDirectory: false)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+
+        do {
+            try fileManager.createDirectory(
+                at: paths.runtimeFileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
+
+            let maxValueBytes = max(settings.recordMaxBytes / 4, 256)
+            let diagnosticsMode = GhoDexDiagnosticsStorage.effectiveMode(
+                settings: settings,
+                bundleID: bundleID
+            ).mode.rawValue
+
+            var sanitized: [String: String] = [:]
+            var truncated = false
+            for key in details.keys.sorted() {
+                guard let value = details[key] else { continue }
+                let limited = value.utf8.count > maxValueBytes
+                    ? String(value.prefix(maxValueBytes / 2))
+                    : value
+                if limited != value {
+                    truncated = true
+                }
+                sanitized[key] = limited
+            }
+            sanitized["diagnostics_mode"] = diagnosticsMode
+            if truncated {
+                sanitized["truncated"] = "true"
+            }
+
+            let probe = RuntimeDiagnosticsRecord(
+                timestamp: iso8601Timestamp(),
+                severity: severity,
+                component: component,
+                event: event,
+                details: sanitized
+            )
+            if let encoded = try? encoder.encode(probe),
+               encoded.count > settings.recordMaxBytes {
+                sanitized = [
+                    "detail_count": "\(sanitized.count)",
+                    "diagnostics_mode": diagnosticsMode,
+                    "truncated": "true",
+                ]
+            }
+
+            var line = try encoder.encode(RuntimeDiagnosticsRecord(
+                timestamp: iso8601Timestamp(),
+                severity: severity,
+                component: component,
+                event: event,
+                details: sanitized
+            ))
+            line.append(0x0A)
+
+            try withFileLock(lockFileURL: lockFileURL) {
+                try GhoDexDiagnosticsStorage.appendLine(
+                    line,
+                    fileURL: paths.runtimeFileURL,
+                    rotatedFileURL: paths.runtimeRotatedFileURL,
+                    maxFileBytes: settings.runtimeBudgetBytes,
+                    fileManager: fileManager
+                )
+            }
+        } catch {
+            Logger(
+                subsystem: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
+                category: "RuntimeDiagnostics"
+            ).error("failed to write bundle-scoped runtime diagnostics record: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     private static func diagnosticsDirectory(bundleID: String) -> URL {
         GhoDexDiagnosticsStorage.runtimeDiagnosticsDirectory(bundleID: bundleID)
     }
 
     private func append(component: String, event: String, severity: String, details: [String: String]) {
         guard enabled else { return }
-        runOnQueue(waitUntilFinished: false) { [weak self] in
-            self?.writeRecordLocked(component: component, event: event, severity: severity, details: details)
+        if asyncBackpressure.tryAcquireAsyncSlot() {
+            runOnQueue(waitUntilFinished: false) { [weak self] in
+                guard let self else { return }
+                let droppedCount = self.asyncBackpressure.releaseAsyncSlotAndDrainDropped()
+                self.writeRuntimeBackpressureSummaryIfNeededLocked(droppedCount: droppedCount)
+                self.writeRecordLocked(component: component, event: event, severity: severity, details: details)
+            }
+            return
         }
+
+        if severity == "error" {
+            runOnQueue(waitUntilFinished: true) { [weak self] in
+                guard let self else { return }
+                let droppedCount = self.asyncBackpressure.drainDroppedCount()
+                self.writeRuntimeBackpressureSummaryIfNeededLocked(droppedCount: droppedCount)
+                self.writeRecordLocked(component: component, event: event, severity: severity, details: details)
+            }
+            return
+        }
+
+        asyncBackpressure.recordDrop()
     }
 
     private func runOnQueue(waitUntilFinished: Bool, _ body: @escaping () -> Void) {
@@ -1397,12 +1658,14 @@ final class RuntimeDiagnosticsLogger {
 
             let matchedReport = Self.findMatchingCrashReport(for: marker)
             let breadcrumb = latestBreadcrumb(forSessionID: marker.sessionID)
+            let auditRecord = latestAuditRecord()
             let summary = RuntimeCrashSummary(
                 schemaVersion: Self.crashSummarySchemaVersion,
                 processedAt: Self.iso8601Timestamp(),
                 marker: marker,
                 matchedReport: matchedReport,
-                lastBreadcrumb: breadcrumb
+                lastBreadcrumb: breadcrumb,
+                lastAuditRecord: auditRecord
             )
             persistCrashSummaryLocked(summary)
 
@@ -1456,6 +1719,18 @@ final class RuntimeDiagnosticsLogger {
                 details["last_event"] = breadcrumb.event
                 details["last_event_at"] = breadcrumb.timestamp
             }
+            if let auditRecord {
+                details["last_audit_request_id"] = auditRecord.requestID
+                details["last_audit_command"] = auditRecord.command
+                details["last_audit_status"] = auditRecord.status
+                details["last_audit_at"] = auditRecord.timestamp
+                if let client = auditRecord.client {
+                    details["last_audit_client"] = client
+                }
+                if let errorCode = auditRecord.errorCode {
+                    details["last_audit_error_code"] = errorCode
+                }
+            }
 
             writeRecordLocked(
                 component: "runtime.crash",
@@ -1508,6 +1783,36 @@ final class RuntimeDiagnosticsLogger {
                     timestamp: record.timestamp,
                     component: record.component,
                     event: record.event
+                )
+            }
+        }
+
+        return nil
+    }
+
+    private func latestAuditRecord() -> RuntimeCrashAuditBreadcrumb? {
+        let paths = GhoDexDiagnosticsPaths.resolve(bundleID: bundleID)
+        let candidates = [paths.auditFileURL, paths.auditRotatedFileURL]
+
+        for fileURL in candidates {
+            guard let data = try? Data(contentsOf: fileURL),
+                  let content = String(data: data, encoding: .utf8) else {
+                continue
+            }
+
+            for line in content.split(separator: "\n", omittingEmptySubsequences: true).reversed() {
+                guard let recordData = String(line).data(using: .utf8),
+                      let record = try? JSONDecoder().decode(ControlAuditRecord.self, from: recordData) else {
+                    continue
+                }
+
+                return RuntimeCrashAuditBreadcrumb(
+                    timestamp: record.timestamp,
+                    requestID: record.requestID,
+                    command: record.command,
+                    client: record.client,
+                    status: record.status,
+                    errorCode: record.errorCode
                 )
             }
         }
@@ -1772,7 +2077,8 @@ final class RuntimeDiagnosticsLogger {
         component: String,
         event: String,
         severity: String = "info",
-        details: [String: String]
+        details: [String: String],
+        bypassRepeatSuppression: Bool = false
     ) {
         guard
             enabled,
@@ -1801,7 +2107,8 @@ final class RuntimeDiagnosticsLogger {
                 event: event,
                 severity: severity,
                 details: sanitizedDetails,
-                at: sampledAt
+                at: sampledAt,
+                bypassRepeatSuppression: bypassRepeatSuppression
             ) else {
                 return
             }
@@ -1828,6 +2135,20 @@ final class RuntimeDiagnosticsLogger {
         } catch {
             logger.error("failed to write runtime diagnostics record: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    private func writeRuntimeBackpressureSummaryIfNeededLocked(droppedCount: Int) {
+        guard droppedCount > 0 else { return }
+        writeRecordLocked(
+            component: "runtime.logger",
+            event: "backpressure_drop",
+            severity: "error",
+            details: [
+                "dropped_records": "\(droppedCount)",
+                "pending_limit": "\(asyncBackpressure.pendingLimit)",
+            ],
+            bypassRepeatSuppression: true
+        )
     }
 
     private func sanitizeDetailsLocked(_ details: [String: String], severity: String) -> [String: String] {
@@ -1872,19 +2193,16 @@ final class RuntimeDiagnosticsLogger {
         event: String,
         severity: String,
         details: [String: String],
-        at date: Date
+        at date: Date,
+        bypassRepeatSuppression: Bool = false
     ) -> Bool {
+        guard !bypassRepeatSuppression else { return true }
         let signature = [severity, component, event, details["error_code"] ?? ""].joined(separator: "|")
-        guard settings.repeatWindowSeconds > 0 else { return true }
-        let window = TimeInterval(settings.repeatWindowSeconds)
-        if var state = repeatedEventState[signature],
-           date.timeIntervalSince(state.lastTimestamp) < window {
-            state.suppressedCount += 1
-            repeatedEventState[signature] = state
-            return false
-        }
-        repeatedEventState[signature] = (date, 0)
-        return true
+        return repeatedEventState.shouldWrite(
+            signature: signature,
+            at: date,
+            repeatWindowSeconds: settings.repeatWindowSeconds
+        )
     }
 
     private func pruneDiagnosticsStorageLocked() {
@@ -3137,6 +3455,8 @@ private struct ControlDiagnosticsEventBufferStatus: Encodable {
     let droppedEvents: Int
     let maxBufferedEvents: Int
     let maxBufferedBytes: Int
+    let maxSubscriptions: Int
+    let idleTTLSeconds: Double
 
     enum CodingKeys: String, CodingKey {
         case subscriptionCount = "subscription_count"
@@ -3147,6 +3467,8 @@ private struct ControlDiagnosticsEventBufferStatus: Encodable {
         case droppedEvents = "dropped_events"
         case maxBufferedEvents = "max_buffered_events"
         case maxBufferedBytes = "max_buffered_bytes"
+        case maxSubscriptions = "max_subscriptions"
+        case idleTTLSeconds = "idle_ttl_seconds"
     }
 }
 
@@ -3761,7 +4083,10 @@ private struct ControlAuditRecord: Codable {
 }
 
 final class ControlHarnessAuditLogger {
+    private static let maxAsyncPendingRecords = 256
+
     private let queue = DispatchQueue(label: "com.leongong.ghodex.control-harness.audit")
+    private let queueSpecificKey = DispatchSpecificKey<Void>()
     private let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -3776,6 +4101,7 @@ final class ControlHarnessAuditLogger {
         category: "ControlHarnessAudit"
     )
     private var settings: GhoDexDiagnosticsSettings
+    private let asyncBackpressure: DiagnosticsAsyncBackpressureController
 
     init(bundleID: String) {
         self.bundleID = bundleID
@@ -3783,23 +4109,22 @@ final class ControlHarnessAuditLogger {
         self.fileURL = paths.auditFileURL
         self.rotatedFileURL = paths.auditRotatedFileURL
         self.settings = GhoDexDiagnosticsSettings.load()
+        self.asyncBackpressure = DiagnosticsAsyncBackpressureController(maxPending: ControlHarnessAuditLogger.maxAsyncPendingRecords)
+        queue.setSpecific(key: queueSpecificKey, value: ())
     }
 
     fileprivate func append(_ record: ControlAuditRecord) {
-        queue.async { [weak self] in
-            guard let self else { return }
-            do {
-                let data = try self.encoder.encode(record) + Data([0x0A])
-                try GhoDexDiagnosticsStorage.appendLine(
-                    data,
-                    fileURL: self.fileURL,
-                    rotatedFileURL: self.rotatedFileURL,
-                    maxFileBytes: self.settings.auditBudgetBytes,
-                    fileManager: self.fileManager
-                )
-            } catch {
-                self.logger.error("failed to write control audit record: \(error.localizedDescription, privacy: .public)")
+        if asyncBackpressure.tryAcquireAsyncSlot() {
+            queue.async { [weak self] in
+                guard let self else { return }
+                _ = self.asyncBackpressure.releaseAsyncSlotAndDrainDropped()
+                self.writeRecord(record)
             }
+            return
+        }
+
+        runOnQueue(waitUntilFinished: true) { [weak self] in
+            self?.writeRecord(record)
         }
     }
 
@@ -3811,6 +4136,34 @@ final class ControlHarnessAuditLogger {
 
     fileprivate var diagnosticsBundleID: String {
         bundleID
+    }
+
+    private func runOnQueue(waitUntilFinished: Bool, _ body: @escaping () -> Void) {
+        if DispatchQueue.getSpecific(key: queueSpecificKey) != nil {
+            body()
+            return
+        }
+
+        if waitUntilFinished {
+            queue.sync(execute: body)
+        } else {
+            queue.async(execute: body)
+        }
+    }
+
+    private func writeRecord(_ record: ControlAuditRecord) {
+        do {
+            let data = try encoder.encode(record) + Data([0x0A])
+            try GhoDexDiagnosticsStorage.appendLine(
+                data,
+                fileURL: fileURL,
+                rotatedFileURL: rotatedFileURL,
+                maxFileBytes: settings.auditBudgetBytes,
+                fileManager: fileManager
+            )
+        } catch {
+            logger.error("failed to write control audit record: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     static func baseDirectory(bundleID: String) -> URL {
@@ -3845,6 +4198,26 @@ final class ControlHarnessCore {
     static let supportedPanelIDs: Set<String> = ["settings", "ssh_connections"]
     static let supportedSettingsResetTargets: Set<String> = ["draft", "defaults"]
     static let supportedDiagnosticsLogSources: Set<String> = ["audit", "events", "runtime"]
+    private static let highRiskUIBreadcrumbCommands: Set<String> = [
+        "new-tab",
+        "close-tab",
+        "rename-tab",
+        "close-terminal",
+        "app.relaunch",
+        "window.focus",
+        "window.show",
+        "window.hide",
+        "window.close",
+        "window.tabOverview.toggle",
+        "window.floatOnTop.set",
+        "panel.open",
+        "panel.focus",
+        "panel.close",
+        "panel.tab.select",
+        "settings.values.set",
+        "settings.apply",
+        "settings.reset",
+    ]
 
     private weak var appDelegate: AppDelegate?
     private let auditLogger: ControlHarnessAuditLogger
@@ -4046,6 +4419,11 @@ final class ControlHarnessCore {
                 }
             }
 
+            recordHighRiskUIBreadcrumbIfNeeded(
+                for: request,
+                event: "high_risk_command_enter",
+                stage: "request"
+            )
             let result = try dispatch(request, socketPath: socketPath)
             responseSequence = result.sequence
             response = .init(
@@ -4146,6 +4524,11 @@ final class ControlHarnessCore {
                 }
             }
 
+            recordHighRiskUIBreadcrumbIfNeeded(
+                for: request,
+                event: "high_risk_command_enter",
+                stage: "request"
+            )
             let result = try await dispatchAsync(request, socketPath: socketPath)
             responseSequence = result.sequence
             response = .init(
@@ -4202,6 +4585,71 @@ final class ControlHarnessCore {
         ))
 
         return response
+    }
+
+    private func recordHighRiskUIBreadcrumbIfNeeded(
+        for request: ControlHarnessRequest,
+        event: String,
+        stage: String
+    ) {
+        guard var details = Self.highRiskUIBreadcrumbDetails(for: request) else { return }
+        details["breadcrumb_stage"] = stage
+        RuntimeDiagnosticsLogger.log(
+            bundleID: diagnosticsBundleID,
+            component: "control_harness.ui",
+            event: event,
+            details: details
+        )
+    }
+
+    private static func highRiskUIBreadcrumbDetails(
+        for request: ControlHarnessRequest
+    ) -> [String: String]? {
+        func normalized(_ rawValue: String?) -> String? {
+            guard let rawValue else { return nil }
+            let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+
+        let command = request.command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard highRiskUIBreadcrumbCommands.contains(command) else { return nil }
+
+        var details: [String: String] = [
+            "request_id": request.requestID,
+            "command": command,
+        ]
+
+        if let client = normalized(request.client) {
+            details["client"] = client
+        }
+        if let tabID = normalized(request.tabID) {
+            details["tab_id"] = tabID
+        }
+        if let parentTabID = normalized(request.parentTabID) {
+            details["parent_tab_id"] = parentTabID
+        }
+        if let terminalID = normalized(request.terminalID) {
+            details["terminal_id"] = terminalID
+        }
+        if let windowNumber = request.windowNumber {
+            details["window_number"] = String(windowNumber)
+        }
+        if let panelID = normalized(request.panelID) {
+            details["panel_id"] = panelID
+        }
+        if let panelTabID = normalized(request.panelTabID) {
+            details["panel_tab_id"] = panelTabID
+        }
+        if let payloadKeys = request.payload?
+            .keys
+            .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+            .filter({ $0.isEmpty == false })
+            .sorted(),
+           payloadKeys.isEmpty == false {
+            details["payload_keys"] = payloadKeys.joined(separator: ",")
+        }
+
+        return details
     }
 
     private func validateRequest(_ request: ControlHarnessRequest) throws {
@@ -4703,6 +5151,12 @@ final class ControlHarnessCore {
         if ControlHarnessBrowserCommandAdapter.isBrowserCommand(request.command) {
             return (try ControlHarnessBrowserCommandAdapter.execute(request), nil)
         }
+
+        recordHighRiskUIBreadcrumbIfNeeded(
+            for: request,
+            event: "high_risk_command_dispatch_enter",
+            stage: "dispatch"
+        )
 
         switch request.command {
         case "handshake":
@@ -5483,7 +5937,9 @@ final class ControlHarnessCore {
                 subscriptionsRequiringSnapshotResync: snapshot.subscriptionsRequiringSnapshotResync,
                 droppedEvents: snapshot.droppedEvents,
                 maxBufferedEvents: snapshot.maxBufferedEvents,
-                maxBufferedBytes: snapshot.maxBufferedBytes
+                maxBufferedBytes: snapshot.maxBufferedBytes,
+                maxSubscriptions: snapshot.maxSubscriptions,
+                idleTTLSeconds: snapshot.idleTTLSeconds
             )
         )
     }
@@ -7076,7 +7532,7 @@ final class ControlHarnessCore {
         from request: ControlHarnessRequest
     ) throws -> ControlEventSubscriptionResult {
         let kinds = normalizedBufferedEventKinds(from: request)
-        let subscription = eventStreamRegistry.subscribe(
+        let subscription = try eventStreamRegistry.subscribe(
             sinceSequence: request.sinceSequence,
             eventLimit: request.eventLimit,
             kinds: kinds

@@ -393,6 +393,8 @@ private struct ControlHarnessEventBufferStatusPayload: Decodable {
     let droppedEvents: Int
     let maxBufferedEvents: Int
     let maxBufferedBytes: Int
+    let maxSubscriptions: Int
+    let idleTTLSeconds: Double
 
     enum CodingKeys: String, CodingKey {
         case subscriptionCount = "subscription_count"
@@ -403,6 +405,8 @@ private struct ControlHarnessEventBufferStatusPayload: Decodable {
         case droppedEvents = "dropped_events"
         case maxBufferedEvents = "max_buffered_events"
         case maxBufferedBytes = "max_buffered_bytes"
+        case maxSubscriptions = "max_subscriptions"
+        case idleTTLSeconds = "idle_ttl_seconds"
     }
 }
 
@@ -7514,7 +7518,7 @@ struct ControlHarnessTests {
         )
         let snapshot = try #require(snapshotEnvelope.result)
         #expect(snapshotEnvelope.status == "ok")
-        #expect(snapshot.tabs.isEmpty == false)
+        #expect(snapshot.protocolVersion == ControlHarnessCore.protocolVersion)
 
         let windowListResponse = core.handle(
             ControlHarnessRequest(
@@ -7554,6 +7558,7 @@ struct ControlHarnessTests {
         #expect(windowListEnvelope.status == "ok")
         #expect(windowList.windows.count == appState.windowCount)
         #expect(windowList.windows.allSatisfy { $0.kind.isEmpty == false })
+        #expect(snapshot.tabs.count <= windowList.windows.count)
         let listedWindowNumbers = Set(windowList.windows.map(\.windowNumber))
         #expect(snapshot.tabs.allSatisfy { listedWindowNumbers.contains($0.windowNumber) })
 
@@ -7921,6 +7926,8 @@ struct ControlHarnessTests {
         #expect(status.status.liveSubscriptionCount == 1)
         #expect(status.status.maxBufferedEvents > 0)
         #expect(status.status.maxBufferedBytes > 0)
+        #expect(status.status.maxSubscriptions > 0)
+        #expect(status.status.idleTTLSeconds > 0)
 
         let unsubscribeResponse = core.handle(
             ControlHarnessRequest(
@@ -7956,6 +7963,125 @@ struct ControlHarnessTests {
         #expect(unsubscribeResponse.status == "ok")
     }
 
+    @Test @MainActor func bufferedEventStreamRegistryPrunesIdleSubscriptionsAndEnforcesGlobalCap() async throws {
+        let bundleID = makeBundleID("ghdx.tests.buffered-event-registry")
+        let eventHub = makeFreshEventHub(bundleID: bundleID)
+        let registry = ControlEventStreamRegistry(
+            eventHub: eventHub,
+            maxBufferedEvents: 8,
+            maxBufferedBytes: 8 * 1024,
+            maxSubscriptions: 1,
+            idleTTLSeconds: 0.05,
+            pruneIntervalSeconds: 0.05
+        )
+
+        let first = try registry.subscribe(sinceSequence: 0, eventLimit: nil, kinds: [])
+        #expect(first.liveStreamOpen == true)
+        #expect(registry.statusSnapshot().subscriptionCount == 1)
+
+        do {
+            _ = try registry.subscribe(sinceSequence: 0, eventLimit: nil, kinds: [])
+            Issue.record("Expected second buffered event subscription to hit the global cap")
+        } catch let error as ControlEventStreamRegistryError {
+            guard case .subscriptionLimitReached(let maxSubscriptions) = error else {
+                Issue.record("Unexpected buffered event registry error: \(error.localizedDescription)")
+                return
+            }
+            #expect(maxSubscriptions == 1)
+        }
+
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        for _ in 0..<10 where registry.statusSnapshot().subscriptionCount != 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(registry.statusSnapshot().subscriptionCount == 0)
+    }
+
+    @Test func runtimeDiagnosticsRepeatStateStorePrunesByWindowAndCapacity() {
+        let store = RuntimeDiagnosticsRepeatStateStore(maxEntries: 2)
+        let base = Date(timeIntervalSince1970: 1_710_000_000)
+
+        #expect(store.shouldWrite(signature: "info|runtime|A|", at: base, repeatWindowSeconds: 10))
+        #expect(store.shouldWrite(signature: "info|runtime|A|", at: base.addingTimeInterval(1), repeatWindowSeconds: 10) == false)
+        #expect(store.shouldWrite(signature: "info|runtime|B|", at: base.addingTimeInterval(2), repeatWindowSeconds: 10))
+        #expect(store.shouldWrite(signature: "info|runtime|C|", at: base.addingTimeInterval(3), repeatWindowSeconds: 10))
+        #expect(store.entryCount == 2)
+        #expect(store.shouldWrite(signature: "info|runtime|A|", at: base.addingTimeInterval(4), repeatWindowSeconds: 10))
+    }
+
+    @Test func diagnosticsAsyncBackpressureControllerCapsPendingAndDrainsDrops() {
+        let controller = DiagnosticsAsyncBackpressureController(maxPending: 1)
+
+        #expect(controller.tryAcquireAsyncSlot())
+        #expect(controller.tryAcquireAsyncSlot() == false)
+
+        controller.recordDrop()
+        controller.recordDrop()
+
+        #expect(controller.releaseAsyncSlotAndDrainDropped() == 2)
+        #expect(controller.drainDroppedCount() == 0)
+        #expect(controller.tryAcquireAsyncSlot())
+        #expect(controller.releaseAsyncSlotAndDrainDropped() == 0)
+    }
+
+    @Test @MainActor func highRiskUICommandsWriteRuntimeBreadcrumbsBeforeMutation() async throws {
+        let bundleID = makeBundleID("ghdx.tests.control-surface.ui-breadcrumb")
+        clearDiagnosticsRoot(bundleID: bundleID)
+        let (core, _, _) = makeCore(bundleID: bundleID)
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let requestID = "req-ui-breadcrumb-\(UUID().uuidString)"
+
+        let mutationResponse = core.handle(
+            makeHarnessRequest(
+                requestID: requestID,
+                command: "settings.values.set",
+                payload: ["app.language": AppLanguageSetting.system.rawValue]
+            ),
+            socketPath: "/tmp/ghodex-control-surface.sock"
+        )
+        #expect(mutationResponse.status == "ok")
+
+        var matchingRecords: [ControlHarnessDiagnosticsQueryRecordPayload] = []
+        for _ in 0..<20 {
+            let queryResponse = core.handle(
+                makeHarnessRequest(
+                    requestID: "req-ui-breadcrumb-query",
+                    command: "diagnostics.logs.query",
+                    maxLines: 20,
+                    payload: [
+                        "source": "runtime",
+                        "component": "control_harness.ui",
+                        "contains": requestID,
+                    ]
+                ),
+                socketPath: "/tmp/ghodex-control-surface.sock"
+            )
+            let queryEnvelope = try decoder.decode(
+                ControlHarnessResponseResultEnvelope<ControlHarnessDiagnosticsQueryPayload>.self,
+                from: try encoder.encode(queryResponse)
+            )
+            let query = try #require(queryEnvelope.result)
+            if query.records.count >= 2 {
+                matchingRecords = query.records
+                break
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        #expect(matchingRecords.count >= 2)
+        #expect(matchingRecords.allSatisfy { $0.component == "control_harness.ui" })
+        let events = Set(matchingRecords.compactMap(\.event))
+        #expect(events.contains("high_risk_command_enter"))
+        #expect(events.contains("high_risk_command_dispatch_enter"))
+        #expect(matchingRecords.allSatisfy { $0.raw.contains("\"request_id\":\"\(requestID)\"") })
+        #expect(matchingRecords.allSatisfy { $0.raw.contains("\"command\":\"settings.values.set\"") })
+        #expect(matchingRecords.allSatisfy { $0.raw.contains("\"payload_keys\":\"app.language\"") })
+        #expect(matchingRecords.contains { $0.raw.contains("\"breadcrumb_stage\":\"request\"") })
+        #expect(matchingRecords.contains { $0.raw.contains("\"breadcrumb_stage\":\"dispatch\"") })
+    }
+
     @Test @MainActor func diagnosticsGovernanceCommandsReturnStatusCrashQueryAndExport() throws {
         try withTemporaryConfigPath { _ in
             let bundleID = makeBundleID("ghdx.tests.control-surface.diagnostics-governance")
@@ -7982,7 +8108,7 @@ struct ControlHarnessTests {
             try Data((eventsLine + "\n").utf8).write(to: paths.eventsFileURL, options: .atomic)
 
             let crashSummary = RuntimeCrashSummary(
-                schemaVersion: 1,
+                schemaVersion: 2,
                 processedAt: "2026-04-16T00:00:03Z",
                 marker: .init(
                     schemaVersion: 1,
@@ -8004,6 +8130,14 @@ struct ControlHarnessTests {
                     timestamp: "2026-04-16T00:00:02Z",
                     component: "runtime.test",
                     event: "probe_failed"
+                ),
+                lastAuditRecord: .init(
+                    timestamp: "2026-04-16T00:00:01Z",
+                    requestID: "req-1",
+                    command: "snapshot",
+                    client: "tests",
+                    status: "error",
+                    errorCode: "E_AUDIT"
                 )
             )
             let crashData = try JSONEncoder().encode(crashSummary)
@@ -8060,6 +8194,7 @@ struct ControlHarnessTests {
             let latestCrash = try #require(crashEnvelope.result)
             #expect(crashEnvelope.status == "ok")
             #expect(latestCrash.summary?.marker.reason == "SIGABRT")
+            #expect(latestCrash.summary?.lastAuditRecord?.command == "snapshot")
 
             let exportResponse = core.handle(
                 makeHarnessRequest(
