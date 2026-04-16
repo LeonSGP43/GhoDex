@@ -2362,15 +2362,9 @@ class AppDelegate: NSObject,
             self.applyLiveAppIcon(resolvedImage, resolvedIcon: resolvedIcon)
         }
         DispatchQueue.global().async {
-            let defaultsTargets = [
-                UserDefaults.standard,
-                Bundle.main.bundleIdentifier.flatMap(UserDefaults.init(suiteName:)),
-            ].compactMap { $0 }
-
-            for defaults in defaultsTargets {
-                defaults.removeObject(forKey: "CustomGhosttyIcon")
-                defaults.appIcon = resolvedIcon
-            }
+            let defaults = UserDefaults.standard
+            defaults.removeObject(forKey: "CustomGhosttyIcon")
+            defaults.appIcon = resolvedIcon
             DistributedNotificationCenter.default()
                 .postNotificationName(.ghosttyIconDidChange, object: nil, userInfo: nil, deliverImmediately: true)
         }

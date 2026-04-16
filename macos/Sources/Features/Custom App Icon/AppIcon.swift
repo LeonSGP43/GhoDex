@@ -126,6 +126,9 @@ enum AppBundleIconMutationPolicy {
         if path.contains("/Build/Products/") {
             return false
         }
+        if path.contains("/macos/build/") {
+            return false
+        }
         return true
     }
 }

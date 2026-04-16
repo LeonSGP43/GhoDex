@@ -15,6 +15,11 @@ struct DockTilePluginTests {
         #expect(AppBundleIconMutationPolicy.shouldWriteBundleIcon(at: appURL) == false)
     }
 
+    @Test func shouldWriteBundleIconRejectsRepoBuildBundle() {
+        let appURL = URL(fileURLWithPath: "/Users/test/Desktop/LeonProjects/GhoDex/macos/build/ReleaseLocal/GhoDex.app")
+        #expect(AppBundleIconMutationPolicy.shouldWriteBundleIcon(at: appURL) == false)
+    }
+
     @Test func shouldWriteBundleIconAllowsInstalledBundle() {
         let appURL = URL(fileURLWithPath: "/Applications/GhoDex.app")
         #expect(AppBundleIconMutationPolicy.shouldWriteBundleIcon(at: appURL))
