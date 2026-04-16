@@ -1568,6 +1568,17 @@ final class ControlHarnessEventHub {
     }
 }
 
+enum ControlEventStreamRegistryError: LocalizedError {
+    case subscriptionLimitReached(maxSubscriptions: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .subscriptionLimitReached(let maxSubscriptions):
+            return "Too many active buffered event streams. Max supported subscriptions: \(maxSubscriptions)."
+        }
+    }
+}
+
 final class ControlEventStreamRegistry {
     struct StatusSnapshot {
         let subscriptionCount: Int
@@ -1578,6 +1589,8 @@ final class ControlEventStreamRegistry {
         let droppedEvents: Int
         let maxBufferedEvents: Int
         let maxBufferedBytes: Int
+        let maxSubscriptions: Int
+        let idleTTLSeconds: TimeInterval
     }
 
     struct DrainResult {
@@ -1591,6 +1604,8 @@ final class ControlEventStreamRegistry {
     private struct SubscriptionState {
         let streamID: UUID
         let kinds: Set<String>
+        let createdAt: Date
+        var lastActivityAt: Date
         var bufferedPayloads: [Data]
         var bufferedBytes: Int
         var droppedEvents: Int
@@ -1602,36 +1617,65 @@ final class ControlEventStreamRegistry {
     private let eventHub: ControlHarnessEventHub
     private let maxBufferedEvents: Int
     private let maxBufferedBytes: Int
+    private let maxSubscriptions: Int
+    private let idleTTLSeconds: TimeInterval
+    private let now: @Sendable () -> Date
     private let queue = DispatchQueue(
         label: "com.leongong.ghodex.control-harness.event-stream-registry",
         qos: .utility
     )
+    private let pruneTimer: DispatchSourceTimer
     private var subscriptions: [UUID: SubscriptionState] = [:]
 
     init(
         eventHub: ControlHarnessEventHub,
         maxBufferedEvents: Int = 512,
-        maxBufferedBytes: Int = 8 * 1024 * 1024
+        maxBufferedBytes: Int = 8 * 1024 * 1024,
+        maxSubscriptions: Int = 64,
+        idleTTLSeconds: TimeInterval = 5 * 60,
+        pruneIntervalSeconds: TimeInterval = 30,
+        now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.eventHub = eventHub
         self.maxBufferedEvents = max(1, maxBufferedEvents)
         self.maxBufferedBytes = max(1_024, maxBufferedBytes)
+        self.maxSubscriptions = max(1, maxSubscriptions)
+        self.idleTTLSeconds = max(0.05, idleTTLSeconds)
+        self.now = now
+        let timer = DispatchSource.makeTimerSource()
+        timer.schedule(
+            deadline: .now() + max(0.05, pruneIntervalSeconds),
+            repeating: max(0.05, pruneIntervalSeconds)
+        )
+        self.pruneTimer = timer
+        timer.setEventHandler { [weak self] in
+            self?.pruneExpiredSubscriptions()
+        }
+        timer.resume()
+    }
+
+    deinit {
+        pruneTimer.cancel()
     }
 
     func subscribe(
         sinceSequence: Int64?,
         eventLimit: Int?,
         kinds: Set<String>
-    ) -> (streamID: String, replayedEventCount: Int, liveStreamOpen: Bool) {
+    ) throws -> (streamID: String, replayedEventCount: Int, liveStreamOpen: Bool) {
+        pruneExpiredSubscriptions()
         let filteredReplay = eventHub.replay(afterSequence: sinceSequence, limit: eventLimit).filter { data in
             Self.matchesKinds(data, kinds: kinds)
         }
         let streamID = UUID()
         let remainingLiveEvents = eventLimit.map { max($0 - filteredReplay.count, 0) }
+        let timestamp = now()
 
         var state = SubscriptionState(
             streamID: streamID,
             kinds: kinds,
+            createdAt: timestamp,
+            lastActivityAt: timestamp,
             bufferedPayloads: [],
             bufferedBytes: 0,
             droppedEvents: 0,
@@ -1643,13 +1687,15 @@ final class ControlEventStreamRegistry {
             append(payload, to: &state)
         }
 
-        if remainingLiveEvents != 0 {
-            state.subscriberID = eventHub.addSubscriber { [weak self] data in
-                self?.consumeLiveEvent(streamID: streamID, payload: data) ?? false
+        try queue.sync {
+            guard subscriptions.count < maxSubscriptions else {
+                throw ControlEventStreamRegistryError.subscriptionLimitReached(maxSubscriptions: maxSubscriptions)
             }
-        }
-
-        queue.sync {
+            if remainingLiveEvents != 0 {
+                state.subscriberID = eventHub.addSubscriber { [weak self] data in
+                    self?.consumeLiveEvent(streamID: streamID, payload: data) ?? false
+                }
+            }
             subscriptions[streamID] = state
         }
 
@@ -1662,6 +1708,7 @@ final class ControlEventStreamRegistry {
 
     func drain(streamID: String, limit: Int?) -> DrainResult? {
         guard let uuid = UUID(uuidString: streamID) else { return nil }
+        pruneExpiredSubscriptions()
         return queue.sync {
             guard var state = subscriptions[uuid] else { return nil }
             let requestedCount = limit.map { max($0, 0) } ?? state.bufferedPayloads.count
@@ -1669,13 +1716,18 @@ final class ControlEventStreamRegistry {
             let drainedPayloads = Array(state.bufferedPayloads.prefix(drainedCount))
             let requiresSnapshotResync = state.requiresSnapshotResync
             let droppedEvents = state.droppedEvents
+            state.lastActivityAt = now()
             if drainedCount > 0 {
                 state.bufferedPayloads.removeFirst(drainedCount)
                 state.bufferedBytes = state.bufferedPayloads.reduce(0) { $0 + $1.count }
             }
             state.requiresSnapshotResync = false
             state.droppedEvents = 0
-            subscriptions[uuid] = state
+            if state.subscriberID == nil && state.bufferedPayloads.isEmpty {
+                subscriptions.removeValue(forKey: uuid)
+            } else {
+                subscriptions[uuid] = state
+            }
             return DrainResult(
                 streamID: state.streamID.uuidString,
                 payloads: drainedPayloads,
@@ -1689,6 +1741,7 @@ final class ControlEventStreamRegistry {
     @discardableResult
     func unsubscribe(streamID: String) -> Bool {
         guard let uuid = UUID(uuidString: streamID) else { return false }
+        pruneExpiredSubscriptions()
         let removedState = queue.sync {
             subscriptions.removeValue(forKey: uuid)
         }
@@ -1699,23 +1752,36 @@ final class ControlEventStreamRegistry {
     }
 
     func statusSnapshot() -> StatusSnapshot {
-        queue.sync {
+        pruneExpiredSubscriptions()
+        return queue.sync {
             let states = Array(subscriptions.values)
-            return .init(
+            let liveSubscriptionCount = states.reduce(0) { count, state in
+                count + (state.subscriberID != nil ? 1 : 0)
+            }
+            let bufferedEventCount = states.reduce(0) { $0 + $1.bufferedPayloads.count }
+            let bufferedBytes = states.reduce(0) { $0 + $1.bufferedBytes }
+            let subscriptionsRequiringSnapshotResync = states.reduce(0) { count, state in
+                count + (state.requiresSnapshotResync ? 1 : 0)
+            }
+            let droppedEvents = states.reduce(0) { $0 + $1.droppedEvents }
+            return StatusSnapshot(
                 subscriptionCount: states.count,
-                liveSubscriptionCount: states.filter { $0.subscriberID != nil }.count,
-                bufferedEventCount: states.reduce(0) { $0 + $1.bufferedPayloads.count },
-                bufferedBytes: states.reduce(0) { $0 + $1.bufferedBytes },
-                subscriptionsRequiringSnapshotResync: states.filter(\.requiresSnapshotResync).count,
-                droppedEvents: states.reduce(0) { $0 + $1.droppedEvents },
+                liveSubscriptionCount: liveSubscriptionCount,
+                bufferedEventCount: bufferedEventCount,
+                bufferedBytes: bufferedBytes,
+                subscriptionsRequiringSnapshotResync: subscriptionsRequiringSnapshotResync,
+                droppedEvents: droppedEvents,
                 maxBufferedEvents: maxBufferedEvents,
-                maxBufferedBytes: maxBufferedBytes
+                maxBufferedBytes: maxBufferedBytes,
+                maxSubscriptions: maxSubscriptions,
+                idleTTLSeconds: idleTTLSeconds
             )
         }
     }
 
     private func consumeLiveEvent(streamID: UUID, payload: Data) -> Bool {
         queue.sync {
+            pruneExpiredLocked(referenceDate: now())
             guard var state = subscriptions[streamID] else {
                 return false
             }
@@ -1724,6 +1790,7 @@ final class ControlEventStreamRegistry {
                 return true
             }
 
+            state.lastActivityAt = now()
             append(payload, to: &state)
             if let remainingLiveEvents = state.remainingLiveEvents {
                 let next = remainingLiveEvents - 1
@@ -1738,6 +1805,32 @@ final class ControlEventStreamRegistry {
             subscriptions[streamID] = state
             return true
         }
+    }
+
+    private func pruneExpiredSubscriptions() {
+        let subscriberIDs = queue.sync {
+            pruneExpiredLocked(referenceDate: now())
+        }
+        for subscriberID in subscriberIDs {
+            eventHub.removeSubscriber(subscriberID)
+        }
+    }
+
+    @discardableResult
+    private func pruneExpiredLocked(referenceDate: Date) -> [UUID] {
+        let expirationDate = referenceDate.addingTimeInterval(-idleTTLSeconds)
+        var removedSubscriberIDs: [UUID] = []
+        let expiredStreamIDs = subscriptions.compactMap { streamID, state -> UUID? in
+            guard state.lastActivityAt <= expirationDate else { return nil }
+            return streamID
+        }
+        for streamID in expiredStreamIDs {
+            if let removed = subscriptions.removeValue(forKey: streamID),
+               let subscriberID = removed.subscriberID {
+                removedSubscriberIDs.append(subscriberID)
+            }
+        }
+        return removedSubscriberIDs
     }
 
     private func append(_ payload: Data, to state: inout SubscriptionState) {
