@@ -1913,10 +1913,16 @@ final class ControlHarnessGateway {
             "settings.validate",
             "settings.diff",
             "diagnostics.metrics.get",
+            "diagnostics.status",
             "diagnostics.logs.tail",
+            "diagnostics.logs.query",
             "diagnostics.errors.recent",
             "diagnostics.audit.query",
             "diagnostics.eventBuffer.status",
+            "diagnostics.crash.latest",
+            "diagnostics.mode.get",
+            "diagnostics.retention.get",
+            "diagnostics.export.bundle",
             "agent.runtime.snapshot",
             "read-terminal",
             "events.subscribe",
@@ -1943,6 +1949,9 @@ final class ControlHarnessGateway {
             "settings.apply",
             "settings.reset",
             "diagnostics.metrics.reset",
+            "diagnostics.mode.set",
+            "diagnostics.retention.apply",
+            "diagnostics.cleanup.run",
             "agent.runtime.session.register",
             "agent.runtime.session.heartbeat",
             "agent.runtime.session.release",
@@ -3211,12 +3220,15 @@ private final class ControlHarnessGatewayRateLimiter {
         case "run-command", "close-terminal", "new-tab", "close-tab", "rename-tab", "app.relaunch",
             "window.focus", "window.show", "window.hide", "window.close", "window.tabOverview.toggle",
             "window.floatOnTop.set", "panel.open", "panel.focus", "panel.close", "panel.tab.select",
-            "settings.values.set", "settings.apply", "settings.reset", "diagnostics.metrics.reset":
+            "settings.values.set", "settings.apply", "settings.reset", "diagnostics.metrics.reset",
+            "diagnostics.mode.set", "diagnostics.retention.apply", "diagnostics.cleanup.run":
             return .command
         case "snapshot", "system.target.resolve", "system.capabilities.get", "app.state.get", "window.list",
             "panel.list", "panel.state.get", "settings.schema.get", "settings.values.get", "settings.validate",
-            "settings.diff", "diagnostics.metrics.get", "diagnostics.logs.tail", "diagnostics.errors.recent",
-            "diagnostics.audit.query", "diagnostics.eventBuffer.status", "terminal.snapshot.v2", "terminal.semantic.v2":
+            "settings.diff", "diagnostics.metrics.get", "diagnostics.status", "diagnostics.logs.tail",
+            "diagnostics.logs.query", "diagnostics.errors.recent", "diagnostics.audit.query",
+            "diagnostics.eventBuffer.status", "diagnostics.crash.latest", "diagnostics.mode.get",
+            "diagnostics.retention.get", "diagnostics.export.bundle", "terminal.snapshot.v2", "terminal.semantic.v2":
             return .snapshot
         case "read-terminal" where readMode == "delta":
             return .resync

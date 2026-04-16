@@ -4,6 +4,33 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(diagnostics): persist crash markers and correlate macOS crash reports
+
+- What changed: Extended `RuntimeDiagnosticsLogger` so every diagnostics record now carries the active lifecycle session metadata, added a local crash marker flow for fatal signals and uncaught Objective-C exceptions, and on next launch automatically correlates the marker with the latest matching macOS `DiagnosticReports` `.ips/.crash` file plus the last in-app breadcrumb. The latest correlated result is persisted to `Diagnostics/runtime-last-crash-summary.json`.
+- Why: The existing runtime diagnostics timeline was useful for slow degradations and graceful exits, but it still left a gap for instant crashes where the app dies before normal teardown or user-facing logging can explain what happened.
+- Impact: Future “flash crashes” now leave a minimal on-disk marker immediately, and the next successful launch can turn that marker into a readable crash summary with system exception type, termination indicator, top frame, and the last GhoDex event seen for the crashed session.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS' -skip-testing GhosttyUITests -only-testing:GhosttyTests/AppDelegateTerminationDiagnosticsTests test`
+- Files: `macos/Sources/Helpers/ObjCExceptionCatcher.h`, `macos/Sources/Helpers/ObjCExceptionCatcher.m`, `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Tests/AppDelegateTerminationDiagnosticsTests.swift`, `CHANGELOG.md`
+- Decision trail: Keep the solution local-first and file-based inside the existing Diagnostics directory instead of adding a remote crash SDK, and reuse macOS native crash reports as the authoritative crash payload while GhoDex contributes session linkage and app-level breadcrumbs.
+
+### feat(diagnostics): add harness-managed governance for local diagnostics storage
+
+- What changed: Added config-backed diagnostics governance settings for mode, per-source budgets, total storage budget, retention window, record size cap, duplicate suppression window, and deep-mode TTL; rotated audit/event/runtime logs through the shared storage guardrails; and exposed new harness commands for diagnostics status, structured log queries, latest crash summary, mode/retention management, cleanup, and export bundles.
+- Why: The earlier crash-marker work made instant crashes debuggable, but the overall diagnostics subsystem still lacked an operator-facing governance surface to keep storage bounded, switch depth safely, and export a coherent local bundle when investigating failures.
+- Impact: GhoDex diagnostics are now locally governable end-to-end through Control Harness, with bounded disk usage, better parity across runtime/audit/events logs, and a practical export/query surface for future crash triage without introducing any remote telemetry dependency.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS' -skip-testing GhosttyUITests -only-testing:GhosttyTests/AppDelegateTerminationDiagnosticsTests -only-testing:GhosttyTests/ControlHarnessTests -only-testing:GhosttyTests/ControlHarnessCommandRoutingTests test`
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `macos/Sources/Features/Control Harness/ControlHarnessSupport.swift`, `macos/Sources/Features/Control Harness/ControlHarnessCommandRouting.swift`, `macos/Sources/Features/Control Harness/ControlHarnessGateway.swift`, `macos/Tests/ControlHarness/ControlHarnessTests.swift`, `macos/Tests/ControlHarness/ControlHarnessCommandRoutingTests.swift`, `CHANGELOG.md`
+- Decision trail: Keep diagnostics local-first, reuse the existing Control Harness as the operator surface, and enforce storage safety with explicit budgets/retention instead of leaving raw JSONL growth and mode escalation unmanaged.
+
+### test(diagnostics): add live acceptance for harness governance commands
+
+- What changed: Added `scripts/control_harness_diagnostics_live_acceptance.py`, which launches an isolated live `GhoDex.app`, seeds bounded diagnostics fixtures inside that isolated app-support root, and proves `diagnostics.status`, `diagnostics.logs.query`, `diagnostics.crash.latest`, `diagnostics.mode.get/set`, `diagnostics.retention.get/apply`, `diagnostics.cleanup.run`, and `diagnostics.export.bundle` over the real Control Harness socket.
+- Why: The focused Swift tests already proved the control-path behavior, but the new diagnostics governance surface still needed one live check that exercised the commands through a real app process and harness socket instead of only through in-process fixtures.
+- Impact: Release/readiness verification for diagnostics now has one dedicated live gate that proves the governance commands work against an actual launched app instance, while still keeping the run isolated from the user's normal config and diagnostics files.
+- Verification: `python3 scripts/control_harness_diagnostics_live_acceptance.py --app /Users/leongong/Library/Developer/Xcode/DerivedData/GhoDex-agcunbrxnmmsbjbkneezzlhlgjed/Build/Products/Debug/GhoDex.app --output /tmp/ghx-control-harness-diagnostics-live-acceptance.json`
+- Files: `scripts/control_harness_diagnostics_live_acceptance.py`, `CHANGELOG.md`
+- Decision trail: Keep the live proof in a dedicated script instead of inflating the broader protocol-surface acceptance harness, so diagnostics governance evidence stays explicit and easy to rerun on its own.
+
 ### build(signing): switch release bundles to Developer ID signing
 
 - What changed: Bound the macOS `GhoDex` app target and `DockTilePlugin` release configurations to team `865A37WV28`, removed the ad-hoc `CODE_SIGN_IDENTITY = "-"` override from release builds, set `Release` / `ReleaseLocal` to sign with `Developer ID Application`, and fixed the CEF helper staging script so it preserves the real Developer ID signature instead of re-signing helper bundles back to ad-hoc.

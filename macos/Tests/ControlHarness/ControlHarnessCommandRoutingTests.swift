@@ -184,6 +184,8 @@ struct ControlHarnessCommandRoutingTests {
         let capabilities = try #require(envelope.result)
         #expect(capabilities.protocolVersion == ControlHarnessCore.protocolVersion)
         #expect(capabilities.commands.contains("events.stream.subscribe"))
+        #expect(capabilities.commands.contains("diagnostics.status"))
+        #expect(capabilities.commands.contains("diagnostics.export.bundle"))
         #expect(capabilities.compatibility.authority == "control_harness")
         #expect(capabilities.compatibility.legacyCommands.contains("events.subscribe"))
         #expect(capabilities.compatibility.legacyCommands.contains("browser.page.navigate"))
@@ -228,6 +230,9 @@ struct ControlHarnessCommandRoutingTests {
         )
         #expect(
             makeRoutingRequest(command: "events.stream.subscribe").normalized().command == "events.stream.subscribe"
+        )
+        #expect(
+            makeRoutingRequest(command: "diagnostics.status").normalized().command == "diagnostics.status"
         )
     }
 

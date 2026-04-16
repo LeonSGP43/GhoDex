@@ -11,3 +11,18 @@ FOUNDATION_EXPORT BOOL GhosttyAddTabbedWindowSafely(
     NSInteger ordered,
     NSError * _Nullable * _Nullable error
 );
+
+FOUNDATION_EXPORT void GhoDexInstallCrashDiagnosticsHandlers(
+    const char * _Nonnull markerPath,
+    const char * _Nonnull bundleID,
+    const char * _Nonnull executableName,
+    int pid,
+    const char * _Nullable sessionID,
+    const char * _Nullable sessionStartedAt
+);
+
+FOUNDATION_EXPORT void GhoDexUpdateCrashDiagnosticsContext(
+    const char * _Nullable sessionID,
+    const char * _Nullable sessionStartedAt,
+    int pid
+);

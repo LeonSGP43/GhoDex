@@ -621,6 +621,8 @@ class AppDelegate: NSObject,
             // Manual autofill via the `Edit => AutoFill` menu item still work as expected.
             "NSAutoFillHeuristicControllerEnabled": false,
         ])
+
+        RuntimeDiagnosticsLogger.beginLifecycleSessionIfNeeded()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

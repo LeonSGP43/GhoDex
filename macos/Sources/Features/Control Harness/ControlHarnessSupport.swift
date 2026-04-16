@@ -36,6 +36,9 @@ extension ControlHarnessRequest {
             "settings.apply",
             "settings.reset",
             "diagnostics.metrics.reset",
+            "diagnostics.mode.set",
+            "diagnostics.retention.apply",
+            "diagnostics.cleanup.run",
             "agent.runtime.session.register",
             "agent.runtime.session.heartbeat",
             "agent.runtime.session.release",
@@ -1362,17 +1365,25 @@ final class ControlHarnessEventHub {
         return encoder
     }()
     private let fileManager = FileManager.default
+    private let bundleID: String
     private let fileURL: URL
+    private let rotatedFileURL: URL
     private let logger: Logger
+    private var settings: GhoDexDiagnosticsSettings
 
     private var nextSequenceValue: Int64
     private var subscribers: [UUID: Subscriber] = [:]
 
     init(bundleID: String) {
-        self.fileURL = ControlHarnessAuditLogger.baseDirectory(bundleID: bundleID)
-            .appendingPathComponent("control-harness-events.jsonl", isDirectory: false)
+        self.bundleID = bundleID
+        let paths = GhoDexDiagnosticsPaths.resolve(bundleID: bundleID)
+        self.fileURL = paths.eventsFileURL
+        self.rotatedFileURL = paths.eventsRotatedFileURL
         self.logger = Logger(subsystem: bundleID, category: "ControlHarnessEvents")
-        self.nextSequenceValue = Self.loadLastSequence(from: fileURL)
+        self.settings = GhoDexDiagnosticsSettings.load()
+        self.nextSequenceValue = Self.loadLastSequence(
+            from: [rotatedFileURL, fileURL]
+        )
     }
 
     func currentSequence() -> Int64 {
@@ -1422,27 +1433,32 @@ final class ControlHarnessEventHub {
             var replayedBytes = 0
             var truncatedByBudget = false
 
-            Self.forEachJSONLLine(in: fileURL) { lineData in
-                guard remaining != 0 else {
-                    return false
-                }
-                guard let sequence = Self.sequence(from: lineData), sequence > threshold else {
-                    return true
-                }
+            for candidate in [rotatedFileURL, fileURL] {
+                Self.forEachJSONLLine(in: candidate) { lineData in
+                    guard remaining != 0 else {
+                        return false
+                    }
+                    guard let sequence = Self.sequence(from: lineData), sequence > threshold else {
+                        return true
+                    }
 
-                let eventData = lineData + Data([0x0A])
-                let nextByteCount = replayedBytes + eventData.count
-                if replayed.count >= Self.maxReplayEvents || nextByteCount > Self.maxReplayBytes {
-                    truncatedByBudget = true
-                    return false
-                }
+                    let eventData = lineData + Data([0x0A])
+                    let nextByteCount = replayedBytes + eventData.count
+                    if replayed.count >= Self.maxReplayEvents || nextByteCount > Self.maxReplayBytes {
+                        truncatedByBudget = true
+                        return false
+                    }
 
-                replayed.append(eventData)
-                replayedBytes = nextByteCount
-                if let currentRemaining = remaining {
-                    remaining = currentRemaining - 1
+                    replayed.append(eventData)
+                    replayedBytes = nextByteCount
+                    if let currentRemaining = remaining {
+                        remaining = currentRemaining - 1
+                    }
+                    return remaining != 0
                 }
-                return remaining != 0
+                if truncatedByBudget || remaining == 0 {
+                    break
+                }
             }
 
             if truncatedByBudget {
@@ -1479,28 +1495,30 @@ final class ControlHarnessEventHub {
     }
 
     private func append(_ data: Data) throws {
-        try fileManager.createDirectory(
-            at: fileURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true,
-            attributes: nil
+        try GhoDexDiagnosticsStorage.appendLine(
+            data,
+            fileURL: fileURL,
+            rotatedFileURL: rotatedFileURL,
+            maxFileBytes: settings.eventsBudgetBytes,
+            fileManager: fileManager
         )
-        if !fileManager.fileExists(atPath: fileURL.path) {
-            fileManager.createFile(atPath: fileURL.path, contents: nil)
-        }
-
-        let handle = try FileHandle(forWritingTo: fileURL)
-        defer { try? handle.close() }
-        try handle.seekToEnd()
-        try handle.write(contentsOf: data)
     }
 
-    private static func loadLastSequence(from fileURL: URL) -> Int64 {
+    func applyDiagnosticsSettings(_ settings: GhoDexDiagnosticsSettings) {
+        queue.sync {
+            self.settings = settings.sanitized()
+        }
+    }
+
+    private static func loadLastSequence(from fileURLs: [URL]) -> Int64 {
         var lastSequence: Int64 = 0
-        Self.forEachJSONLLine(in: fileURL) { lineData in
-            if let sequence = sequence(from: lineData) {
-                lastSequence = max(lastSequence, sequence)
+        for fileURL in fileURLs {
+            Self.forEachJSONLLine(in: fileURL) { lineData in
+                if let sequence = sequence(from: lineData) {
+                    lastSequence = max(lastSequence, sequence)
+                }
+                return true
             }
-            return true
         }
         return lastSequence
     }

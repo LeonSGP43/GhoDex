@@ -416,6 +416,164 @@ private struct ControlHarnessDiagnosticsEventBufferStatusPayload: Decodable {
     }
 }
 
+private struct ControlHarnessDiagnosticsSettingsPayload: Decodable {
+    let mode: String
+    let totalBudgetMB: Int
+    let runtimeBudgetMB: Int
+    let auditBudgetMB: Int
+    let eventsBudgetMB: Int
+    let retentionDays: Int
+    let recordMaxKB: Int
+    let repeatWindowSeconds: Int
+    let deepDefaultTTLSeconds: Int
+
+    enum CodingKeys: String, CodingKey {
+        case mode
+        case totalBudgetMB = "total_budget_mb"
+        case runtimeBudgetMB = "runtime_budget_mb"
+        case auditBudgetMB = "audit_budget_mb"
+        case eventsBudgetMB = "events_budget_mb"
+        case retentionDays = "retention_days"
+        case recordMaxKB = "record_max_kb"
+        case repeatWindowSeconds = "repeat_window_seconds"
+        case deepDefaultTTLSeconds = "deep_default_ttl_seconds"
+    }
+}
+
+private struct ControlHarnessDiagnosticsSourceStatusPayload: Decodable {
+    let source: String
+    let primaryBytes: Int64
+    let rotatedBytes: Int64
+    let totalBytes: Int64
+    let budgetBytes: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case source
+        case primaryBytes = "primary_bytes"
+        case rotatedBytes = "rotated_bytes"
+        case totalBytes = "total_bytes"
+        case budgetBytes = "budget_bytes"
+    }
+}
+
+private struct ControlHarnessDiagnosticsStatusPayload: Decodable {
+    let protocolVersion: String
+    let settings: ControlHarnessDiagnosticsSettingsPayload
+    let effectiveMode: String
+    let overrideActive: Bool
+    let overrideExpiresAt: String?
+    let lastCleanupAt: String?
+    let totalStorageBytes: Int64
+    let totalBudgetBytes: Int64
+    let sources: [ControlHarnessDiagnosticsSourceStatusPayload]
+    let latestCrashSummaryPresent: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case settings
+        case effectiveMode = "effective_mode"
+        case overrideActive = "override_active"
+        case overrideExpiresAt = "override_expires_at"
+        case lastCleanupAt = "last_cleanup_at"
+        case totalStorageBytes = "total_storage_bytes"
+        case totalBudgetBytes = "total_budget_bytes"
+        case sources
+        case latestCrashSummaryPresent = "latest_crash_summary_present"
+    }
+}
+
+private struct ControlHarnessDiagnosticsQueryRecordPayload: Decodable {
+    let source: String
+    let timestamp: String?
+    let severity: String?
+    let component: String?
+    let event: String?
+    let status: String?
+    let errorCode: String?
+    let raw: String
+
+    enum CodingKeys: String, CodingKey {
+        case source
+        case timestamp
+        case severity
+        case component
+        case event
+        case status
+        case errorCode = "error_code"
+        case raw
+    }
+}
+
+private struct ControlHarnessDiagnosticsQueryPayload: Decodable {
+    let protocolVersion: String
+    let records: [ControlHarnessDiagnosticsQueryRecordPayload]
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case records
+    }
+}
+
+private struct ControlHarnessDiagnosticsLatestCrashPayload: Decodable {
+    let protocolVersion: String
+    let summary: RuntimeCrashSummary?
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case summary
+    }
+}
+
+private struct ControlHarnessDiagnosticsModePayload: Decodable {
+    let protocolVersion: String
+    let configuredMode: String
+    let effectiveMode: String
+    let overrideActive: Bool
+    let overrideExpiresAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case configuredMode = "configured_mode"
+        case effectiveMode = "effective_mode"
+        case overrideActive = "override_active"
+        case overrideExpiresAt = "override_expires_at"
+    }
+}
+
+private struct ControlHarnessDiagnosticsRetentionPayload: Decodable {
+    let protocolVersion: String
+    let settings: ControlHarnessDiagnosticsSettingsPayload
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case settings
+    }
+}
+
+private struct ControlHarnessDiagnosticsCleanupPayload: Decodable {
+    let protocolVersion: String
+    let deletedPaths: [String]
+    let bytesFreed: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case deletedPaths = "deleted_paths"
+        case bytesFreed = "bytes_freed"
+    }
+}
+
+private struct ControlHarnessDiagnosticsExportBundlePayload: Decodable {
+    let protocolVersion: String
+    let path: String
+    let byteCount: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case path
+        case byteCount = "byte_count"
+    }
+}
+
 private struct ControlHarnessPairingBeginPayload: Decodable {
     let pairingCode: String
     let client: String
@@ -1134,10 +1292,32 @@ struct ControlHarnessTests {
 
     @MainActor
     private func makeFreshEventHub(bundleID: String) -> ControlHarnessEventHub {
-        let eventsFileURL = ControlHarnessAuditLogger.baseDirectory(bundleID: bundleID)
-            .appendingPathComponent("control-harness-events.jsonl", isDirectory: false)
-        try? FileManager.default.removeItem(at: eventsFileURL)
+        clearDiagnosticsRoot(bundleID: bundleID)
         return ControlHarnessEventHub(bundleID: bundleID)
+    }
+
+    private func clearDiagnosticsRoot(bundleID: String) {
+        let paths = GhoDexDiagnosticsPaths.resolve(bundleID: bundleID)
+        try? FileManager.default.removeItem(at: paths.diagnosticsDirectory.deletingLastPathComponent())
+    }
+
+    private func withTemporaryConfigPath<T>(
+        _ body: (String) throws -> T
+    ) rethrows -> T {
+        let previous = getenv("GHOSTTY_CONFIG_PATH").map { String(cString: $0) }
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: false)
+            .appendingPathExtension("ghodex")
+            .path
+        setenv("GHOSTTY_CONFIG_PATH", path, 1)
+        defer {
+            if let previous {
+                setenv("GHOSTTY_CONFIG_PATH", previous, 1)
+            } else {
+                unsetenv("GHOSTTY_CONFIG_PATH")
+            }
+        }
+        return try body(path)
     }
 
     @MainActor
@@ -1427,7 +1607,9 @@ struct ControlHarnessTests {
         mode: String? = nil,
         streamID: String? = nil,
         ackBytes: Int? = nil,
-        lastAckSequence: Int64? = nil
+        lastAckSequence: Int64? = nil,
+        maxLines: Int? = nil,
+        payload: [String: String]? = nil
     ) -> ControlHarnessRequest {
         ControlHarnessRequest(
             requestID: requestID,
@@ -1451,12 +1633,13 @@ struct ControlHarnessTests {
             mode: mode,
             sinceFrameID: nil,
             maxChars: nil,
-            maxLines: nil,
+            maxLines: maxLines,
             cursor: nil,
             readAfterWriteID: nil,
             streamID: streamID,
             ackBytes: ackBytes,
-            lastAckSequence: lastAckSequence
+            lastAckSequence: lastAckSequence,
+            payload: payload
         )
     }
 
@@ -7053,6 +7236,9 @@ struct ControlHarnessTests {
         #expect(ControlHarnessCore.supportedCommands.contains("panel.list"))
         #expect(ControlHarnessCore.supportedCommands.contains("settings.schema.get"))
         #expect(ControlHarnessCore.supportedCommands.contains("diagnostics.metrics.get"))
+        #expect(ControlHarnessCore.supportedCommands.contains("diagnostics.status"))
+        #expect(ControlHarnessCore.supportedCommands.contains("diagnostics.mode.set"))
+        #expect(ControlHarnessCore.supportedCommands.contains("diagnostics.export.bundle"))
         #expect(ControlHarnessCore.supportedCommands.contains("agent.runtime.snapshot"))
         #expect(ControlHarnessCore.supportedCommands.contains("agent.runtime.session.register"))
         #expect(ControlHarnessCore.supportedCommands.contains("agent.runtime.session.heartbeat"))
@@ -7179,11 +7365,17 @@ struct ControlHarnessTests {
             taskKind: AgentRuntimeTaskKind.terminalCommand.rawValue,
             recurrenceMode: AgentRuntimeScheduleRecurrence.Mode.once.rawValue
         )
+        let diagnosticsModeSet = makeHarnessRequest(
+            requestID: "req-diagnostics-mode-set-kind",
+            command: "diagnostics.mode.set",
+            payload: ["mode": "deep", "scope": "override", "ttl_seconds": "120"]
+        )
 
         #expect(snapshot.commandKind == .query)
         #expect(register.commandKind == .mutation)
         #expect(enqueue.commandKind == .mutation)
         #expect(schedule.commandKind == .mutation)
+        #expect(diagnosticsModeSet.commandKind == .mutation)
     }
 
     @Test @MainActor func expandedCapabilitiesAdvertiseUnifiedDesktopControlSurface() throws {
@@ -7237,6 +7429,8 @@ struct ControlHarnessTests {
         #expect(result.commands.contains("panel.list"))
         #expect(result.commands.contains("settings.schema.get"))
         #expect(result.commands.contains("diagnostics.metrics.get"))
+        #expect(result.commands.contains("diagnostics.status"))
+        #expect(result.commands.contains("diagnostics.export.bundle"))
         #expect(result.compatibility.authority == "control_harness")
     }
 
@@ -7760,6 +7954,210 @@ struct ControlHarnessTests {
             socketPath: "/tmp/ghodex-control-surface.sock"
         )
         #expect(unsubscribeResponse.status == "ok")
+    }
+
+    @Test @MainActor func diagnosticsGovernanceCommandsReturnStatusCrashQueryAndExport() throws {
+        try withTemporaryConfigPath { _ in
+            let bundleID = makeBundleID("ghdx.tests.control-surface.diagnostics-governance")
+            clearDiagnosticsRoot(bundleID: bundleID)
+            let (core, _, _) = makeCore(bundleID: bundleID)
+            let paths = GhoDexDiagnosticsPaths.resolve(bundleID: bundleID)
+            let fileManager = FileManager.default
+            try fileManager.createDirectory(at: paths.diagnosticsDirectory, withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: paths.controlHarnessDirectory, withIntermediateDirectories: true)
+
+            let runtimeLine = """
+            {"timestamp":"2026-04-16T00:00:00Z","severity":"error","component":"runtime.test","event":"probe_failed","details":{"error_code":"E_RUNTIME"}}
+            """
+            try Data((runtimeLine + "\n").utf8).write(to: paths.runtimeFileURL, options: .atomic)
+
+            let auditLine = """
+            {"timestamp":"2026-04-16T00:00:01Z","request_id":"req-1","command":"snapshot","client":"tests","idempotency_key":null,"expected_generation":null,"tab_id":null,"terminal_id":null,"status":"error","error_code":"E_AUDIT","sequence":1,"duration_ms":1.5}
+            """
+            try Data((auditLine + "\n").utf8).write(to: paths.auditFileURL, options: .atomic)
+
+            let eventsLine = """
+            {"stream_kind":"event","event_id":"evt_1","sequence":1,"timestamp":"2026-04-16T00:00:02Z","event":"tab.created","request_id":"req-1"}
+            """
+            try Data((eventsLine + "\n").utf8).write(to: paths.eventsFileURL, options: .atomic)
+
+            let crashSummary = RuntimeCrashSummary(
+                schemaVersion: 1,
+                processedAt: "2026-04-16T00:00:03Z",
+                marker: .init(
+                    schemaVersion: 1,
+                    crashKind: "signal",
+                    pid: 123,
+                    bundleID: bundleID,
+                    executableName: "GhoDex",
+                    sessionID: "session-1",
+                    sessionStartedAt: "2026-04-16T00:00:00Z",
+                    reason: "SIGABRT",
+                    signalName: "SIGABRT",
+                    signalNumber: 6,
+                    exceptionName: nil,
+                    exceptionReason: nil,
+                    markerWrittenAt: "2026-04-16T00:00:03Z"
+                ),
+                matchedReport: nil,
+                lastBreadcrumb: .init(
+                    timestamp: "2026-04-16T00:00:02Z",
+                    component: "runtime.test",
+                    event: "probe_failed"
+                )
+            )
+            let crashData = try JSONEncoder().encode(crashSummary)
+            try crashData.write(to: paths.crashSummaryFileURL, options: .atomic)
+
+            let encoder = JSONEncoder()
+            let decoder = JSONDecoder()
+
+            let statusResponse = core.handle(
+                makeHarnessRequest(requestID: "req-diagnostics-status", command: "diagnostics.status"),
+                socketPath: "/tmp/ghodex-control-surface.sock"
+            )
+            let statusEnvelope = try decoder.decode(
+                ControlHarnessResponseResultEnvelope<ControlHarnessDiagnosticsStatusPayload>.self,
+                from: try encoder.encode(statusResponse)
+            )
+            let status = try #require(statusEnvelope.result)
+            #expect(statusEnvelope.status == "ok")
+            #expect(status.latestCrashSummaryPresent == true)
+            #expect(status.totalStorageBytes > 0)
+            #expect(status.totalBudgetBytes > 0)
+            let runtimeSourceStatus = status.sources.first(where: { $0.source == "runtime" })
+            let resolvedRuntimeSourceStatus = try #require(runtimeSourceStatus)
+            #expect(resolvedRuntimeSourceStatus.primaryBytes > 0)
+            #expect(resolvedRuntimeSourceStatus.budgetBytes > 0)
+
+            let queryResponse = core.handle(
+                makeHarnessRequest(
+                    requestID: "req-diagnostics-query",
+                    command: "diagnostics.logs.query",
+                    maxLines: 10,
+                    payload: ["source": "runtime", "severity": "error"]
+                ),
+                socketPath: "/tmp/ghodex-control-surface.sock"
+            )
+            let queryEnvelope = try decoder.decode(
+                ControlHarnessResponseResultEnvelope<ControlHarnessDiagnosticsQueryPayload>.self,
+                from: try encoder.encode(queryResponse)
+            )
+            let query = try #require(queryEnvelope.result)
+            #expect(queryEnvelope.status == "ok")
+            #expect(query.records.count == 1)
+            #expect(query.records.first?.component == "runtime.test")
+            #expect(query.records.first?.errorCode == "E_RUNTIME")
+
+            let crashResponse = core.handle(
+                makeHarnessRequest(requestID: "req-diagnostics-crash", command: "diagnostics.crash.latest"),
+                socketPath: "/tmp/ghodex-control-surface.sock"
+            )
+            let crashEnvelope = try decoder.decode(
+                ControlHarnessResponseResultEnvelope<ControlHarnessDiagnosticsLatestCrashPayload>.self,
+                from: try encoder.encode(crashResponse)
+            )
+            let latestCrash = try #require(crashEnvelope.result)
+            #expect(crashEnvelope.status == "ok")
+            #expect(latestCrash.summary?.marker.reason == "SIGABRT")
+
+            let exportResponse = core.handle(
+                makeHarnessRequest(
+                    requestID: "req-diagnostics-export",
+                    command: "diagnostics.export.bundle",
+                    maxLines: 20,
+                    payload: ["source": "runtime"]
+                ),
+                socketPath: "/tmp/ghodex-control-surface.sock"
+            )
+            let exportEnvelope = try decoder.decode(
+                ControlHarnessResponseResultEnvelope<ControlHarnessDiagnosticsExportBundlePayload>.self,
+                from: try encoder.encode(exportResponse)
+            )
+            let exportResult = try #require(exportEnvelope.result)
+            #expect(exportEnvelope.status == "ok")
+            #expect(fileManager.fileExists(atPath: exportResult.path))
+            #expect(exportResult.byteCount > 0)
+        }
+    }
+
+    @Test @MainActor func diagnosticsGovernanceMutationsApplyModeRetentionAndCleanup() throws {
+        try withTemporaryConfigPath { _ in
+            let bundleID = makeBundleID("ghdx.tests.control-surface.diagnostics-mutate")
+            clearDiagnosticsRoot(bundleID: bundleID)
+            let (core, _, _) = makeCore(bundleID: bundleID)
+            let paths = GhoDexDiagnosticsPaths.resolve(bundleID: bundleID)
+            let fileManager = FileManager.default
+            try fileManager.createDirectory(at: paths.exportsDirectoryURL, withIntermediateDirectories: true)
+            let staleExportURL = paths.exportsDirectoryURL.appendingPathComponent("stale.json", isDirectory: false)
+            try Data("stale".utf8).write(to: staleExportURL, options: .atomic)
+            try fileManager.setAttributes(
+                [.modificationDate: Date(timeIntervalSinceNow: -(20 * 86_400))],
+                ofItemAtPath: staleExportURL.path
+            )
+
+            let encoder = JSONEncoder()
+            let decoder = JSONDecoder()
+
+            let modeSetResponse = core.handle(
+                makeHarnessRequest(
+                    requestID: "req-diagnostics-mode-set",
+                    command: "diagnostics.mode.set",
+                    payload: ["mode": "deep", "scope": "override", "ttl_seconds": "120"]
+                ),
+                socketPath: "/tmp/ghodex-control-surface.sock"
+            )
+            let modeSetEnvelope = try decoder.decode(
+                ControlHarnessResponseResultEnvelope<ControlHarnessDiagnosticsModePayload>.self,
+                from: try encoder.encode(modeSetResponse)
+            )
+            let modeSet = try #require(modeSetEnvelope.result)
+            #expect(modeSetEnvelope.status == "ok")
+            #expect(modeSet.effectiveMode == "deep")
+            #expect(modeSet.overrideActive == true)
+            #expect(modeSet.overrideExpiresAt != nil)
+
+            let retentionResponse = core.handle(
+                makeHarnessRequest(
+                    requestID: "req-diagnostics-retention",
+                    command: "diagnostics.retention.apply",
+                    payload: ["retention_days": "7"]
+                ),
+                socketPath: "/tmp/ghodex-control-surface.sock"
+            )
+            let retentionEnvelope = try decoder.decode(
+                ControlHarnessResponseResultEnvelope<ControlHarnessDiagnosticsRetentionPayload>.self,
+                from: try encoder.encode(retentionResponse)
+            )
+            let retention = try #require(retentionEnvelope.result)
+            #expect(retentionEnvelope.status == "ok")
+            #expect(retention.settings.retentionDays == 7)
+
+            let settingsResponse = core.handle(
+                makeHarnessRequest(requestID: "req-diagnostics-settings-values", command: "settings.values.get"),
+                socketPath: "/tmp/ghodex-control-surface.sock"
+            )
+            let settingsEnvelope = try decoder.decode(
+                ControlHarnessResponseResultEnvelope<ControlHarnessSettingsValuesPayload>.self,
+                from: try encoder.encode(settingsResponse)
+            )
+            let settings = try #require(settingsEnvelope.result)
+            #expect(settings.values["diagnostics.retention_days"] == "7")
+
+            let cleanupResponse = core.handle(
+                makeHarnessRequest(requestID: "req-diagnostics-cleanup", command: "diagnostics.cleanup.run"),
+                socketPath: "/tmp/ghodex-control-surface.sock"
+            )
+            let cleanupEnvelope = try decoder.decode(
+                ControlHarnessResponseResultEnvelope<ControlHarnessDiagnosticsCleanupPayload>.self,
+                from: try encoder.encode(cleanupResponse)
+            )
+            let cleanup = try #require(cleanupEnvelope.result)
+            #expect(cleanupEnvelope.status == "ok")
+            #expect(cleanup.deletedPaths.contains(staleExportURL.path))
+            #expect(cleanup.bytesFreed >= 5)
+            #expect(fileManager.fileExists(atPath: staleExportURL.path) == false)
+        }
     }
 
     @Test @MainActor func runtimeCommandsRegisterClaimUpdateAndSnapshot() throws {

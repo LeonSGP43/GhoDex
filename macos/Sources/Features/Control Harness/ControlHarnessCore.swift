@@ -35,14 +35,15 @@ private struct ControlTerminalStreamChunkPayload {
     let changedRows: [ControlHarnessReadChangedRow]
 }
 
-private struct RuntimeDiagnosticsRecord: Encodable {
+struct RuntimeDiagnosticsRecord: Codable {
     let timestamp: String
+    let severity: String
     let component: String
     let event: String
     let details: [String: String]
 }
 
-private struct RuntimeLifecycleSessionState: Codable {
+struct RuntimeLifecycleSessionState: Codable {
     let schemaVersion: Int
     var sessionID: String
     var pid: Int32
@@ -66,6 +67,662 @@ private struct RuntimeLifecycleSessionState: Codable {
         case terminateRequestedBy = "terminate_requested_by"
         case lastSignal = "last_signal"
     }
+}
+
+struct RuntimeCrashMarker: Codable, Equatable {
+    let schemaVersion: Int
+    let crashKind: String
+    let pid: Int32
+    let bundleID: String
+    let executableName: String
+    let sessionID: String?
+    let sessionStartedAt: String?
+    let reason: String
+    let signalName: String?
+    let signalNumber: Int32?
+    let exceptionName: String?
+    let exceptionReason: String?
+    var markerWrittenAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case crashKind = "crash_kind"
+        case pid
+        case bundleID = "bundle_id"
+        case executableName = "executable_name"
+        case sessionID = "session_id"
+        case sessionStartedAt = "session_started_at"
+        case reason
+        case signalName = "signal_name"
+        case signalNumber = "signal_number"
+        case exceptionName = "exception_name"
+        case exceptionReason = "exception_reason"
+        case markerWrittenAt = "marker_written_at"
+    }
+}
+
+struct RuntimeCrashBreadcrumb: Codable, Equatable {
+    let timestamp: String
+    let component: String
+    let event: String
+}
+
+struct RuntimeCrashReportSummary: Codable, Equatable {
+    let fileName: String
+    let filePath: String
+    let appName: String?
+    let bundleID: String?
+    let appVersion: String?
+    let bugType: String?
+    let incidentID: String?
+    let pid: Int32?
+    let procName: String?
+    let captureTime: String?
+    let procLaunch: String?
+    let exceptionType: String?
+    let exceptionSignal: String?
+    let terminationNamespace: String?
+    let terminationIndicator: String?
+    let faultingThread: Int?
+    let triggeredThreadName: String?
+    let triggeredQueue: String?
+    let firstFrameSymbol: String?
+    let firstFrameSourceFile: String?
+    let firstFrameSourceLine: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case fileName = "file_name"
+        case filePath = "file_path"
+        case appName = "app_name"
+        case bundleID = "bundle_id"
+        case appVersion = "app_version"
+        case bugType = "bug_type"
+        case incidentID = "incident_id"
+        case pid
+        case procName = "proc_name"
+        case captureTime = "capture_time"
+        case procLaunch = "proc_launch"
+        case exceptionType = "exception_type"
+        case exceptionSignal = "exception_signal"
+        case terminationNamespace = "termination_namespace"
+        case terminationIndicator = "termination_indicator"
+        case faultingThread = "faulting_thread"
+        case triggeredThreadName = "triggered_thread_name"
+        case triggeredQueue = "triggered_queue"
+        case firstFrameSymbol = "first_frame_symbol"
+        case firstFrameSourceFile = "first_frame_source_file"
+        case firstFrameSourceLine = "first_frame_source_line"
+    }
+}
+
+struct RuntimeCrashSummary: Codable {
+    let schemaVersion: Int
+    let processedAt: String
+    let marker: RuntimeCrashMarker
+    let matchedReport: RuntimeCrashReportSummary?
+    let lastBreadcrumb: RuntimeCrashBreadcrumb?
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case processedAt = "processed_at"
+        case marker
+        case matchedReport = "matched_report"
+        case lastBreadcrumb = "last_breadcrumb"
+    }
+}
+
+enum GhoDexDiagnosticsMode: String, CaseIterable, Codable {
+    case core
+    case operational
+    case deep
+}
+
+struct GhoDexDiagnosticsSettings: Codable, Equatable, Sendable {
+    static let schemaVersion = 1
+    static let defaultTotalBudgetMB = 16
+    static let defaultRuntimeBudgetMB = 2
+    static let defaultAuditBudgetMB = 2
+    static let defaultEventsBudgetMB = 2
+    static let defaultRetentionDays = 14
+    static let defaultRecordMaxKB = 16
+    static let defaultRepeatWindowSeconds = 45
+    static let defaultDeepTTLSeconds = 600
+    private static let settingsStartMarker = "# >>> GhoDex diagnostics settings >>>"
+    private static let settingsEndMarker = "# <<< GhoDex diagnostics settings <<<"
+
+    let schemaVersion: Int
+    var mode: GhoDexDiagnosticsMode
+    var totalBudgetMB: Int
+    var runtimeBudgetMB: Int
+    var auditBudgetMB: Int
+    var eventsBudgetMB: Int
+    var retentionDays: Int
+    var recordMaxKB: Int
+    var repeatWindowSeconds: Int
+    var deepDefaultTTLSeconds: Int
+
+    init(
+        schemaVersion: Int = GhoDexDiagnosticsSettings.schemaVersion,
+        mode: GhoDexDiagnosticsMode = .core,
+        totalBudgetMB: Int = defaultTotalBudgetMB,
+        runtimeBudgetMB: Int = defaultRuntimeBudgetMB,
+        auditBudgetMB: Int = defaultAuditBudgetMB,
+        eventsBudgetMB: Int = defaultEventsBudgetMB,
+        retentionDays: Int = defaultRetentionDays,
+        recordMaxKB: Int = defaultRecordMaxKB,
+        repeatWindowSeconds: Int = defaultRepeatWindowSeconds,
+        deepDefaultTTLSeconds: Int = defaultDeepTTLSeconds
+    ) {
+        self.schemaVersion = schemaVersion
+        self.mode = mode
+        self.totalBudgetMB = totalBudgetMB
+        self.runtimeBudgetMB = runtimeBudgetMB
+        self.auditBudgetMB = auditBudgetMB
+        self.eventsBudgetMB = eventsBudgetMB
+        self.retentionDays = retentionDays
+        self.recordMaxKB = recordMaxKB
+        self.repeatWindowSeconds = repeatWindowSeconds
+        self.deepDefaultTTLSeconds = deepDefaultTTLSeconds
+    }
+
+    func sanitized() -> Self {
+        var copy = self
+        copy.totalBudgetMB = max(8, min(totalBudgetMB, 128))
+        copy.runtimeBudgetMB = max(1, min(runtimeBudgetMB, 16))
+        copy.auditBudgetMB = max(1, min(auditBudgetMB, 16))
+        copy.eventsBudgetMB = max(1, min(eventsBudgetMB, 16))
+        copy.retentionDays = max(1, min(retentionDays, 90))
+        copy.recordMaxKB = max(4, min(recordMaxKB, 64))
+        copy.repeatWindowSeconds = max(5, min(repeatWindowSeconds, 300))
+        copy.deepDefaultTTLSeconds = max(60, min(deepDefaultTTLSeconds, 86_400))
+
+        let requiredFloorMB = copy.runtimeBudgetMB * 2 + copy.auditBudgetMB * 2 + copy.eventsBudgetMB * 2 + 2
+        if copy.totalBudgetMB < requiredFloorMB {
+            copy.totalBudgetMB = requiredFloorMB
+        }
+        return copy
+    }
+
+    var totalBudgetBytes: Int64 { Int64(totalBudgetMB) * 1024 * 1024 }
+    var runtimeBudgetBytes: Int64 { Int64(runtimeBudgetMB) * 1024 * 1024 }
+    var auditBudgetBytes: Int64 { Int64(auditBudgetMB) * 1024 * 1024 }
+    var eventsBudgetBytes: Int64 { Int64(eventsBudgetMB) * 1024 * 1024 }
+    var recordMaxBytes: Int { recordMaxKB * 1024 }
+
+    static func configURL() -> URL {
+        let fileManager = FileManager.default
+        if let envPath = ProcessInfo.processInfo.environment["GHOSTTY_CONFIG_PATH"],
+           !envPath.isEmpty {
+            let url = URL(fileURLWithPath: envPath, isDirectory: false)
+            try? fileManager.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            return url
+        }
+
+        if let path = Ghostty.App.configPath(), !path.isEmpty {
+            let url = URL(fileURLWithPath: path, isDirectory: false)
+            try? fileManager.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            return url
+        }
+
+        let appSupport = (try? fileManager.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )) ?? fileManager.homeDirectoryForCurrentUser
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.leongong.ghodex"
+        let directory = appSupport.appendingPathComponent(bundleID, isDirectory: true)
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("config.ghodex", isDirectory: false)
+    }
+
+    static func load() -> Self {
+        let url = configURL()
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+            return Self().sanitized()
+        }
+
+        func value(for key: String) -> String? {
+            for rawLine in text.split(whereSeparator: \.isNewline) {
+                let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard line.hasPrefix("\(key) =") else { continue }
+                let rawValue = line.dropFirst(key.count + 2).trimmingCharacters(in: .whitespacesAndNewlines)
+                if rawValue.hasPrefix("\""), rawValue.hasSuffix("\""), rawValue.count >= 2 {
+                    return String(rawValue.dropFirst().dropLast())
+                }
+                return rawValue
+            }
+            return nil
+        }
+
+        var settings = Self()
+        if let rawMode = value(for: "ghodex-diagnostics-mode"),
+           let mode = GhoDexDiagnosticsMode(rawValue: rawMode) {
+            settings.mode = mode
+        }
+        if let raw = value(for: "ghodex-diagnostics-total-budget-mb"), let parsed = Int(raw) {
+            settings.totalBudgetMB = parsed
+        }
+        if let raw = value(for: "ghodex-diagnostics-runtime-budget-mb"), let parsed = Int(raw) {
+            settings.runtimeBudgetMB = parsed
+        }
+        if let raw = value(for: "ghodex-diagnostics-audit-budget-mb"), let parsed = Int(raw) {
+            settings.auditBudgetMB = parsed
+        }
+        if let raw = value(for: "ghodex-diagnostics-events-budget-mb"), let parsed = Int(raw) {
+            settings.eventsBudgetMB = parsed
+        }
+        if let raw = value(for: "ghodex-diagnostics-retention-days"), let parsed = Int(raw) {
+            settings.retentionDays = parsed
+        }
+        if let raw = value(for: "ghodex-diagnostics-record-max-kb"), let parsed = Int(raw) {
+            settings.recordMaxKB = parsed
+        }
+        if let raw = value(for: "ghodex-diagnostics-repeat-window-seconds"), let parsed = Int(raw) {
+            settings.repeatWindowSeconds = parsed
+        }
+        if let raw = value(for: "ghodex-diagnostics-deep-default-ttl-seconds"), let parsed = Int(raw) {
+            settings.deepDefaultTTLSeconds = parsed
+        }
+        return settings.sanitized()
+    }
+
+    func save() throws {
+        let fileManager = FileManager.default
+        let url = Self.configURL()
+        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+        let existingText: String
+        if fileManager.fileExists(atPath: url.path) {
+            existingText = try String(contentsOf: url, encoding: .utf8)
+        } else {
+            existingText = ""
+        }
+
+        let stripped = Self.stripSettingsBlock(from: existingText)
+        let normalized = stripped.trimmingCharacters(in: .whitespacesAndNewlines)
+        let block = Self.settingsBlock(for: sanitized())
+        let text = normalized.isEmpty ? "\(block)\n" : "\(normalized)\n\n\(block)\n"
+        try text.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private static func settingsBlock(for settings: Self) -> String {
+        [
+            settingsStartMarker,
+            "ghodex-diagnostics-mode = \"\(settings.mode.rawValue)\"",
+            "ghodex-diagnostics-total-budget-mb = \(settings.totalBudgetMB)",
+            "ghodex-diagnostics-runtime-budget-mb = \(settings.runtimeBudgetMB)",
+            "ghodex-diagnostics-audit-budget-mb = \(settings.auditBudgetMB)",
+            "ghodex-diagnostics-events-budget-mb = \(settings.eventsBudgetMB)",
+            "ghodex-diagnostics-retention-days = \(settings.retentionDays)",
+            "ghodex-diagnostics-record-max-kb = \(settings.recordMaxKB)",
+            "ghodex-diagnostics-repeat-window-seconds = \(settings.repeatWindowSeconds)",
+            "ghodex-diagnostics-deep-default-ttl-seconds = \(settings.deepDefaultTTLSeconds)",
+            settingsEndMarker,
+        ].joined(separator: "\n")
+    }
+
+    private static func stripSettingsBlock(from text: String) -> String {
+        stripConfigBlock(
+            from: text,
+            startMarker: settingsStartMarker,
+            endMarker: settingsEndMarker
+        )
+    }
+}
+
+struct GhoDexDiagnosticsModeOverrideState: Codable, Equatable, Sendable {
+    var schemaVersion: Int = 1
+    var overrideMode: GhoDexDiagnosticsMode?
+    var overrideExpiresAt: String?
+    var lastCleanupAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case overrideMode = "override_mode"
+        case overrideExpiresAt = "override_expires_at"
+        case lastCleanupAt = "last_cleanup_at"
+    }
+}
+
+struct GhoDexDiagnosticsPaths: Sendable {
+    let bundleID: String
+    let diagnosticsDirectory: URL
+    let controlHarnessDirectory: URL
+    let runtimeFileURL: URL
+    let runtimeRotatedFileURL: URL
+    let lifecycleStateFileURL: URL
+    let crashMarkerFileURL: URL
+    let crashSummaryFileURL: URL
+    let governanceStateFileURL: URL
+    let auditFileURL: URL
+    let auditRotatedFileURL: URL
+    let eventsFileURL: URL
+    let eventsRotatedFileURL: URL
+    let exportsDirectoryURL: URL
+
+    static func resolve(bundleID: String) -> Self {
+        let fileManager = FileManager.default
+        let appSupport = (try? fileManager.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )) ?? fileManager.homeDirectoryForCurrentUser
+        let root = appSupport.appendingPathComponent(bundleID, isDirectory: true)
+        let diagnosticsDirectory = root.appendingPathComponent("Diagnostics", isDirectory: true)
+        let controlHarnessDirectory = root.appendingPathComponent("ControlHarness", isDirectory: true)
+        return .init(
+            bundleID: bundleID,
+            diagnosticsDirectory: diagnosticsDirectory,
+            controlHarnessDirectory: controlHarnessDirectory,
+            runtimeFileURL: diagnosticsDirectory.appendingPathComponent("runtime-memory-diagnostics.jsonl", isDirectory: false),
+            runtimeRotatedFileURL: diagnosticsDirectory.appendingPathComponent("runtime-memory-diagnostics.1.jsonl", isDirectory: false),
+            lifecycleStateFileURL: diagnosticsDirectory.appendingPathComponent("runtime-lifecycle-state.json", isDirectory: false),
+            crashMarkerFileURL: diagnosticsDirectory.appendingPathComponent("runtime-crash-marker.txt", isDirectory: false),
+            crashSummaryFileURL: diagnosticsDirectory.appendingPathComponent("runtime-last-crash-summary.json", isDirectory: false),
+            governanceStateFileURL: diagnosticsDirectory.appendingPathComponent("runtime-diagnostics-governance-state.json", isDirectory: false),
+            auditFileURL: controlHarnessDirectory.appendingPathComponent("control-harness-audit.jsonl", isDirectory: false),
+            auditRotatedFileURL: controlHarnessDirectory.appendingPathComponent("control-harness-audit.1.jsonl", isDirectory: false),
+            eventsFileURL: controlHarnessDirectory.appendingPathComponent("control-harness-events.jsonl", isDirectory: false),
+            eventsRotatedFileURL: controlHarnessDirectory.appendingPathComponent("control-harness-events.1.jsonl", isDirectory: false),
+            exportsDirectoryURL: diagnosticsDirectory.appendingPathComponent("Exports", isDirectory: true)
+        )
+    }
+}
+
+enum GhoDexDiagnosticsStorage {
+    struct CleanupReport: Sendable {
+        let deletedPaths: [String]
+        let bytesFreed: Int64
+    }
+
+    static func runtimeDiagnosticsDirectory(bundleID: String) -> URL {
+        GhoDexDiagnosticsPaths.resolve(bundleID: bundleID).diagnosticsDirectory
+    }
+
+    static func sourceFileURLs(source: String, bundleID: String) -> [URL] {
+        let paths = GhoDexDiagnosticsPaths.resolve(bundleID: bundleID)
+        switch source {
+        case "runtime":
+            return [paths.runtimeRotatedFileURL, paths.runtimeFileURL]
+        case "audit":
+            return [paths.auditRotatedFileURL, paths.auditFileURL]
+        case "events":
+            return [paths.eventsRotatedFileURL, paths.eventsFileURL]
+        default:
+            return []
+        }
+    }
+
+    static func loadModeOverrideState(bundleID: String) -> GhoDexDiagnosticsModeOverrideState {
+        let url = GhoDexDiagnosticsPaths.resolve(bundleID: bundleID).governanceStateFileURL
+        guard let data = try? Data(contentsOf: url),
+              let state = try? JSONDecoder().decode(GhoDexDiagnosticsModeOverrideState.self, from: data) else {
+            return .init()
+        }
+        return state
+    }
+
+    static func saveModeOverrideState(_ state: GhoDexDiagnosticsModeOverrideState, bundleID: String) {
+        let fileManager = FileManager.default
+        let url = GhoDexDiagnosticsPaths.resolve(bundleID: bundleID).governanceStateFileURL
+        do {
+            try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let data = try JSONEncoder().encode(state)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            Logger(subsystem: bundleID, category: "DiagnosticsStorage").error(
+                "failed to save diagnostics governance state: \(error.localizedDescription, privacy: .public)"
+            )
+        }
+    }
+
+    static func effectiveMode(
+        settings: GhoDexDiagnosticsSettings,
+        bundleID: String,
+        now: Date = Date()
+    ) -> (mode: GhoDexDiagnosticsMode, overrideActive: Bool, expiresAt: String?) {
+        var state = loadModeOverrideState(bundleID: bundleID)
+        if let overrideMode = state.overrideMode {
+            if let rawExpires = state.overrideExpiresAt,
+               let expiresAt = ISO8601DateFormatter().date(from: rawExpires),
+               expiresAt <= now {
+                state.overrideMode = nil
+                state.overrideExpiresAt = nil
+                saveModeOverrideState(state, bundleID: bundleID)
+            } else {
+                return (overrideMode, true, state.overrideExpiresAt)
+            }
+        }
+        return (settings.mode, false, nil)
+    }
+
+    static func appendLine(
+        _ line: Data,
+        fileURL: URL,
+        rotatedFileURL: URL,
+        maxFileBytes: Int64,
+        fileManager: FileManager = .default
+    ) throws {
+        try fileManager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try rotateIfNeeded(
+            fileURL: fileURL,
+            rotatedFileURL: rotatedFileURL,
+            maxFileBytes: maxFileBytes,
+            fileManager: fileManager
+        )
+        let fileDescriptor = open(
+            fileURL.path,
+            O_WRONLY | O_CREAT | O_APPEND,
+            mode_t(S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
+        )
+        guard fileDescriptor >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        defer { close(fileDescriptor) }
+
+        try line.withUnsafeBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress else { return }
+            var remaining = rawBuffer.count
+            var offset = 0
+            while remaining > 0 {
+                let wrote = Darwin.write(fileDescriptor, baseAddress.advanced(by: offset), remaining)
+                if wrote < 0 {
+                    if errno == EINTR {
+                        continue
+                    }
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                }
+                remaining -= wrote
+                offset += wrote
+            }
+        }
+    }
+
+    static func rotateIfNeeded(
+        fileURL: URL,
+        rotatedFileURL: URL,
+        maxFileBytes: Int64,
+        fileManager: FileManager = .default
+    ) throws {
+        guard
+            let attributes = try? fileManager.attributesOfItem(atPath: fileURL.path),
+            let bytes = (attributes[.size] as? NSNumber)?.int64Value,
+            bytes >= maxFileBytes
+        else {
+            return
+        }
+
+        if fileManager.fileExists(atPath: rotatedFileURL.path) {
+            try fileManager.removeItem(at: rotatedFileURL)
+        }
+        if fileManager.fileExists(atPath: fileURL.path) {
+            try fileManager.moveItem(at: fileURL, to: rotatedFileURL)
+        }
+    }
+
+    static func fileSize(at url: URL, fileManager: FileManager = .default) -> Int64 {
+        guard
+            let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+            let bytes = (attributes[.size] as? NSNumber)?.int64Value
+        else {
+            return 0
+        }
+        return bytes
+    }
+
+    static func directorySize(at url: URL, fileManager: FileManager = .default) -> Int64 {
+        guard let enumerator = fileManager.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return 0
+        }
+
+        var total: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            guard
+                let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                values.isRegularFile == true
+            else {
+                continue
+            }
+            total += Int64(values.fileSize ?? 0)
+        }
+        return total
+    }
+
+    static func cleanup(
+        bundleID: String,
+        settings: GhoDexDiagnosticsSettings,
+        now: Date = Date(),
+        fileManager: FileManager = .default
+    ) -> CleanupReport {
+        let paths = GhoDexDiagnosticsPaths.resolve(bundleID: bundleID)
+        let retentionInterval = TimeInterval(settings.retentionDays) * 86_400
+
+        struct Candidate {
+            let url: URL
+            let modifiedAt: Date
+            let size: Int64
+        }
+
+        func candidate(for url: URL) -> Candidate? {
+            guard fileManager.fileExists(atPath: url.path) else { return nil }
+            guard
+                let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
+                let modifiedAt = values.contentModificationDate
+            else {
+                return nil
+            }
+            return Candidate(url: url, modifiedAt: modifiedAt, size: Int64(values.fileSize ?? 0))
+        }
+
+        func exportCandidates() -> [Candidate] {
+            guard let urls = try? fileManager.contentsOfDirectory(
+                at: paths.exportsDirectoryURL,
+                includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey, .fileSizeKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                return []
+            }
+
+            return urls.compactMap { url in
+                guard
+                    let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey, .fileSizeKey]),
+                    values.isRegularFile == true
+                else {
+                    return nil
+                }
+                return Candidate(
+                    url: url,
+                    modifiedAt: values.contentModificationDate ?? .distantPast,
+                    size: Int64(values.fileSize ?? 0)
+                )
+            }
+        }
+
+        var deletedPaths: [String] = []
+        var bytesFreed: Int64 = 0
+
+        func delete(_ candidate: Candidate) {
+            guard fileManager.fileExists(atPath: candidate.url.path) else { return }
+            do {
+                try fileManager.removeItem(at: candidate.url)
+                deletedPaths.append(candidate.url.path)
+                bytesFreed += candidate.size
+            } catch {
+                Logger(subsystem: bundleID, category: "DiagnosticsStorage").error(
+                    "failed to delete diagnostics artifact \(candidate.url.path, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                )
+            }
+        }
+
+        var deletableCandidates = [
+            candidate(for: paths.runtimeRotatedFileURL),
+            candidate(for: paths.auditRotatedFileURL),
+            candidate(for: paths.eventsRotatedFileURL),
+        ].compactMap { $0 } + exportCandidates()
+
+        for candidate in deletableCandidates where now.timeIntervalSince(candidate.modifiedAt) >= retentionInterval {
+            delete(candidate)
+        }
+
+        deletableCandidates = [
+            candidate(for: paths.runtimeRotatedFileURL),
+            candidate(for: paths.auditRotatedFileURL),
+            candidate(for: paths.eventsRotatedFileURL),
+        ].compactMap { $0 } + exportCandidates()
+
+        var totalBytes = directorySize(at: paths.diagnosticsDirectory, fileManager: fileManager)
+            + directorySize(at: paths.controlHarnessDirectory, fileManager: fileManager)
+        if totalBytes > settings.totalBudgetBytes {
+            for candidate in deletableCandidates.sorted(by: { lhs, rhs in
+                if lhs.modifiedAt == rhs.modifiedAt {
+                    return lhs.url.path < rhs.url.path
+                }
+                return lhs.modifiedAt < rhs.modifiedAt
+            }) {
+                guard totalBytes > settings.totalBudgetBytes else { break }
+                delete(candidate)
+                totalBytes = max(0, totalBytes - candidate.size)
+            }
+        }
+
+        return .init(
+            deletedPaths: deletedPaths.sorted(),
+            bytesFreed: bytesFreed
+        )
+    }
+}
+
+private func stripConfigBlock(from text: String, startMarker: String, endMarker: String) -> String {
+    let lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
+    var output: [String] = []
+    var skipping = false
+    for line in lines {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed == startMarker {
+            skipping = true
+            continue
+        }
+        if trimmed == endMarker {
+            skipping = false
+            continue
+        }
+        if !skipping {
+            output.append(line)
+        }
+    }
+    return output.joined(separator: "\n")
 }
 
 private struct RuntimeDiagnosticsRegionSnapshot {
@@ -186,12 +843,10 @@ private struct RuntimeDiagnosticsRegionSnapshot {
 }
 
 final class RuntimeDiagnosticsLogger {
-    private static let fileName = "runtime-memory-diagnostics.jsonl"
-    private static let rotatedFileName = "runtime-memory-diagnostics.1.jsonl"
-    private static let lifecycleStateFileName = "runtime-lifecycle-state.json"
     private static let lifecycleStateSchemaVersion = 1
-    private static let maxFileBytes: Int64 = 4 * 1024 * 1024
+    private static let crashSummarySchemaVersion = 1
     private static let periodicRegionSampleSeconds: TimeInterval = 60
+    private static let crashReportCorrelationWindowSeconds: TimeInterval = 15 * 60
 
     static let shared = RuntimeDiagnosticsLogger()
 
@@ -203,53 +858,78 @@ final class RuntimeDiagnosticsLogger {
         return encoder
     }()
     private let fileManager = FileManager.default
+    private let bundleID: String
     private let fileURL: URL?
     private let rotatedFileURL: URL?
     private let lockFileURL: URL?
     private let stateFileURL: URL?
+    private let crashMarkerFileURL: URL?
+    private let crashSummaryFileURL: URL?
     private let enabled: Bool
-    private let vmmapSamplingEnabled: Bool
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
         category: "RuntimeDiagnostics"
     )
+    private var settings: GhoDexDiagnosticsSettings
+    private var modeOverrideState: GhoDexDiagnosticsModeOverrideState
     private var periodicRegionSampler: DispatchSourceTimer?
     private var latestRegionSnapshot: RuntimeDiagnosticsRegionSnapshot?
     private var previousProcessMemorySnapshot: RuntimeProcessMemorySnapshot?
     private var previousProcessMemorySampleDate: Date?
     private var lifecycleSessionState: RuntimeLifecycleSessionState?
     private var lifecycleSessionStarted = false
+    private var repeatedEventState: [String: (lastTimestamp: Date, suppressedCount: Int)] = [:]
 
     private init() {
         let configured = Self.parseEnabledFlag(ProcessInfo.processInfo.environment["GHODEX_RUNTIME_DIAG_LOG"])
         self.enabled = configured ?? true
-        let vmmapConfigured = Self.parseEnabledFlag(ProcessInfo.processInfo.environment["GHODEX_RUNTIME_DIAG_VMMAP"])
-        self.vmmapSamplingEnabled = vmmapConfigured ?? false
+        self.bundleID = Bundle.main.bundleIdentifier ?? "com.leongong.ghodex"
+        self.settings = GhoDexDiagnosticsSettings.load()
+        self.modeOverrideState = GhoDexDiagnosticsStorage.loadModeOverrideState(bundleID: bundleID)
         queue.setSpecific(key: queueSpecificKey, value: ())
         guard enabled else {
             self.fileURL = nil
             self.rotatedFileURL = nil
             self.lockFileURL = nil
             self.stateFileURL = nil
+            self.crashMarkerFileURL = nil
+            self.crashSummaryFileURL = nil
             return
         }
 
-        let bundleID = Bundle.main.bundleIdentifier ?? "com.leongong.ghodex"
-        let directory = Self.diagnosticsDirectory(bundleID: bundleID)
-        self.fileURL = directory.appendingPathComponent(Self.fileName, isDirectory: false)
-        self.rotatedFileURL = directory.appendingPathComponent(Self.rotatedFileName, isDirectory: false)
-        self.lockFileURL = directory.appendingPathComponent("\(Self.fileName).lock", isDirectory: false)
-        self.stateFileURL = directory.appendingPathComponent(Self.lifecycleStateFileName, isDirectory: false)
+        let paths = GhoDexDiagnosticsPaths.resolve(bundleID: bundleID)
+        self.fileURL = paths.runtimeFileURL
+        self.rotatedFileURL = paths.runtimeRotatedFileURL
+        self.lockFileURL = paths.runtimeFileURL.deletingLastPathComponent().appendingPathComponent("runtime-memory-diagnostics.jsonl.lock", isDirectory: false)
+        self.stateFileURL = paths.lifecycleStateFileURL
+        self.crashMarkerFileURL = paths.crashMarkerFileURL
+        self.crashSummaryFileURL = paths.crashSummaryFileURL
         self.ensureLifecycleSessionStarted(waitUntilFinished: true)
+        self.installCrashDiagnosticsCapture(waitUntilFinished: true)
+        self.processPendingCrashMarker(waitUntilFinished: true)
+        self.pruneDiagnosticsStorage(waitUntilFinished: true)
         self.startPeriodicRegionSampler()
     }
 
-    static func log(component: String, event: String, details: [String: String] = [:]) {
-        shared.append(component: component, event: event, details: details)
+    static func log(
+        component: String,
+        event: String,
+        severity: String = "info",
+        details: [String: String] = [:]
+    ) {
+        shared.append(component: component, event: event, severity: severity, details: details)
     }
 
     static func beginLifecycleSessionIfNeeded() {
         shared.ensureLifecycleSessionStarted(waitUntilFinished: false)
+    }
+
+    static func applySettings(_ settings: GhoDexDiagnosticsSettings) {
+        shared.updateSettings(settings, waitUntilFinished: true)
+    }
+
+    static func applyModeOverride(_ mode: GhoDexDiagnosticsMode?, ttlSeconds: Int?) {
+        shared.updateModeOverride(mode, ttlSeconds: ttlSeconds, waitUntilFinished: true)
     }
 
     static func recordLifecycleTerminateRequested(
@@ -316,22 +996,13 @@ final class RuntimeDiagnosticsLogger {
     }
 
     private static func diagnosticsDirectory(bundleID: String) -> URL {
-        let fileManager = FileManager.default
-        let appSupport = (try? fileManager.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )) ?? fileManager.homeDirectoryForCurrentUser
-        return appSupport
-            .appendingPathComponent(bundleID, isDirectory: true)
-            .appendingPathComponent("Diagnostics", isDirectory: true)
+        GhoDexDiagnosticsStorage.runtimeDiagnosticsDirectory(bundleID: bundleID)
     }
 
-    private func append(component: String, event: String, details: [String: String]) {
+    private func append(component: String, event: String, severity: String, details: [String: String]) {
         guard enabled else { return }
         runOnQueue(waitUntilFinished: false) { [weak self] in
-            self?.writeRecordLocked(component: component, event: event, details: details)
+            self?.writeRecordLocked(component: component, event: event, severity: severity, details: details)
         }
     }
 
@@ -355,11 +1026,110 @@ final class RuntimeDiagnosticsLogger {
         }
     }
 
+    private func installCrashDiagnosticsCapture(waitUntilFinished: Bool) {
+        guard enabled else { return }
+        runOnQueue(waitUntilFinished: waitUntilFinished) { [weak self] in
+            self?.installCrashDiagnosticsCaptureLocked()
+        }
+    }
+
+    private func processPendingCrashMarker(waitUntilFinished: Bool) {
+        guard enabled else { return }
+        runOnQueue(waitUntilFinished: waitUntilFinished) { [weak self] in
+            self?.processPendingCrashMarkerLocked()
+        }
+    }
+
+    private func pruneDiagnosticsStorage(waitUntilFinished: Bool) {
+        guard enabled else { return }
+        runOnQueue(waitUntilFinished: waitUntilFinished) { [weak self] in
+            self?.pruneDiagnosticsStorageLocked()
+        }
+    }
+
+    private func updateSettings(_ settings: GhoDexDiagnosticsSettings, waitUntilFinished: Bool) {
+        runOnQueue(waitUntilFinished: waitUntilFinished) { [weak self] in
+            self?.settings = settings.sanitized()
+            self?.refreshModeOverrideStateLocked()
+            self?.pruneDiagnosticsStorageLocked()
+        }
+    }
+
+    private func updateModeOverride(
+        _ mode: GhoDexDiagnosticsMode?,
+        ttlSeconds: Int?,
+        waitUntilFinished: Bool
+    ) {
+        runOnQueue(waitUntilFinished: waitUntilFinished) { [weak self] in
+            guard let self else { return }
+            var state = self.modeOverrideState
+            state.overrideMode = mode
+            if let mode, mode == .deep {
+                let effectiveTTL = max(ttlSeconds ?? self.settings.deepDefaultTTLSeconds, 60)
+                state.overrideExpiresAt = Self.iso8601Timestamp(from: Date().addingTimeInterval(TimeInterval(effectiveTTL)))
+            } else {
+                state.overrideExpiresAt = nil
+            }
+            GhoDexDiagnosticsStorage.saveModeOverrideState(state, bundleID: self.bundleID)
+            self.modeOverrideState = state
+        }
+    }
+
+    private func refreshModeOverrideStateLocked() {
+        modeOverrideState = GhoDexDiagnosticsStorage.loadModeOverrideState(bundleID: bundleID)
+    }
+
     private func ensureLifecycleSessionStartedLocked() {
         guard enabled else { return }
         guard !lifecycleSessionStarted else { return }
         lifecycleSessionStarted = true
         beginLifecycleSessionLocked()
+    }
+
+    private func installCrashDiagnosticsCaptureLocked() {
+        guard
+            enabled,
+            let crashMarkerFileURL,
+            let sessionState = lifecycleSessionState
+        else {
+            return
+        }
+
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.leongong.ghodex"
+        let executableName =
+            (Bundle.main.object(forInfoDictionaryKey: kCFBundleExecutableKey as String) as? String)
+            ?? "GhoDex"
+        crashMarkerFileURL.path.withCString { markerPath in
+            bundleID.withCString { bundleIDCString in
+                executableName.withCString { executableNameCString in
+                    sessionState.sessionID.withCString { sessionIDCString in
+                        sessionState.startedAt.withCString { sessionStartedAtCString in
+                            GhoDexInstallCrashDiagnosticsHandlers(
+                                markerPath,
+                                bundleIDCString,
+                                executableNameCString,
+                                sessionState.pid,
+                                sessionIDCString,
+                                sessionStartedAtCString
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func refreshCrashDiagnosticsContextLocked() {
+        guard enabled, let sessionState = lifecycleSessionState else { return }
+        sessionState.sessionID.withCString { sessionIDCString in
+            sessionState.startedAt.withCString { sessionStartedAtCString in
+                GhoDexUpdateCrashDiagnosticsContext(
+                    sessionIDCString,
+                    sessionStartedAtCString,
+                    sessionState.pid
+                )
+            }
+        }
     }
 
     private func appendLifecycleTerminateRequested(
@@ -575,6 +1345,7 @@ final class RuntimeDiagnosticsLogger {
             logger.error("failed to initialize runtime lifecycle state: \(error.localizedDescription, privacy: .public)")
         }
 
+        refreshCrashDiagnosticsContextLocked()
         appendLifecycleEventLocked(event: "session_start", details: [:])
     }
 
@@ -608,29 +1379,345 @@ final class RuntimeDiagnosticsLogger {
         }
     }
 
-    private static func iso8601Timestamp() -> String {
-        ISO8601DateFormatter().string(from: Date())
+    private func processPendingCrashMarkerLocked() {
+        guard let crashMarkerFileURL else { return }
+        guard fileManager.fileExists(atPath: crashMarkerFileURL.path) else { return }
+
+        defer {
+            try? fileManager.removeItem(at: crashMarkerFileURL)
+        }
+
+        do {
+            let markerAttributes = try? fileManager.attributesOfItem(atPath: crashMarkerFileURL.path)
+            let markerDate = markerAttributes?[.modificationDate] as? Date
+            var marker = Self.parseCrashMarkerContents(try String(contentsOf: crashMarkerFileURL, encoding: .utf8))
+            marker?.markerWrittenAt = markerDate.map(Self.iso8601Timestamp(from:))
+
+            guard let marker else { return }
+
+            let matchedReport = Self.findMatchingCrashReport(for: marker)
+            let breadcrumb = latestBreadcrumb(forSessionID: marker.sessionID)
+            let summary = RuntimeCrashSummary(
+                schemaVersion: Self.crashSummarySchemaVersion,
+                processedAt: Self.iso8601Timestamp(),
+                marker: marker,
+                matchedReport: matchedReport,
+                lastBreadcrumb: breadcrumb
+            )
+            persistCrashSummaryLocked(summary)
+
+            var details: [String: String] = [
+                "marker_reason": marker.reason,
+                "marker_kind": marker.crashKind,
+                "marker_pid": "\(marker.pid)",
+            ]
+            if let markerWrittenAt = marker.markerWrittenAt {
+                details["marker_written_at"] = markerWrittenAt
+            }
+            if let sessionID = marker.sessionID {
+                details["previous_session_id"] = sessionID
+            }
+            if let sessionStartedAt = marker.sessionStartedAt {
+                details["previous_session_started_at"] = sessionStartedAt
+            }
+            if let signalName = marker.signalName {
+                details["signal_name"] = signalName
+            }
+            if let signalNumber = marker.signalNumber {
+                details["signal_number"] = "\(signalNumber)"
+            }
+            if let exceptionName = marker.exceptionName {
+                details["exception_name"] = exceptionName
+            }
+            if let exceptionReason = marker.exceptionReason {
+                details["exception_reason"] = exceptionReason
+            }
+            if let matchedReport {
+                details["report_file"] = matchedReport.fileName
+                details["report_path"] = matchedReport.filePath
+                if let bugType = matchedReport.bugType {
+                    details["report_bug_type"] = bugType
+                }
+                if let exceptionType = matchedReport.exceptionType {
+                    details["report_exception_type"] = exceptionType
+                }
+                if let exceptionSignal = matchedReport.exceptionSignal {
+                    details["report_exception_signal"] = exceptionSignal
+                }
+                if let terminationIndicator = matchedReport.terminationIndicator {
+                    details["report_termination_indicator"] = terminationIndicator
+                }
+                if let firstFrameSymbol = matchedReport.firstFrameSymbol {
+                    details["report_first_frame_symbol"] = firstFrameSymbol
+                }
+            }
+            if let breadcrumb {
+                details["last_component"] = breadcrumb.component
+                details["last_event"] = breadcrumb.event
+                details["last_event_at"] = breadcrumb.timestamp
+            }
+
+            writeRecordLocked(
+                component: "runtime.crash",
+                event: "previous_session_crash_detected",
+                severity: "error",
+                details: details
+            )
+        } catch {
+            logger.error("failed to process runtime crash marker: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
-    private static func rotateIfNeeded(
-        fileURL: URL,
-        rotatedFileURL: URL,
-        fileManager: FileManager
-    ) throws {
-        guard
-            let attributes = try? fileManager.attributesOfItem(atPath: fileURL.path),
-            let bytes = (attributes[.size] as? NSNumber)?.int64Value,
-            bytes >= maxFileBytes
-        else {
-            return
+    private func persistCrashSummaryLocked(_ summary: RuntimeCrashSummary) {
+        guard let crashSummaryFileURL else { return }
+
+        do {
+            try fileManager.createDirectory(
+                at: crashSummaryFileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
+            let data = try encoder.encode(summary)
+            try data.write(to: crashSummaryFileURL, options: .atomic)
+        } catch {
+            logger.error("failed to write runtime crash summary: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func latestBreadcrumb(forSessionID sessionID: String?) -> RuntimeCrashBreadcrumb? {
+        guard let sessionID, !sessionID.isEmpty else { return nil }
+
+        let candidates = [fileURL, rotatedFileURL].compactMap { $0 }
+        for fileURL in candidates {
+            guard let data = try? Data(contentsOf: fileURL),
+                  let content = String(data: data, encoding: .utf8) else {
+                continue
+            }
+
+            for line in content.split(separator: "\n", omittingEmptySubsequences: true).reversed() {
+                guard let recordData = String(line).data(using: .utf8),
+                      let record = try? JSONDecoder().decode(RuntimeDiagnosticsRecord.self, from: recordData),
+                      record.details["session_id"] == sessionID else {
+                    continue
+                }
+
+                if record.component == "runtime.lifecycle" && record.event == "session_start" {
+                    continue
+                }
+                return RuntimeCrashBreadcrumb(
+                    timestamp: record.timestamp,
+                    component: record.component,
+                    event: record.event
+                )
+            }
         }
 
-        if fileManager.fileExists(atPath: rotatedFileURL.path) {
-            try fileManager.removeItem(at: rotatedFileURL)
+        return nil
+    }
+
+    private static func iso8601Timestamp() -> String {
+        iso8601Timestamp(from: Date())
+    }
+
+    private static func iso8601Timestamp(from date: Date) -> String {
+        ISO8601DateFormatter().string(from: date)
+    }
+
+    static func parseCrashMarkerContents(_ contents: String) -> RuntimeCrashMarker? {
+        var values: [String: String] = [:]
+        for line in contents.split(separator: "\n", omittingEmptySubsequences: true) {
+            let rawLine = String(line)
+            guard let separatorIndex = rawLine.firstIndex(of: "=") else { continue }
+            let key = String(rawLine[..<separatorIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = String(rawLine[rawLine.index(after: separatorIndex)...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty else { continue }
+            values[key] = value
         }
-        if fileManager.fileExists(atPath: fileURL.path) {
-            try fileManager.moveItem(at: fileURL, to: rotatedFileURL)
+
+        guard
+            let schemaVersionRaw = values["schema_version"],
+            let schemaVersion = Int(schemaVersionRaw),
+            let crashKind = values["crash_kind"],
+            let pidRaw = values["pid"],
+            let pid = Int32(pidRaw),
+            let bundleID = values["bundle_id"],
+            let executableName = values["executable_name"],
+            let reason = values["reason"]
+        else {
+            return nil
         }
+
+        return RuntimeCrashMarker(
+            schemaVersion: schemaVersion,
+            crashKind: crashKind,
+            pid: pid,
+            bundleID: bundleID,
+            executableName: executableName,
+            sessionID: values["session_id"],
+            sessionStartedAt: values["session_started_at"],
+            reason: reason,
+            signalName: values["signal_name"],
+            signalNumber: values["signal_number"].flatMap(Int32.init),
+            exceptionName: values["exception_name"],
+            exceptionReason: values["exception_reason"],
+            markerWrittenAt: values["marker_written_at"]
+        )
+    }
+
+    static func parseCrashReportSummary(
+        contents: String,
+        fileName: String,
+        filePath: String
+    ) -> RuntimeCrashReportSummary? {
+        let trimmed = contents.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let lines = trimmed.split(separator: "\n", omittingEmptySubsequences: false)
+        guard let headerLine = lines.first,
+              let headerData = String(headerLine).data(using: .utf8),
+              let headerObject = try? JSONSerialization.jsonObject(with: headerData) as? [String: Any] else {
+            return nil
+        }
+
+        let bodyString = lines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        let bodyObject: [String: Any]?
+        if let bodyData = bodyString.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any] {
+            bodyObject = json
+        } else {
+            bodyObject = nil
+        }
+
+        let exception = bodyObject?["exception"] as? [String: Any]
+        let termination = bodyObject?["termination"] as? [String: Any]
+        let threads = bodyObject?["threads"] as? [[String: Any]]
+        let faultingThread = bodyObject?["faultingThread"] as? Int
+        let triggeredThread = threads?.first(where: { ($0["triggered"] as? Bool) == true })
+        let frames = triggeredThread?["frames"] as? [[String: Any]]
+        let firstFrame = frames?.first
+
+        return RuntimeCrashReportSummary(
+            fileName: fileName,
+            filePath: filePath,
+            appName: headerObject["app_name"] as? String,
+            bundleID: (headerObject["bundleID"] as? String) ?? ((bodyObject?["bundleInfo"] as? [String: Any])?["CFBundleIdentifier"] as? String),
+            appVersion: headerObject["app_version"] as? String,
+            bugType: headerObject["bug_type"] as? String,
+            incidentID: (headerObject["incident_id"] as? String) ?? (bodyObject?["incident"] as? String),
+            pid: (bodyObject?["pid"] as? NSNumber)?.int32Value,
+            procName: bodyObject?["procName"] as? String,
+            captureTime: bodyObject?["captureTime"] as? String,
+            procLaunch: bodyObject?["procLaunch"] as? String,
+            exceptionType: exception?["type"] as? String,
+            exceptionSignal: exception?["signal"] as? String,
+            terminationNamespace: termination?["namespace"] as? String,
+            terminationIndicator: termination?["indicator"] as? String,
+            faultingThread: faultingThread,
+            triggeredThreadName: triggeredThread?["name"] as? String,
+            triggeredQueue: triggeredThread?["queue"] as? String,
+            firstFrameSymbol: firstFrame?["symbol"] as? String,
+            firstFrameSourceFile: firstFrame?["sourceFile"] as? String,
+            firstFrameSourceLine: firstFrame?["sourceLine"] as? Int
+        )
+    }
+
+    private static func findMatchingCrashReport(for marker: RuntimeCrashMarker) -> RuntimeCrashReportSummary? {
+        let reportsDirectory = FileManager.default
+            .homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/DiagnosticReports", isDirectory: true)
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: reportsDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+
+        let markerDate = marker.markerWrittenAt.flatMap(Self.parseFlexibleTimestamp(_:))
+            ?? marker.sessionStartedAt.flatMap(Self.parseFlexibleTimestamp(_:))
+
+        let candidates = entries.filter { url in
+            let fileName = url.lastPathComponent.lowercased()
+            guard fileName.hasSuffix(".ips") || fileName.hasSuffix(".crash") else { return false }
+
+            let bundleToken = marker.bundleID.lowercased()
+                .split(separator: ".")
+                .last
+                .map(String.init)?
+                .replacingOccurrences(of: "debug", with: "")
+            let executableToken = marker.executableName.lowercased()
+
+            return fileName.contains(executableToken) || (bundleToken.map { fileName.contains($0) } ?? false)
+        }.sorted { lhs, rhs in
+            let lhsDate = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            let rhsDate = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            return lhsDate > rhsDate
+        }
+
+        for candidate in candidates {
+            guard let contents = try? String(contentsOf: candidate, encoding: .utf8),
+                  let summary = parseCrashReportSummary(
+                    contents: contents,
+                    fileName: candidate.lastPathComponent,
+                    filePath: candidate.path
+                  ) else {
+                continue
+            }
+
+            if let markerDate {
+                let reportDate = summary.captureTime.flatMap(Self.parseFlexibleTimestamp(_:))
+                    ?? summary.procLaunch.flatMap(Self.parseFlexibleTimestamp(_:))
+                    ?? (try? candidate.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+                if let reportDate,
+                   abs(reportDate.timeIntervalSince(markerDate)) > crashReportCorrelationWindowSeconds {
+                    continue
+                }
+            }
+
+            if let summaryPID = summary.pid, summaryPID != marker.pid {
+                if let launchDate = summary.procLaunch.flatMap(Self.parseFlexibleTimestamp(_:)),
+                   let sessionStartedAt = marker.sessionStartedAt.flatMap(Self.parseFlexibleTimestamp(_:)),
+                   abs(launchDate.timeIntervalSince(sessionStartedAt)) > 1 {
+                    continue
+                }
+            }
+
+            let bundleMatches = summary.bundleID == nil || summary.bundleID == marker.bundleID
+            let procMatches = summary.procName == nil || summary.procName == marker.executableName
+            if bundleMatches || procMatches {
+                return summary
+            }
+        }
+
+        return nil
+    }
+
+    private static func parseFlexibleTimestamp(_ rawValue: String) -> Date? {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if let date = ISO8601DateFormatter().date(from: trimmed) {
+            return date
+        }
+
+        let formats = [
+            "yyyy-MM-dd HH:mm:ss.SSSS Z",
+            "yyyy-MM-dd HH:mm:ss.SSS Z",
+            "yyyy-MM-dd HH:mm:ss Z",
+        ]
+
+        for format in formats {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            formatter.dateFormat = format
+            if let date = formatter.date(from: trimmed) {
+                return date
+            }
+        }
+
+        return nil
     }
 
     private func startPeriodicRegionSampler() {
@@ -650,7 +1737,13 @@ final class RuntimeDiagnosticsLogger {
 
     private func capturePeriodicRegionSampleLocked() {
         guard enabled else { return }
-        if vmmapSamplingEnabled {
+        let effectiveMode = GhoDexDiagnosticsStorage.effectiveMode(
+            settings: settings,
+            bundleID: bundleID
+        ).mode
+        guard effectiveMode != .core else { return }
+
+        if vmmapSamplingEnabledLocked {
             if let snapshot = Self.captureRegionSnapshot(
                 processID: ProcessInfo.processInfo.processIdentifier,
                 previous: latestRegionSnapshot
@@ -661,13 +1754,26 @@ final class RuntimeDiagnosticsLogger {
         writeRecordLocked(
             component: "runtime.memory",
             event: "periodic_sample",
+            severity: "debug",
             details: [
                 "interval_seconds": String(format: "%.0f", Self.periodicRegionSampleSeconds),
             ]
         )
     }
 
-    private func writeRecordLocked(component: String, event: String, details: [String: String]) {
+    private var vmmapSamplingEnabledLocked: Bool {
+        if let envValue = Self.parseEnabledFlag(ProcessInfo.processInfo.environment["GHODEX_RUNTIME_DIAG_VMMAP"]) {
+            return envValue
+        }
+        return GhoDexDiagnosticsStorage.effectiveMode(settings: settings, bundleID: bundleID).mode == .deep
+    }
+
+    private func writeRecordLocked(
+        component: String,
+        event: String,
+        severity: String = "info",
+        details: [String: String]
+    ) {
         guard
             enabled,
             let fileURL,
@@ -685,29 +1791,126 @@ final class RuntimeDiagnosticsLogger {
             )
 
             var enriched = details
+            mergeLifecycleContextLocked(into: &enriched)
             let sampledAt = Date()
             mergeProcessMemoryDetailsLocked(into: &enriched, sampledAt: sampledAt)
             latestRegionSnapshot?.merge(into: &enriched)
+            let sanitizedDetails = sanitizeDetailsLocked(enriched, severity: severity)
+            guard shouldWriteRuntimeRecordLocked(
+                component: component,
+                event: event,
+                severity: severity,
+                details: sanitizedDetails,
+                at: sampledAt
+            ) else {
+                return
+            }
 
             let record = RuntimeDiagnosticsRecord(
                 timestamp: ISO8601DateFormatter().string(from: sampledAt),
+                severity: severity,
                 component: component,
                 event: event,
-                details: enriched
+                details: sanitizedDetails
             )
             var line = try encoder.encode(record)
             line.append(0x0A)
 
             try Self.withFileLock(lockFileURL: lockFileURL) {
-                try Self.rotateIfNeeded(
+                try GhoDexDiagnosticsStorage.appendLine(
+                    line,
                     fileURL: fileURL,
                     rotatedFileURL: rotatedFileURL,
+                    maxFileBytes: settings.runtimeBudgetBytes,
                     fileManager: fileManager
                 )
-                try Self.appendLine(line, to: fileURL)
             }
         } catch {
             logger.error("failed to write runtime diagnostics record: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func sanitizeDetailsLocked(_ details: [String: String], severity: String) -> [String: String] {
+        let maxValueBytes = max(settings.recordMaxBytes / 4, 256)
+        var sanitized: [String: String] = [:]
+        var truncated = false
+        for key in details.keys.sorted() {
+            guard let value = details[key] else { continue }
+            let limited = value.utf8.count > maxValueBytes
+                ? String(value.prefix(maxValueBytes / 2))
+                : value
+            if limited != value {
+                truncated = true
+            }
+            sanitized[key] = limited
+        }
+        sanitized["diagnostics_mode"] = GhoDexDiagnosticsStorage.effectiveMode(
+            settings: settings,
+            bundleID: bundleID
+        ).mode.rawValue
+        if truncated {
+            sanitized["truncated"] = "true"
+        }
+        if let encoded = try? encoder.encode(RuntimeDiagnosticsRecord(
+            timestamp: Self.iso8601Timestamp(),
+            severity: severity,
+            component: "runtime",
+            event: "size_probe",
+            details: sanitized
+        )), encoded.count > settings.recordMaxBytes {
+            let compactDetails: [String: String] = [
+                "detail_count": "\(sanitized.count)",
+                "truncated": "true",
+            ]
+            return compactDetails
+        }
+        return sanitized
+    }
+
+    private func shouldWriteRuntimeRecordLocked(
+        component: String,
+        event: String,
+        severity: String,
+        details: [String: String],
+        at date: Date
+    ) -> Bool {
+        let signature = [severity, component, event, details["error_code"] ?? ""].joined(separator: "|")
+        guard settings.repeatWindowSeconds > 0 else { return true }
+        let window = TimeInterval(settings.repeatWindowSeconds)
+        if var state = repeatedEventState[signature],
+           date.timeIntervalSince(state.lastTimestamp) < window {
+            state.suppressedCount += 1
+            repeatedEventState[signature] = state
+            return false
+        }
+        repeatedEventState[signature] = (date, 0)
+        return true
+    }
+
+    private func pruneDiagnosticsStorageLocked() {
+        let now = Date()
+        _ = GhoDexDiagnosticsStorage.cleanup(
+            bundleID: bundleID,
+            settings: settings,
+            now: now,
+            fileManager: fileManager
+        )
+        var state = modeOverrideState
+        state.lastCleanupAt = Self.iso8601Timestamp(from: now)
+        GhoDexDiagnosticsStorage.saveModeOverrideState(state, bundleID: bundleID)
+        modeOverrideState = state
+    }
+
+    private func mergeLifecycleContextLocked(into details: inout [String: String]) {
+        guard let state = lifecycleSessionState else { return }
+        if details["session_id"] == nil {
+            details["session_id"] = state.sessionID
+        }
+        if details["session_started_at"] == nil {
+            details["session_started_at"] = state.startedAt
+        }
+        if details["session_pid"] == nil {
+            details["session_pid"] = "\(state.pid)"
         }
     }
 
@@ -1747,6 +2950,164 @@ private struct ControlDiagnosticsRecentErrorsResult: Encodable {
     }
 }
 
+private struct ControlDiagnosticsSettingsPayload: Encodable {
+    let mode: String
+    let totalBudgetMB: Int
+    let runtimeBudgetMB: Int
+    let auditBudgetMB: Int
+    let eventsBudgetMB: Int
+    let retentionDays: Int
+    let recordMaxKB: Int
+    let repeatWindowSeconds: Int
+    let deepDefaultTTLSeconds: Int
+
+    enum CodingKeys: String, CodingKey {
+        case mode
+        case totalBudgetMB = "total_budget_mb"
+        case runtimeBudgetMB = "runtime_budget_mb"
+        case auditBudgetMB = "audit_budget_mb"
+        case eventsBudgetMB = "events_budget_mb"
+        case retentionDays = "retention_days"
+        case recordMaxKB = "record_max_kb"
+        case repeatWindowSeconds = "repeat_window_seconds"
+        case deepDefaultTTLSeconds = "deep_default_ttl_seconds"
+    }
+}
+
+private struct ControlDiagnosticsSourceStatus: Encodable {
+    let source: String
+    let primaryBytes: Int64
+    let rotatedBytes: Int64
+    let totalBytes: Int64
+    let budgetBytes: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case source
+        case primaryBytes = "primary_bytes"
+        case rotatedBytes = "rotated_bytes"
+        case totalBytes = "total_bytes"
+        case budgetBytes = "budget_bytes"
+    }
+}
+
+private struct ControlDiagnosticsStatusResult: Encodable {
+    let protocolVersion: String
+    let settings: ControlDiagnosticsSettingsPayload
+    let effectiveMode: String
+    let overrideActive: Bool
+    let overrideExpiresAt: String?
+    let lastCleanupAt: String?
+    let totalStorageBytes: Int64
+    let totalBudgetBytes: Int64
+    let sources: [ControlDiagnosticsSourceStatus]
+    let latestCrashSummaryPresent: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case settings
+        case effectiveMode = "effective_mode"
+        case overrideActive = "override_active"
+        case overrideExpiresAt = "override_expires_at"
+        case lastCleanupAt = "last_cleanup_at"
+        case totalStorageBytes = "total_storage_bytes"
+        case totalBudgetBytes = "total_budget_bytes"
+        case sources
+        case latestCrashSummaryPresent = "latest_crash_summary_present"
+    }
+}
+
+private struct ControlDiagnosticsRetentionResult: Encodable {
+    let protocolVersion: String
+    let settings: ControlDiagnosticsSettingsPayload
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case settings
+    }
+}
+
+private struct ControlDiagnosticsModeResult: Encodable {
+    let protocolVersion: String
+    let configuredMode: String
+    let effectiveMode: String
+    let overrideActive: Bool
+    let overrideExpiresAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case configuredMode = "configured_mode"
+        case effectiveMode = "effective_mode"
+        case overrideActive = "override_active"
+        case overrideExpiresAt = "override_expires_at"
+    }
+}
+
+private struct ControlDiagnosticsCleanupResult: Encodable {
+    let protocolVersion: String
+    let deletedPaths: [String]
+    let bytesFreed: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case deletedPaths = "deleted_paths"
+        case bytesFreed = "bytes_freed"
+    }
+}
+
+private struct ControlDiagnosticsQueryRecord: Encodable {
+    let source: String
+    let timestamp: String?
+    let severity: String?
+    let component: String?
+    let event: String?
+    let status: String?
+    let errorCode: String?
+    let raw: String
+
+    enum CodingKeys: String, CodingKey {
+        case source
+        case timestamp
+        case severity
+        case component
+        case event
+        case status
+        case errorCode = "error_code"
+        case raw
+    }
+}
+
+private struct ControlDiagnosticsQueryResult: Encodable {
+    let protocolVersion: String
+    let records: [ControlDiagnosticsQueryRecord]
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case records
+    }
+}
+
+private struct ControlDiagnosticsLatestCrashResult: Encodable {
+    let protocolVersion: String
+    let summary: RuntimeCrashSummary?
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case summary
+    }
+}
+
+private struct ControlDiagnosticsExportBundleResult: Encodable {
+    let protocolVersion: String
+    let path: String
+    let byteCount: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case path
+        case byteCount = "byte_count"
+    }
+}
+
 private struct ControlDiagnosticsAuditQueryResult: Encodable {
     let protocolVersion: String
     let records: [ControlAuditRecord]
@@ -2406,39 +3767,50 @@ final class ControlHarnessAuditLogger {
         encoder.outputFormatting = [.sortedKeys]
         return encoder
     }()
+    private let bundleID: String
     private let fileURL: URL
+    private let rotatedFileURL: URL
     private let fileManager = FileManager.default
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.leongong.ghodex",
         category: "ControlHarnessAudit"
     )
+    private var settings: GhoDexDiagnosticsSettings
 
     init(bundleID: String) {
-        self.fileURL = Self.baseDirectory(bundleID: bundleID)
-            .appendingPathComponent("control-harness-audit.jsonl", isDirectory: false)
+        self.bundleID = bundleID
+        let paths = GhoDexDiagnosticsPaths.resolve(bundleID: bundleID)
+        self.fileURL = paths.auditFileURL
+        self.rotatedFileURL = paths.auditRotatedFileURL
+        self.settings = GhoDexDiagnosticsSettings.load()
     }
 
     fileprivate func append(_ record: ControlAuditRecord) {
-        queue.async { [fileURL, fileManager, encoder, logger] in
+        queue.async { [weak self] in
+            guard let self else { return }
             do {
-                try fileManager.createDirectory(
-                    at: fileURL.deletingLastPathComponent(),
-                    withIntermediateDirectories: true,
-                    attributes: nil
+                let data = try self.encoder.encode(record) + Data([0x0A])
+                try GhoDexDiagnosticsStorage.appendLine(
+                    data,
+                    fileURL: self.fileURL,
+                    rotatedFileURL: self.rotatedFileURL,
+                    maxFileBytes: self.settings.auditBudgetBytes,
+                    fileManager: self.fileManager
                 )
-                let data = try encoder.encode(record)
-                if !fileManager.fileExists(atPath: fileURL.path) {
-                    fileManager.createFile(atPath: fileURL.path, contents: nil)
-                }
-                let handle = try FileHandle(forWritingTo: fileURL)
-                defer { try? handle.close() }
-                try handle.seekToEnd()
-                try handle.write(contentsOf: data)
-                try handle.write(contentsOf: Data([0x0A]))
             } catch {
-                logger.error("failed to write control audit record: \(error.localizedDescription, privacy: .public)")
+                self.logger.error("failed to write control audit record: \(error.localizedDescription, privacy: .public)")
             }
         }
+    }
+
+    fileprivate func applyDiagnosticsSettings(_ settings: GhoDexDiagnosticsSettings) {
+        queue.async { [weak self] in
+            self?.settings = settings.sanitized()
+        }
+    }
+
+    fileprivate var diagnosticsBundleID: String {
+        bundleID
     }
 
     static func baseDirectory(bundleID: String) -> URL {
@@ -2488,6 +3860,7 @@ final class ControlHarnessCore {
     private let samplingActivityResolver: @MainActor (UUID) -> ControlHarnessSamplingActivityClass?
     private let streamPollInterval: TimeInterval
     private let now: @MainActor () -> Date
+    private let diagnosticsBundleID: String
     private var terminalWindowBellObserver: NSObjectProtocol?
     private var lastReadFootprintProbeDate: Date?
     private var lastReadFootprintBytes: UInt64?
@@ -2558,6 +3931,7 @@ final class ControlHarnessCore {
         }
         self.streamPollInterval = max(0.01, streamPollInterval)
         self.now = now
+        self.diagnosticsBundleID = auditLogger.diagnosticsBundleID
         self.terminalWindowBellObserver = NotificationCenter.default.addObserver(
             forName: .terminalWindowBellDidChangeNotification,
             object: nil,
@@ -2935,7 +4309,8 @@ final class ControlHarnessCore {
         switch request.command {
         case "app.state.get", "window.list", "panel.list", "settings.schema.get", "settings.values.get",
             "diagnostics.metrics.get", "diagnostics.metrics.reset", "diagnostics.errors.recent",
-            "diagnostics.eventBuffer.status":
+            "diagnostics.eventBuffer.status", "diagnostics.status", "diagnostics.mode.get",
+            "diagnostics.retention.get", "diagnostics.crash.latest":
             break
 
         case "app.relaunch":
@@ -2999,6 +4374,12 @@ final class ControlHarnessCore {
                 throw ControlHarnessCoreError.invalidArgument("diagnostics.logs.tail source must be audit|events|runtime")
             }
 
+        case "diagnostics.logs.query":
+            if let source = normalizedOptionalString(request.payload?["source"]),
+               Self.supportedDiagnosticsLogSources.contains(source) == false {
+                throw ControlHarnessCoreError.invalidArgument("diagnostics.logs.query source must be audit|events|runtime")
+            }
+
         case "diagnostics.audit.query":
             if let limit = request.maxLines, limit < 1 {
                 throw ControlHarnessCoreError.invalidArgument("max_lines must be >= 1")
@@ -3006,6 +4387,44 @@ final class ControlHarnessCore {
             if let status = normalizedOptionalString(request.payload?["status"]),
                ["ok", "error"].contains(status) == false {
                 throw ControlHarnessCoreError.invalidArgument("diagnostics.audit.query payload.status must be ok|error")
+            }
+
+        case "diagnostics.mode.set":
+            guard let payload = request.payload, payload.isEmpty == false else {
+                throw ControlHarnessCoreError.invalidArgument("diagnostics.mode.set requires payload")
+            }
+            let clearOverride = Self.parseBooleanString(payload["clear_override"]) ?? false
+            let scope = normalizedOptionalString(payload["scope"]) ?? ((payload["ttl_seconds"]?.isEmpty == false) ? "override" : "configured")
+            if ["configured", "override"].contains(scope) == false {
+                throw ControlHarnessCoreError.invalidArgument("diagnostics.mode.set payload.scope must be configured|override")
+            }
+            if clearOverride == false {
+                guard let rawMode = normalizedOptionalString(payload["mode"]),
+                      GhoDexDiagnosticsMode(rawValue: rawMode) != nil else {
+                    throw ControlHarnessCoreError.invalidArgument("diagnostics.mode.set payload.mode must be core|operational|deep")
+                }
+            }
+            if let ttlRaw = normalizedOptionalString(payload["ttl_seconds"]),
+               (Int(ttlRaw) ?? 0) <= 0 {
+                throw ControlHarnessCoreError.invalidArgument("diagnostics.mode.set payload.ttl_seconds must be > 0")
+            }
+
+        case "diagnostics.retention.apply":
+            guard let payload = request.payload, payload.isEmpty == false else {
+                throw ControlHarnessCoreError.invalidArgument("diagnostics.retention.apply requires payload")
+            }
+            guard let rawValue = normalizedOptionalString(payload["retention_days"]),
+                  (Int(rawValue) ?? 0) > 0 else {
+                throw ControlHarnessCoreError.invalidArgument("diagnostics.retention.apply payload.retention_days must be > 0")
+            }
+
+        case "diagnostics.cleanup.run":
+            break
+
+        case "diagnostics.export.bundle":
+            if let source = normalizedOptionalString(request.payload?["source"]),
+               Self.supportedDiagnosticsLogSources.contains(source) == false {
+                throw ControlHarnessCoreError.invalidArgument("diagnostics.export.bundle source must be audit|events|runtime")
             }
 
         case "todo-snapshot", "todo-sync-stale":
@@ -3491,8 +4910,14 @@ final class ControlHarnessCore {
         case "diagnostics.metrics.reset":
             return (AnyEncodable(resetDiagnosticsMetrics()), nil)
 
+        case "diagnostics.status":
+            return (AnyEncodable(diagnosticsStatus()), nil)
+
         case "diagnostics.logs.tail":
             return (AnyEncodable(try diagnosticsLogsTail(from: request)), nil)
+
+        case "diagnostics.logs.query":
+            return (AnyEncodable(try diagnosticsLogsQuery(from: request)), nil)
 
         case "diagnostics.errors.recent":
             return (AnyEncodable(diagnosticsRecentErrors()), nil)
@@ -3502,6 +4927,27 @@ final class ControlHarnessCore {
 
         case "diagnostics.eventBuffer.status":
             return (AnyEncodable(diagnosticsEventBufferStatus()), nil)
+
+        case "diagnostics.crash.latest":
+            return (AnyEncodable(diagnosticsLatestCrash()), nil)
+
+        case "diagnostics.mode.get":
+            return (AnyEncodable(diagnosticsModeGet()), nil)
+
+        case "diagnostics.mode.set":
+            return (AnyEncodable(try diagnosticsModeSet(from: request)), nil)
+
+        case "diagnostics.retention.get":
+            return (AnyEncodable(diagnosticsRetentionGet()), nil)
+
+        case "diagnostics.retention.apply":
+            return (AnyEncodable(try diagnosticsRetentionApply(from: request)), nil)
+
+        case "diagnostics.cleanup.run":
+            return (AnyEncodable(diagnosticsCleanupRun()), nil)
+
+        case "diagnostics.export.bundle":
+            return (AnyEncodable(try diagnosticsExportBundle(from: request)), nil)
 
         default:
             throw ControlHarnessCoreError.unsupportedCommand(request.command)
@@ -3955,6 +5401,32 @@ final class ControlHarnessCore {
         )
     }
 
+    private func diagnosticsStatus() -> ControlDiagnosticsStatusResult {
+        let settings = GhoDexDiagnosticsSettings.load().sanitized()
+        let effective = GhoDexDiagnosticsStorage.effectiveMode(
+            settings: settings,
+            bundleID: diagnosticsBundleID
+        )
+        let state = GhoDexDiagnosticsStorage.loadModeOverrideState(bundleID: diagnosticsBundleID)
+        let paths = GhoDexDiagnosticsPaths.resolve(bundleID: diagnosticsBundleID)
+        let totalStorageBytes =
+            GhoDexDiagnosticsStorage.directorySize(at: paths.diagnosticsDirectory)
+            + GhoDexDiagnosticsStorage.directorySize(at: paths.controlHarnessDirectory)
+
+        return .init(
+            protocolVersion: Self.protocolVersion,
+            settings: diagnosticsSettingsPayload(settings),
+            effectiveMode: effective.mode.rawValue,
+            overrideActive: effective.overrideActive,
+            overrideExpiresAt: effective.expiresAt,
+            lastCleanupAt: state.lastCleanupAt,
+            totalStorageBytes: totalStorageBytes,
+            totalBudgetBytes: settings.totalBudgetBytes,
+            sources: ["runtime", "audit", "events"].map { diagnosticsSourceStatus(source: $0, settings: settings) },
+            latestCrashSummaryPresent: FileManager.default.fileExists(atPath: paths.crashSummaryFileURL.path)
+        )
+    }
+
     private func resetDiagnosticsMetrics() -> ControlDiagnosticsMetricsResult {
         .init(
             protocolVersion: Self.protocolVersion,
@@ -3964,11 +5436,8 @@ final class ControlHarnessCore {
 
     private func diagnosticsLogsTail(from request: ControlHarnessRequest) throws -> ControlDiagnosticsLogsTailResult {
         let source = normalizedOptionalString(request.payload?["source"]) ?? "audit"
-        guard let url = diagnosticsLogURL(source: source) else {
-            return .init(protocolVersion: Self.protocolVersion, source: source, lines: [])
-        }
         let limit = max(request.maxLines ?? 20, 1)
-        let lines = try tailLogLines(at: url, source: source, limit: limit)
+        let lines = try tailLogLines(at: diagnosticsLogURLs(source: source), source: source, limit: limit)
         return .init(protocolVersion: Self.protocolVersion, source: source, lines: lines)
     }
 
@@ -3991,11 +5460,7 @@ final class ControlHarnessCore {
         let commandFilter = normalizedOptionalString(request.payload?["command"])
         let errorCodeFilter = normalizedOptionalString(request.payload?["error_code"])
         let clientFilter = normalizedOptionalString(request.payload?["client"])
-        let sourceURL = diagnosticsLogURL(source: "audit")
-        guard let sourceURL else {
-            return .init(protocolVersion: Self.protocolVersion, records: [])
-        }
-        let records = try readAuditRecords(at: sourceURL)
+        let records = try readAuditRecords(at: diagnosticsLogURLs(source: "audit"))
             .filter { record in
                 if let statusFilter, record.status != statusFilter { return false }
                 if let commandFilter, record.command != commandFilter { return false }
@@ -4020,6 +5485,161 @@ final class ControlHarnessCore {
                 maxBufferedEvents: snapshot.maxBufferedEvents,
                 maxBufferedBytes: snapshot.maxBufferedBytes
             )
+        )
+    }
+
+    private func diagnosticsLogsQuery(from request: ControlHarnessRequest) throws -> ControlDiagnosticsQueryResult {
+        let sourceFilter = normalizedOptionalString(request.payload?["source"])
+        let severityFilter = normalizedOptionalString(request.payload?["severity"])
+        let componentFilter = normalizedOptionalString(request.payload?["component"])
+        let eventFilter = normalizedOptionalString(request.payload?["event"])
+        let statusFilter = normalizedOptionalString(request.payload?["status"])
+        let errorCodeFilter = normalizedOptionalString(request.payload?["error_code"])
+        let containsFilter = normalizedOptionalString(request.payload?["contains"])?.lowercased()
+        let limit = max(request.maxLines ?? 100, 1)
+        let sources = sourceFilter.map { [$0] } ?? ["runtime", "audit", "events"]
+
+        let records = try sources.flatMap { source in
+            try readQueryRecords(source: source)
+        }.filter { record in
+            if let severityFilter, record.severity != severityFilter { return false }
+            if let componentFilter, record.component != componentFilter { return false }
+            if let eventFilter, record.event != eventFilter { return false }
+            if let statusFilter, record.status != statusFilter { return false }
+            if let errorCodeFilter, record.errorCode != errorCodeFilter { return false }
+            if let containsFilter, record.raw.lowercased().contains(containsFilter) == false { return false }
+            return true
+        }
+
+        return .init(
+            protocolVersion: Self.protocolVersion,
+            records: Array(records.suffix(limit))
+        )
+    }
+
+    private func diagnosticsLatestCrash() -> ControlDiagnosticsLatestCrashResult {
+        .init(
+            protocolVersion: Self.protocolVersion,
+            summary: loadLatestCrashSummary()
+        )
+    }
+
+    private func diagnosticsModeGet() -> ControlDiagnosticsModeResult {
+        let settings = GhoDexDiagnosticsSettings.load().sanitized()
+        let effective = GhoDexDiagnosticsStorage.effectiveMode(
+            settings: settings,
+            bundleID: diagnosticsBundleID
+        )
+        return .init(
+            protocolVersion: Self.protocolVersion,
+            configuredMode: settings.mode.rawValue,
+            effectiveMode: effective.mode.rawValue,
+            overrideActive: effective.overrideActive,
+            overrideExpiresAt: effective.expiresAt
+        )
+    }
+
+    private func diagnosticsModeSet(from request: ControlHarnessRequest) throws -> ControlDiagnosticsModeResult {
+        let payload = request.payload ?? [:]
+        let clearOverride = Self.parseBooleanString(payload["clear_override"]) ?? false
+        let scope = normalizedOptionalString(payload["scope"]) ?? ((payload["ttl_seconds"]?.isEmpty == false) ? "override" : "configured")
+
+        if scope == "configured" {
+            let rawMode = try requiredPayloadValue("mode", payload: payload, command: "diagnostics.mode.set")
+            guard let mode = GhoDexDiagnosticsMode(rawValue: rawMode) else {
+                throw ControlHarnessCoreError.invalidArgument("diagnostics.mode.set payload.mode must be core|operational|deep")
+            }
+            var nextValues = currentSettingsValues()
+            nextValues["diagnostics.mode"] = mode.rawValue
+            try persistSettingsValues(nextValues)
+            if clearOverride {
+                saveDiagnosticsModeOverride(mode: nil, ttlSeconds: nil)
+            }
+            return diagnosticsModeGet()
+        }
+
+        if clearOverride {
+            saveDiagnosticsModeOverride(mode: nil, ttlSeconds: nil)
+            return diagnosticsModeGet()
+        }
+
+        let rawMode = try requiredPayloadValue("mode", payload: payload, command: "diagnostics.mode.set")
+        guard let mode = GhoDexDiagnosticsMode(rawValue: rawMode) else {
+            throw ControlHarnessCoreError.invalidArgument("diagnostics.mode.set payload.mode must be core|operational|deep")
+        }
+        let ttlSeconds = normalizedOptionalString(payload["ttl_seconds"]).flatMap(Int.init)
+        saveDiagnosticsModeOverride(mode: mode, ttlSeconds: ttlSeconds)
+        return diagnosticsModeGet()
+    }
+
+    private func diagnosticsRetentionGet() -> ControlDiagnosticsRetentionResult {
+        .init(
+            protocolVersion: Self.protocolVersion,
+            settings: diagnosticsSettingsPayload(GhoDexDiagnosticsSettings.load().sanitized())
+        )
+    }
+
+    private func diagnosticsRetentionApply(from request: ControlHarnessRequest) throws -> ControlDiagnosticsRetentionResult {
+        let payload = request.payload ?? [:]
+        let retentionDays = try requiredPayloadInt("retention_days", payload: payload, command: "diagnostics.retention.apply")
+        var settings = GhoDexDiagnosticsSettings.load().sanitized()
+        settings.retentionDays = retentionDays
+        try applyDiagnosticsSettings(settings)
+        return diagnosticsRetentionGet()
+    }
+
+    private func diagnosticsCleanupRun() -> ControlDiagnosticsCleanupResult {
+        let report = GhoDexDiagnosticsStorage.cleanup(
+            bundleID: diagnosticsBundleID,
+            settings: GhoDexDiagnosticsSettings.load().sanitized()
+        )
+        updateDiagnosticsCleanupTimestamp()
+        return .init(
+            protocolVersion: Self.protocolVersion,
+            deletedPaths: report.deletedPaths,
+            bytesFreed: report.bytesFreed
+        )
+    }
+
+    private func diagnosticsExportBundle(from request: ControlHarnessRequest) throws -> ControlDiagnosticsExportBundleResult {
+        struct DiagnosticsExportBundle: Encodable {
+            let generatedAt: String
+            let protocolVersion: String
+            let status: ControlDiagnosticsStatusResult
+            let latestCrash: RuntimeCrashSummary?
+            let recentErrors: [ControlDiagnosticsRecentError]
+            let queriedRecords: [ControlDiagnosticsQueryRecord]
+
+            enum CodingKeys: String, CodingKey {
+                case generatedAt = "generated_at"
+                case protocolVersion = "protocol_version"
+                case status
+                case latestCrash = "latest_crash"
+                case recentErrors = "recent_errors"
+                case queriedRecords = "queried_records"
+            }
+        }
+
+        let export = DiagnosticsExportBundle(
+            generatedAt: Self.iso8601(Date()),
+            protocolVersion: Self.protocolVersion,
+            status: diagnosticsStatus(),
+            latestCrash: loadLatestCrashSummary(),
+            recentErrors: diagnosticsRecentErrors().errors,
+            queriedRecords: try diagnosticsLogsQuery(from: request).records
+        )
+        let paths = GhoDexDiagnosticsPaths.resolve(bundleID: diagnosticsBundleID)
+        try FileManager.default.createDirectory(at: paths.exportsDirectoryURL, withIntermediateDirectories: true)
+        let timestamp = Self.iso8601(Date()).replacingOccurrences(of: ":", with: "-")
+        let exportURL = paths.exportsDirectoryURL.appendingPathComponent("diagnostics-bundle-\(timestamp).json", isDirectory: false)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(export)
+        try data.write(to: exportURL, options: .atomic)
+        return .init(
+            protocolVersion: Self.protocolVersion,
+            path: exportURL.path,
+            byteCount: Int64(data.count)
         )
     }
 
@@ -5887,6 +7507,15 @@ final class ControlHarnessCore {
             .init(key: "runtime.enabled", valueType: "bool", defaultValue: defaults["runtime.enabled"] ?? "", enumValues: ["true", "false"], description: "Agent runtime enable flag."),
             .init(key: "runtime.default_lease_duration_seconds", valueType: "double", defaultValue: defaults["runtime.default_lease_duration_seconds"] ?? "", enumValues: nil, description: "Default runtime lease duration."),
             .init(key: "runtime.stale_task_policy", valueType: "enum", defaultValue: defaults["runtime.stale_task_policy"] ?? "", enumValues: AgentRuntimeStaleTaskPolicy.allCases.map(\.rawValue), description: "Runtime stale task policy."),
+            .init(key: "diagnostics.mode", valueType: "enum", defaultValue: defaults["diagnostics.mode"] ?? "", enumValues: GhoDexDiagnosticsMode.allCases.map(\.rawValue), description: "Diagnostics mode baseline."),
+            .init(key: "diagnostics.total_budget_mb", valueType: "int", defaultValue: defaults["diagnostics.total_budget_mb"] ?? "", enumValues: nil, description: "Diagnostics total storage budget."),
+            .init(key: "diagnostics.runtime_budget_mb", valueType: "int", defaultValue: defaults["diagnostics.runtime_budget_mb"] ?? "", enumValues: nil, description: "Runtime log budget."),
+            .init(key: "diagnostics.audit_budget_mb", valueType: "int", defaultValue: defaults["diagnostics.audit_budget_mb"] ?? "", enumValues: nil, description: "Audit log budget."),
+            .init(key: "diagnostics.events_budget_mb", valueType: "int", defaultValue: defaults["diagnostics.events_budget_mb"] ?? "", enumValues: nil, description: "Events log budget."),
+            .init(key: "diagnostics.retention_days", valueType: "int", defaultValue: defaults["diagnostics.retention_days"] ?? "", enumValues: nil, description: "Diagnostics retention period."),
+            .init(key: "diagnostics.record_max_kb", valueType: "int", defaultValue: defaults["diagnostics.record_max_kb"] ?? "", enumValues: nil, description: "Maximum diagnostic record size."),
+            .init(key: "diagnostics.repeat_window_seconds", valueType: "int", defaultValue: defaults["diagnostics.repeat_window_seconds"] ?? "", enumValues: nil, description: "Duplicate event suppression window."),
+            .init(key: "diagnostics.deep_default_ttl_seconds", valueType: "int", defaultValue: defaults["diagnostics.deep_default_ttl_seconds"] ?? "", enumValues: nil, description: "Default deep mode TTL."),
         ]
     }
 
@@ -5937,6 +7566,16 @@ final class ControlHarnessCore {
             values["runtime.default_lease_duration_seconds"] = Self.doubleString(runtime.defaultLeaseDurationSeconds)
             values["runtime.stale_task_policy"] = runtime.staleTaskPolicy.rawValue
         }
+        let diagnostics = GhoDexDiagnosticsSettings.load().sanitized()
+        values["diagnostics.mode"] = diagnostics.mode.rawValue
+        values["diagnostics.total_budget_mb"] = String(diagnostics.totalBudgetMB)
+        values["diagnostics.runtime_budget_mb"] = String(diagnostics.runtimeBudgetMB)
+        values["diagnostics.audit_budget_mb"] = String(diagnostics.auditBudgetMB)
+        values["diagnostics.events_budget_mb"] = String(diagnostics.eventsBudgetMB)
+        values["diagnostics.retention_days"] = String(diagnostics.retentionDays)
+        values["diagnostics.record_max_kb"] = String(diagnostics.recordMaxKB)
+        values["diagnostics.repeat_window_seconds"] = String(diagnostics.repeatWindowSeconds)
+        values["diagnostics.deep_default_ttl_seconds"] = String(diagnostics.deepDefaultTTLSeconds)
         return values
     }
 
@@ -5947,6 +7586,7 @@ final class ControlHarnessCore {
         let learningDefaults = AITerminalLearningSettings()
         let heartbeatDefaults = AITerminalHeartbeatQueueSettings()
         let runtimeDefaults = AgentRuntimeSettings().sanitized()
+        let diagnosticsDefaults = GhoDexDiagnosticsSettings().sanitized()
         return [
             "app.language": AppLanguageSetting.system.rawValue,
             "appearance.icon": iconDefaults.icon.rawValue,
@@ -5977,6 +7617,15 @@ final class ControlHarnessCore {
             "runtime.enabled": Self.booleanString(runtimeDefaults.enabled),
             "runtime.default_lease_duration_seconds": Self.doubleString(runtimeDefaults.defaultLeaseDurationSeconds),
             "runtime.stale_task_policy": runtimeDefaults.staleTaskPolicy.rawValue,
+            "diagnostics.mode": diagnosticsDefaults.mode.rawValue,
+            "diagnostics.total_budget_mb": String(diagnosticsDefaults.totalBudgetMB),
+            "diagnostics.runtime_budget_mb": String(diagnosticsDefaults.runtimeBudgetMB),
+            "diagnostics.audit_budget_mb": String(diagnosticsDefaults.auditBudgetMB),
+            "diagnostics.events_budget_mb": String(diagnosticsDefaults.eventsBudgetMB),
+            "diagnostics.retention_days": String(diagnosticsDefaults.retentionDays),
+            "diagnostics.record_max_kb": String(diagnosticsDefaults.recordMaxKB),
+            "diagnostics.repeat_window_seconds": String(diagnosticsDefaults.repeatWindowSeconds),
+            "diagnostics.deep_default_ttl_seconds": String(diagnosticsDefaults.deepDefaultTTLSeconds),
         ]
     }
 
@@ -6093,6 +7742,20 @@ final class ControlHarnessCore {
             }
             return value.rawValue
 
+        case "diagnostics.mode":
+            guard let value = GhoDexDiagnosticsMode(rawValue: trimmed) else {
+                throw ControlHarnessCoreError.invalidArgument("Unsupported diagnostics.mode value: \(rawValue)")
+            }
+            return value.rawValue
+
+        case "diagnostics.total_budget_mb", "diagnostics.runtime_budget_mb", "diagnostics.audit_budget_mb",
+            "diagnostics.events_budget_mb", "diagnostics.retention_days", "diagnostics.record_max_kb",
+            "diagnostics.repeat_window_seconds", "diagnostics.deep_default_ttl_seconds":
+            guard let value = Int(trimmed), value > 0 else {
+                throw ControlHarnessCoreError.invalidArgument("\(key) must be a positive integer")
+            }
+            return String(value)
+
         default:
             throw ControlHarnessCoreError.invalidArgument("Unsupported settings key: \(key)")
         }
@@ -6163,6 +7826,19 @@ final class ControlHarnessCore {
             defaultLeaseDurationSeconds: Double(requiredSettingValue("runtime.default_lease_duration_seconds", from: values)) ?? AgentRuntimeSettings().defaultLeaseDurationSeconds,
             staleTaskPolicy: AgentRuntimeStaleTaskPolicy(rawValue: requiredSettingValue("runtime.stale_task_policy", from: values)) ?? .requeueClaimedWork
         ))
+
+        let diagnosticsSettings = GhoDexDiagnosticsSettings(
+            mode: GhoDexDiagnosticsMode(rawValue: requiredSettingValue("diagnostics.mode", from: values)) ?? .core,
+            totalBudgetMB: Int(requiredSettingValue("diagnostics.total_budget_mb", from: values)) ?? GhoDexDiagnosticsSettings.defaultTotalBudgetMB,
+            runtimeBudgetMB: Int(requiredSettingValue("diagnostics.runtime_budget_mb", from: values)) ?? GhoDexDiagnosticsSettings.defaultRuntimeBudgetMB,
+            auditBudgetMB: Int(requiredSettingValue("diagnostics.audit_budget_mb", from: values)) ?? GhoDexDiagnosticsSettings.defaultAuditBudgetMB,
+            eventsBudgetMB: Int(requiredSettingValue("diagnostics.events_budget_mb", from: values)) ?? GhoDexDiagnosticsSettings.defaultEventsBudgetMB,
+            retentionDays: Int(requiredSettingValue("diagnostics.retention_days", from: values)) ?? GhoDexDiagnosticsSettings.defaultRetentionDays,
+            recordMaxKB: Int(requiredSettingValue("diagnostics.record_max_kb", from: values)) ?? GhoDexDiagnosticsSettings.defaultRecordMaxKB,
+            repeatWindowSeconds: Int(requiredSettingValue("diagnostics.repeat_window_seconds", from: values)) ?? GhoDexDiagnosticsSettings.defaultRepeatWindowSeconds,
+            deepDefaultTTLSeconds: Int(requiredSettingValue("diagnostics.deep_default_ttl_seconds", from: values)) ?? GhoDexDiagnosticsSettings.defaultDeepTTLSeconds
+        )
+        try applyDiagnosticsSettings(diagnosticsSettings)
     }
 
     private func requiredSettingValue(_ key: String, from values: [String: String]) -> String {
@@ -6180,23 +7856,60 @@ final class ControlHarnessCore {
         Array(Set(previous.keys).union(next.keys)).sorted().filter { previous[$0] != next[$0] }
     }
 
-    private func diagnosticsLogURL(source: String) -> URL? {
-        let bundleID = Bundle.main.bundleIdentifier ?? "com.leongong.ghodex"
-        let baseDirectory = ControlHarnessAuditLogger.baseDirectory(bundleID: bundleID)
-        switch source {
-        case "audit":
-            return baseDirectory.appendingPathComponent("control-harness-audit.jsonl", isDirectory: false)
-        case "events":
-            return baseDirectory.appendingPathComponent("control-harness-events.jsonl", isDirectory: false)
-        case "runtime":
-            return baseDirectory.appendingPathComponent("runtime-memory-diagnostics.jsonl", isDirectory: false)
-        default:
-            return nil
-        }
+    private func applyDiagnosticsSettings(_ settings: GhoDexDiagnosticsSettings) throws {
+        let sanitized = settings.sanitized()
+        try sanitized.save()
+        RuntimeDiagnosticsLogger.applySettings(sanitized)
+        auditLogger.applyDiagnosticsSettings(sanitized)
+        eventHub.applyDiagnosticsSettings(sanitized)
     }
 
-    private func tailLogLines(at url: URL, source: String, limit: Int) throws -> [ControlDiagnosticsLogLine] {
-        let lines = try readUTF8Lines(at: url)
+    private func diagnosticsSettingsPayload(_ settings: GhoDexDiagnosticsSettings) -> ControlDiagnosticsSettingsPayload {
+        .init(
+            mode: settings.mode.rawValue,
+            totalBudgetMB: settings.totalBudgetMB,
+            runtimeBudgetMB: settings.runtimeBudgetMB,
+            auditBudgetMB: settings.auditBudgetMB,
+            eventsBudgetMB: settings.eventsBudgetMB,
+            retentionDays: settings.retentionDays,
+            recordMaxKB: settings.recordMaxKB,
+            repeatWindowSeconds: settings.repeatWindowSeconds,
+            deepDefaultTTLSeconds: settings.deepDefaultTTLSeconds
+        )
+    }
+
+    private func diagnosticsSourceStatus(source: String, settings: GhoDexDiagnosticsSettings) -> ControlDiagnosticsSourceStatus {
+        let urls = diagnosticsLogURLs(source: source)
+        let primaryBytes = urls.last.map { GhoDexDiagnosticsStorage.fileSize(at: $0) } ?? 0
+        let rotatedBytes = urls.dropLast().reduce(Int64(0)) { partialResult, url in
+            partialResult + GhoDexDiagnosticsStorage.fileSize(at: url)
+        }
+        let budgetBytes: Int64
+        switch source {
+        case "runtime":
+            budgetBytes = settings.runtimeBudgetBytes
+        case "audit":
+            budgetBytes = settings.auditBudgetBytes
+        case "events":
+            budgetBytes = settings.eventsBudgetBytes
+        default:
+            budgetBytes = 0
+        }
+        return .init(
+            source: source,
+            primaryBytes: primaryBytes,
+            rotatedBytes: rotatedBytes,
+            totalBytes: primaryBytes + rotatedBytes,
+            budgetBytes: budgetBytes
+        )
+    }
+
+    private func diagnosticsLogURLs(source: String) -> [URL] {
+        GhoDexDiagnosticsStorage.sourceFileURLs(source: source, bundleID: diagnosticsBundleID)
+    }
+
+    private func tailLogLines(at urls: [URL], source: String, limit: Int) throws -> [ControlDiagnosticsLogLine] {
+        let lines = try readUTF8Lines(at: urls)
         let slice = Array(lines.suffix(limit))
         let startIndex = max(lines.count - slice.count, 0)
         return slice.enumerated().map { offset, rawLine in
@@ -6204,16 +7917,15 @@ final class ControlHarnessCore {
         }
     }
 
-    private func readAuditRecords(at url: URL) throws -> [ControlAuditRecord] {
-        try readUTF8Lines(at: url).compactMap { line in
+    private func readAuditRecords(at urls: [URL]) throws -> [ControlAuditRecord] {
+        try readUTF8Lines(at: urls).compactMap { line in
             guard let data = line.data(using: .utf8) else { return nil }
             return try? JSONDecoder().decode(ControlAuditRecord.self, from: data)
         }
     }
 
     private func recentAuditErrors(limit: Int) -> [ControlDiagnosticsRecentError] {
-        guard let url = diagnosticsLogURL(source: "audit"),
-              let records = try? readAuditRecords(at: url) else {
+        guard let records = try? readAuditRecords(at: diagnosticsLogURLs(source: "audit")) else {
             return []
         }
         return records
@@ -6228,6 +7940,124 @@ final class ControlHarnessCore {
                     command: $0.command
                 )
             }
+    }
+
+    private func readQueryRecords(source: String) throws -> [ControlDiagnosticsQueryRecord] {
+        try readUTF8Lines(at: diagnosticsLogURLs(source: source)).compactMap { line in
+            guard let data = line.data(using: .utf8) else { return nil }
+
+            switch source {
+            case "runtime":
+                if let record = try? JSONDecoder().decode(RuntimeDiagnosticsRecord.self, from: data) {
+                    return .init(
+                        source: source,
+                        timestamp: record.timestamp,
+                        severity: record.severity,
+                        component: record.component,
+                        event: record.event,
+                        status: nil,
+                        errorCode: record.details["error_code"],
+                        raw: line
+                    )
+                }
+            case "audit":
+                if let record = try? JSONDecoder().decode(ControlAuditRecord.self, from: data) {
+                    return .init(
+                        source: source,
+                        timestamp: record.timestamp,
+                        severity: record.status == "error" ? "error" : "info",
+                        component: "control_harness.audit",
+                        event: record.command,
+                        status: record.status,
+                        errorCode: record.errorCode,
+                        raw: line
+                    )
+                }
+            default:
+                break
+            }
+
+            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return .init(
+                    source: source,
+                    timestamp: nil,
+                    severity: nil,
+                    component: nil,
+                    event: nil,
+                    status: nil,
+                    errorCode: nil,
+                    raw: line
+                )
+            }
+
+            return .init(
+                source: source,
+                timestamp: object["timestamp"] as? String,
+                severity: object["severity"] as? String,
+                component: object["component"] as? String,
+                event: object["event"] as? String,
+                status: object["status"] as? String,
+                errorCode: object["error_code"] as? String,
+                raw: line
+            )
+        }
+    }
+
+    private func loadLatestCrashSummary() -> RuntimeCrashSummary? {
+        let url = GhoDexDiagnosticsPaths.resolve(bundleID: diagnosticsBundleID).crashSummaryFileURL
+        guard let data = try? Data(contentsOf: url) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(RuntimeCrashSummary.self, from: data)
+    }
+
+    private func saveDiagnosticsModeOverride(mode: GhoDexDiagnosticsMode?, ttlSeconds: Int?) {
+        var state = GhoDexDiagnosticsStorage.loadModeOverrideState(bundleID: diagnosticsBundleID)
+        state.overrideMode = mode
+        if let mode, mode == .deep {
+            let effectiveTTL = max(ttlSeconds ?? GhoDexDiagnosticsSettings.load().sanitized().deepDefaultTTLSeconds, 60)
+            state.overrideExpiresAt = Self.iso8601(Date().addingTimeInterval(TimeInterval(effectiveTTL)))
+        } else {
+            state.overrideExpiresAt = nil
+        }
+        GhoDexDiagnosticsStorage.saveModeOverrideState(state, bundleID: diagnosticsBundleID)
+
+        if diagnosticsBundleID == (Bundle.main.bundleIdentifier ?? "com.leongong.ghodex") {
+            RuntimeDiagnosticsLogger.applyModeOverride(mode, ttlSeconds: ttlSeconds)
+        }
+    }
+
+    private func updateDiagnosticsCleanupTimestamp() {
+        var state = GhoDexDiagnosticsStorage.loadModeOverrideState(bundleID: diagnosticsBundleID)
+        state.lastCleanupAt = Self.iso8601(Date())
+        GhoDexDiagnosticsStorage.saveModeOverrideState(state, bundleID: diagnosticsBundleID)
+    }
+
+    private func requiredPayloadValue(
+        _ key: String,
+        payload: [String: String],
+        command: String
+    ) throws -> String {
+        guard let value = normalizedOptionalString(payload[key]) else {
+            throw ControlHarnessCoreError.invalidArgument("\(command) payload.\(key) is required")
+        }
+        return value
+    }
+
+    private func requiredPayloadInt(
+        _ key: String,
+        payload: [String: String],
+        command: String
+    ) throws -> Int {
+        let rawValue = try requiredPayloadValue(key, payload: payload, command: command)
+        guard let value = Int(rawValue), value > 0 else {
+            throw ControlHarnessCoreError.invalidArgument("\(command) payload.\(key) must be > 0")
+        }
+        return value
+    }
+
+    private func readUTF8Lines(at urls: [URL]) throws -> [String] {
+        try urls.flatMap { try readUTF8Lines(at: $0) }
     }
 
     private func readUTF8Lines(at url: URL) throws -> [String] {
