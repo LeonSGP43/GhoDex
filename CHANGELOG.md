@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(control-harness): harden diagnostics breadcrumbs and bounded event streams
+
+- What changed: Added lightweight runtime breadcrumbs before high-risk UI control mutations, made buffered event subscriptions enforce a global cap plus idle TTL pruning, and exposed those bounds through the diagnostics status payload used by the harness test surface.
+- Why: The diagnostics governance work needed one more layer of pre-mutation visibility for risky UI commands, and the buffered event stream registry still needed explicit limits so long-lived or abandoned subscriptions could not grow unchecked.
+- Impact: High-risk UI mutations now leave queryable runtime breadcrumbs before dispatch, and live buffered event subscriptions stay bounded by count and idle lifetime instead of accumulating indefinitely.
+- Verification: `xcodebuild test -project '/Users/leongong/Desktop/LeonProjects/GhoDex/macos/GhoDex.xcodeproj' -scheme GhoDex -configuration Debug -destination 'platform=macOS,arch=arm64' -only-testing:GhosttyTests/ControlHarnessTests`
+- Files: `macos/Sources/Features/Control Harness/ControlHarnessCore.swift`, `macos/Sources/Features/Control Harness/ControlHarnessSupport.swift`, `macos/Tests/ControlHarness/ControlHarnessTests.swift`
+- Decision trail: Keep the breadcrumb signal lightweight and local, and enforce registry safety with hard bounds plus passive idle cleanup instead of relying on clients to always unsubscribe correctly.
+
 ### test(diagnostics): wire governance gate into canonical protocol verification
 
 - What changed: Updated `scripts/control_harness_protocol_surface_live_acceptance.py` so the canonical non-browser live acceptance now also executes `scripts/control_harness_diagnostics_live_acceptance.py` as a related gate and records its artifact/status in the parent output. Also refreshed `docs/control-harness-protocol.md` so the published diagnostics command list and verification entrypoints match the current governance surface.
@@ -12,6 +21,24 @@ All notable changes to this project are documented in this file.
 - Verification: `python3 -m py_compile scripts/control_harness_protocol_surface_live_acceptance.py scripts/control_harness_diagnostics_live_acceptance.py`; `python3 scripts/control_harness_protocol_surface_live_acceptance.py --app macos/build/ReleaseLocal/GhoDex.app --runtime-root macos/build/cef-runtime/current --output /tmp/ghx-control-harness-protocol-with-diagnostics.json`
 - Files: `scripts/control_harness_protocol_surface_live_acceptance.py`, `docs/control-harness-protocol.md`, `CHANGELOG.md`
 - Decision trail: Keep diagnostics governance as a dedicated child harness for isolation, but make the canonical protocol verification lane call it explicitly so regression evidence stays centralized instead of relying on chat history or manual operator memory.
+
+### fix(app-icon): keep preset writes out of repo build bundles
+
+- What changed: Restricted app-icon preset persistence so repo-local build products and `macos/build/*` app bundles are treated like non-installed bundles, and simplified preset writes to the standard defaults store instead of trying to fan out to extra defaults targets.
+- Why: Built app bundles inside the repo should not be mutated like installed apps, otherwise preset selection can rewrite development artifacts and create confusing local state drift.
+- Impact: App icon preset changes stay scoped to the installed app path and no longer try to persist into repo build outputs.
+- Verification: `xcodebuild test -project '/Users/leongong/Desktop/LeonProjects/GhoDex/macos/GhoDex.xcodeproj' -scheme GhoDex -configuration Debug -destination 'platform=macOS,arch=arm64' -only-testing:GhosttyTests/DockTilePluginTests`
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Features/Custom App Icon/AppIcon.swift`, `macos/Tests/DockTilePluginTests.swift`
+- Decision trail: Treat only installed app bundles as writable preset targets and keep repo build products read-only to avoid corrupting local development artifacts.
+
+### fix(signing): preserve executable entitlements during helper staging
+
+- What changed: Updated `scripts/stage_cef_helper_app.sh` so it can fall back to repo entitlements when extraction is unavailable, signs the main app executable through a temporary copy path, and verifies the executable separately before the final bundle verification pass.
+- Why: The helper staging path still had one gap where post-build signing could strip or destabilize the executable signature even when the bundle-level signing inputs were otherwise correct.
+- Impact: Post-build helper staging now preserves the expected executable entitlements more reliably, which keeps release bundle signing closer to Xcode’s original output.
+- Verification: `bash -n scripts/stage_cef_helper_app.sh`
+- Files: `scripts/stage_cef_helper_app.sh`, `CHANGELOG.md`
+- Decision trail: Preserve the existing staging workflow, but make executable signing more conservative so helper repackaging cannot accidentally degrade the release signature.
 
 ### feat(diagnostics): persist crash markers and correlate macOS crash reports
 
