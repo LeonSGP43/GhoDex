@@ -814,6 +814,10 @@ extension Ghostty {
             bool(for: "ghodex-mouse-back-forward-switches-tabs", default: false)
         }
 
+        var ghodexSplitPickerEnabled: Bool {
+            bool(for: "ghodex-split-picker-enabled", default: false)
+        }
+
         var ghodexBrowserProfilePath: String? {
             optionalString(for: "ghodex-browser-profile-path")
         }

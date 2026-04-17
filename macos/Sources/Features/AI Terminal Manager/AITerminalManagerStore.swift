@@ -1493,46 +1493,66 @@ final class AITerminalManagerStore: ObservableObject {
         rebuildSessions()
     }
 
-    func openLocalShell() {
-        launch(.localShell())
+    func openLocalShell(directoryOverride: String? = nil) {
+        launch(.localShell(directoryOverride: directoryOverride))
     }
 
     func open(host: AITerminalHost) {
         open(host: host, directoryOverride: nil)
     }
 
-    func openInNewTab(host: AITerminalHost) {
+    func openInNewTab(host: AITerminalHost, directoryOverride: String? = nil) {
         if host.isLocal {
-            openLocalShell(launchTarget: .tab)
+            openLocalShell(launchTarget: .tab, directoryOverride: directoryOverride)
             return
         }
 
-        open(host: host, directoryOverride: nil, launchTarget: .tab)
+        open(host: host, directoryOverride: directoryOverride, launchTarget: .tab)
     }
 
-    func openInPaneTab(host: AITerminalHost, controller: TerminalController, sourceSurface: Ghostty.SurfaceView) {
+    func openInPaneTab(
+        host: AITerminalHost,
+        controller: TerminalController,
+        sourceSurface: Ghostty.SurfaceView,
+        directoryOverride: String? = nil
+    ) {
         if host.isLocal {
-            _ = launch(.localShell(), inPaneOf: controller, sourceSurface: sourceSurface)
+            _ = launch(
+                .localShell(directoryOverride: directoryOverride),
+                inPaneOf: controller,
+                sourceSurface: sourceSurface
+            )
             return
         }
 
-        open(host: host, directoryOverride: nil, inPaneOf: controller, sourceSurface: sourceSurface)
+        open(
+            host: host,
+            directoryOverride: directoryOverride,
+            inPaneOf: controller,
+            sourceSurface: sourceSurface
+        )
     }
 
     func openInSplit(
         host: AITerminalHost,
         controller: TerminalController,
         sourceSurface: Ghostty.SurfaceView,
-        direction: SplitTree<TerminalPane>.NewDirection
+        direction: SplitTree<TerminalPane>.NewDirection,
+        directoryOverride: String? = nil
     ) {
         if host.isLocal {
-            _ = launch(.localShell(), inSplitOf: controller, sourceSurface: sourceSurface, direction: direction)
+            _ = launch(
+                .localShell(directoryOverride: directoryOverride),
+                inSplitOf: controller,
+                sourceSurface: sourceSurface,
+                direction: direction
+            )
             return
         }
 
         open(
             host: host,
-            directoryOverride: nil,
+            directoryOverride: directoryOverride,
             inSplitOf: controller,
             sourceSurface: sourceSurface,
             direction: direction
@@ -1556,8 +1576,25 @@ final class AITerminalManagerStore: ObservableObject {
         open(host: host, directoryOverride: directoryOverride, launchTarget: launchTarget)
     }
 
-    func openLocalShell(launchTarget: AITerminalLaunchTarget) {
-        _ = launch(.localShell(), target: launchTarget)
+    func openLocalShell(
+        launchTarget: AITerminalLaunchTarget,
+        directoryOverride: String? = nil
+    ) {
+        _ = launch(.localShell(directoryOverride: directoryOverride), target: launchTarget)
+    }
+
+    func openLocalShellInSplit(
+        controller: TerminalController,
+        sourceSurface: Ghostty.SurfaceView,
+        direction: SplitTree<TerminalPane>.NewDirection,
+        directoryOverride: String? = nil
+    ) {
+        _ = launch(
+            .localShell(directoryOverride: directoryOverride),
+            inSplitOf: controller,
+            sourceSurface: sourceSurface,
+            direction: direction
+        )
     }
 
     private func open(
@@ -1567,7 +1604,7 @@ final class AITerminalManagerStore: ObservableObject {
     ) {
         switch host.transport {
         case .local:
-            openLocalShell(launchTarget: launchTarget)
+            openLocalShell(launchTarget: launchTarget, directoryOverride: directoryOverride)
             return
 
         case .localmcd:
@@ -1609,7 +1646,11 @@ final class AITerminalManagerStore: ObservableObject {
     ) {
         switch host.transport {
         case .local:
-            _ = launch(.localShell(), inPaneOf: controller, sourceSurface: sourceSurface)
+            _ = launch(
+                .localShell(directoryOverride: directoryOverride),
+                inPaneOf: controller,
+                sourceSurface: sourceSurface
+            )
             return
 
         case .localmcd:
@@ -1652,7 +1693,12 @@ final class AITerminalManagerStore: ObservableObject {
     ) {
         switch host.transport {
         case .local:
-            _ = launch(.localShell(), inSplitOf: controller, sourceSurface: sourceSurface, direction: direction)
+            _ = launch(
+                .localShell(directoryOverride: directoryOverride),
+                inSplitOf: controller,
+                sourceSurface: sourceSurface,
+                direction: direction
+            )
             return
 
         case .localmcd:

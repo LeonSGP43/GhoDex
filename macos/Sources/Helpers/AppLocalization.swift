@@ -236,6 +236,7 @@ enum AppLocalization {
         "ssh.connections.new_tab_picker.empty": "No saved SSH connections are ready yet.",
         "ssh.connections.new_tab_picker.search": "Search local and SSH connections",
         "ssh.connections.new_tab_picker.quick_connect": "⌘1-9 Quick Connect",
+        "ssh.connections.new_tab_picker.escape_local_shell": "Open local shell here",
         "ssh.connections.tab.connections": "Connection Center",
         "ssh.connections.tab.todo": "Todo",
         "ssh.connections.tab.learning": "Learning Settings",
@@ -589,6 +590,13 @@ enum AppLocalization {
         "settings.mouse_navigation.saved": "Mouse navigation setting saved to config.",
         "settings.mouse_navigation.state.enabled": "Enabled",
         "settings.mouse_navigation.state.disabled": "Disabled",
+        "settings.split_picker.title": "Split Picker",
+        "settings.split_picker.toggle": "Show the picker before creating a split",
+        "settings.split_picker.description": "Choose whether split shortcuts open the picker first or create a local terminal split immediately.",
+        "settings.split_picker.footnote": "When this is off, split shortcuts create a new local terminal directly in the current directory. Press Esc in the picker to do the same.",
+        "settings.split_picker.saved": "Split picker setting saved to config.",
+        "settings.split_picker.state.enabled": "Picker First",
+        "settings.split_picker.state.disabled": "Direct Split",
         "settings.permissions.title": "macOS Privacy Settings",
         "settings.permissions.description": "Use these shortcuts when GhoDex needs Files and Folders or Full Disk Access. They open the two privacy pages most commonly needed during local development and automation setup.",
         "settings.permissions.signing": "Signing Status",
@@ -871,6 +879,7 @@ enum AppLocalization {
         "ssh.connections.new_tab_picker.empty": "当前还没有可直接连接的已保存 SSH 连接。",
         "ssh.connections.new_tab_picker.search": "搜索本地和 SSH 连接",
         "ssh.connections.new_tab_picker.quick_connect": "⌘1-9 快速连接",
+        "ssh.connections.new_tab_picker.escape_local_shell": "在此目录打开本地终端",
         "ssh.connections.tab.connections": "连接中心",
         "ssh.connections.tab.todo": "待办",
         "ssh.connections.tab.learning": "学习设置",
@@ -1223,6 +1232,13 @@ enum AppLocalization {
         "settings.mouse_navigation.saved": "鼠标导航设置已写入配置文件。",
         "settings.mouse_navigation.state.enabled": "已启用",
         "settings.mouse_navigation.state.disabled": "已关闭",
+        "settings.split_picker.title": "分屏选择器",
+        "settings.split_picker.toggle": "创建分屏前先显示选择器",
+        "settings.split_picker.description": "决定分屏快捷键是先打开选择器，还是直接创建本地终端分屏。",
+        "settings.split_picker.footnote": "关闭后，分屏快捷键会直接在当前目录创建新的本地终端。若已打开选择器，按 Esc 也会执行同样动作。",
+        "settings.split_picker.saved": "分屏选择器设置已写入配置文件。",
+        "settings.split_picker.state.enabled": "先选目标",
+        "settings.split_picker.state.disabled": "直接分屏",
         "settings.permissions.title": "macOS 隐私设置",
         "settings.permissions.description": "当 GhoDex 需要“文件与文件夹”或“完全磁盘访问权限”时，可用这里的快捷入口直接跳转。这两个入口覆盖了本地开发和自动化场景里最常用的权限页面。",
         "settings.permissions.signing": "签名状态",
@@ -1913,6 +1929,13 @@ enum L10n {
         nonisolated static var mouseNavigationSaved: String { AppLocalization.localizedString("settings.mouse_navigation.saved") }
         nonisolated static var mouseNavigationEnabledState: String { AppLocalization.localizedString("settings.mouse_navigation.state.enabled") }
         nonisolated static var mouseNavigationDisabledState: String { AppLocalization.localizedString("settings.mouse_navigation.state.disabled") }
+        nonisolated static var splitPickerTitle: String { AppLocalization.localizedString("settings.split_picker.title") }
+        nonisolated static var splitPickerToggle: String { AppLocalization.localizedString("settings.split_picker.toggle") }
+        nonisolated static var splitPickerDescription: String { AppLocalization.localizedString("settings.split_picker.description") }
+        nonisolated static var splitPickerFootnote: String { AppLocalization.localizedString("settings.split_picker.footnote") }
+        nonisolated static var splitPickerSaved: String { AppLocalization.localizedString("settings.split_picker.saved") }
+        nonisolated static var splitPickerEnabledState: String { AppLocalization.localizedString("settings.split_picker.state.enabled") }
+        nonisolated static var splitPickerDisabledState: String { AppLocalization.localizedString("settings.split_picker.state.disabled") }
         nonisolated static var permissionsTitle: String { AppLocalization.localizedString("settings.permissions.title") }
         nonisolated static var permissionsDescription: String { AppLocalization.localizedString("settings.permissions.description") }
         nonisolated static var permissionsSigningTitle: String { AppLocalization.localizedString("settings.permissions.signing") }
@@ -2127,6 +2150,7 @@ enum L10n {
         nonisolated static var newTabPickerEmpty: String { AppLocalization.localizedString("ssh.connections.new_tab_picker.empty") }
         nonisolated static var newTabPickerSearch: String { AppLocalization.localizedString("ssh.connections.new_tab_picker.search") }
         nonisolated static var newTabPickerQuickConnect: String { AppLocalization.localizedString("ssh.connections.new_tab_picker.quick_connect") }
+        nonisolated static var newTabPickerEscapeLocalShell: String { AppLocalization.localizedString("ssh.connections.new_tab_picker.escape_local_shell") }
         nonisolated static var tabConnections: String { AppLocalization.localizedString("ssh.connections.tab.connections") }
         nonisolated static var tabTodo: String { AppLocalization.localizedString("ssh.connections.tab.todo") }
         nonisolated static var tabLearning: String { AppLocalization.localizedString("ssh.connections.tab.learning") }

@@ -1237,8 +1237,12 @@ struct AITerminalLaunchPlan {
     var surfaceConfiguration: Ghostty.SurfaceConfiguration
     var registration: AITerminalLaunchRegistration
 
-    static func localShell() -> AITerminalLaunchPlan {
+    static func localShell(directoryOverride: String? = nil) -> AITerminalLaunchPlan {
         var config = Ghostty.SurfaceConfiguration()
+        let normalizedDirectory = directoryOverride?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let normalizedDirectory, normalizedDirectory.isEmpty == false {
+            config.workingDirectory = normalizedDirectory
+        }
         config.environmentVariables["GHOSTTY_AI_MANAGER"] = "1"
         config.environmentVariables["GHOSTTY_AI_SESSION_KIND"] = "local"
         return .init(

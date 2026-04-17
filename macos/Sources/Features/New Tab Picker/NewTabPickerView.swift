@@ -10,6 +10,8 @@ struct NewTabPickerView: View {
     let onClose: () -> Void
     let includeBrowserEntry: Bool
     let onCancel: (() -> Void)?
+    let onEscape: (() -> Void)?
+    let escapeHint: String?
     let onOpenHost: ((AITerminalHost) -> Void)?
     let onOpenBrowser: (() -> Void)?
     let onOpenWorkspaceMap: (() -> Void)?
@@ -223,7 +225,7 @@ struct NewTabPickerView: View {
 
     private var footer: some View {
         HStack {
-            Text("↩︎ \(L10n.AITerminalManager.connect) · Esc \(L10n.Common.cancel) · \(L10n.SSHConnections.newTabPickerQuickConnect)")
+            Text("↩︎ \(L10n.AITerminalManager.connect) · Esc \(escapeFooterLabel) · \(L10n.SSHConnections.newTabPickerQuickConnect)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -232,7 +234,6 @@ struct NewTabPickerView: View {
             Button(L10n.Common.cancel) {
                 cancel()
             }
-            .keyboardShortcut(.cancelAction)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -253,6 +254,10 @@ struct NewTabPickerView: View {
                 Button { submitSelection() } label: { Color.clear }
                     .buttonStyle(.plain)
                     .keyboardShortcut(.defaultAction)
+
+                Button { handleEscape() } label: { Color.clear }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.cancelAction)
             }
             .frame(width: 0, height: 0)
             .accessibilityHidden(true)
@@ -331,6 +336,24 @@ struct NewTabPickerView: View {
     private func cancel() {
         onCancel?()
         onClose()
+    }
+
+    private func handleEscape() {
+        if let onEscape {
+            onEscape()
+            onClose()
+            return
+        }
+
+        cancel()
+    }
+
+    private var escapeFooterLabel: String {
+        if let escapeHint, escapeHint.isEmpty == false {
+            return escapeHint
+        }
+
+        return L10n.Common.cancel
     }
 
     private func open(_ entry: NewTabPickerEntry) {

@@ -578,6 +578,7 @@ class AppDelegate: NSObject,
     @Published private(set) var appIcon: NSImage?
     @Published private(set) var appIconSettings = AppIconSettings()
     @Published private(set) var mouseBackForwardSwitchesTabs = false
+    @Published private(set) var splitPickerEnabled = false
     @Published private(set) var browserProfilePathOverride: String?
     @Published private(set) var browserRuntimePathOverride: String?
 
@@ -2251,6 +2252,7 @@ class AppDelegate: NSObject,
         self.derivedConfig = DerivedConfig(config)
         appIconSettings = AppIconSettings(config: config)
         mouseBackForwardSwitchesTabs = config.ghodexMouseBackForwardSwitchesTabs
+        splitPickerEnabled = config.ghodexSplitPickerEnabled
         syncBrowserProfileConfig(config)
         syncBrowserRuntimeConfig(config)
         syncBrowserRemoteDebugPortConfig(config)
@@ -2494,8 +2496,31 @@ class AppDelegate: NSObject,
 
     @MainActor
     func saveMouseBackForwardTabSwitchingSetting(_ enabled: Bool) throws {
+        try saveInputInteractionSettings(
+            mouseBackForwardSwitchesTabs: enabled,
+            splitPickerEnabled: splitPickerEnabled
+        )
+    }
+
+    @MainActor
+    func saveSplitPickerSetting(_ enabled: Bool) throws {
+        try saveInputInteractionSettings(
+            mouseBackForwardSwitchesTabs: mouseBackForwardSwitchesTabs,
+            splitPickerEnabled: enabled
+        )
+    }
+
+    @MainActor
+    private func saveInputInteractionSettings(
+        mouseBackForwardSwitchesTabs: Bool,
+        splitPickerEnabled: Bool
+    ) throws {
         let configURL = Self.browserSettingsConfigURL()
-        try Self.saveMouseNavigationSettingsConfig(enabled: enabled, to: configURL)
+        try Self.saveInputInteractionSettingsConfig(
+            mouseBackForwardSwitchesTabs: mouseBackForwardSwitchesTabs,
+            splitPickerEnabled: splitPickerEnabled,
+            to: configURL
+        )
         ghostty.reloadConfig()
     }
 
@@ -3073,6 +3098,7 @@ class AppDelegate: NSObject,
 
     @MainActor
     func showNewTabPicker(from window: NSWindow?) {
+        let directoryOverride = activeTerminalDirectory(preferred: window)
         let browserAction = { [weak self] in
             guard let self else { return }
             let parentWindow = self.selectedTopLevelWindow(for: window)
@@ -3085,12 +3111,29 @@ class AppDelegate: NSObject,
                 ?? self.selectedTopLevelWindow(for: NSApp.keyWindow)
             _ = WorkspaceMapController.newTab(self.ghostty, from: parentWindow)
         }
+        let openLocalShell = { [weak self] in
+            guard let self else { return }
+            self.aiTerminalManagerStore.openLocalShell(
+                launchTarget: .tab,
+                directoryOverride: directoryOverride
+            )
+        }
+        let openHost = { [weak self] (host: AITerminalHost) in
+            guard let self else { return }
+            self.aiTerminalManagerStore.openInNewTab(
+                host: host,
+                directoryOverride: directoryOverride
+            )
+        }
 
         if let window {
             newTabPickerController.show(
                 relativeTo: window,
                 mode: .topLevel,
                 includeBrowserEntry: true,
+                onEscape: openLocalShell,
+                escapeHint: L10n.SSHConnections.newTabPickerEscapeLocalShell,
+                onOpenHost: openHost,
                 onOpenBrowser: browserAction,
                 onOpenWorkspaceMap: workspaceMapAction
             )
@@ -3101,6 +3144,9 @@ class AppDelegate: NSObject,
             relativeTo: nil,
             mode: .topLevel,
             includeBrowserEntry: true,
+            onEscape: openLocalShell,
+            escapeHint: L10n.SSHConnections.newTabPickerEscapeLocalShell,
+            onOpenHost: openHost,
             onOpenBrowser: browserAction,
             onOpenWorkspaceMap: workspaceMapAction
         )
@@ -3147,6 +3193,7 @@ class AppDelegate: NSObject,
                 return
             }
 
+            let directoryOverride = normalizedTerminalDirectory(sourceSurface.pwd)
             let defaultSplit: () -> Void = { [weak self, weak terminalController, weak sourceSurface] in
                 guard let self, let terminalController else { return }
                 let splitSource = self.activePaneSurface(in: terminalController) ?? sourceSurface
@@ -3154,10 +3201,17 @@ class AppDelegate: NSObject,
                     terminalAction(terminalController, self)
                     return
                 }
-                _ = terminalController.newSplit(
-                    at: splitSource,
-                    direction: terminalSplitDirection
+                self.aiTerminalManagerStore.openLocalShellInSplit(
+                    controller: terminalController,
+                    sourceSurface: splitSource,
+                    direction: terminalSplitDirection,
+                    directoryOverride: directoryOverride
                 )
+            }
+
+            guard splitPickerEnabled else {
+                defaultSplit()
+                return
             }
 
             showSplitPicker(
@@ -3166,6 +3220,8 @@ class AppDelegate: NSObject,
                 subtitle: AppLocalization.localizedText("Choose a target for the new split pane."),
                 includeBrowserEntry: false,
                 onCancel: defaultSplit,
+                onEscape: defaultSplit,
+                escapeHint: L10n.SSHConnections.newTabPickerEscapeLocalShell,
                 onOpenHost: { [weak self, weak terminalController, weak sourceSurface] host in
                     guard let self, let terminalController else { return }
                     let splitSource = self.activePaneSurface(in: terminalController) ?? sourceSurface
@@ -3174,7 +3230,8 @@ class AppDelegate: NSObject,
                         host: host,
                         controller: terminalController,
                         sourceSurface: splitSource,
-                        direction: terminalSplitDirection
+                        direction: terminalSplitDirection,
+                        directoryOverride: directoryOverride
                     )
                 },
                 onOpenBrowser: nil
@@ -3194,6 +3251,8 @@ class AppDelegate: NSObject,
         subtitle: String,
         includeBrowserEntry: Bool,
         onCancel: (() -> Void)?,
+        onEscape: (() -> Void)?,
+        escapeHint: String? = nil,
         onOpenHost: ((AITerminalHost) -> Void)?,
         onOpenBrowser: (() -> Void)?
     ) {
@@ -3204,6 +3263,8 @@ class AppDelegate: NSObject,
             subtitle: subtitle,
             includeBrowserEntry: includeBrowserEntry,
             onCancel: onCancel,
+            onEscape: onEscape,
+            escapeHint: escapeHint,
             onOpenHost: onOpenHost,
             onOpenBrowser: onOpenBrowser
         )
@@ -3330,6 +3391,21 @@ class AppDelegate: NSObject,
         in controller: TerminalController
     ) -> Ghostty.SurfaceView? {
         controller.effectiveFocusedSurface().flatMap { controller.pane(for: $0)?.activeSurface ?? $0 }
+    }
+
+    private func activeTerminalDirectory(preferred window: NSWindow?) -> String? {
+        guard let controller = activeTerminalController(preferred: window) else {
+            return nil
+        }
+        return normalizedTerminalDirectory(activePaneSurface(in: controller)?.pwd)
+    }
+
+    private func normalizedTerminalDirectory(_ path: String?) -> String? {
+        guard let trimmed = path?.trimmingCharacters(in: .whitespacesAndNewlines),
+              trimmed.isEmpty == false else {
+            return nil
+        }
+        return trimmed
     }
 
     @IBAction func closeAllWindows(_ sender: Any?) {
@@ -3574,6 +3650,7 @@ extension AppDelegate {
     private static let browserRuntimeConfigKey = "ghodex-browser-runtime-path"
     private static let browserRemoteDebugPortConfigKey = "ghodex-browser-remote-debug-port"
     private static let mouseBackForwardSwitchesTabsConfigKey = "ghodex-mouse-back-forward-switches-tabs"
+    private static let splitPickerEnabledConfigKey = "ghodex-split-picker-enabled"
     private static let macosIconConfigKey = "macos-icon"
     private static let macosCustomIconConfigKey = "macos-custom-icon"
     private static let macosIconFrameConfigKey = "macos-icon-frame"
@@ -3815,7 +3892,11 @@ extension AppDelegate {
         try text.write(to: url, atomically: true, encoding: .utf8)
     }
 
-    fileprivate static func saveMouseNavigationSettingsConfig(enabled: Bool, to url: URL) throws {
+    fileprivate static func saveInputInteractionSettingsConfig(
+        mouseBackForwardSwitchesTabs: Bool,
+        splitPickerEnabled: Bool,
+        to url: URL
+    ) throws {
         let fileManager = FileManager.default
         try fileManager.createDirectory(
             at: url.deletingLastPathComponent(),
@@ -3829,8 +3910,11 @@ extension AppDelegate {
             existingText = ""
         }
 
-        let stripped = stripMouseNavigationSettingsConfig(from: existingText)
-        let block = mouseNavigationSettingsConfigBlock(enabled: enabled)
+        let stripped = stripInputInteractionSettingsConfig(from: existingText)
+        let block = inputInteractionSettingsConfigBlock(
+            mouseBackForwardSwitchesTabs: mouseBackForwardSwitchesTabs,
+            splitPickerEnabled: splitPickerEnabled
+        )
         let normalized = stripped.trimmingCharacters(in: .whitespacesAndNewlines)
         let text = normalized.isEmpty ? "\(block)\n" : "\(normalized)\n\n\(block)\n"
         try text.write(to: url, atomically: true, encoding: .utf8)
@@ -3866,10 +3950,14 @@ extension AppDelegate {
         ].joined(separator: "\n")
     }
 
-    private static func mouseNavigationSettingsConfigBlock(enabled: Bool) -> String {
+    private static func inputInteractionSettingsConfigBlock(
+        mouseBackForwardSwitchesTabs: Bool,
+        splitPickerEnabled: Bool
+    ) -> String {
         [
             mouseNavigationSettingsStartMarker,
-            "\(mouseBackForwardSwitchesTabsConfigKey) = \(enabled ? "true" : "false")",
+            "\(mouseBackForwardSwitchesTabsConfigKey) = \(mouseBackForwardSwitchesTabs ? "true" : "false")",
+            "\(splitPickerEnabledConfigKey) = \(splitPickerEnabled ? "true" : "false")",
             mouseNavigationSettingsEndMarker,
         ].joined(separator: "\n")
     }
@@ -3909,7 +3997,7 @@ extension AppDelegate {
         return result.joined(separator: "\n")
     }
 
-    private static func stripMouseNavigationSettingsConfig(from text: String) -> String {
+    private static func stripInputInteractionSettingsConfig(from text: String) -> String {
         let lines = text.components(separatedBy: .newlines)
         var result: [String] = []
         var insideManagedBlock = false
@@ -3932,7 +4020,9 @@ extension AppDelegate {
             }
 
             if trimmed.hasPrefix("\(mouseBackForwardSwitchesTabsConfigKey) =") ||
-                trimmed == mouseBackForwardSwitchesTabsConfigKey {
+                trimmed == mouseBackForwardSwitchesTabsConfigKey ||
+                trimmed.hasPrefix("\(splitPickerEnabledConfigKey) =") ||
+                trimmed == splitPickerEnabledConfigKey {
                 continue
             }
 

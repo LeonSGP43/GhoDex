@@ -8,6 +8,11 @@ struct SettingsView: View {
         case gateway
     }
 
+    private enum InputFeedbackScope {
+        case mouseNavigation
+        case splitPicker
+    }
+
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var appDelegate: AppDelegate
     private let visibleTabs: [SettingsTab]
@@ -23,9 +28,11 @@ struct SettingsView: View {
     @State private var gatewayShowQrOnLaunch = false
     @State private var gatewaySemanticProfile: ControlHarnessSemanticProfile = .defaultValue
     @State private var mouseBackForwardSwitchesTabs = false
+    @State private var splitPickerEnabled = false
     @State private var builtInIconSelection: Ghostty.MacOSIcon = .official
     @State private var inputFeedbackMessage: String?
     @State private var inputFeedbackIsError = false
+    @State private var inputFeedbackScope: InputFeedbackScope?
     @State private var permissionsFeedbackMessage: String?
     @State private var iconFeedbackMessage: String?
     @State private var iconFeedbackIsError = false
@@ -129,11 +136,17 @@ struct SettingsView: View {
         .onReceive(appDelegate.$mouseBackForwardSwitchesTabs) { _ in
             syncInputForm(clearFeedback: false)
         }
+        .onReceive(appDelegate.$splitPickerEnabled) { _ in
+            syncInputForm(clearFeedback: false)
+        }
         .onReceive(appDelegate.$appIconSettings) { _ in
             syncIconForm(clearFeedback: false)
         }
         .onChange(of: mouseBackForwardSwitchesTabs) { _ in
             saveMouseNavigationSettingIfNeeded()
+        }
+        .onChange(of: splitPickerEnabled) { _ in
+            saveSplitPickerSettingIfNeeded()
         }
         .onChange(of: builtInIconSelection) { _ in
             saveIconSettingsIfNeeded()
@@ -442,6 +455,13 @@ struct SettingsView: View {
                             label: L10n.Settings.mouseNavigationTitle,
                             systemImage: "computermouse"
                         )
+                        heroMetric(
+                            value: splitPickerEnabled
+                                ? L10n.Settings.splitPickerEnabledState
+                                : L10n.Settings.splitPickerDisabledState,
+                            label: L10n.Settings.splitPickerTitle,
+                            systemImage: "square.split.2x1"
+                        )
                     }
                 )
             )
@@ -477,7 +497,27 @@ struct SettingsView: View {
             ) {
                 Toggle(L10n.Settings.mouseNavigationSwitchTabs, isOn: $mouseBackForwardSwitchesTabs)
 
-                if let inputFeedbackMessage {
+                if let inputFeedbackMessage, inputFeedbackScope == .mouseNavigation {
+                    statusBanner(
+                        text: inputFeedbackMessage,
+                        tone: inputFeedbackIsError ? .danger : .success
+                    )
+                }
+            }
+
+            settingsSplitCard(
+                title: L10n.Settings.splitPickerTitle,
+                subtitle: L10n.Settings.splitPickerDescription,
+                icon: "square.split.2x1"
+            ) {
+                Toggle(L10n.Settings.splitPickerToggle, isOn: $splitPickerEnabled)
+
+                Text(L10n.Settings.splitPickerFootnote)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let inputFeedbackMessage, inputFeedbackScope == .splitPicker {
                     statusBanner(
                         text: inputFeedbackMessage,
                         tone: inputFeedbackIsError ? .danger : .success
@@ -1108,10 +1148,12 @@ struct SettingsView: View {
 
     private func syncInputForm(clearFeedback: Bool) {
         mouseBackForwardSwitchesTabs = appDelegate.mouseBackForwardSwitchesTabs
+        splitPickerEnabled = appDelegate.splitPickerEnabled
 
         if clearFeedback {
             inputFeedbackMessage = nil
             inputFeedbackIsError = false
+            inputFeedbackScope = nil
         }
     }
 
@@ -1169,10 +1211,28 @@ struct SettingsView: View {
             try appDelegate.saveMouseBackForwardTabSwitchingSetting(mouseBackForwardSwitchesTabs)
             inputFeedbackMessage = L10n.Settings.mouseNavigationSaved
             inputFeedbackIsError = false
+            inputFeedbackScope = .mouseNavigation
         } catch {
             mouseBackForwardSwitchesTabs = appDelegate.mouseBackForwardSwitchesTabs
             inputFeedbackMessage = error.localizedDescription
             inputFeedbackIsError = true
+            inputFeedbackScope = .mouseNavigation
+        }
+    }
+
+    private func saveSplitPickerSettingIfNeeded() {
+        guard splitPickerEnabled != appDelegate.splitPickerEnabled else { return }
+
+        do {
+            try appDelegate.saveSplitPickerSetting(splitPickerEnabled)
+            inputFeedbackMessage = L10n.Settings.splitPickerSaved
+            inputFeedbackIsError = false
+            inputFeedbackScope = .splitPicker
+        } catch {
+            splitPickerEnabled = appDelegate.splitPickerEnabled
+            inputFeedbackMessage = error.localizedDescription
+            inputFeedbackIsError = true
+            inputFeedbackScope = .splitPicker
         }
     }
 

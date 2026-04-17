@@ -282,6 +282,12 @@ struct AITerminalManagerTests {
         #expect(plan.registration.hostID == "localmcd:grokmcp")
     }
 
+    @Test func localShellPlanUsesDirectoryOverride() {
+        let plan = AITerminalLaunchPlan.localShell(directoryOverride: "/tmp/ghodex")
+        #expect(plan.surfaceConfiguration.workingDirectory == "/tmp/ghodex")
+        #expect(plan.registration.hostID == AITerminalHost.local.id)
+    }
+
     @Test func mergesImportedHostOverrides() {
         let imported = [
             AITerminalHost(
