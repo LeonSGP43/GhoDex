@@ -399,6 +399,20 @@ enum AppLocalization {
         "about.github": "GitHub",
         "settings.title": "Settings",
         "settings.body": "Language can be configured here. For advanced terminal settings, edit $HOME/.config/ghodex/config.ghodex and restart GhoDex.",
+        "settings.sidebar.eyebrow": "Environment Control",
+        "settings.sidebar.description": "Tune app language, branding, and harness behavior from one focused panel.",
+        "settings.sidebar.overview": "Live Overview",
+        "settings.sidebar.gateway.on": "Gateway On",
+        "settings.sidebar.gateway.off": "Gateway Off",
+        "settings.sidebar.general.short": "Language, input, privacy",
+        "settings.sidebar.appearance.short": "Logo, preview, presets",
+        "settings.sidebar.gateway.short": "Gateway, pairing, QR",
+        "settings.sidebar.general.detail": "Core app behavior, language, mouse navigation, and privacy shortcuts.",
+        "settings.sidebar.appearance.detail": "Built-in logo presets with live preview and instant app icon updates.",
+        "settings.sidebar.gateway.detail": "Remote control exposure, pairing host, semantic profile, and launch actions.",
+        "settings.hero.workspace": "Workspace Basics",
+        "settings.hero.appearance": "Visual Identity",
+        "settings.hero.remote": "Remote Access",
         "settings.general.tab": "General",
         "settings.appearance.tab": "Appearance",
         "settings.gateway.tab": "Gateway",
@@ -418,6 +432,8 @@ enum AppLocalization {
         "settings.icon.title": "App Logo",
         "settings.icon.description": "Choose one of the built-in logos and apply it live without editing config by hand.",
         "settings.icon.preview": "Preview",
+        "settings.icon.live_apply_short": "Live Apply",
+        "settings.icon.preset_description": "Pick a built-in GhoDex logo preset and apply it immediately.",
         "settings.icon.mode": "Logo Source",
         "settings.icon.mode.built_in": "Built-in",
         "settings.icon.mode.custom_file": "Custom File",
@@ -522,6 +538,8 @@ enum AppLocalization {
         "settings.mouse_navigation.switch_tabs": "Use mouse back/forward buttons to switch top-level tabs",
         "settings.mouse_navigation.description": "When enabled, side buttons on the mouse cycle native macOS top-level tabs in Terminal, Browser, and Workspace Map windows. Leave this off if you want Browser tabs to keep page back/forward behavior.",
         "settings.mouse_navigation.saved": "Mouse navigation setting saved to config.",
+        "settings.mouse_navigation.state.enabled": "Enabled",
+        "settings.mouse_navigation.state.disabled": "Disabled",
         "settings.permissions.title": "macOS Privacy Settings",
         "settings.permissions.description": "Use these shortcuts when GhoDex needs Files and Folders or Full Disk Access. They open the two privacy pages most commonly needed during local development and automation setup.",
         "settings.permissions.signing": "Signing Status",
@@ -562,6 +580,10 @@ enum AppLocalization {
         "settings.gateway.apply": "Apply Gateway Settings",
         "settings.gateway.show_qr": "Show Pairing QR",
         "settings.gateway.pending_changes": "Unsaved gateway changes are waiting to be applied.",
+        "settings.gateway.panel.connection_title": "Connection Surface",
+        "settings.gateway.panel.connection_description": "Define how the harness gateway binds, advertises itself, and accepts pairings.",
+        "settings.gateway.panel.actions_title": "Launch Actions",
+        "settings.gateway.panel.actions_description": "Save the current gateway draft or expose the pairing QR for a client session.",
         "app.allow_execute": "Allow GhoDex to execute \"%@\"?",
         "app.undo_action": "Undo %@",
         "app.redo_action": "Redo %@",
@@ -962,6 +984,20 @@ enum AppLocalization {
         "about.github": "GitHub",
         "settings.title": "设置",
         "settings.body": "这里目前可配置应用语言。若要修改高级终端配置，请编辑 $HOME/.config/ghodex/config.ghodex，然后重启 GhoDex。",
+        "settings.sidebar.eyebrow": "环境控制",
+        "settings.sidebar.description": "把应用语言、品牌视觉和 harness 行为统一放在一个更聚焦的面板里调整。",
+        "settings.sidebar.overview": "实时概览",
+        "settings.sidebar.gateway.on": "网关已开启",
+        "settings.sidebar.gateway.off": "网关已关闭",
+        "settings.sidebar.general.short": "语言、输入、隐私",
+        "settings.sidebar.appearance.short": "Logo、预览、预设",
+        "settings.sidebar.gateway.short": "网关、配对、二维码",
+        "settings.sidebar.general.detail": "应用基础行为、语言、鼠标导航，以及常用权限入口。",
+        "settings.sidebar.appearance.detail": "内置 Logo 预设、实时预览，以及即时应用应用图标。",
+        "settings.sidebar.gateway.detail": "远程控制暴露方式、配对主机、语义模式与启动动作。",
+        "settings.hero.workspace": "工作区基础",
+        "settings.hero.appearance": "视觉识别",
+        "settings.hero.remote": "远程接入",
         "settings.general.tab": "通用",
         "settings.appearance.tab": "外观",
         "settings.gateway.tab": "网关",
@@ -981,6 +1017,8 @@ enum AppLocalization {
         "settings.icon.title": "应用 Logo",
         "settings.icon.description": "直接选择一个内置 Logo，保存后会立即生效，不需要手动改配置。",
         "settings.icon.preview": "预览",
+        "settings.icon.live_apply_short": "实时应用",
+        "settings.icon.preset_description": "选择一个内置 GhoDex Logo 预设，并立即应用到应用图标。",
         "settings.icon.mode": "Logo 来源",
         "settings.icon.mode.built_in": "内置",
         "settings.icon.mode.custom_file": "自定义文件",
@@ -1085,6 +1123,8 @@ enum AppLocalization {
         "settings.mouse_navigation.switch_tabs": "使用鼠标前进/回退按钮切换顶层标签页",
         "settings.mouse_navigation.description": "开启后，鼠标侧键会在 Terminal、Browser 和 Workspace Map 窗口的原生 macOS 顶层标签页之间循环切换。如果你希望 Browser 标签页继续保留网页前进/回退行为，请保持关闭。",
         "settings.mouse_navigation.saved": "鼠标导航设置已写入配置文件。",
+        "settings.mouse_navigation.state.enabled": "已启用",
+        "settings.mouse_navigation.state.disabled": "已关闭",
         "settings.permissions.title": "macOS 隐私设置",
         "settings.permissions.description": "当 GhoDex 需要“文件与文件夹”或“完全磁盘访问权限”时，可用这里的快捷入口直接跳转。这两个入口覆盖了本地开发和自动化场景里最常用的权限页面。",
         "settings.permissions.signing": "签名状态",
@@ -1125,6 +1165,10 @@ enum AppLocalization {
         "settings.gateway.apply": "应用网关设置",
         "settings.gateway.show_qr": "显示配对二维码",
         "settings.gateway.pending_changes": "还有未应用的网关变更。",
+        "settings.gateway.panel.connection_title": "连接面",
+        "settings.gateway.panel.connection_description": "定义 harness 网关如何监听、如何对外广播，以及如何接受配对。",
+        "settings.gateway.panel.actions_title": "操作动作",
+        "settings.gateway.panel.actions_description": "保存当前网关草稿，或直接展示配对二维码给客户端接入。",
         "app.allow_execute": "允许 GhoDex 执行“%@”吗？",
         "app.undo_action": "撤销 %@",
         "app.redo_action": "重做 %@",
@@ -1656,6 +1700,20 @@ enum L10n {
     enum Settings {
         nonisolated static var title: String { AppLocalization.localizedString("settings.title") }
         nonisolated static var body: String { AppLocalization.localizedString("settings.body") }
+        nonisolated static var sidebarEyebrow: String { AppLocalization.localizedString("settings.sidebar.eyebrow") }
+        nonisolated static var sidebarDescription: String { AppLocalization.localizedString("settings.sidebar.description") }
+        nonisolated static var sidebarOverview: String { AppLocalization.localizedString("settings.sidebar.overview") }
+        nonisolated static var sidebarGatewayOn: String { AppLocalization.localizedString("settings.sidebar.gateway.on") }
+        nonisolated static var sidebarGatewayOff: String { AppLocalization.localizedString("settings.sidebar.gateway.off") }
+        nonisolated static var sidebarGeneralShort: String { AppLocalization.localizedString("settings.sidebar.general.short") }
+        nonisolated static var sidebarAppearanceShort: String { AppLocalization.localizedString("settings.sidebar.appearance.short") }
+        nonisolated static var sidebarGatewayShort: String { AppLocalization.localizedString("settings.sidebar.gateway.short") }
+        nonisolated static var sidebarGeneralDetail: String { AppLocalization.localizedString("settings.sidebar.general.detail") }
+        nonisolated static var sidebarAppearanceDetail: String { AppLocalization.localizedString("settings.sidebar.appearance.detail") }
+        nonisolated static var sidebarGatewayDetail: String { AppLocalization.localizedString("settings.sidebar.gateway.detail") }
+        nonisolated static var heroWorkspace: String { AppLocalization.localizedString("settings.hero.workspace") }
+        nonisolated static var heroAppearance: String { AppLocalization.localizedString("settings.hero.appearance") }
+        nonisolated static var heroRemote: String { AppLocalization.localizedString("settings.hero.remote") }
         nonisolated static var generalTab: String { AppLocalization.localizedString("settings.general.tab") }
         nonisolated static var appearanceTab: String { AppLocalization.localizedString("settings.appearance.tab") }
         nonisolated static var gatewayTab: String { AppLocalization.localizedString("settings.gateway.tab") }
@@ -1672,6 +1730,8 @@ enum L10n {
         nonisolated static var iconTitle: String { AppLocalization.localizedString("settings.icon.title") }
         nonisolated static var iconDescription: String { AppLocalization.localizedString("settings.icon.description") }
         nonisolated static var iconPreview: String { AppLocalization.localizedString("settings.icon.preview") }
+        nonisolated static var iconLiveApplyShort: String { AppLocalization.localizedString("settings.icon.live_apply_short") }
+        nonisolated static var iconPresetDescription: String { AppLocalization.localizedString("settings.icon.preset_description") }
         nonisolated static var iconModeTitle: String { AppLocalization.localizedString("settings.icon.mode") }
         nonisolated static var iconModeBuiltIn: String { AppLocalization.localizedString("settings.icon.mode.built_in") }
         nonisolated static var iconModeCustomFile: String { AppLocalization.localizedString("settings.icon.mode.custom_file") }
@@ -1743,6 +1803,8 @@ enum L10n {
         nonisolated static var mouseNavigationSwitchTabs: String { AppLocalization.localizedString("settings.mouse_navigation.switch_tabs") }
         nonisolated static var mouseNavigationDescription: String { AppLocalization.localizedString("settings.mouse_navigation.description") }
         nonisolated static var mouseNavigationSaved: String { AppLocalization.localizedString("settings.mouse_navigation.saved") }
+        nonisolated static var mouseNavigationEnabledState: String { AppLocalization.localizedString("settings.mouse_navigation.state.enabled") }
+        nonisolated static var mouseNavigationDisabledState: String { AppLocalization.localizedString("settings.mouse_navigation.state.disabled") }
         nonisolated static var permissionsTitle: String { AppLocalization.localizedString("settings.permissions.title") }
         nonisolated static var permissionsDescription: String { AppLocalization.localizedString("settings.permissions.description") }
         nonisolated static var permissionsSigningTitle: String { AppLocalization.localizedString("settings.permissions.signing") }
@@ -1785,6 +1847,10 @@ enum L10n {
         nonisolated static var gatewayApply: String { AppLocalization.localizedString("settings.gateway.apply") }
         nonisolated static var gatewayShowQr: String { AppLocalization.localizedString("settings.gateway.show_qr") }
         nonisolated static var gatewayPendingChanges: String { AppLocalization.localizedString("settings.gateway.pending_changes") }
+        nonisolated static var gatewayPanelConnectionTitle: String { AppLocalization.localizedString("settings.gateway.panel.connection_title") }
+        nonisolated static var gatewayPanelConnectionDescription: String { AppLocalization.localizedString("settings.gateway.panel.connection_description") }
+        nonisolated static var gatewayPanelActionsTitle: String { AppLocalization.localizedString("settings.gateway.panel.actions_title") }
+        nonisolated static var gatewayPanelActionsDescription: String { AppLocalization.localizedString("settings.gateway.panel.actions_description") }
     }
 
     enum WelcomeSetup {

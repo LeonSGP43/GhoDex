@@ -27,6 +27,23 @@ enum SSHConnectionsPanelTab: String, CaseIterable, Identifiable {
             return L10n.Settings.title
         }
     }
+
+    var systemImageName: String {
+        switch self {
+        case .connections:
+            return "point.3.connected.trianglepath.dotted"
+        case .todo:
+            return "checklist"
+        case .learning:
+            return "brain.head.profile"
+        case .taskQueue:
+            return "list.bullet.rectangle.portrait"
+        case .browser:
+            return "globe"
+        case .preferences:
+            return "slider.horizontal.3"
+        }
+    }
 }
 
 @MainActor

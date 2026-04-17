@@ -53,22 +53,6 @@ struct SSHConnectionsView: View {
         return formatter
     }()
 
-    private struct VisualEffectBackground: NSViewRepresentable {
-        let material: NSVisualEffectView.Material
-
-        func makeNSView(context: Context) -> NSVisualEffectView {
-            let view = NSVisualEffectView()
-            view.state = .active
-            view.blendingMode = .behindWindow
-            view.material = material
-            return view
-        }
-
-        func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
-            nsView.material = material
-        }
-    }
-
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var appDelegate: AppDelegate
     @EnvironmentObject private var store: AITerminalManagerStore
@@ -126,6 +110,10 @@ struct SSHConnectionsView: View {
     @State private var browserSaveMessage: String?
     @State private var browserErrorMessage: String?
 
+    private var panelAccent: Color { GhoDexPanelPalette.accent }
+    private var panelAccentStrong: Color { GhoDexPanelPalette.accentStrong }
+    private var panelAccentSoft: Color { GhoDexPanelPalette.accentSoft }
+
     init(presentation: SSHConnectionsPresentationState) {
         self.presentation = presentation
     }
@@ -146,9 +134,13 @@ struct SSHConnectionsView: View {
         return todoWorkspaceTargets.first(where: { $0.workspaceID == focusedID })
     }
 
+    private var currentTab: SSHConnectionsPanelTab {
+        presentation.selectedTab
+    }
+
     var body: some View {
         ZStack {
-            VisualEffectBackground(material: .underWindowBackground)
+            workspaceBackground
                 .ignoresSafeArea()
 
             VStack(spacing: 0) {
@@ -159,10 +151,6 @@ struct SSHConnectionsView: View {
                         .padding(.horizontal, 20)
                         .padding(.bottom, 8)
                 }
-
-                tabPicker
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 12)
 
                 switch presentation.selectedTab {
                 case .connections:
@@ -185,6 +173,7 @@ struct SSHConnectionsView: View {
             }
         }
         .frame(minWidth: 1240, minHeight: 780)
+        .tint(panelAccent)
         .sheet(isPresented: $isPresentingEditor) {
             hostEditorSheet
         }
@@ -208,17 +197,6 @@ struct SSHConnectionsView: View {
         .onChange(of: store.todoRevision) { _ in
             refreshTodoDocument()
         }
-        .onChange(of: presentation.selectedTab) { tab in
-            if tab == .todo {
-                syncTodoSettings()
-            } else if tab == .learning {
-                syncLearningSettings()
-            } else if tab == .taskQueue {
-                syncTaskQueueSettings()
-            } else if tab == .browser {
-                syncBrowserSettingsFromConfig()
-            }
-        }
         .onReceive(appDelegate.$browserProfilePathOverride) { _ in
             syncBrowserSettingsFromConfig()
         }
@@ -235,28 +213,50 @@ struct SSHConnectionsView: View {
         }
     }
 
+    private var workspaceBackground: some View {
+        LinearGradient(
+            colors: colorScheme == .dark
+                ? [
+                    Color(red: 0.08, green: 0.09, blue: 0.11),
+                    Color(red: 0.11, green: 0.12, blue: 0.15),
+                    Color(red: 0.07, green: 0.08, blue: 0.10),
+                ]
+                : [
+                    Color(red: 0.95, green: 0.96, blue: 0.98),
+                    Color(red: 0.97, green: 0.96, blue: 0.94),
+                    Color(red: 0.94, green: 0.96, blue: 0.98),
+                ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
     private var tabPicker: some View {
-        Picker("", selection: selectedTab) {
-            ForEach(SSHConnectionsPanelTab.allCases) { tab in
-                Text(tab.title)
-                    .tag(tab)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(SSHConnectionsPanelTab.allCases) { tab in
+                    navigationButton(for: tab)
+                }
             }
         }
-        .pickerStyle(.segmented)
-        .frame(maxWidth: 640)
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color.white.opacity(colorScheme == .dark ? 0.08 : 0.58))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.18 : 0.1), lineWidth: 1)
+        )
     }
 
     private var connectionsTabContent: some View {
         VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(L10n.SSHConnections.connectionsPageTitle)
-                    .font(.title2.weight(.semibold))
-
-                Text(L10n.SSHConnections.connectionsPageSubtitle)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            pageHero(
+                tab: .connections,
+                title: L10n.SSHConnections.connectionsPageTitle,
+                subtitle: L10n.SSHConnections.connectionsPageSubtitle
+            )
 
             HStack(alignment: .top, spacing: 20) {
                 sidebarPanel
@@ -273,15 +273,11 @@ struct SSHConnectionsView: View {
     private var learningTabContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(L10n.SSHConnections.learningTitle)
-                        .font(.title2.weight(.semibold))
-
-                    Text(L10n.SSHConnections.learningSubtitle)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                pageHero(
+                    tab: .learning,
+                    title: L10n.SSHConnections.learningTitle,
+                    subtitle: L10n.SSHConnections.learningSubtitle
+                )
 
                 Toggle(L10n.SSHConnections.learningEnable, isOn: $learningEnabled)
 
@@ -398,15 +394,11 @@ struct SSHConnectionsView: View {
     private var todoTabContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(L10n.SSHConnections.todoTitle)
-                        .font(.title2.weight(.semibold))
-
-                    Text(L10n.SSHConnections.todoSubtitle)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                pageHero(
+                    tab: .todo,
+                    title: L10n.SSHConnections.todoTitle,
+                    subtitle: L10n.SSHConnections.todoSubtitle
+                )
 
                 Toggle(L10n.SSHConnections.todoEnable, isOn: $todoEnabled)
 
@@ -513,15 +505,11 @@ struct SSHConnectionsView: View {
     private var browserTabContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(L10n.Settings.browserTitle)
-                        .font(.title2.weight(.semibold))
-
-                    Text(L10n.Settings.browserDescription)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                pageHero(
+                    tab: .browser,
+                    title: L10n.Settings.browserTitle,
+                    subtitle: L10n.Settings.browserDescription
+                )
 
                 browserProfileSection
 
@@ -714,28 +702,22 @@ struct SSHConnectionsView: View {
     }
 
     private var preferencesTabContent: some View {
-        ScrollView {
-            SettingsView(
-                initialTab: .general,
-                visibleTabs: [.general, .appearance, .gateway]
-            )
-                .padding(.horizontal, 20)
-                .padding(.bottom, 20)
-                .padding(.top, 4)
-        }
+        SettingsView(
+            initialTab: .general,
+            visibleTabs: [.general, .appearance, .gateway]
+        )
+        .padding(.horizontal, 20)
+        .padding(.bottom, 20)
     }
 
     private var taskQueueTabContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(L10n.SSHConnections.taskQueueTitle)
-                        .font(.title2.weight(.semibold))
-                    Text(L10n.SSHConnections.taskQueueSubtitle)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                pageHero(
+                    tab: .taskQueue,
+                    title: L10n.SSHConnections.taskQueueTitle,
+                    subtitle: L10n.SSHConnections.taskQueueSubtitle
+                )
 
                 Toggle(L10n.SSHConnections.taskQueueEnable, isOn: $heartbeatQueueEnabled)
 
@@ -862,10 +844,7 @@ struct SSHConnectionsView: View {
                                     }
                                 }
                                 .padding(10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(Color.primary.opacity(0.05))
-                                )
+                                .subpanelSurface()
                             }
                         }
                     }
@@ -896,10 +875,7 @@ struct SSHConnectionsView: View {
                 .foregroundStyle(.secondary)
         }
         .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color.primary.opacity(0.04))
-        )
+        .subpanelSurface()
     }
 
     private var todoPresentationCard: some View {
@@ -953,10 +929,7 @@ struct SSHConnectionsView: View {
             }
         }
         .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color.primary.opacity(0.04))
-        )
+        .subpanelSurface()
     }
 
     @ViewBuilder
@@ -985,8 +958,12 @@ struct SSHConnectionsView: View {
             }
             .padding(14)
             .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(Color.accentColor.opacity(colorScheme == .dark ? 0.12 : 0.08))
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(panelAccent.opacity(colorScheme == .dark ? 0.14 : 0.1))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(panelAccent.opacity(colorScheme == .dark ? 0.34 : 0.2), lineWidth: 1)
             )
         }
     }
@@ -1023,10 +1000,7 @@ struct SSHConnectionsView: View {
             }
         }
         .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color.primary.opacity(0.04))
-        )
+        .subpanelSurface()
     }
 
     private var todoTimelinePanel: some View {
@@ -1046,10 +1020,7 @@ struct SSHConnectionsView: View {
             }
         }
         .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color.primary.opacity(0.04))
-        )
+        .subpanelSurface()
     }
 
     private func todoItemRow(_ item: AITerminalTodoItem) -> some View {
@@ -1153,40 +1124,197 @@ struct SSHConnectionsView: View {
             }
         }
         .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color.white.opacity(colorScheme == .dark ? 0.04 : 0.6))
-        )
+        .subpanelSurface()
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 16) {
-            HStack(alignment: .center, spacing: 12) {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Color.accentColor.gradient)
-                    )
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(panelAccentStrong.opacity(colorScheme == .dark ? 0.32 : 0.16))
+
+                    Image(systemName: currentTab.systemImageName)
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(panelAccentSoft)
+                }
+                .frame(width: 52, height: 52)
 
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(L10n.SSHConnections.title)
-                        .font(.title2.weight(.semibold))
+                    Text(currentTab.title)
+                        .font(.system(size: 26, weight: .bold, design: .rounded))
 
-                    Text(L10n.SSHConnections.subtitle)
+                    Text(tabSubtitle(for: currentTab))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+
+                Spacer(minLength: 12)
+
+                HStack(spacing: 10) {
+                    headerChip(
+                        title: L10n.SSHConnections.tabConnections,
+                        value: "\(allConnectionHosts.count)",
+                        systemImage: SSHConnectionsPanelTab.connections.systemImageName
+                    )
+                    headerChip(
+                        title: L10n.SSHConnections.taskQueueTitle,
+                        value: "\(store.heartbeatQueuedCount)",
+                        systemImage: SSHConnectionsPanelTab.taskQueue.systemImageName
+                    )
+                }
             }
 
-            Spacer(minLength: 12)
+            tabPicker
         }
         .padding(.horizontal, 20)
         .padding(.top, 18)
         .padding(.bottom, 16)
+    }
+
+    private func navigationButton(for tab: SSHConnectionsPanelTab) -> some View {
+        let isSelected = selectedTab.wrappedValue == tab
+
+        return Button {
+            selectedTab.wrappedValue = tab
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: tab.systemImageName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(isSelected ? Color.white : panelAccent)
+
+                Text(tab.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(isSelected ? Color.white : .primary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 11)
+            .background {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [panelAccentStrong, panelAccent],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                } else {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.white.opacity(colorScheme == .dark ? 0.04 : 0.32))
+                }
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(
+                        isSelected
+                            ? panelAccent.opacity(0.5)
+                            : Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.12 : 0.08),
+                        lineWidth: 1
+                    )
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func headerChip(title: String, value: String, systemImage: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(panelAccent)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(value)
+                    .font(.caption.weight(.semibold))
+                Text(title)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white.opacity(colorScheme == .dark ? 0.06 : 0.42))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.16 : 0.08), lineWidth: 1)
+        )
+    }
+
+    private func pageHero(
+        tab: SSHConnectionsPanelTab,
+        title: String,
+        subtitle: String
+    ) -> some View {
+        HStack(alignment: .top, spacing: 16) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(panelAccentStrong.opacity(colorScheme == .dark ? 0.34 : 0.14))
+
+                Image(systemName: tab.systemImageName)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(panelAccentSoft)
+            }
+            .frame(width: 52, height: 52)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+
+                Text(subtitle)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(24)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: colorScheme == .dark
+                            ? [
+                                panelAccentStrong.opacity(0.9),
+                                GhoDexPanelPalette.accentSurfaceDark,
+                            ]
+                            : [
+                                GhoDexPanelPalette.accentSurfaceLight,
+                                GhoDexPanelPalette.accentSurfaceLightRaised,
+                            ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.16 : 0.08), lineWidth: 1)
+        )
+    }
+
+    private func tabSubtitle(for tab: SSHConnectionsPanelTab) -> String {
+        switch tab {
+        case .connections:
+            return L10n.SSHConnections.connectionsPageSubtitle
+        case .todo:
+            return L10n.SSHConnections.todoSubtitle
+        case .learning:
+            return L10n.SSHConnections.learningSubtitle
+        case .taskQueue:
+            return L10n.SSHConnections.taskQueueSubtitle
+        case .browser:
+            return L10n.Settings.browserDescription
+        case .preferences:
+            return L10n.Settings.sidebarDescription
+        }
     }
 
     private var managedSkillRepositoryPanel: some View {
@@ -1228,10 +1356,7 @@ struct SSHConnectionsView: View {
             }
         }
         .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color.primary.opacity(0.04))
-        )
+        .subpanelSurface()
     }
 
     private func managedSkillRepositoryRow(
@@ -1274,10 +1399,7 @@ struct SSHConnectionsView: View {
             }
         }
         .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.primary.opacity(0.05))
-        )
+        .subpanelSurface()
     }
 
     private func skillStatusLabel(_ state: AITerminalManagerStore.ManagedSkillRepositoryState) -> String {
@@ -1363,10 +1485,7 @@ struct SSHConnectionsView: View {
             }
         }
         .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color.primary.opacity(0.04))
-        )
+        .subpanelSurface()
     }
 
     private func learningLogRow(_ entry: AITerminalLearningLogEntry) -> some View {
@@ -1420,10 +1539,7 @@ struct SSHConnectionsView: View {
             }
         }
         .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.primary.opacity(0.05))
-        )
+        .subpanelSurface()
     }
 
     private var sidebarPanel: some View {
@@ -1548,41 +1664,36 @@ struct SSHConnectionsView: View {
 
     private func recentHostRow(_ host: AITerminalHost) -> some View {
         HStack(spacing: 12) {
-            Button {
-                selectedHostID = host.id
-            } label: {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
-                        Text(host.name)
-                            .font(.headline)
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-
-                        if store.isFavorite(host) {
-                            Image(systemName: "star.fill")
-                                .font(.caption)
-                                .foregroundStyle(Color.accentColor)
-                        }
-
-                        if let recentRecord = store.recentRecord(for: host) {
-                            statusPill(for: recentRecord)
-                        }
-                    }
-
-                    Text(primarySubtitle(for: host))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(host.name)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
 
+                    if store.isFavorite(host) {
+                        Image(systemName: "star.fill")
+                            .font(.caption)
+                            .foregroundStyle(panelAccent)
+                    }
+
                     if let recentRecord = store.recentRecord(for: host) {
-                        Text(recentTimestamp(for: recentRecord))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                        statusPill(for: recentRecord)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text(primarySubtitle(for: host))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                if let recentRecord = store.recentRecord(for: host) {
+                    Text(recentTimestamp(for: recentRecord))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
-            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Button {
                 store.open(host: host)
@@ -1591,7 +1702,7 @@ struct SSHConnectionsView: View {
                     .font(.title3)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(Color.accentColor)
+            .foregroundStyle(panelAccent)
         }
         .padding(14)
         .background(rowBackground(for: host), in: RoundedRectangle(cornerRadius: 14))
@@ -1599,58 +1710,58 @@ struct SSHConnectionsView: View {
             RoundedRectangle(cornerRadius: 14)
                 .stroke(rowBorder(for: host), lineWidth: 1)
         )
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .onTapGesture {
+            selectedHostID = host.id
+        }
     }
 
     private func sidebarHostRow(_ host: AITerminalHost) -> some View {
-        Button {
-            selectedHostID = host.id
-        } label: {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
-                        Text(host.name)
-                            .font(.headline)
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-
-                        if store.isFavorite(host) {
-                            Image(systemName: "star.fill")
-                                .font(.caption)
-                                .foregroundStyle(Color.accentColor)
-                        }
-
-                        if hasActiveSession(for: host) {
-                            Image(systemName: "wave.3.right.circle.fill")
-                                .foregroundStyle(Color.accentColor)
-                        }
-                    }
-
-                    Text(primarySubtitle(for: host))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(host.name)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
 
-                    HStack(spacing: 6) {
-                        compactBadge(hostSourceLabel(for: host))
+                    if store.isFavorite(host) {
+                        Image(systemName: "star.fill")
+                            .font(.caption)
+                            .foregroundStyle(panelAccent)
+                    }
 
-                        if host.transport == .ssh, host.authMode == .password {
-                            compactBadge(host.authMode.displayName)
-                        }
+                    if hasActiveSession(for: host) {
+                        Image(systemName: "wave.3.right.circle.fill")
+                            .foregroundStyle(panelAccent)
                     }
                 }
 
-                Spacer(minLength: 8)
+                Text(primarySubtitle(for: host))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                HStack(spacing: 6) {
+                    compactBadge(hostSourceLabel(for: host))
+
+                    if host.transport == .ssh, host.authMode == .password {
+                        compactBadge(host.authMode.displayName)
+                    }
+                }
             }
-            .padding(14)
-            .background(rowBackground(for: host), in: RoundedRectangle(cornerRadius: 14))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14)
-                    .stroke(rowBorder(for: host), lineWidth: 1)
-            )
+
+            Spacer(minLength: 8)
         }
-        .buttonStyle(.plain)
-        .onTapGesture(count: 2) {
-            store.open(host: host)
+        .padding(14)
+        .background(rowBackground(for: host), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(rowBorder(for: host), lineWidth: 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .onTapGesture {
+            selectedHostID = host.id
         }
     }
 
@@ -1681,7 +1792,7 @@ struct SSHConnectionsView: View {
                     .font(.title3)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(Color.accentColor)
+            .foregroundStyle(panelAccent)
             .help(L10n.AITerminalManager.launch)
 
             Button(role: .destructive) {
@@ -1699,6 +1810,10 @@ struct SSHConnectionsView: View {
             RoundedRectangle(cornerRadius: 14)
                 .stroke(Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.18 : 0.1), lineWidth: 1)
         )
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .onTapGesture {
+            store.open(savedWorkspaceTemplate: workspace)
+        }
     }
 
     @ViewBuilder
@@ -2046,18 +2161,18 @@ struct SSHConnectionsView: View {
     private func statusPill(for recentRecord: AITerminalRecentHostRecord) -> some View {
         Text(recentStatusTitle(for: recentRecord))
             .font(.caption2.weight(.semibold))
-            .foregroundStyle(recentRecord.status == .failed ? .red : Color.accentColor)
+            .foregroundStyle(recentRecord.status == .failed ? .red : panelAccent)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(
-                (recentRecord.status == .failed ? Color.red : Color.accentColor).opacity(0.12),
+                (recentRecord.status == .failed ? Color.red : panelAccent).opacity(0.12),
                 in: Capsule()
             )
     }
 
     private func rowBackground(for host: AITerminalHost) -> Color {
         if selectedHostID == host.id {
-            return Color.accentColor.opacity(colorScheme == .dark ? 0.18 : 0.12)
+            return panelAccent.opacity(colorScheme == .dark ? 0.18 : 0.12)
         }
 
         return Color.white.opacity(colorScheme == .dark ? 0.035 : 0.55)
@@ -2065,7 +2180,7 @@ struct SSHConnectionsView: View {
 
     private func rowBorder(for host: AITerminalHost) -> Color {
         if selectedHostID == host.id {
-            return Color.accentColor.opacity(colorScheme == .dark ? 0.32 : 0.2)
+            return panelAccent.opacity(colorScheme == .dark ? 0.32 : 0.2)
         }
 
         return Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.18 : 0.1)
