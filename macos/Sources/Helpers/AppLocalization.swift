@@ -429,6 +429,9 @@ enum AppLocalization {
         "settings.icon.quick_title": "App Logo",
         "settings.icon.quick_description": "Switch the Dock and app logo visually, save it into config, and apply it live after saving.",
         "settings.icon.open_editor": "Open Logo Settings",
+        "settings.welcome_setup.title": "Welcome Setup",
+        "settings.welcome_setup.description": "Reopen the guided first-run setup and walk through workspace, browser runtime, and gateway defaults again.",
+        "settings.welcome_setup.action": "Reopen Welcome Setup",
         "settings.icon.title": "App Logo",
         "settings.icon.description": "Choose one of the built-in logos and apply it live without editing config by hand.",
         "settings.icon.preview": "Preview",
@@ -475,6 +478,51 @@ enum AppLocalization {
         "welcome_setup.menu_title": "Welcome Setup...",
         "welcome_setup.title": "Set up GhoDex for your first run",
         "welcome_setup.subtitle": "Configure the paths, browser runtime, and remote control basics that are easiest to miss on a fresh install. You can reopen this assistant anytime from the app menu.",
+        "welcome_setup.step_progress": "Step %d of %d",
+        "welcome_setup.back": "Back",
+        "welcome_setup.next": "Next",
+        "welcome_setup.section.workspace.title": "GhoDex Workspace",
+        "welcome_setup.section.workspace.body": "Start with one primary GhoDex workspace. Learning, notes, todo, and browser data all default to child paths under this root unless you open advanced overrides.",
+        "welcome_setup.section.workspace.root_title": "Primary Workspace Path",
+        "welcome_setup.section.workspace.root_body": "This is the main folder GhoDex should treat as its home base. Most users only need to set this once.",
+        "welcome_setup.section.workspace.root_default_hint": "Default for new users: %@. GhoDex will create this hidden workspace root automatically unless you choose a custom location.",
+        "welcome_setup.section.workspace.preview_title": "Derived Paths",
+        "welcome_setup.section.workspace.preview_body": "By default, GhoDex will place chat, learn, notes, todo, and browser files under this workspace so the setup stays simple.",
+        "welcome_setup.section.workspace.advanced_title": "Advanced Path Overrides",
+        "welcome_setup.section.workspace.advanced_body": "Only open this if you want one of the child paths to live outside the main GhoDex workspace.",
+        "welcome_setup.section.workspace.advanced_toggle": "Show advanced child paths",
+        "welcome_setup.section.workspace.prepare": "Prepare Workspace Now",
+        "welcome_setup.section.workspace.preparing": "Preparing the workspace folders and selected feature scaffolds…",
+        "welcome_setup.section.workspace.prepared": "Workspace folders are ready.",
+        "welcome_setup.section.workspace.preview.chat": "Chat Workspace",
+        "welcome_setup.section.workspace.preview.learn": "Learn Workspace",
+        "welcome_setup.section.workspace.preview.notes": "Notes File",
+        "welcome_setup.section.workspace.preview.todo": "Todo Workspace",
+        "welcome_setup.section.workspace.preview.browser_profile": "Browser Profile",
+        "welcome_setup.section.workspace.preview.browser_runtime": "Browser Runtime",
+        "welcome_setup.section.guide.title": "Quick Feature Guide",
+        "welcome_setup.section.guide.body": "Use these cards to understand what each module is for before you enable it. New features can be added to this guide through the same onboarding registry.",
+        "welcome_setup.guide.chat.title": "Chat Workspace",
+        "welcome_setup.guide.chat.summary": "Chat is your everyday execution area for project conversations, terminal sessions, and AI-assisted iteration.",
+        "welcome_setup.guide.chat.usage": "Use it when you want to open or continue working on a concrete project in a stable workspace.",
+        "welcome_setup.guide.learn.title": "Learn Workspace",
+        "welcome_setup.guide.learn.summary": "Learn keeps reusable notes, knowledge captures, and scaffolded context beside chat so long-term learning stays organized.",
+        "welcome_setup.guide.learn.usage": "Use it when you want GhoDex to accumulate project memory and reusable notes instead of starting cold every time.",
+        "welcome_setup.guide.todo.title": "Todo Workspace",
+        "welcome_setup.guide.todo.summary": "Todo stores day-based task files and workspace planning material so your execution queue is visible and reviewable.",
+        "welcome_setup.guide.todo.usage": "Use it when you want a persistent task surface for daily planning, follow-ups, and completion tracking.",
+        "welcome_setup.guide.browser.title": "Browser",
+        "welcome_setup.guide.browser.summary": "Browser gives GhoDex a controlled web surface for research, navigation, and page automation without leaving the app.",
+        "welcome_setup.guide.browser.usage": "Use it when a task needs real web content, page control, or browser-based workflows tied back to your workspace.",
+        "welcome_setup.guide.app.title": "App Basics",
+        "welcome_setup.guide.app.summary": "Language, navigation, and icon choices shape the default feel of the app before deeper setup begins.",
+        "welcome_setup.guide.app.usage": "Use this step to make the app readable and familiar first, then continue into the heavier feature setup.",
+        "welcome_setup.guide.browser_runtime.title": "Managed Browser Runtime",
+        "welcome_setup.guide.browser_runtime.summary": "The browser runtime is downloaded separately and stored under your workspace so Browser tabs can run safely without bundling Chromium by default.",
+        "welcome_setup.guide.browser_runtime.usage": "Install it when you decide to use Browser features; advanced users can still override the runtime path later.",
+        "welcome_setup.guide.gateway.title": "Harness Gateway",
+        "welcome_setup.guide.gateway.summary": "The gateway is the control-plane endpoint that lets local or remote clients talk to GhoDex through the harness protocol.",
+        "welcome_setup.guide.gateway.usage": "Enable it when you need automation, pairing, or external control. Leave it off if you only use GhoDex locally.",
         "welcome_setup.section.app.title": "App Basics",
         "welcome_setup.section.app.body": "Choose your interface language, built-in icon, and default mouse behavior before you settle into daily use.",
         "welcome_setup.section.learning.title": "Learning Workspace",
@@ -496,6 +544,7 @@ enum AppLocalization {
         "welcome_setup.section.browser.install_runtime": "Install Managed Runtime",
         "welcome_setup.section.browser.retry_activation": "Retry Activation",
         "welcome_setup.section.browser.activation_failed": "Browser runtime installed, but Chromium could not be activated in this app session.",
+        "welcome_setup.section.browser.download_help": "GhoDex does not bundle the Chromium runtime into this setup by default. When you install it here, the runtime will be downloaded into %@ and reused by Browser tabs.",
         "welcome_setup.section.gateway.title": "Remote Control Gateway",
         "welcome_setup.section.gateway.body": "These settings control how GhoDex exposes its harness gateway to local or remote clients.",
         "welcome_setup.footer_note": "This assistant edits the same settings used elsewhere in GhoDex. It does not introduce a second configuration source.",
@@ -1014,6 +1063,9 @@ enum AppLocalization {
         "settings.icon.quick_title": "应用 Logo",
         "settings.icon.quick_description": "可视化切换 Dock 和应用 Logo，保存后会写回配置文件并立即生效。",
         "settings.icon.open_editor": "打开 Logo 设置",
+        "settings.welcome_setup.title": "欢迎引导",
+        "settings.welcome_setup.description": "重新打开首次启动引导，再走一遍 workspace、browser runtime 和 gateway 的默认配置流程。",
+        "settings.welcome_setup.action": "重新打开 Welcome Setup",
         "settings.icon.title": "应用 Logo",
         "settings.icon.description": "直接选择一个内置 Logo，保存后会立即生效，不需要手动改配置。",
         "settings.icon.preview": "预览",
@@ -1060,6 +1112,51 @@ enum AppLocalization {
         "welcome_setup.menu_title": "欢迎设置...",
         "welcome_setup.title": "首次启动时先把 GhoDex 配好",
         "welcome_setup.subtitle": "把最容易遗漏的路径、Browser 运行时和远程控制基础项先配置清楚。后续你也可以随时从应用菜单重新打开这个助手。",
+        "welcome_setup.step_progress": "第 %d / %d 步",
+        "welcome_setup.back": "上一步",
+        "welcome_setup.next": "下一步",
+        "welcome_setup.section.workspace.title": "GhoDex 主工作区",
+        "welcome_setup.section.workspace.body": "先确定一个主的 GhoDex workspace。学习、笔记、todo 和 browser 数据默认都放在这个根目录下面，只有高级场景才需要单独改路径。",
+        "welcome_setup.section.workspace.root_title": "主工作区路径",
+        "welcome_setup.section.workspace.root_body": "这是 GhoDex 后续默认使用的主目录。大多数用户只需要在这里设置一次。",
+        "welcome_setup.section.workspace.root_default_hint": "新用户默认路径为：%@。除非你手动改成自己的地址，否则 GhoDex 会自动创建这个隐藏的 workspace 根目录。",
+        "welcome_setup.section.workspace.preview_title": "默认派生路径",
+        "welcome_setup.section.workspace.preview_body": "默认情况下，聊天、learn、笔记、todo 和 browser 文件都会放在这个 workspace 下面，尽量减少首次配置成本。",
+        "welcome_setup.section.workspace.advanced_title": "高级路径覆盖",
+        "welcome_setup.section.workspace.advanced_body": "只有当你想把某一个子目录放到主 workspace 之外时，才需要展开这里。",
+        "welcome_setup.section.workspace.advanced_toggle": "展开高级子路径",
+        "welcome_setup.section.workspace.prepare": "立即准备工作区",
+        "welcome_setup.section.workspace.preparing": "正在准备 workspace 目录和已启用功能的脚手架…",
+        "welcome_setup.section.workspace.prepared": "workspace 目录已经准备完成。",
+        "welcome_setup.section.workspace.preview.chat": "聊天工作区",
+        "welcome_setup.section.workspace.preview.learn": "Learn 工作区",
+        "welcome_setup.section.workspace.preview.notes": "笔记文件",
+        "welcome_setup.section.workspace.preview.todo": "Todo 工作区",
+        "welcome_setup.section.workspace.preview.browser_profile": "Browser 配置目录",
+        "welcome_setup.section.workspace.preview.browser_runtime": "Browser 运行时目录",
+        "welcome_setup.section.guide.title": "功能快速说明",
+        "welcome_setup.section.guide.body": "先看清每个模块是干什么的，再决定是否开启。以后如果有新功能，也可以通过同一套欢迎引导注册方式接入这里。",
+        "welcome_setup.guide.chat.title": "聊天工作区",
+        "welcome_setup.guide.chat.summary": "Chat 是你日常执行项目对话、终端协作和 AI 迭代的主区域。",
+        "welcome_setup.guide.chat.usage": "当你要实际推进一个项目、持续对话、落地操作时，就会主要用到它。",
+        "welcome_setup.guide.learn.title": "Learn 工作区",
+        "welcome_setup.guide.learn.summary": "Learn 会把可复用的笔记、知识沉淀和脚手架上下文整理在 chat 旁边，方便长期积累。",
+        "welcome_setup.guide.learn.usage": "当你希望 GhoDex 不是每次从零开始，而是能持续积累项目经验和知识时，就该开启它。",
+        "welcome_setup.guide.todo.title": "Todo 工作区",
+        "welcome_setup.guide.todo.summary": "Todo 用来保存按日期组织的任务文件和工作区规划内容，让执行队列可见、可回看。",
+        "welcome_setup.guide.todo.usage": "当你需要日计划、待办流转和完成状态跟踪时，它会成为主要任务面板。",
+        "welcome_setup.guide.browser.title": "Browser",
+        "welcome_setup.guide.browser.summary": "Browser 给 GhoDex 提供受控的网页研究、导航和页面自动化能力，不需要离开应用。",
+        "welcome_setup.guide.browser.usage": "当任务需要真实网页内容、浏览器操作或和工作区联动的网页流程时，就使用它。",
+        "welcome_setup.guide.app.title": "应用基础",
+        "welcome_setup.guide.app.summary": "语言、导航和图标这些基础项会先决定整个应用的默认使用感受。",
+        "welcome_setup.guide.app.usage": "建议先把这些基础体验调顺，再继续更重的功能配置。",
+        "welcome_setup.guide.browser_runtime.title": "托管 Browser Runtime",
+        "welcome_setup.guide.browser_runtime.summary": "Browser runtime 会单独下载并放到你的 workspace 下，这样 Browser 标签页能运行，同时又不需要默认把 Chromium 打进安装包。",
+        "welcome_setup.guide.browser_runtime.usage": "当你决定使用 Browser 功能时再安装它；后续如果你有高级需求，仍然可以改成自定义 runtime 路径。",
+        "welcome_setup.guide.gateway.title": "Harness Gateway",
+        "welcome_setup.guide.gateway.summary": "Gateway 是控制面的入口，它让本地或远端客户端都能通过 harness 协议和 GhoDex 交互。",
+        "welcome_setup.guide.gateway.usage": "只有在你需要自动化、配对或者外部控制 GhoDex 时再打开它；纯本地使用可以先关着。",
         "welcome_setup.section.app.title": "应用基础",
         "welcome_setup.section.app.body": "先选好界面语言、内置图标和默认鼠标行为，后续日常使用会更顺手。",
         "welcome_setup.section.learning.title": "学习工作区",
@@ -1081,6 +1178,7 @@ enum AppLocalization {
         "welcome_setup.section.browser.install_runtime": "安装托管运行时",
         "welcome_setup.section.browser.retry_activation": "重试激活",
         "welcome_setup.section.browser.activation_failed": "Browser 运行时已经安装，但当前应用会话里还没能成功激活 Chromium。",
+        "welcome_setup.section.browser.download_help": "GhoDex 默认不会把 Chromium runtime 直接打进这套引导里。你在这里点击安装后，运行时会下载到 %@，后续 Browser 标签页会复用这个目录。",
         "welcome_setup.section.gateway.title": "远程控制网关",
         "welcome_setup.section.gateway.body": "这些设置决定了 GhoDex 如何把 harness 网关暴露给本地或远程客户端。",
         "welcome_setup.footer_note": "这个助手编辑的是 GhoDex 现有设置本体，不会引入第二套配置来源。",
@@ -1552,6 +1650,13 @@ enum AppLocalization {
         "International Ro": "国际 Ro",
         "International Yen": "国际 Yen",
         "Context Menu": "上下文菜单",
+        "Created": "创建时间",
+        "Updated": "更新时间",
+        "Workspace": "工作区",
+        "Tabs": "标签页",
+        "Panes": "分栏",
+        "Hosts": "主机",
+        "Saved Tabs": "已保存标签页",
         "View GitHub Commit": "查看 GitHub 提交",
         "Changes Since This Tip Release": "查看自当前 Tip 版本以来的变更",
         "View Release Notes": "查看发布说明"
@@ -1727,6 +1832,9 @@ enum L10n {
         nonisolated static var iconQuickTitle: String { AppLocalization.localizedString("settings.icon.quick_title") }
         nonisolated static var iconQuickDescription: String { AppLocalization.localizedString("settings.icon.quick_description") }
         nonisolated static var iconOpenEditor: String { AppLocalization.localizedString("settings.icon.open_editor") }
+        nonisolated static var welcomeSetupTitle: String { AppLocalization.localizedString("settings.welcome_setup.title") }
+        nonisolated static var welcomeSetupDescription: String { AppLocalization.localizedString("settings.welcome_setup.description") }
+        nonisolated static var welcomeSetupAction: String { AppLocalization.localizedString("settings.welcome_setup.action") }
         nonisolated static var iconTitle: String { AppLocalization.localizedString("settings.icon.title") }
         nonisolated static var iconDescription: String { AppLocalization.localizedString("settings.icon.description") }
         nonisolated static var iconPreview: String { AppLocalization.localizedString("settings.icon.preview") }
@@ -1858,6 +1966,51 @@ enum L10n {
         nonisolated static var menuTitle: String { AppLocalization.localizedString("welcome_setup.menu_title") }
         nonisolated static var title: String { AppLocalization.localizedString("welcome_setup.title") }
         nonisolated static var subtitle: String { AppLocalization.localizedString("welcome_setup.subtitle") }
+        nonisolated static func stepProgress(_ current: Int, _ total: Int) -> String { AppLocalization.localizedString("welcome_setup.step_progress", current, total) }
+        nonisolated static var back: String { AppLocalization.localizedString("welcome_setup.back") }
+        nonisolated static var next: String { AppLocalization.localizedString("welcome_setup.next") }
+        nonisolated static var workspaceSectionTitle: String { AppLocalization.localizedString("welcome_setup.section.workspace.title") }
+        nonisolated static var workspaceSectionBody: String { AppLocalization.localizedString("welcome_setup.section.workspace.body") }
+        nonisolated static var workspaceRootTitle: String { AppLocalization.localizedString("welcome_setup.section.workspace.root_title") }
+        nonisolated static var workspaceRootBody: String { AppLocalization.localizedString("welcome_setup.section.workspace.root_body") }
+        nonisolated static func workspaceRootDefaultHint(_ path: String) -> String { AppLocalization.localizedString("welcome_setup.section.workspace.root_default_hint", path) }
+        nonisolated static var workspacePreviewTitle: String { AppLocalization.localizedString("welcome_setup.section.workspace.preview_title") }
+        nonisolated static var workspacePreviewBody: String { AppLocalization.localizedString("welcome_setup.section.workspace.preview_body") }
+        nonisolated static var workspaceAdvancedTitle: String { AppLocalization.localizedString("welcome_setup.section.workspace.advanced_title") }
+        nonisolated static var workspaceAdvancedBody: String { AppLocalization.localizedString("welcome_setup.section.workspace.advanced_body") }
+        nonisolated static var workspaceAdvancedToggle: String { AppLocalization.localizedString("welcome_setup.section.workspace.advanced_toggle") }
+        nonisolated static var workspacePrepare: String { AppLocalization.localizedString("welcome_setup.section.workspace.prepare") }
+        nonisolated static var workspacePreparing: String { AppLocalization.localizedString("welcome_setup.section.workspace.preparing") }
+        nonisolated static var workspacePrepared: String { AppLocalization.localizedString("welcome_setup.section.workspace.prepared") }
+        nonisolated static var workspacePreviewChat: String { AppLocalization.localizedString("welcome_setup.section.workspace.preview.chat") }
+        nonisolated static var workspacePreviewLearn: String { AppLocalization.localizedString("welcome_setup.section.workspace.preview.learn") }
+        nonisolated static var workspacePreviewNotes: String { AppLocalization.localizedString("welcome_setup.section.workspace.preview.notes") }
+        nonisolated static var workspacePreviewTodo: String { AppLocalization.localizedString("welcome_setup.section.workspace.preview.todo") }
+        nonisolated static var workspacePreviewBrowserProfile: String { AppLocalization.localizedString("welcome_setup.section.workspace.preview.browser_profile") }
+        nonisolated static var workspacePreviewBrowserRuntime: String { AppLocalization.localizedString("welcome_setup.section.workspace.preview.browser_runtime") }
+        nonisolated static var guideSectionTitle: String { AppLocalization.localizedString("welcome_setup.section.guide.title") }
+        nonisolated static var guideSectionBody: String { AppLocalization.localizedString("welcome_setup.section.guide.body") }
+        nonisolated static var guideChatTitle: String { AppLocalization.localizedString("welcome_setup.guide.chat.title") }
+        nonisolated static var guideChatSummary: String { AppLocalization.localizedString("welcome_setup.guide.chat.summary") }
+        nonisolated static var guideChatUsage: String { AppLocalization.localizedString("welcome_setup.guide.chat.usage") }
+        nonisolated static var guideLearnTitle: String { AppLocalization.localizedString("welcome_setup.guide.learn.title") }
+        nonisolated static var guideLearnSummary: String { AppLocalization.localizedString("welcome_setup.guide.learn.summary") }
+        nonisolated static var guideLearnUsage: String { AppLocalization.localizedString("welcome_setup.guide.learn.usage") }
+        nonisolated static var guideTodoTitle: String { AppLocalization.localizedString("welcome_setup.guide.todo.title") }
+        nonisolated static var guideTodoSummary: String { AppLocalization.localizedString("welcome_setup.guide.todo.summary") }
+        nonisolated static var guideTodoUsage: String { AppLocalization.localizedString("welcome_setup.guide.todo.usage") }
+        nonisolated static var guideBrowserTitle: String { AppLocalization.localizedString("welcome_setup.guide.browser.title") }
+        nonisolated static var guideBrowserSummary: String { AppLocalization.localizedString("welcome_setup.guide.browser.summary") }
+        nonisolated static var guideBrowserUsage: String { AppLocalization.localizedString("welcome_setup.guide.browser.usage") }
+        nonisolated static var guideAppTitle: String { AppLocalization.localizedString("welcome_setup.guide.app.title") }
+        nonisolated static var guideAppSummary: String { AppLocalization.localizedString("welcome_setup.guide.app.summary") }
+        nonisolated static var guideAppUsage: String { AppLocalization.localizedString("welcome_setup.guide.app.usage") }
+        nonisolated static var guideBrowserRuntimeTitle: String { AppLocalization.localizedString("welcome_setup.guide.browser_runtime.title") }
+        nonisolated static var guideBrowserRuntimeSummary: String { AppLocalization.localizedString("welcome_setup.guide.browser_runtime.summary") }
+        nonisolated static var guideBrowserRuntimeUsage: String { AppLocalization.localizedString("welcome_setup.guide.browser_runtime.usage") }
+        nonisolated static var guideGatewayTitle: String { AppLocalization.localizedString("welcome_setup.guide.gateway.title") }
+        nonisolated static var guideGatewaySummary: String { AppLocalization.localizedString("welcome_setup.guide.gateway.summary") }
+        nonisolated static var guideGatewayUsage: String { AppLocalization.localizedString("welcome_setup.guide.gateway.usage") }
         nonisolated static var appSectionTitle: String { AppLocalization.localizedString("welcome_setup.section.app.title") }
         nonisolated static var appSectionBody: String { AppLocalization.localizedString("welcome_setup.section.app.body") }
         nonisolated static var learningSectionTitle: String { AppLocalization.localizedString("welcome_setup.section.learning.title") }
@@ -1879,6 +2032,7 @@ enum L10n {
         nonisolated static var browserInstallRuntime: String { AppLocalization.localizedString("welcome_setup.section.browser.install_runtime") }
         nonisolated static var browserRetryActivation: String { AppLocalization.localizedString("welcome_setup.section.browser.retry_activation") }
         nonisolated static var browserRuntimeActivationFailed: String { AppLocalization.localizedString("welcome_setup.section.browser.activation_failed") }
+        nonisolated static func browserDownloadHelp(_ path: String) -> String { AppLocalization.localizedString("welcome_setup.section.browser.download_help", path) }
         nonisolated static var gatewaySectionTitle: String { AppLocalization.localizedString("welcome_setup.section.gateway.title") }
         nonisolated static var gatewaySectionBody: String { AppLocalization.localizedString("welcome_setup.section.gateway.body") }
         nonisolated static var footerNote: String { AppLocalization.localizedString("welcome_setup.footer_note") }
