@@ -1955,7 +1955,9 @@ class AppDelegate: NSObject,
         guard Self.shouldShowWelcomeSetupOnFirstLaunch() else { return }
         DispatchQueue.main.async { [weak self] in
             Self.markWelcomeSetupShown()
-            self?.welcomeSetupController.show()
+            self?.welcomeSetupController.show(
+                relativeTo: self?.preferredTopLevelWindow(for: nil)
+            )
         }
     }
 
@@ -2889,7 +2891,7 @@ class AppDelegate: NSObject,
     }
 
     @IBAction func showWelcomeSetup(_ sender: Any?) {
-        welcomeSetupController.show()
+        welcomeSetupController.show(relativeTo: preferredTopLevelWindow(for: sender))
     }
 
     @IBAction func reloadConfig(_ sender: Any?) {

@@ -525,6 +525,30 @@ struct SettingsView: View {
                 }
             }
 
+            settingsCard(
+                title: L10n.Settings.welcomeSetupTitle,
+                subtitle: L10n.Settings.welcomeSetupDescription,
+                icon: "sparkles.rectangle.stack"
+            ) {
+                HStack(alignment: .center, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(L10n.WelcomeSetup.title)
+                            .font(.headline)
+                        Text(L10n.WelcomeSetup.subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer()
+
+                    Button(L10n.Settings.welcomeSetupAction) {
+                        appDelegate.showWelcomeSetup(nil)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+
             settingsSplitCard(
                 title: L10n.Settings.permissionsTitle,
                 subtitle: L10n.Settings.permissionsDescription,
