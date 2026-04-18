@@ -78,6 +78,7 @@ private enum BrowserRuntimeInstallerError: LocalizedError {
 
 enum BrowserRuntimeInstaller {
     static func install(
+        destinationRuntimeRoot: URL? = nil,
         progress: @escaping @MainActor (BrowserRuntimeInstallPhase) -> Void
     ) async throws {
         let fileManager = FileManager.default
@@ -96,7 +97,7 @@ enum BrowserRuntimeInstaller {
         let runtimeRoot = try resolveRuntimeRoot(in: unpackRoot)
 
         await progress(.installing)
-        try installRuntime(from: runtimeRoot)
+        try installRuntime(from: runtimeRoot, destinationRuntimeRoot: destinationRuntimeRoot)
 
         await progress(.installed)
     }
@@ -187,7 +188,19 @@ enum BrowserRuntimeInstaller {
         return nil
     }
 
-    private static func installRuntime(from runtimeRoot: URL) throws {
+    private static func installRuntime(
+        from runtimeRoot: URL,
+        destinationRuntimeRoot: URL?
+    ) throws {
+        if let destinationRuntimeRoot {
+            try installRuntimeAtCustomRoot(from: runtimeRoot, destinationRuntimeRoot: destinationRuntimeRoot)
+            return
+        }
+
+        try installManagedRuntimeAtDefaultRoot(from: runtimeRoot)
+    }
+
+    private static func installManagedRuntimeAtDefaultRoot(from runtimeRoot: URL) throws {
         let fileManager = FileManager.default
         let descriptor = BrowserPaths.managedRuntimeDescriptor
         let destinationRoot = BrowserPaths.defaultCEFRootDirectory()
@@ -233,6 +246,58 @@ enum BrowserRuntimeInstaller {
         let currentRoot = BrowserPaths.defaultManagedCEFRuntimeRoot()
         try? fileManager.removeItem(at: currentRoot)
         try fileManager.createSymbolicLink(at: currentRoot, withDestinationURL: installRoot)
+    }
+
+    private static func installRuntimeAtCustomRoot(
+        from runtimeRoot: URL,
+        destinationRuntimeRoot: URL
+    ) throws {
+        let fileManager = FileManager.default
+        guard let frameworkSource = runtimeFrameworkSource(for: runtimeRoot) else {
+            throw BrowserRuntimeInstallerError.frameworkMissing
+        }
+
+        let normalizedDestination = destinationRuntimeRoot.standardizedFileURL
+        let parentDirectory = normalizedDestination.deletingLastPathComponent()
+        try fileManager.createDirectory(at: parentDirectory, withIntermediateDirectories: true)
+
+        let stagingRoot = parentDirectory.appendingPathComponent(
+            ".install-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let frameworkDestination = stagingRoot
+            .appendingPathComponent("Frameworks", isDirectory: true)
+            .appendingPathComponent("Chromium Embedded Framework.framework", isDirectory: true)
+
+        try fileManager.createDirectory(
+            at: stagingRoot.appendingPathComponent("Frameworks", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try fileManager.copyItem(at: frameworkSource, to: frameworkDestination)
+        try ensureFrameworkInfoPlist(at: frameworkDestination)
+        try adHocCodeSign(frameworkDestination)
+
+        let descriptor = BrowserPaths.managedRuntimeDescriptor
+        let manifest = BrowserRuntimeManifest(
+            installedAt: ISO8601DateFormatter().string(from: Date()),
+            source: descriptor.source ?? descriptor.slug,
+            downloadURL: descriptor.downloadURL.absoluteString,
+            archiveSHA256: descriptor.archiveSHA256,
+            ffmpegBranding: descriptor.ffmpegBranding,
+            proprietaryCodecs: descriptor.proprietaryCodecs,
+            mediaCapabilities: descriptor.mediaCapabilities,
+            framework: "Frameworks/Chromium Embedded Framework.framework"
+        )
+        let manifestData = try JSONEncoder().encode(manifest)
+        try manifestData.write(
+            to: stagingRoot.appendingPathComponent("manifest.json", isDirectory: false),
+            options: [.atomic]
+        )
+
+        if fileManager.fileExists(atPath: normalizedDestination.path) {
+            try fileManager.removeItem(at: normalizedDestination)
+        }
+        try fileManager.moveItem(at: stagingRoot, to: normalizedDestination)
     }
 
     private static func ensureFrameworkInfoPlist(at frameworkURL: URL) throws {
