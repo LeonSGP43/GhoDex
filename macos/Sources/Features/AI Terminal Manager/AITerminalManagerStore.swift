@@ -175,6 +175,7 @@ final class AITerminalManagerStore: ObservableObject {
     private let todoDocumentPersistence = TodoDocumentPersistenceCoordinator()
     private var registrations: [UUID: AITerminalLaunchRegistration] = [:]
     private var sshSessionAuthStates: [UUID: AITerminalSSHSessionAuthState] = [:]
+    private var storedPasswordAvailabilityByHostID: [String: Bool] = [:]
     private var pendingSSHPasswordAutomations: [UUID: PendingSSHPasswordAutomation] = [:]
     private var taskBindings: [UUID: UUID] = [:]
     private var todoDocumentCache: [String: TodoDocumentCacheEntry] = [:]
@@ -421,7 +422,13 @@ final class AITerminalManagerStore: ObservableObject {
 
     func hasStoredPassword(for host: AITerminalHost) -> Bool {
         guard host.authMode == .password else { return false }
-        return (try? credentialStore.password(for: host.id))?.isEmpty == false
+        if let cached = storedPasswordAvailabilityByHostID[host.id] {
+            return cached
+        }
+
+        let hasStoredPassword = (try? credentialStore.password(for: host.id))?.isEmpty == false
+        storedPasswordAvailabilityByHostID[host.id] = hasStoredPassword
+        return hasStoredPassword
     }
 
     var workspaces: [AITerminalWorkspaceTemplate] {
@@ -2187,6 +2194,7 @@ final class AITerminalManagerStore: ObservableObject {
         case .system:
             do {
                 try credentialStore.removePassword(for: hostID)
+                storedPasswordAvailabilityByHostID[hostID] = false
             } catch {
                 lastError = L10n.SSHConnections.passwordDeleteFailed(error.localizedDescription)
                 return
@@ -2196,9 +2204,13 @@ final class AITerminalManagerStore: ObservableObject {
             do {
                 if let trimmedPassword, !trimmedPassword.isEmpty {
                     try credentialStore.setPassword(trimmedPassword, for: hostID)
+                    storedPasswordAvailabilityByHostID[hostID] = true
                 } else if try credentialStore.password(for: hostID) == nil {
+                    storedPasswordAvailabilityByHostID[hostID] = false
                     lastError = L10n.SSHConnections.passwordRequired
                     return
+                } else {
+                    storedPasswordAvailabilityByHostID[hostID] = true
                 }
             } catch {
                 lastError = L10n.SSHConnections.passwordSaveFailed(error.localizedDescription)
@@ -2298,6 +2310,7 @@ final class AITerminalManagerStore: ObservableObject {
     func removeHost(_ host: AITerminalHost) {
         do {
             try credentialStore.removePassword(for: host.id)
+            storedPasswordAvailabilityByHostID.removeValue(forKey: host.id)
         } catch {
             lastError = L10n.SSHConnections.passwordDeleteFailed(error.localizedDescription)
             return
@@ -2317,6 +2330,7 @@ final class AITerminalManagerStore: ObservableObject {
     func resetImportedHostOverride(_ host: AITerminalHost) {
         do {
             try credentialStore.removePassword(for: host.id)
+            storedPasswordAvailabilityByHostID[host.id] = false
         } catch {
             lastError = L10n.SSHConnections.passwordDeleteFailed(error.localizedDescription)
             return
@@ -3744,6 +3758,7 @@ final class AITerminalManagerStore: ObservableObject {
     }
 
     private func rebuildSessions() {
+        pruneStoredPasswordAvailabilityCache(validHostIDs: Set(availableHosts.map(\.id)))
         let hostLookup = Dictionary(uniqueKeysWithValues: availableHosts.map { ($0.id, $0) })
         let activeSessionIDs = Set(
             TerminalController.all.flatMap { controller in
@@ -3951,13 +3966,20 @@ final class AITerminalManagerStore: ObservableObject {
         case .password:
             do {
                 guard let password = try credentialStore.password(for: host.id), !password.isEmpty else {
+                    storedPasswordAvailabilityByHostID[host.id] = false
                     return (nil, L10n.SSHConnections.passwordMissing)
                 }
+                storedPasswordAvailabilityByHostID[host.id] = true
                 return (password, nil)
             } catch {
+                storedPasswordAvailabilityByHostID[host.id] = false
                 return (nil, L10n.SSHConnections.passwordReadFailed(error.localizedDescription))
             }
         }
+    }
+
+    private func pruneStoredPasswordAvailabilityCache(validHostIDs: Set<String>) {
+        storedPasswordAvailabilityByHostID = storedPasswordAvailabilityByHostID.filter { validHostIDs.contains($0.key) }
     }
 
     @discardableResult

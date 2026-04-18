@@ -1957,13 +1957,13 @@ struct SSHConnectionsView: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
 
-                    if store.isFavorite(host) {
+                    if isFavorite(host) {
                         Image(systemName: "star.fill")
                             .font(.caption)
                             .foregroundStyle(panelAccent)
                     }
 
-                    if let recentRecord = store.recentRecord(for: host) {
+                    if let recentRecord = recentRecord(for: host) {
                         statusPill(for: recentRecord)
                     }
                 }
@@ -1973,7 +1973,7 @@ struct SSHConnectionsView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
 
-                if let recentRecord = store.recentRecord(for: host) {
+                if let recentRecord = recentRecord(for: host) {
                     Text(recentTimestamp(for: recentRecord))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -1999,6 +1999,7 @@ struct SSHConnectionsView: View {
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onTapGesture {
             selectedHostID = host.id
+            selectedSavedWorkspaceID = nil
         }
     }
 
@@ -2011,7 +2012,7 @@ struct SSHConnectionsView: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
 
-                    if store.isFavorite(host) {
+                    if isFavorite(host) {
                         Image(systemName: "star.fill")
                             .font(.caption)
                             .foregroundStyle(panelAccent)
@@ -2048,6 +2049,7 @@ struct SSHConnectionsView: View {
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onTapGesture {
             selectedHostID = host.id
+            selectedSavedWorkspaceID = nil
         }
     }
 
@@ -2091,14 +2093,15 @@ struct SSHConnectionsView: View {
             .help(L10n.AITerminalManager.remove)
         }
         .padding(14)
-        .background(Color.white.opacity(colorScheme == .dark ? 0.035 : 0.55), in: RoundedRectangle(cornerRadius: 14))
+        .background(savedWorkspaceRowBackground(for: workspace), in: RoundedRectangle(cornerRadius: 14))
         .overlay(
             RoundedRectangle(cornerRadius: 14)
-                .stroke(Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.18 : 0.1), lineWidth: 1)
+                .stroke(savedWorkspaceRowBorder(for: workspace), lineWidth: 1)
         )
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onTapGesture {
-            store.open(savedWorkspaceTemplate: workspace)
+            selectedSavedWorkspaceID = workspace.id
+            selectedHostID = nil
         }
     }
 
@@ -2112,6 +2115,16 @@ struct SSHConnectionsView: View {
                     if selectedHost.transport == .ssh {
                         sessionsSection(for: selectedHost)
                     }
+                }
+                .padding(22)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .panelSurface()
+        } else if let selectedSavedWorkspace {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    savedWorkspaceHeroSection(for: selectedSavedWorkspace)
+                    savedWorkspaceSummaryGrid(for: selectedSavedWorkspace)
                 }
                 .padding(22)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -2138,6 +2151,104 @@ struct SSHConnectionsView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             .padding(32)
             .panelSurface()
+        }
+    }
+
+    private func savedWorkspaceHeroSection(
+        for workspace: AITerminalSavedWorkspaceTemplate
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(workspace.name)
+                        .font(.system(size: 30, weight: .semibold))
+
+                    Text(savedWorkspaceSummary(for: workspace))
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+
+                    HStack(spacing: 8) {
+                        compactBadge(L10n.AITerminalManager.savedWorkspacesSection)
+                        compactBadge("\(workspace.tabCount) tabs")
+                        compactBadge("\(workspace.paneCount) panes")
+                    }
+                }
+
+                Spacer(minLength: 16)
+
+                VStack(alignment: .trailing, spacing: 10) {
+                    Button(L10n.AITerminalManager.open) {
+                        store.open(savedWorkspaceTemplate: workspace)
+                    }
+                    .controlSize(.large)
+
+                    Button(L10n.AITerminalManager.remove, role: .destructive) {
+                        store.removeSavedWorkspaceTemplate(workspace)
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                detailCell(
+                    label: AppLocalization.localizedText("Created"),
+                    value: workspace.createdAt.formatted(date: .abbreviated, time: .shortened)
+                )
+                detailCell(
+                    label: AppLocalization.localizedText("Updated"),
+                    value: workspace.updatedAt.formatted(date: .abbreviated, time: .shortened)
+                )
+            }
+        }
+        .padding(20)
+        .subpanelSurface()
+    }
+
+    private func savedWorkspaceSummaryGrid(
+        for workspace: AITerminalSavedWorkspaceTemplate
+    ) -> some View {
+        let tabs = flattenedTabs(in: workspace.root)
+
+        return VStack(alignment: .leading, spacing: 14) {
+            sectionHeader(L10n.AITerminalManager.hostDetails)
+
+            LazyVGrid(
+                columns: [
+                    GridItem(.flexible(minimum: 220), spacing: 14),
+                    GridItem(.flexible(minimum: 220), spacing: 14),
+                ],
+                alignment: .leading,
+                spacing: 14
+            ) {
+                detailCell(label: AppLocalization.localizedText("Workspace"), value: workspace.name)
+                detailCell(label: AppLocalization.localizedText("Tabs"), value: "\(workspace.tabCount)")
+                detailCell(label: AppLocalization.localizedText("Panes"), value: "\(workspace.paneCount)")
+                detailCell(
+                    label: AppLocalization.localizedText("Hosts"),
+                    value: savedWorkspaceHostNames(for: workspace).joined(separator: ", ")
+                )
+            }
+
+            if !tabs.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    sectionHeader(AppLocalization.localizedText("Saved Tabs"))
+
+                    ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("\(index + 1). \(savedWorkspaceTabHostLabel(for: tab))")
+                                .font(.headline)
+
+                            if let directory = tab.directory, !directory.isEmpty {
+                                Text(directory)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        .padding(16)
+                        .subpanelSurface()
+                    }
+                }
+            }
         }
     }
 
@@ -2175,7 +2286,7 @@ struct SSHConnectionsView: View {
                     .controlSize(.large)
 
                     HStack(spacing: 8) {
-                        Button(store.isFavorite(host) ? L10n.AITerminalManager.removeFavoriteHost : L10n.AITerminalManager.favoriteHost) {
+                        Button(isFavorite(host) ? L10n.AITerminalManager.removeFavoriteHost : L10n.AITerminalManager.favoriteHost) {
                             store.toggleFavorite(host)
                         }
 
@@ -2190,7 +2301,7 @@ struct SSHConnectionsView: View {
                 }
             }
 
-            if let recentRecord = store.recentRecord(for: host) {
+            if let recentRecord = recentRecord(for: host) {
                 HStack(spacing: 8) {
                     statusPill(for: recentRecord)
 
@@ -2201,17 +2312,17 @@ struct SSHConnectionsView: View {
             }
 
             if host.transport == .ssh, host.authMode == .password {
-                Text(store.hasStoredPassword(for: host) ? L10n.SSHConnections.passwordStored : L10n.SSHConnections.passwordNotStored)
+                Text(hasStoredPassword(for: host) ? L10n.SSHConnections.passwordStored : L10n.SSHConnections.passwordNotStored)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             HStack(spacing: 10) {
-                if store.isUserManagedHost(host) {
+                if isUserManagedHost(host) {
                     Button(L10n.AITerminalManager.remove, role: .destructive) {
                         store.removeHost(host)
                     }
-                } else if store.isImportedHostOverridden(host) {
+                } else if isImportedHostOverridden(host) {
                     Button(L10n.AITerminalManager.resetOverride, role: .destructive) {
                         store.resetImportedHostOverride(host)
                     }
@@ -2472,6 +2583,26 @@ struct SSHConnectionsView: View {
         return Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.18 : 0.1)
     }
 
+    private func savedWorkspaceRowBackground(
+        for workspace: AITerminalSavedWorkspaceTemplate
+    ) -> Color {
+        if selectedSavedWorkspaceID == workspace.id {
+            return panelAccent.opacity(colorScheme == .dark ? 0.18 : 0.12)
+        }
+
+        return Color.white.opacity(colorScheme == .dark ? 0.035 : 0.55)
+    }
+
+    private func savedWorkspaceRowBorder(
+        for workspace: AITerminalSavedWorkspaceTemplate
+    ) -> Color {
+        if selectedSavedWorkspaceID == workspace.id {
+            return panelAccent.opacity(colorScheme == .dark ? 0.32 : 0.2)
+        }
+
+        return Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.18 : 0.1)
+    }
+
     private func authStateColor(_ authState: AITerminalSSHSessionAuthState) -> Color {
         switch authState {
         case .failed:
@@ -2485,6 +2616,7 @@ struct SSHConnectionsView: View {
 
     private func beginEditing(_ host: AITerminalHost) {
         selectedHostID = host.id
+        selectedSavedWorkspaceID = nil
         editingHostID = host.id
         hostEditorType = .init(host.transport)
         hostName = host.name
@@ -2501,6 +2633,7 @@ struct SSHConnectionsView: View {
 
     private func beginDuplicating(_ host: AITerminalHost) {
         selectedHostID = host.id
+        selectedSavedWorkspaceID = nil
         editingHostID = nil
         hostEditorType = .init(host.transport)
         hostName = "\(host.name) \(L10n.AITerminalManager.copySuffix)"
@@ -2584,16 +2717,26 @@ struct SSHConnectionsView: View {
 
         guard store.lastError == nil else { return }
         selectedHostID = draftHostID
+        selectedSavedWorkspaceID = nil
         cancelEditor()
     }
 
     private func reconnect(session: AITerminalRemoteSessionSummary) {
-        guard let host = store.availableHosts.first(where: { $0.id == session.hostID }) else { return }
+        guard let host = connectionsSnapshot.allConnectionHostLookup[session.hostID] else { return }
         store.open(host: host)
     }
 
     private func syncSelection() {
         let ids = Set(allConnectionHosts.map(\.id))
+        let workspaceIDs = Set(displaySavedWorkspaceTemplates.map(\.id))
+
+        if let selectedSavedWorkspaceID, workspaceIDs.contains(selectedSavedWorkspaceID) {
+            return
+        }
+
+        if selectedSavedWorkspaceID != nil {
+            self.selectedSavedWorkspaceID = nil
+        }
 
         if let selectedHostID, ids.contains(selectedHostID) {
             return
@@ -3052,41 +3195,27 @@ struct SSHConnectionsView: View {
     }
 
     private var displayRecentHosts: [AITerminalHost] {
-        Self.sidebarRecentHosts(
-            recentHosts: filterHosts(store.recentHosts),
-            favoriteHosts: displayFavoriteHosts
-        )
+        connectionsSnapshot.displayRecentHosts
     }
 
     private var displayFavoriteHosts: [AITerminalHost] {
-        Self.sidebarFavoriteHosts(
-            favoriteHosts: filterHosts(store.favoriteHosts)
-        )
+        connectionsSnapshot.displayFavoriteHosts
     }
 
     private var displaySavedHosts: [AITerminalHost] {
-        Self.sidebarSavedHosts(
-            savedHosts: filterHosts(store.savedHosts),
-            favoriteHosts: displayFavoriteHosts,
-            recentHosts: displayRecentHosts
-        )
+        connectionsSnapshot.displaySavedHosts
     }
 
     private var displayImportedHosts: [AITerminalHost] {
-        Self.sidebarImportedHosts(
-            importedHosts: filterHosts(store.mergedImportedHosts),
-            favoriteHosts: displayFavoriteHosts,
-            savedHosts: filterHosts(store.savedHosts),
-            recentHosts: displayRecentHosts
-        )
+        connectionsSnapshot.displayImportedHosts
     }
 
     private var displaySavedWorkspaceTemplates: [AITerminalSavedWorkspaceTemplate] {
-        filterSavedWorkspaceTemplates(store.savedWorkspaceTemplates)
+        connectionsSnapshot.displaySavedWorkspaceTemplates
     }
 
     private var allConnectionHosts: [AITerminalHost] {
-        store.availableHosts.filter { !$0.isLocal }
+        connectionsSnapshot.allConnectionHosts
     }
 
     private var hostEditorTitle: String {
@@ -3108,7 +3237,7 @@ struct SSHConnectionsView: View {
         }
 
         if let editingHost,
-           store.hasStoredPassword(for: editingHost) {
+           hasStoredPassword(for: editingHost) {
             return L10n.SSHConnections.passwordStored
         }
 
@@ -3117,7 +3246,7 @@ struct SSHConnectionsView: View {
 
     private var editingHost: AITerminalHost? {
         guard let editingHostID else { return nil }
-        return allConnectionHosts.first(where: { $0.id == editingHostID })
+        return connectionsSnapshot.allConnectionHostLookup[editingHostID]
     }
 
     private var learningSupportedPlaceholdersText: String {
@@ -3128,30 +3257,6 @@ struct SSHConnectionsView: View {
         store.learningLogs
     }
 
-    private func filterHosts(_ hosts: [AITerminalHost]) -> [AITerminalHost] {
-        let query = hostSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return hosts }
-
-        return hosts.filter { host in
-            host.name.localizedCaseInsensitiveContains(query)
-                || (host.sshAlias?.localizedCaseInsensitiveContains(query) ?? false)
-                || (host.hostname?.localizedCaseInsensitiveContains(query) ?? false)
-                || (host.user?.localizedCaseInsensitiveContains(query) ?? false)
-                || host.startupCommands.contains(where: { $0.localizedCaseInsensitiveContains(query) })
-        }
-    }
-
-    private func filterSavedWorkspaceTemplates(
-        _ templates: [AITerminalSavedWorkspaceTemplate]
-    ) -> [AITerminalSavedWorkspaceTemplate] {
-        let query = hostSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return templates }
-
-        return templates.filter { template in
-            template.name.localizedCaseInsensitiveContains(query)
-        }
-    }
-
     private func savedWorkspaceSummary(for workspace: AITerminalSavedWorkspaceTemplate) -> String {
         let paneLabel = workspace.paneCount == 1 ? "1 pane" : "\(workspace.paneCount) panes"
         let tabLabel = workspace.tabCount == 1 ? "1 tab" : "\(workspace.tabCount) tabs"
@@ -3159,12 +3264,12 @@ struct SSHConnectionsView: View {
     }
 
     private func hostSourceLabel(for host: AITerminalHost) -> String {
-        if store.savedHosts.contains(where: { $0.id == host.id }) {
+        if connectionsSnapshot.savedHostIDs.contains(host.id) {
             return L10n.AITerminalManager.savedHostSource
         }
 
-        if store.isImportedHost(host) {
-            return store.isImportedHostOverridden(host)
+        if connectionsSnapshot.importedHostIDs.contains(host.id) {
+            return connectionsSnapshot.overriddenImportedHostIDs.contains(host.id)
                 ? L10n.AITerminalManager.importedHostOverriddenSource
                 : L10n.AITerminalManager.importedHostSource
         }
@@ -3200,17 +3305,67 @@ struct SSHConnectionsView: View {
         host.connectionTarget ?? host.displaySubtitle
     }
 
+    private func recentRecord(for host: AITerminalHost) -> AITerminalRecentHostRecord? {
+        connectionsSnapshot.latestRecentRecordsByHostID[host.id]
+    }
+
     private func contextualRemoteSessions(for host: AITerminalHost) -> [AITerminalRemoteSessionSummary] {
-        store.remoteSessions.filter { $0.hostID == host.id }
+        connectionsSnapshot.remoteSessionsByHostID[host.id] ?? []
     }
 
     private func hasActiveSession(for host: AITerminalHost) -> Bool {
-        store.remoteSessions.contains { $0.hostID == host.id }
+        connectionsSnapshot.activeSessionHostIDs.contains(host.id)
+    }
+
+    private func isFavorite(_ host: AITerminalHost) -> Bool {
+        connectionsSnapshot.favoriteHostIDs.contains(host.id)
+    }
+
+    private func isUserManagedHost(_ host: AITerminalHost) -> Bool {
+        connectionsSnapshot.savedHostIDs.contains(host.id)
+    }
+
+    private func isImportedHostOverridden(_ host: AITerminalHost) -> Bool {
+        connectionsSnapshot.overriddenImportedHostIDs.contains(host.id)
+    }
+
+    private func hasStoredPassword(for host: AITerminalHost) -> Bool {
+        store.hasStoredPassword(for: host)
     }
 
     private var selectedHost: AITerminalHost? {
         guard let selectedHostID else { return nil }
-        return allConnectionHosts.first(where: { $0.id == selectedHostID })
+        return connectionsSnapshot.allConnectionHostLookup[selectedHostID]
+    }
+
+    private var selectedSavedWorkspace: AITerminalSavedWorkspaceTemplate? {
+        guard let selectedSavedWorkspaceID else { return nil }
+        return connectionsSnapshot.displaySavedWorkspaceTemplates.first(where: { $0.id == selectedSavedWorkspaceID })
+    }
+
+    private func flattenedTabs(
+        in node: AITerminalSavedWorkspaceNode
+    ) -> [AITerminalSavedWorkspaceTab] {
+        switch node {
+        case .pane(let pane):
+            return pane.tabs
+        case .split(let split):
+            return flattenedTabs(in: split.left) + flattenedTabs(in: split.right)
+        }
+    }
+
+    private func savedWorkspaceHostNames(
+        for workspace: AITerminalSavedWorkspaceTemplate
+    ) -> [String] {
+        let names = flattenedTabs(in: workspace.root).map(savedWorkspaceTabHostLabel(for:))
+        let deduplicated = NSOrderedSet(array: names).array as? [String] ?? names
+        return deduplicated.isEmpty ? [L10n.Common.untitled] : deduplicated
+    }
+
+    private func savedWorkspaceTabHostLabel(
+        for tab: AITerminalSavedWorkspaceTab
+    ) -> String {
+        connectionsSnapshot.availableHostNamesByID[tab.hostID] ?? tab.hostID
     }
 }
 
