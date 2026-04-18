@@ -4,6 +4,33 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### fix(onboarding): reopen welcome setup from active windows
+
+- What changed: Anchored the welcome setup reopen action to the active top-level app window on both first-launch auto show and manual reopen, and added a dedicated reopen card inside Settings.
+- Why: The new setup flow existed, but reopening it still felt detached from the active app context and the Settings surface did not expose an obvious way to get back to it.
+- Impact: Users can reopen onboarding from Settings and the flow now appears relative to the active GhoDex window instead of feeling like a stray popup.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -testPlan GhoDex -configuration Debug -destination 'platform=macOS,arch=arm64' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO test -only-testing:GhosttyTests/AppDelegateWelcomeSetupTests`
+- Files: `macos/Sources/App/macOS/AppDelegate.swift`, `macos/Sources/Features/Settings/SettingsView.swift`, `CHANGELOG.md`
+- Decision trail: Keep the existing welcome setup controller, but make the reopen path explicit and always resolve the best active window before presentation.
+
+### feat(browser): support custom managed runtime install roots
+
+- What changed: Extended `BrowserRuntimeInstaller.install` to accept a destination runtime root, stage managed Chromium runtime contents into that custom location, and emit the expected manifest after the copy/sign step.
+- Why: The welcome setup and unified workspace flow now derive browser runtime paths from the chosen workspace root, so runtime installation had to support writing outside the legacy default managed location.
+- Impact: Managed browser runtime installation can now target the browser runtime directory chosen by onboarding/settings instead of always falling back to the default app-support root.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration Debug -destination 'platform=macOS,arch=arm64' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build`
+- Files: `macos/Sources/Features/Browser/BrowserRuntimeInstaller.swift`, `CHANGELOG.md`
+- Decision trail: Preserve the default managed install behavior, but branch into a custom-root staging path when workspace-driven runtime storage is explicitly requested.
+
+### refactor(connections): streamline saved workspace selection
+
+- What changed: Reworked the SSH Connections sidebar/detail flow so saved workspaces can be selected without immediately opening, added a detail/summary pane for saved workspaces, centralized sidebar filtering through a snapshot model, and cached stored-password availability to avoid repeating credential-store lookups.
+- Why: The connection center still had uneven selection behavior and repeated host/password lookups while the surrounding workspace/settings flows were being unified.
+- Impact: Saved workspaces now behave more like first-class selectable items in the connection center, and related host detail rendering does less redundant work.
+- Verification: `xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -testPlan GhoDex -configuration Debug -destination 'platform=macOS,arch=arm64' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO test -only-testing:GhosttyTests/AITerminalManagerTests`
+- Files: `macos/Sources/Features/AI Terminal Manager/AITerminalManagerStore.swift`, `macos/Sources/Features/SSH Connections/SSHConnectionsView.swift`, `CHANGELOG.md`
+- Decision trail: Keep the saved-workspace open action explicit, but move selection, lookup reuse, and password-status checks into a single snapshot-driven view model path.
+
 ### feat(settings): unify workspace root overrides across setup panels
 
 - What changed: Reused the shared hidden-home workspace inference helpers inside the welcome setup flow, added default-layout detection utilities to `AITerminalWorkspaceDefaults`, and rewired the learning, todo, and browser settings panels to drive from one workspace root with derived preview paths plus optional advanced overrides.
