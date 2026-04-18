@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(settings): unify workspace root overrides across setup panels
+
+- What changed: Reused the shared hidden-home workspace inference helpers inside the welcome setup flow, added default-layout detection utilities to `AITerminalWorkspaceDefaults`, and rewired the learning, todo, and browser settings panels to drive from one workspace root with derived preview paths plus optional advanced overrides.
+- Why: The hidden `~/.ghodex/workspace` root had already become the canonical default, but the settings UI still exposed several independent path fields that made new-machine setup inconsistent and easy to misconfigure.
+- Impact: A fresh install can now be configured from one root path across welcome setup and settings, while advanced users can still override chat, todo, notes, browser profile, and browser runtime locations without losing the shared default layout model.
+- Verification: `GITHUB_ACTIONS=1 xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -testPlan GhoDex -destination 'platform=macOS' -only-testing:GhosttyTests/AITerminalManagerTests test`; `GHODEX_CEF_ENABLED=1 GHODEX_CEF_OTHER_LDFLAGS=-lsqlite3 xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration ReleaseLocal -destination 'platform=macOS' build`
+- Files: `macos/Sources/Features/AI Terminal Manager/AITerminalManagerModels.swift`, `macos/Sources/Features/Settings/WelcomeSetupController.swift`, `macos/Sources/Features/SSH Connections/SSHConnectionsView.swift`, `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`, `CHANGELOG.md`
+- Decision trail: Keep the existing child directory names stable for compatibility, but make both onboarding and later settings edits converge on the same workspace-root-first model instead of separate feature-level path defaults.
+
 ### feat(workspace): unify default roots under hidden home workspace
 
 - What changed: Added a shared `AITerminalWorkspaceDefaults` source of truth and rewired welcome setup, chat/learn workspace defaults, todo workspace defaults, and browser profile/runtime defaults to derive from `~/.ghodex/workspace`.

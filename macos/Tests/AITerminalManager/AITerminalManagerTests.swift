@@ -320,6 +320,45 @@ struct AITerminalManagerTests {
         #expect(AITerminalWorkspaceDefaults.browserRuntimePath() == expectedBrowserRuntime)
     }
 
+    @Test func workspaceDefaultsInferRootAndDetectDefaultLayout() {
+        let root = "/tmp/ghodex-root"
+        let chat = AITerminalWorkspaceDefaults.chatWorkspacePath(workspaceRootPath: root)
+        let todo = AITerminalWorkspaceDefaults.todoWorkspacePath(workspaceRootPath: root)
+        let profile = AITerminalWorkspaceDefaults.browserProfilePath(workspaceRootPath: root)
+        let runtime = AITerminalWorkspaceDefaults.browserRuntimePath(workspaceRootPath: root)
+
+        #expect(
+            AITerminalWorkspaceDefaults.inferWorkspaceRootPath(
+                chatWorkspacePath: chat,
+                todoWorkspacePath: todo,
+                browserProfilePath: profile,
+                browserRuntimePath: runtime
+            ) == root
+        )
+
+        #expect(
+            AITerminalWorkspaceDefaults.usesDefaultWorkspaceLayout(
+                workspaceRootPath: root,
+                chatWorkspacePath: chat,
+                notesRelativePath: AITerminalLearningSettings.defaultNotesRelativePath,
+                todoWorkspacePath: todo,
+                browserProfilePath: profile,
+                browserRuntimePath: runtime
+            )
+        )
+
+        #expect(
+            !AITerminalWorkspaceDefaults.usesDefaultWorkspaceLayout(
+                workspaceRootPath: root,
+                chatWorkspacePath: "/tmp/custom-chat",
+                notesRelativePath: AITerminalLearningSettings.defaultNotesRelativePath,
+                todoWorkspacePath: todo,
+                browserProfilePath: profile,
+                browserRuntimePath: runtime
+            )
+        )
+    }
+
     @Test func mergesImportedHostOverrides() {
         let imported = [
             AITerminalHost(

@@ -5,6 +5,145 @@ import SwiftUI
 struct SSHConnectionsView: View {
     @ObservedObject private var presentation: SSHConnectionsPresentationState
 
+    @MainActor
+    private struct ConnectionsSnapshot {
+        var allConnectionHosts: [AITerminalHost]
+        var allConnectionHostLookup: [String: AITerminalHost]
+        var displayFavoriteHosts: [AITerminalHost]
+        var displayRecentHosts: [AITerminalHost]
+        var displaySavedHosts: [AITerminalHost]
+        var displayImportedHosts: [AITerminalHost]
+        var displaySavedWorkspaceTemplates: [AITerminalSavedWorkspaceTemplate]
+        var favoriteHostIDs: Set<String>
+        var latestRecentRecordsByHostID: [String: AITerminalRecentHostRecord]
+        var remoteSessionsByHostID: [String: [AITerminalRemoteSessionSummary]]
+        var activeSessionHostIDs: Set<String>
+        var savedHostIDs: Set<String>
+        var importedHostIDs: Set<String>
+        var overriddenImportedHostIDs: Set<String>
+        var availableHostNamesByID: [String: String]
+
+        init(store: AITerminalManagerStore, searchText: String) {
+            let savedHosts = store.configuration.savedHosts.sorted {
+                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
+            let overrideLookup = Dictionary(
+                uniqueKeysWithValues: store.configuration.importedHostOverrides.map { ($0.id, $0) }
+            )
+            let mergedImportedHosts = store.importedSSHHosts.map { host in
+                guard let override = overrideLookup[host.id] else { return host }
+                var merged = host
+                merged.name = override.name
+                merged.sshAlias = override.sshAlias
+                merged.hostname = override.hostname
+                merged.user = override.user
+                merged.port = override.port
+                merged.defaultDirectory = override.defaultDirectory
+                merged.authMode = override.authMode
+                return merged
+            }
+            .sorted { (lhs: AITerminalHost, rhs: AITerminalHost) in
+                lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+
+            var availableHosts: [AITerminalHost] = [AITerminalHost.local]
+            var seenHostIDs: Set<String> = [AITerminalHost.local.id]
+            for host in savedHosts where seenHostIDs.insert(host.id).inserted {
+                availableHosts.append(host)
+            }
+            for host in mergedImportedHosts where seenHostIDs.insert(host.id).inserted {
+                availableHosts.append(host)
+            }
+            availableHosts.sort { lhs, rhs in
+                if lhs.id == AITerminalHost.local.id { return true }
+                if rhs.id == AITerminalHost.local.id { return false }
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+
+            let allConnectionHosts = availableHosts.filter { !$0.isLocal }
+            let hostLookup = Dictionary(uniqueKeysWithValues: allConnectionHosts.map { ($0.id, $0) })
+            let favoriteHostIDs = Set(store.configuration.favoriteHostIDs)
+            let recentRecords = store.configuration.recentHosts.sorted { $0.connectedAt > $1.connectedAt }
+            let latestRecentRecordsByHostID = recentRecords.reduce(
+                into: [String: AITerminalRecentHostRecord]()
+            ) { partialResult, record in
+                guard partialResult[record.id] == nil else { return }
+                partialResult[record.id] = record
+            }
+            let remoteSessionsByHostID = Dictionary(grouping: store.remoteSessions, by: \.hostID)
+            let activeSessionHostIDs = Set(remoteSessionsByHostID.keys)
+            let savedHostIDs = Set(savedHosts.map(\.id))
+            let importedHostIDs = Set(store.importedSSHHosts.map(\.id))
+            let overriddenImportedHostIDs = Set(store.configuration.importedHostOverrides.map(\.id))
+            let availableHostNamesByID = Dictionary(uniqueKeysWithValues: availableHosts.map { ($0.id, $0.name) })
+            let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            func matches(_ host: AITerminalHost) -> Bool {
+                guard !query.isEmpty else { return true }
+                return host.name.localizedCaseInsensitiveContains(query)
+                    || (host.sshAlias?.localizedCaseInsensitiveContains(query) ?? false)
+                    || (host.hostname?.localizedCaseInsensitiveContains(query) ?? false)
+                    || (host.user?.localizedCaseInsensitiveContains(query) ?? false)
+                    || host.startupCommands.contains(where: { $0.localizedCaseInsensitiveContains(query) })
+            }
+
+            let filteredFavoriteHosts = store.configuration.favoriteHostIDs
+                .compactMap { hostLookup[$0] }
+                .filter(matches)
+            let displayFavoriteHosts = SSHConnectionsView.sidebarFavoriteHosts(
+                favoriteHosts: filteredFavoriteHosts
+            )
+
+            let filteredRecentHosts = recentRecords
+                .compactMap { hostLookup[$0.id] }
+                .filter(matches)
+            let displayRecentHosts = SSHConnectionsView.sidebarRecentHosts(
+                recentHosts: filteredRecentHosts,
+                favoriteHosts: displayFavoriteHosts
+            )
+
+            let filteredSavedHosts = savedHosts.filter(matches)
+            let displaySavedHosts = SSHConnectionsView.sidebarSavedHosts(
+                savedHosts: filteredSavedHosts,
+                favoriteHosts: displayFavoriteHosts,
+                recentHosts: displayRecentHosts
+            )
+
+            let filteredImportedHosts = mergedImportedHosts.filter(matches)
+            let displayImportedHosts = SSHConnectionsView.sidebarImportedHosts(
+                importedHosts: filteredImportedHosts,
+                favoriteHosts: displayFavoriteHosts,
+                savedHosts: filteredSavedHosts,
+                recentHosts: displayRecentHosts
+            )
+
+            let displaySavedWorkspaceTemplates: [AITerminalSavedWorkspaceTemplate]
+            if query.isEmpty {
+                displaySavedWorkspaceTemplates = store.savedWorkspaceTemplates
+            } else {
+                displaySavedWorkspaceTemplates = store.savedWorkspaceTemplates.filter {
+                    $0.name.localizedCaseInsensitiveContains(query)
+                }
+            }
+
+            self.allConnectionHosts = allConnectionHosts
+            self.allConnectionHostLookup = hostLookup
+            self.displayFavoriteHosts = displayFavoriteHosts
+            self.displayRecentHosts = displayRecentHosts
+            self.displaySavedHosts = displaySavedHosts
+            self.displayImportedHosts = displayImportedHosts
+            self.displaySavedWorkspaceTemplates = displaySavedWorkspaceTemplates
+            self.favoriteHostIDs = favoriteHostIDs
+            self.latestRecentRecordsByHostID = latestRecentRecordsByHostID
+            self.remoteSessionsByHostID = remoteSessionsByHostID
+            self.activeSessionHostIDs = activeSessionHostIDs
+            self.savedHostIDs = savedHostIDs
+            self.importedHostIDs = importedHostIDs
+            self.overriddenImportedHostIDs = overriddenImportedHostIDs
+            self.availableHostNamesByID = availableHostNamesByID
+        }
+    }
+
     private enum ConnectionEditorType: String, CaseIterable, Identifiable {
         case ssh
         case localmcd
@@ -53,6 +192,12 @@ struct SSHConnectionsView: View {
         return formatter
     }()
 
+    private struct WorkspacePreviewItem: Identifiable {
+        let id: String
+        let title: String
+        let path: String
+    }
+
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var appDelegate: AppDelegate
     @EnvironmentObject private var store: AITerminalManagerStore
@@ -70,6 +215,7 @@ struct SSHConnectionsView: View {
     @State private var editingHostID: String?
     @State private var isPresentingEditor = false
     @State private var selectedHostID: String?
+    @State private var selectedSavedWorkspaceID: String?
     @State private var hostSearchText = ""
 
     @State private var todoEnabled = true
@@ -88,7 +234,10 @@ struct SSHConnectionsView: View {
     @State private var todoStatusMessage: String?
 
     @State private var learningEnabled = true
+    @State private var workspaceRootPathText = AITerminalWorkspaceDefaults.defaultWorkspaceRootPath
+    @State private var showAdvancedWorkspacePaths = false
     @State private var learningChatWorkspacePath = ""
+    @State private var learningNotesRelativePath = AITerminalLearningSettings.defaultNotesRelativePath
     @State private var learningCommandTemplate = ""
     @State private var learningStatusMessage: String?
     @State private var managedSkillStatuses: [AITerminalManagerStore.ManagedSkillRepositoryStatus] = []
@@ -103,9 +252,7 @@ struct SSHConnectionsView: View {
     @State private var queueScheduleEnabled = false
     @State private var queueExecuteAt = Date().addingTimeInterval(60)
     @State private var queueStatusMessage: String?
-    @State private var browserUsesManagedProfile = true
     @State private var browserProfilePathText = ""
-    @State private var browserUsesManagedRuntime = true
     @State private var browserRuntimePathText = ""
     @State private var browserSaveMessage: String?
     @State private var browserErrorMessage: String?
@@ -136,6 +283,102 @@ struct SSHConnectionsView: View {
 
     private var currentTab: SSHConnectionsPanelTab {
         presentation.selectedTab
+    }
+
+    private var connectionsSnapshot: ConnectionsSnapshot {
+        ConnectionsSnapshot(store: store, searchText: hostSearchText)
+    }
+
+    private var resolvedWorkspaceRootPath: String {
+        let trimmed = workspaceRootPathText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return AITerminalWorkspaceDefaults.defaultWorkspaceRootPath
+        }
+        return NSString(string: trimmed).expandingTildeInPath
+    }
+
+    private var defaultLearningChatWorkspacePath: String {
+        AITerminalWorkspaceDefaults.chatWorkspacePath(workspaceRootPath: resolvedWorkspaceRootPath)
+    }
+
+    private var resolvedLearningChatWorkspacePath: String {
+        guard showAdvancedWorkspacePaths else {
+            return defaultLearningChatWorkspacePath
+        }
+        return resolvedDirectoryOverride(
+            learningChatWorkspacePath,
+            fallback: defaultLearningChatWorkspacePath
+        )
+    }
+
+    private var resolvedLearnWorkspacePath: String {
+        AITerminalLearningSettings.learnWorkspacePath(
+            fromChatWorkspacePath: resolvedLearningChatWorkspacePath
+        )
+    }
+
+    private var resolvedNotesRelativePath: String {
+        let trimmed = learningNotesRelativePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if showAdvancedWorkspacePaths, !trimmed.isEmpty {
+            return trimmed
+        }
+        return AITerminalLearningSettings.defaultNotesRelativePath
+    }
+
+    private var resolvedNotesAbsolutePath: String {
+        let normalized = AITerminalWorkspaceDefaults.normalizedNotesPath(resolvedNotesRelativePath)
+        if normalized.hasPrefix("/") {
+            return normalized
+        }
+        return URL(fileURLWithPath: resolvedLearnWorkspacePath, isDirectory: true)
+            .appendingPathComponent(normalized, isDirectory: false)
+            .path
+    }
+
+    private var defaultTodoWorkspacePath: String {
+        AITerminalWorkspaceDefaults.todoWorkspacePath(workspaceRootPath: resolvedWorkspaceRootPath)
+    }
+
+    private var resolvedTodoWorkspacePath: String {
+        guard showAdvancedWorkspacePaths else {
+            return defaultTodoWorkspacePath
+        }
+        return resolvedDirectoryOverride(
+            todoWorkspaceRootPath,
+            fallback: defaultTodoWorkspacePath
+        )
+    }
+
+    private var defaultBrowserProfilePath: String {
+        AITerminalWorkspaceDefaults.browserProfilePath(workspaceRootPath: resolvedWorkspaceRootPath)
+    }
+
+    private var resolvedBrowserProfilePath: String {
+        guard showAdvancedWorkspacePaths else {
+            return defaultBrowserProfilePath
+        }
+        return resolvedDirectoryOverride(
+            browserProfilePathText,
+            fallback: defaultBrowserProfilePath
+        )
+    }
+
+    private var defaultBrowserRuntimePath: String {
+        AITerminalWorkspaceDefaults.browserRuntimePath(workspaceRootPath: resolvedWorkspaceRootPath)
+    }
+
+    private var resolvedBrowserRuntimePath: String {
+        guard showAdvancedWorkspacePaths else {
+            return defaultBrowserRuntimePath
+        }
+        return resolvedDirectoryOverride(
+            browserRuntimePathText,
+            fallback: defaultBrowserRuntimePath
+        )
+    }
+
+    private var workspaceRootHint: String {
+        L10n.WelcomeSetup.workspaceRootDefaultHint(AITerminalWorkspaceDefaults.defaultWorkspaceRootPath)
     }
 
     var body: some View {
@@ -179,29 +422,33 @@ struct SSHConnectionsView: View {
         }
         .onAppear {
             syncSelection()
+            syncWorkspacePathSettings()
             syncTodoSettings()
             syncLearningSettings()
             syncTaskQueueSettings()
-            syncBrowserSettingsFromConfig()
+            browserSaveMessage = nil
+            browserErrorMessage = nil
         }
         .onChange(of: allConnectionHosts.map(\.id)) { _ in
             syncSelection()
         }
         .onChange(of: store.configurationRevision) { _ in
             syncSelection()
+            syncWorkspacePathSettings()
             syncTodoSettings()
             syncLearningSettings()
             syncTaskQueueSettings()
-            syncBrowserSettingsFromConfig()
+            browserSaveMessage = nil
+            browserErrorMessage = nil
         }
         .onChange(of: store.todoRevision) { _ in
             refreshTodoDocument()
         }
         .onReceive(appDelegate.$browserProfilePathOverride) { _ in
-            syncBrowserSettingsFromConfig()
+            syncWorkspacePathSettings()
         }
         .onReceive(appDelegate.$browserRuntimePathOverride) { _ in
-            syncBrowserSettingsFromConfig()
+            syncWorkspacePathSettings()
         }
         .alert(L10n.SSHConnections.learningInitializeConfirmTitle, isPresented: $showingInitializeConfirmation) {
             Button(L10n.SSHConnections.learningInitializeConfirmAction) {
@@ -281,26 +528,34 @@ struct SSHConnectionsView: View {
 
                 Toggle(L10n.SSHConnections.learningEnable, isOn: $learningEnabled)
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(L10n.SSHConnections.learningChatWorkspacePath)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    TextField(
-                        AITerminalLearningSettings.defaultChatWorkspacePath,
-                        text: $learningChatWorkspacePath
-                    )
-                    .textFieldStyle(.roundedBorder)
-                }
+                workspaceLayoutCard(
+                    previewItems: [
+                        .init(id: "chat", title: L10n.WelcomeSetup.workspacePreviewChat, path: resolvedLearningChatWorkspacePath),
+                        .init(id: "learn", title: L10n.WelcomeSetup.workspacePreviewLearn, path: resolvedLearnWorkspacePath),
+                        .init(id: "notes", title: L10n.WelcomeSetup.workspacePreviewNotes, path: resolvedNotesAbsolutePath),
+                    ]
+                ) {
+                    advancedPathField(
+                        title: L10n.WelcomeSetup.workspacePreviewChat,
+                        text: $learningChatWorkspacePath,
+                        placeholder: defaultLearningChatWorkspacePath
+                    ) {
+                        if let path = chooseDirectory(currentPath: learningChatWorkspacePath) {
+                            showAdvancedWorkspacePaths = true
+                            learningChatWorkspacePath = path
+                        }
+                    }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(L10n.SSHConnections.learningLearnWorkspaceAutoPath)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(derivedLearnWorkspacePath)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(L10n.WelcomeSetup.workspacePreviewNotes)
+                            .font(.headline)
+                        TextField(
+                            AITerminalLearningSettings.defaultNotesRelativePath,
+                            text: $learningNotesRelativePath
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        monoPathLabel(resolvedNotesAbsolutePath)
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -367,28 +622,24 @@ struct SSHConnectionsView: View {
     }
 
     private var normalizedBrowserProfilePath: String? {
-        let trimmed = browserProfilePathText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        return (trimmed as NSString).standardizingPath
+        AITerminalWorkspaceDefaults.normalizedDirectoryPath(resolvedBrowserProfilePath)
     }
 
     private var effectiveBrowserProfilePath: String? {
-        appDelegate.browserProfilePathOverride
+        AITerminalWorkspaceDefaults.normalizedDirectoryPath(appDelegate.browserProfilePathOverride ?? "")
     }
 
     private var normalizedBrowserRuntimePath: String? {
-        let trimmed = browserRuntimePathText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        return (trimmed as NSString).standardizingPath
+        AITerminalWorkspaceDefaults.normalizedDirectoryPath(resolvedBrowserRuntimePath)
     }
 
     private var effectiveBrowserRuntimePath: String? {
-        appDelegate.browserRuntimePathOverride
+        AITerminalWorkspaceDefaults.normalizedDirectoryPath(appDelegate.browserRuntimePathOverride ?? "")
     }
 
     private var browserSettingsDirty: Bool {
-        (browserUsesManagedProfile ? nil : normalizedBrowserProfilePath) != effectiveBrowserProfilePath ||
-            (browserUsesManagedRuntime ? nil : normalizedBrowserRuntimePath) != effectiveBrowserRuntimePath
+        normalizedBrowserProfilePath != effectiveBrowserProfilePath ||
+            normalizedBrowserRuntimePath != effectiveBrowserRuntimePath
     }
 
     private var todoTabContent: some View {
@@ -402,15 +653,21 @@ struct SSHConnectionsView: View {
 
                 Toggle(L10n.SSHConnections.todoEnable, isOn: $todoEnabled)
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(L10n.SSHConnections.todoWorkspaceRootPath)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    TextField(
-                        AITerminalTodoSettings.defaultWorkspaceRootPath,
-                        text: $todoWorkspaceRootPath
-                    )
-                    .textFieldStyle(.roundedBorder)
+                workspaceLayoutCard(
+                    previewItems: [
+                        .init(id: "todo", title: L10n.WelcomeSetup.workspacePreviewTodo, path: resolvedTodoWorkspacePath),
+                    ]
+                ) {
+                    advancedPathField(
+                        title: L10n.WelcomeSetup.workspacePreviewTodo,
+                        text: $todoWorkspaceRootPath,
+                        placeholder: defaultTodoWorkspacePath
+                    ) {
+                        if let path = chooseDirectory(currentPath: todoWorkspaceRootPath) {
+                            showAdvancedWorkspacePaths = true
+                            todoWorkspaceRootPath = path
+                        }
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -511,9 +768,38 @@ struct SSHConnectionsView: View {
                     subtitle: L10n.Settings.browserDescription
                 )
 
-                browserProfileSection
+                workspaceLayoutCard(
+                    previewItems: [
+                        .init(id: "browser_profile", title: L10n.WelcomeSetup.workspacePreviewBrowserProfile, path: resolvedBrowserProfilePath),
+                        .init(id: "browser_runtime", title: L10n.WelcomeSetup.workspacePreviewBrowserRuntime, path: resolvedBrowserRuntimePath),
+                    ]
+                ) {
+                    advancedPathField(
+                        title: L10n.WelcomeSetup.workspacePreviewBrowserProfile,
+                        text: $browserProfilePathText,
+                        placeholder: defaultBrowserProfilePath
+                    ) {
+                        if let path = appDelegate.chooseBrowserProfilePath(currentPath: browserProfilePathText) {
+                            showAdvancedWorkspacePaths = true
+                            browserProfilePathText = path
+                            browserSaveMessage = nil
+                            browserErrorMessage = nil
+                        }
+                    }
 
-                Divider()
+                    advancedPathField(
+                        title: L10n.WelcomeSetup.workspacePreviewBrowserRuntime,
+                        text: $browserRuntimePathText,
+                        placeholder: defaultBrowserRuntimePath
+                    ) {
+                        if let path = appDelegate.chooseBrowserRuntimePath(currentPath: browserRuntimePathText) {
+                            showAdvancedWorkspacePaths = true
+                            browserRuntimePathText = path
+                            browserSaveMessage = nil
+                            browserErrorMessage = nil
+                        }
+                    }
+                }
 
                 browserRuntimeSection
 
@@ -552,60 +838,10 @@ struct SSHConnectionsView: View {
         .padding(.bottom, 20)
     }
 
-    private var browserProfileSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(L10n.Settings.browserProfileSectionTitle)
-                .font(.headline)
-
-            Toggle(L10n.Settings.browserUseManagedProfile, isOn: $browserUsesManagedProfile)
-                .onChange(of: browserUsesManagedProfile) { _ in
-                    browserSaveMessage = nil
-                    browserErrorMessage = nil
-                }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text(browserUsesManagedProfile ? L10n.Settings.browserManagedPath : L10n.Settings.browserCustomPath)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                if browserUsesManagedProfile {
-                    Text(appDelegate.managedBrowserProfilePath)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(nsColor: .textBackgroundColor))
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                } else {
-                    HStack(spacing: 10) {
-                        TextField(
-                            L10n.Settings.browserCustomPlaceholder,
-                            text: $browserProfilePathText
-                        )
-                        .textFieldStyle(.roundedBorder)
-
-                        Button(L10n.Settings.browserBrowseButton) {
-                            if let path = appDelegate.chooseBrowserProfilePath(currentPath: browserProfilePathText) {
-                                browserProfilePathText = path
-                                browserSaveMessage = nil
-                                browserErrorMessage = nil
-                            }
-                        }
-                    }
-
-                    Text(L10n.Settings.browserCustomHint)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        }
-    }
-
     private var browserRuntimeSection: some View {
         let runtimeAssessment = BrowserPaths.runtimeMediaAssessment(
-            runtimePath: browserUsesManagedRuntime ? appDelegate.managedBrowserRuntimePath : browserRuntimePathText,
-            usesManagedRuntime: browserUsesManagedRuntime
+            runtimePath: resolvedBrowserRuntimePath,
+            usesManagedRuntime: false
         )
 
         return VStack(alignment: .leading, spacing: 10) {
@@ -617,48 +853,7 @@ struct SSHConnectionsView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Toggle(L10n.Settings.browserUseManagedRuntime, isOn: $browserUsesManagedRuntime)
-                .onChange(of: browserUsesManagedRuntime) { _ in
-                    browserSaveMessage = nil
-                    browserErrorMessage = nil
-                }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text(browserUsesManagedRuntime ? L10n.Settings.browserManagedRuntimePath : L10n.Settings.browserCustomRuntimePath)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                if browserUsesManagedRuntime {
-                    Text(appDelegate.managedBrowserRuntimePath)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(nsColor: .textBackgroundColor))
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                } else {
-                    HStack(spacing: 10) {
-                        TextField(
-                            L10n.Settings.browserCustomRuntimePlaceholder,
-                            text: $browserRuntimePathText
-                        )
-                        .textFieldStyle(.roundedBorder)
-
-                        Button(L10n.Settings.browserBrowseButton) {
-                            if let path = appDelegate.chooseBrowserRuntimePath(currentPath: browserRuntimePathText) {
-                                browserRuntimePathText = path
-                                browserSaveMessage = nil
-                                browserErrorMessage = nil
-                            }
-                        }
-                    }
-
-                    Text(L10n.Settings.browserCustomRuntimeHint)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
+            monoPathLabel(resolvedBrowserRuntimePath)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(L10n.Settings.browserRuntimeMediaTitle)
@@ -675,6 +870,97 @@ struct SSHConnectionsView: View {
             .background(runtimeAssessmentColor(runtimeAssessment).opacity(colorScheme == .dark ? 0.14 : 0.1))
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
+    }
+
+    private func workspaceLayoutCard<AdvancedContent: View>(
+        previewItems: [WorkspacePreviewItem],
+        @ViewBuilder advancedContent: @escaping () -> AdvancedContent
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(L10n.WelcomeSetup.workspaceRootTitle)
+                    .font(.headline)
+                Text(L10n.WelcomeSetup.workspaceRootBody)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack(spacing: 10) {
+                    TextField(
+                        AITerminalWorkspaceDefaults.defaultWorkspaceRootPath,
+                        text: $workspaceRootPathText
+                    )
+                    .textFieldStyle(.roundedBorder)
+
+                    Button(L10n.Settings.browserBrowseButton) {
+                        if let path = chooseDirectory(currentPath: workspaceRootPathText) {
+                            workspaceRootPathText = path
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                monoPathLabel(resolvedWorkspaceRootPath)
+
+                Text(workspaceRootHint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(previewItems) { item in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(item.title)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        monoPathLabel(item.path)
+                    }
+                }
+            }
+
+            DisclosureGroup(isExpanded: $showAdvancedWorkspacePaths) {
+                VStack(alignment: .leading, spacing: 14) {
+                    advancedContent()
+                }
+                .padding(.top, 12)
+            } label: {
+                Text(L10n.WelcomeSetup.workspaceAdvancedToggle)
+                    .font(.headline)
+            }
+        }
+        .padding(14)
+        .subpanelSurface()
+    }
+
+    private func advancedPathField(
+        title: String,
+        text: Binding<String>,
+        placeholder: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.headline)
+            HStack(spacing: 10) {
+                TextField(placeholder, text: text)
+                    .textFieldStyle(.roundedBorder)
+                Button(L10n.Settings.browserBrowseButton, action: action)
+                    .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    private func monoPathLabel(_ path: String) -> some View {
+        Text(path)
+            .font(.system(.caption, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(nsColor: .textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     private func runtimeAssessmentMessage(_ assessment: BrowserRuntimeMediaAssessment) -> String {
@@ -2313,13 +2599,44 @@ struct SSHConnectionsView: View {
             return
         }
 
-        selectedHostID = allConnectionHosts.first?.id
+        if let firstHostID = allConnectionHosts.first?.id {
+            selectedHostID = firstHostID
+            return
+        }
+
+        selectedSavedWorkspaceID = displaySavedWorkspaceTemplates.first?.id
+    }
+
+    private func resolvedDirectoryOverride(
+        _ candidate: String,
+        fallback: String
+    ) -> String {
+        let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return fallback }
+        return NSString(string: trimmed).expandingTildeInPath
+    }
+
+    private func chooseDirectory(currentPath: String) -> String? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+
+        let trimmed = currentPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            panel.directoryURL = URL(
+                fileURLWithPath: NSString(string: trimmed).expandingTildeInPath,
+                isDirectory: true
+            )
+        }
+
+        return panel.runModal() == .OK ? panel.url?.path : nil
     }
 
     private func syncTodoSettings() {
         let settings = store.todoSettings
         todoEnabled = settings.enabled
-        todoWorkspaceRootPath = settings.workspaceRootPath
         todoShowCompletedItems = settings.showCompletedItems
         todoSelectedDate = AITerminalTodoSettings.date(fromDayString: settings.selectedDateAnchor) ?? .now
         todoSidebarEdge = settings.sidebarEdge
@@ -2341,38 +2658,26 @@ struct SSHConnectionsView: View {
     }
 
     private func persistTodoSettings(showSavedMessage: Bool) {
-        let trimmedRootPath = todoWorkspaceRootPath.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedRootPath.isEmpty else {
-            todoStatusMessage = L10n.SSHConnections.todoWorkspaceRequired
-            return
-        }
-
-        store.saveTodoSettings(.init(
+        let nextTodoSettings = AITerminalTodoSettings(
             enabled: todoEnabled,
-            workspaceRootPath: trimmedRootPath,
+            workspaceRootPath: resolvedTodoWorkspacePath,
             showCompletedItems: todoShowCompletedItems,
             selectedDateAnchor: AITerminalTodoSettings.dayString(from: todoSelectedDate),
             sidebarEdge: todoSidebarEdge,
             workspaceOverlayVisible: todoWorkspaceOverlayVisible,
             workspaceOverlayCorner: todoWorkspaceOverlayCorner
-        ))
+        )
 
-        if store.lastError == nil {
-            todoWorkspaceRootPath = trimmedRootPath
+        if persistSharedWorkspacePathSettings(todoSettings: nextTodoSettings) {
+            todoWorkspaceRootPath = resolvedTodoWorkspacePath
             todoStatusMessage = showSavedMessage ? L10n.SSHConnections.todoSaved : nil
         } else {
-            todoStatusMessage = store.lastError
+            todoStatusMessage = store.lastError ?? browserErrorMessage
         }
     }
 
     private func initializeTodoWorkspace() {
-        let trimmedRootPath = todoWorkspaceRootPath.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedRootPath.isEmpty else {
-            todoStatusMessage = L10n.SSHConnections.todoWorkspaceRequired
-            return
-        }
-
-        guard let result = store.initializeTodoWorkspace(rootPath: trimmedRootPath) else {
+        guard let result = store.initializeTodoWorkspace(rootPath: resolvedTodoWorkspacePath) else {
             todoStatusMessage = L10n.SSHConnections.todoInitializeFailedMessage(
                 store.lastError ?? "unknown"
             )
@@ -2390,9 +2695,6 @@ struct SSHConnectionsView: View {
     private func syncLearningSettings() {
         let settings = store.learningSettings
         learningEnabled = settings.enabled
-        learningChatWorkspacePath = AITerminalLearningSettings.chatWorkspacePath(
-            fromLearnWorkspacePath: settings.defaultProjectPath
-        )
         learningCommandTemplate = settings.commandTemplate
         managedSkillStatuses = store.managedSkillStatuses
         if !learningOperationInProgress {
@@ -2408,15 +2710,102 @@ struct SSHConnectionsView: View {
         queueStatusMessage = nil
     }
 
-    private func syncBrowserSettingsFromConfig() {
+    private func syncWorkspacePathSettings() {
+        let learningSettings = store.learningSettings
+        let currentChatWorkspacePath = AITerminalLearningSettings.chatWorkspacePath(
+            fromLearnWorkspacePath: learningSettings.defaultProjectPath
+        )
+        let todoSettings = store.todoSettings
         let currentProfilePath = appDelegate.browserProfilePathOverride ?? ""
-        browserUsesManagedProfile = currentProfilePath.isEmpty
-        browserProfilePathText = currentProfilePath
         let currentRuntimePath = appDelegate.browserRuntimePathOverride ?? ""
-        browserUsesManagedRuntime = currentRuntimePath.isEmpty
-        browserRuntimePathText = currentRuntimePath
+
+        let inferredWorkspaceRoot = AITerminalWorkspaceDefaults.inferWorkspaceRootPath(
+            chatWorkspacePath: currentChatWorkspacePath,
+            todoWorkspacePath: todoSettings.workspaceRootPath,
+            browserProfilePath: currentProfilePath,
+            browserRuntimePath: currentRuntimePath
+        ) ?? AITerminalWorkspaceDefaults.defaultWorkspaceRootPath
+
+        let effectiveChatPath = currentChatWorkspacePath.isEmpty
+            ? AITerminalWorkspaceDefaults.chatWorkspacePath(workspaceRootPath: inferredWorkspaceRoot)
+            : currentChatWorkspacePath
+        let effectiveTodoPath = todoSettings.workspaceRootPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? AITerminalWorkspaceDefaults.todoWorkspacePath(workspaceRootPath: inferredWorkspaceRoot)
+            : todoSettings.workspaceRootPath
+        let effectiveProfilePath = currentProfilePath.isEmpty
+            ? AITerminalWorkspaceDefaults.browserProfilePath(workspaceRootPath: inferredWorkspaceRoot)
+            : currentProfilePath
+        let effectiveRuntimePath = currentRuntimePath.isEmpty
+            ? AITerminalWorkspaceDefaults.browserRuntimePath(workspaceRootPath: inferredWorkspaceRoot)
+            : currentRuntimePath
+
+        workspaceRootPathText = inferredWorkspaceRoot
+        learningChatWorkspacePath = effectiveChatPath
+        learningNotesRelativePath = learningSettings.notesRelativePath
+        todoWorkspaceRootPath = effectiveTodoPath
+        browserProfilePathText = effectiveProfilePath
+        browserRuntimePathText = effectiveRuntimePath
+        showAdvancedWorkspacePaths = !AITerminalWorkspaceDefaults.usesDefaultWorkspaceLayout(
+            workspaceRootPath: inferredWorkspaceRoot,
+            chatWorkspacePath: effectiveChatPath,
+            notesRelativePath: learningSettings.notesRelativePath,
+            todoWorkspacePath: effectiveTodoPath,
+            browserProfilePath: effectiveProfilePath,
+            browserRuntimePath: effectiveRuntimePath
+        )
         browserSaveMessage = nil
         browserErrorMessage = nil
+    }
+
+    private func persistSharedWorkspacePathSettings(
+        learningSettings: AITerminalLearningSettings? = nil,
+        todoSettings: AITerminalTodoSettings? = nil
+    ) -> Bool {
+        let nextLearningSettings = learningSettings ?? store.learningSettings
+        let nextTodoSettings = todoSettings ?? store.todoSettings
+
+        do {
+            try appDelegate.saveBrowserSettings(
+                profilePath: resolvedBrowserProfilePath,
+                runtimePath: resolvedBrowserRuntimePath
+            )
+        } catch {
+            browserErrorMessage = error.localizedDescription
+            browserSaveMessage = nil
+            return false
+        }
+
+        store.saveLearningSettings(.init(
+            enabled: nextLearningSettings.enabled,
+            preferTabWorkingDirectory: nextLearningSettings.preferTabWorkingDirectory,
+            defaultProjectPath: resolvedLearnWorkspacePath,
+            notesRelativePath: resolvedNotesRelativePath,
+            commandTemplate: nextLearningSettings.commandTemplate,
+            fastModel: nextLearningSettings.fastModel,
+            promptTemplate: nextLearningSettings.promptTemplate
+        ))
+        if let error = store.lastError {
+            learningStatusMessage = error
+            return false
+        }
+
+        store.saveTodoSettings(.init(
+            enabled: nextTodoSettings.enabled,
+            workspaceRootPath: resolvedTodoWorkspacePath,
+            showCompletedItems: nextTodoSettings.showCompletedItems,
+            selectedDateAnchor: nextTodoSettings.selectedDateAnchor,
+            sidebarEdge: nextTodoSettings.sidebarEdge,
+            workspaceOverlayVisible: nextTodoSettings.workspaceOverlayVisible,
+            workspaceOverlayCorner: nextTodoSettings.workspaceOverlayCorner
+        ))
+        if let error = store.lastError {
+            todoStatusMessage = error
+            return false
+        }
+
+        browserErrorMessage = nil
+        syncWorkspacePathSettings()
+        return true
     }
 
     private func persistTaskQueueSettings() {
@@ -2432,17 +2821,10 @@ struct SSHConnectionsView: View {
     }
 
     private func persistBrowserSettings() {
-        do {
-            let profileValueToSave = browserUsesManagedProfile ? "" : browserProfilePathText
-            let runtimeValueToSave = browserUsesManagedRuntime ? "" : browserRuntimePathText
-            try appDelegate.saveBrowserSettings(
-                profilePath: profileValueToSave,
-                runtimePath: runtimeValueToSave)
+        if persistSharedWorkspacePathSettings() {
             browserSaveMessage = L10n.Settings.browserSaved
             browserErrorMessage = nil
-            syncBrowserSettingsFromConfig()
-        } catch {
-            browserErrorMessage = error.localizedDescription
+        } else {
             browserSaveMessage = nil
         }
     }
@@ -2463,33 +2845,25 @@ struct SSHConnectionsView: View {
     }
 
     private func persistLearningSettings() {
-        let trimmedChatWorkspacePath = learningChatWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
         let current = store.learningSettings
-        let resolvedWorkspacePath: String = if !trimmedChatWorkspacePath.isEmpty {
-            AITerminalLearningSettings.learnWorkspacePath(fromChatWorkspacePath: trimmedChatWorkspacePath)
-        } else {
-            current.defaultProjectPath
-        }
-
-        store.saveLearningSettings(.init(
+        let nextLearningSettings = AITerminalLearningSettings(
             enabled: learningEnabled,
-            preferTabWorkingDirectory: false,
-            defaultProjectPath: resolvedWorkspacePath,
-            notesRelativePath: current.notesRelativePath,
+            preferTabWorkingDirectory: current.preferTabWorkingDirectory,
+            defaultProjectPath: resolvedLearnWorkspacePath,
+            notesRelativePath: resolvedNotesRelativePath,
             commandTemplate: learningCommandTemplate,
             fastModel: current.fastModel,
             promptTemplate: current.promptTemplate
-        ))
+        )
 
-        if store.lastError == nil {
-            if !resolvedWorkspacePath.isEmpty {
-                learningChatWorkspacePath = AITerminalLearningSettings.chatWorkspacePath(
-                    fromLearnWorkspacePath: resolvedWorkspacePath
-                )
-            }
+        if persistSharedWorkspacePathSettings(
+            learningSettings: nextLearningSettings,
+            todoSettings: store.todoSettings
+        ) {
+            learningChatWorkspacePath = resolvedLearningChatWorkspacePath
             learningStatusMessage = L10n.SSHConnections.learningSaved
         } else {
-            learningStatusMessage = nil
+            learningStatusMessage = store.lastError ?? browserErrorMessage
         }
     }
 
@@ -2598,7 +2972,7 @@ struct SSHConnectionsView: View {
     }
 
     private func validatedLearningChatWorkspacePath() -> String? {
-        let trimmedChatWorkspacePath = learningChatWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedChatWorkspacePath = resolvedLearningChatWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedChatWorkspacePath.isEmpty else {
             learningStatusMessage = L10n.SSHConnections.learningChatWorkspaceRequired
             return nil
@@ -2606,18 +2980,8 @@ struct SSHConnectionsView: View {
         return trimmedChatWorkspacePath
     }
 
-    private var derivedLearnWorkspacePath: String {
-        let trimmedChatWorkspacePath = learningChatWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedChatWorkspacePath.isEmpty else {
-            return "-"
-        }
-        return AITerminalLearningSettings.learnWorkspacePath(
-            fromChatWorkspacePath: trimmedChatWorkspacePath
-        )
-    }
-
     private var selectedTodoDayFilePath: String {
-        let trimmedRootPath = todoWorkspaceRootPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedRootPath = resolvedTodoWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedRootPath.isEmpty else {
             return "-"
         }

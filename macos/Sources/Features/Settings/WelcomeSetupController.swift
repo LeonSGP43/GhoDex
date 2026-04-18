@@ -1241,18 +1241,12 @@ final class WelcomeSetupModel: ObservableObject {
         browserProfilePath: String,
         browserRuntimePath: String
     ) -> String? {
-        for candidate in [
-            workspaceRootCandidate(fromBrowserProfilePath: browserProfilePath),
-            workspaceRootCandidate(fromBrowserRuntimePath: browserRuntimePath),
-            workspaceRootCandidate(fromTodoWorkspacePath: todoWorkspacePath),
-            workspaceRootCandidate(fromChatWorkspacePath: chatWorkspacePath),
-        ] {
-            if let candidate {
-                return candidate
-            }
-        }
-
-        return nil
+        AITerminalWorkspaceDefaults.inferWorkspaceRootPath(
+            chatWorkspacePath: chatWorkspacePath,
+            todoWorkspacePath: todoWorkspacePath,
+            browserProfilePath: browserProfilePath,
+            browserRuntimePath: browserRuntimePath
+        )
     }
 
     private static func usesDefaultWorkspaceLayout(
@@ -1263,72 +1257,13 @@ final class WelcomeSetupModel: ObservableObject {
         browserProfilePath: String,
         browserRuntimePath: String
     ) -> Bool {
-        normalizedDirectoryPath(chatWorkspacePath) == normalizedDirectoryPath(
-            defaultLearningChatWorkspacePath(workspaceRootPath: workspaceRootPath)
-        ) &&
-        normalizedDirectoryPath(todoWorkspacePath) == normalizedDirectoryPath(
-            defaultTodoWorkspacePath(workspaceRootPath: workspaceRootPath)
-        ) &&
-        normalizedDirectoryPath(browserProfilePath) == normalizedDirectoryPath(
-            defaultBrowserProfilePath(workspaceRootPath: workspaceRootPath)
-        ) &&
-        normalizedDirectoryPath(browserRuntimePath) == normalizedDirectoryPath(
-            defaultBrowserRuntimePath(workspaceRootPath: workspaceRootPath)
-        ) &&
-        normalizedNotesPath(notesRelativePath) == normalizedNotesPath(
-            AITerminalLearningSettings.defaultNotesRelativePath
+        AITerminalWorkspaceDefaults.usesDefaultWorkspaceLayout(
+            workspaceRootPath: workspaceRootPath,
+            chatWorkspacePath: chatWorkspacePath,
+            notesRelativePath: notesRelativePath,
+            todoWorkspacePath: todoWorkspacePath,
+            browserProfilePath: browserProfilePath,
+            browserRuntimePath: browserRuntimePath
         )
-    }
-
-    private static func workspaceRootCandidate(fromChatWorkspacePath path: String) -> String? {
-        guard var url = normalizedDirectoryURL(path) else { return nil }
-        guard url.lastPathComponent == AITerminalLearningSettings.chatWorkspaceDirectoryName else {
-            return nil
-        }
-        url.deleteLastPathComponent()
-        return url.path
-    }
-
-    private static func workspaceRootCandidate(fromTodoWorkspacePath path: String) -> String? {
-        guard var url = normalizedDirectoryURL(path) else { return nil }
-        guard url.lastPathComponent == AITerminalTodoSettings.workspaceDirectoryName else {
-            return nil
-        }
-        url.deleteLastPathComponent()
-        return url.path
-    }
-
-    private static func workspaceRootCandidate(fromBrowserProfilePath path: String) -> String? {
-        guard var url = normalizedDirectoryURL(path) else { return nil }
-        guard url.lastPathComponent == browserProfileDirectoryName else { return nil }
-        url.deleteLastPathComponent()
-        guard url.lastPathComponent == browserDirectoryName else { return nil }
-        url.deleteLastPathComponent()
-        return url.path
-    }
-
-    private static func workspaceRootCandidate(fromBrowserRuntimePath path: String) -> String? {
-        guard var url = normalizedDirectoryURL(path) else { return nil }
-        guard url.lastPathComponent == browserRuntimeDirectoryName else { return nil }
-        url.deleteLastPathComponent()
-        guard url.lastPathComponent == browserDirectoryName else { return nil }
-        url.deleteLastPathComponent()
-        return url.path
-    }
-
-    private static func normalizedDirectoryPath(_ path: String) -> String? {
-        normalizedDirectoryURL(path)?.path
-    }
-
-    private static func normalizedDirectoryURL(_ path: String) -> URL? {
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        let expanded = NSString(string: trimmed).expandingTildeInPath
-        return URL(fileURLWithPath: expanded, isDirectory: true).standardizedFileURL
-    }
-
-    private static func normalizedNotesPath(_ path: String) -> String {
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? AITerminalLearningSettings.defaultNotesRelativePath : trimmed
     }
 }
