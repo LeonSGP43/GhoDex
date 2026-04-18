@@ -306,11 +306,9 @@ final class WelcomeSetupModel: ObservableObject {
         let usage: String
     }
 
-    private static let workspaceContainerDirectoryName = ".ghodex"
-    private static let workspaceDirectoryName = "workspace"
-    private static let browserDirectoryName = "browser"
-    private static let browserProfileDirectoryName = "profile"
-    private static let browserRuntimeDirectoryName = "runtime"
+    private static let browserDirectoryName = AITerminalWorkspaceDefaults.browserDirectoryName
+    private static let browserProfileDirectoryName = AITerminalWorkspaceDefaults.browserProfileDirectoryName
+    private static let browserRuntimeDirectoryName = AITerminalWorkspaceDefaults.browserRuntimeDirectoryName
 
     weak var controller: WelcomeSetupController?
 
@@ -366,10 +364,7 @@ final class WelcomeSetupModel: ObservableObject {
     }
 
     static var defaultWorkspaceRootPath: String {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(workspaceContainerDirectoryName, isDirectory: true)
-            .appendingPathComponent(workspaceDirectoryName, isDirectory: true)
-            .path
+        AITerminalWorkspaceDefaults.defaultWorkspaceRootPath
     }
 
     var needsRestart: Bool {
@@ -1225,29 +1220,19 @@ final class WelcomeSetupModel: ObservableObject {
     }
 
     private static func defaultLearningChatWorkspacePath(workspaceRootPath: String) -> String {
-        URL(fileURLWithPath: workspaceRootPath, isDirectory: true)
-            .appendingPathComponent(AITerminalLearningSettings.chatWorkspaceDirectoryName, isDirectory: true)
-            .path
+        AITerminalWorkspaceDefaults.chatWorkspacePath(workspaceRootPath: workspaceRootPath)
     }
 
     private static func defaultTodoWorkspacePath(workspaceRootPath: String) -> String {
-        URL(fileURLWithPath: workspaceRootPath, isDirectory: true)
-            .appendingPathComponent(AITerminalTodoSettings.workspaceDirectoryName, isDirectory: true)
-            .path
+        AITerminalWorkspaceDefaults.todoWorkspacePath(workspaceRootPath: workspaceRootPath)
     }
 
     private static func defaultBrowserProfilePath(workspaceRootPath: String) -> String {
-        URL(fileURLWithPath: workspaceRootPath, isDirectory: true)
-            .appendingPathComponent(browserDirectoryName, isDirectory: true)
-            .appendingPathComponent(browserProfileDirectoryName, isDirectory: true)
-            .path
+        AITerminalWorkspaceDefaults.browserProfilePath(workspaceRootPath: workspaceRootPath)
     }
 
     private static func defaultBrowserRuntimePath(workspaceRootPath: String) -> String {
-        URL(fileURLWithPath: workspaceRootPath, isDirectory: true)
-            .appendingPathComponent(browserDirectoryName, isDirectory: true)
-            .appendingPathComponent(browserRuntimeDirectoryName, isDirectory: true)
-            .path
+        AITerminalWorkspaceDefaults.browserRuntimePath(workspaceRootPath: workspaceRootPath)
     }
 
     private static func inferWorkspaceRootPath(

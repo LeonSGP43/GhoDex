@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### feat(workspace): unify default roots under hidden home workspace
+
+- What changed: Added a shared `AITerminalWorkspaceDefaults` source of truth and rewired welcome setup, chat/learn workspace defaults, todo workspace defaults, and browser profile/runtime defaults to derive from `~/.ghodex/workspace`.
+- Why: The first-run setup had already moved to a hidden home-directory workspace, but lower-level defaults were still split across older hardcoded locations, which made new-machine bootstrap inconsistent.
+- Impact: On a fresh machine, the default GhoDex workspace layout now resolves from one hidden root and the welcome setup can create the expected chat, learn, todo, and browser subpaths without path drift between features.
+- Verification: `GITHUB_ACTIONS=1 xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -testPlan GhoDex -destination 'platform=macOS' -only-testing:GhosttyTests/AITerminalManagerTests test`; `GHODEX_CEF_ENABLED=1 GHODEX_CEF_OTHER_LDFLAGS=-lsqlite3 xcodebuild -project macos/GhoDex.xcodeproj -scheme GhoDex -configuration ReleaseLocal -derivedDataPath /tmp/ghodex-unified-workspace-build-20260418 build`; `codesign --verify --deep --strict /tmp/ghodex-unified-workspace-build-20260418/Build/Products/ReleaseLocal/GhoDex.app`
+- Files: `macos/Sources/Features/AI Terminal Manager/AITerminalManagerModels.swift`, `macos/Sources/Features/Settings/WelcomeSetupController.swift`, `macos/Tests/AITerminalManager/AITerminalManagerTests.swift`, `CHANGELOG.md`
+- Decision trail: Keep existing child directory names stable for compatibility, but centralize the hidden workspace root so config, welcome flow, and downstream features stop deriving defaults from competing locations.
+
 ### fix(control-harness): harden diagnostics breadcrumbs and bounded event streams
 
 - What changed: Added lightweight runtime breadcrumbs before high-risk UI control mutations, made buffered event subscriptions enforce a global cap plus idle TTL pruning, and exposed those bounds through the diagnostics status payload used by the harness test surface.

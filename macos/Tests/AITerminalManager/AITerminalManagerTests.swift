@@ -288,6 +288,38 @@ struct AITerminalManagerTests {
         #expect(plan.registration.hostID == AITerminalHost.local.id)
     }
 
+    @Test @MainActor func unifiedWorkspaceDefaultsUseHiddenHomeRoot() {
+        let expectedRoot = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".ghodex", isDirectory: true)
+            .appendingPathComponent("workspace", isDirectory: true)
+            .path
+        let expectedChat = URL(fileURLWithPath: expectedRoot, isDirectory: true)
+            .appendingPathComponent(AITerminalLearningSettings.chatWorkspaceDirectoryName, isDirectory: true)
+            .path
+        let expectedLearn = URL(fileURLWithPath: expectedChat, isDirectory: true)
+            .appendingPathComponent(AITerminalLearningSettings.learnWorkspaceDirectoryName, isDirectory: true)
+            .path
+        let expectedTodo = URL(fileURLWithPath: expectedRoot, isDirectory: true)
+            .appendingPathComponent(AITerminalTodoSettings.workspaceDirectoryName, isDirectory: true)
+            .path
+        let expectedBrowserProfile = URL(fileURLWithPath: expectedRoot, isDirectory: true)
+            .appendingPathComponent("browser", isDirectory: true)
+            .appendingPathComponent("profile", isDirectory: true)
+            .path
+        let expectedBrowserRuntime = URL(fileURLWithPath: expectedRoot, isDirectory: true)
+            .appendingPathComponent("browser", isDirectory: true)
+            .appendingPathComponent("runtime", isDirectory: true)
+            .path
+
+        #expect(AITerminalWorkspaceDefaults.defaultWorkspaceRootPath == expectedRoot)
+        #expect(WelcomeSetupModel.defaultWorkspaceRootPath == expectedRoot)
+        #expect(AITerminalLearningSettings.defaultChatWorkspacePath == expectedChat)
+        #expect(AITerminalLearningSettings.defaultLearnWorkspacePath == expectedLearn)
+        #expect(AITerminalTodoSettings.defaultWorkspaceRootPath == expectedTodo)
+        #expect(AITerminalWorkspaceDefaults.browserProfilePath() == expectedBrowserProfile)
+        #expect(AITerminalWorkspaceDefaults.browserRuntimePath() == expectedBrowserRuntime)
+    }
+
     @Test func mergesImportedHostOverrides() {
         let imported = [
             AITerminalHost(

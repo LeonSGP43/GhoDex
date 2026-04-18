@@ -72,6 +72,53 @@ enum AITerminalHostAuthMode: String, Codable, CaseIterable, Identifiable, Sendab
     }
 }
 
+enum AITerminalWorkspaceDefaults {
+    static let containerDirectoryName = ".ghodex"
+    static let workspaceDirectoryName = "workspace"
+    static let browserDirectoryName = "browser"
+    static let browserProfileDirectoryName = "profile"
+    static let browserRuntimeDirectoryName = "runtime"
+
+    static var defaultWorkspaceRootPath: String {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(containerDirectoryName, isDirectory: true)
+            .appendingPathComponent(workspaceDirectoryName, isDirectory: true)
+            .path
+    }
+
+    static func chatWorkspacePath(workspaceRootPath: String = defaultWorkspaceRootPath) -> String {
+        URL(fileURLWithPath: workspaceRootPath, isDirectory: true)
+            .appendingPathComponent(AITerminalLearningSettings.chatWorkspaceDirectoryName, isDirectory: true)
+            .path
+    }
+
+    static func learnWorkspacePath(workspaceRootPath: String = defaultWorkspaceRootPath) -> String {
+        URL(fileURLWithPath: chatWorkspacePath(workspaceRootPath: workspaceRootPath), isDirectory: true)
+            .appendingPathComponent(AITerminalLearningSettings.learnWorkspaceDirectoryName, isDirectory: true)
+            .path
+    }
+
+    static func todoWorkspacePath(workspaceRootPath: String = defaultWorkspaceRootPath) -> String {
+        URL(fileURLWithPath: workspaceRootPath, isDirectory: true)
+            .appendingPathComponent(AITerminalTodoSettings.workspaceDirectoryName, isDirectory: true)
+            .path
+    }
+
+    static func browserProfilePath(workspaceRootPath: String = defaultWorkspaceRootPath) -> String {
+        URL(fileURLWithPath: workspaceRootPath, isDirectory: true)
+            .appendingPathComponent(browserDirectoryName, isDirectory: true)
+            .appendingPathComponent(browserProfileDirectoryName, isDirectory: true)
+            .path
+    }
+
+    static func browserRuntimePath(workspaceRootPath: String = defaultWorkspaceRootPath) -> String {
+        URL(fileURLWithPath: workspaceRootPath, isDirectory: true)
+            .appendingPathComponent(browserDirectoryName, isDirectory: true)
+            .appendingPathComponent(browserRuntimeDirectoryName, isDirectory: true)
+            .path
+    }
+}
+
 struct AITerminalHost: Identifiable, Codable, Hashable, Sendable {
     let id: String
     var name: String
@@ -491,12 +538,7 @@ struct AITerminalTodoSettings: Codable, Hashable, Sendable {
 
     static let workspaceDirectoryName = "gho_todolist_workspace"
     static var defaultWorkspaceRootPath: String {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Desktop", isDirectory: true)
-            .appendingPathComponent("LeonProjects", isDirectory: true)
-            .appendingPathComponent("gho_workspace", isDirectory: true)
-            .appendingPathComponent(workspaceDirectoryName, isDirectory: true)
-            .path
+        AITerminalWorkspaceDefaults.todoWorkspacePath()
     }
     static let dayFilenameFormatter = ISO8601DateFormatter.todoDayFormatter
     static let defaultSelectedDateAnchor = dayFilenameFormatter.string(from: .now)
@@ -723,12 +765,10 @@ struct AITerminalLearningSettings: Codable, Hashable, Sendable {
     static let chatWorkspaceDirectoryName = "codex_chat_workspace"
     static let learnWorkspaceDirectoryName = "codex_learn_workspace"
     static var defaultChatWorkspacePath: String {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(chatWorkspaceDirectoryName, isDirectory: true)
-            .path
+        AITerminalWorkspaceDefaults.chatWorkspacePath()
     }
     static var defaultLearnWorkspacePath: String {
-        learnWorkspacePath(fromChatWorkspacePath: defaultChatWorkspacePath)
+        AITerminalWorkspaceDefaults.learnWorkspacePath()
     }
     static let defaultNotesRelativePath = "../knowledges/inbox.md"
     static let defaultCommandTemplate = #"/Users/leongong/.local/bin/codex1m exec --skip-git-repo-check -c 'mcp_servers.gemini.enabled=false' -c 'mcp_servers.grok-research.enabled=false' -c 'mcp_servers.opus-planning.enabled=false' -C "$LEARN_WORKSPACE" "$PROMPT""#
