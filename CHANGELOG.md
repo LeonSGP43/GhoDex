@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-19
+
 ### fix(onboarding): reopen welcome setup from active windows
 
 - What changed: Anchored the welcome setup reopen action to the active top-level app window on both first-launch auto show and manual reopen, and added a dedicated reopen card inside Settings.
